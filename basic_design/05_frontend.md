@@ -55,6 +55,8 @@ frontend/
 
 ## 2. 画面一覧とルーティング
 
+> drawio版の画面遷移図：[diagrams/04_screen_flow.drawio](./diagrams/04_screen_flow.drawio)
+
 | No | 画面 | パス | レイアウト | ガード | 出典 |
 |----|------|------|-----------|--------|------|
 | 1 | ログイン | `/login` | AuthLayout | 未認証のみ | 要件書§2-1 / pptx slide1 |

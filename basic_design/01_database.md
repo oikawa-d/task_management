@@ -16,6 +16,8 @@
 
 ## 2. ER図
 
+> drawio版：[diagrams/03_er_diagram.drawio](./diagrams/03_er_diagram.drawio)（Redisキー・インデックス・DB関数の一覧を併記）
+
 ```mermaid
 erDiagram
     users ||--o{ oauth_accounts : "外部ID紐付け"

@@ -40,6 +40,8 @@
 
 ## 3. システム構成
 
+> drawio版：[diagrams/01_system_architecture.drawio](./diagrams/01_system_architecture.drawio)（公開ポート・CI/CD経路を含む詳細版）
+
 ```mermaid
 flowchart TB
     subgraph client["クライアント"]
@@ -68,6 +70,8 @@ flowchart TB
 ```
 
 ## 4. バックエンドのレイヤ構成
+
+> drawio版：[diagrams/02_backend_layers.drawio](./diagrams/02_backend_layers.drawio)（モジュール単位の詳細版）
 
 依存方向は `api → service → repository → models` の一方向とし、`core` は全層から参照可能とする。
 
@@ -127,6 +131,8 @@ project-root/
 ```
 
 ## 5. 画面遷移図
+
+> drawio版：[diagrams/04_screen_flow.drawio](./diagrams/04_screen_flow.drawio)
 
 ```mermaid
 stateDiagram-v2

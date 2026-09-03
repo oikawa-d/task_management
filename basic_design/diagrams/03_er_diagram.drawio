@@ -1,0 +1,223 @@
+<mxfile host="app.diagrams.net" type="device">
+  <diagram name="ER図" id="ER図">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1500" pageHeight="1050" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="n1" value="ER図（PostgreSQL）" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=20;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="24" width="500" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="n2" value="永続データのみを保持。ログイン状態（session / refresh token）は Redis 側で管理する。" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=12;fontColor=#616161;" vertex="1" parent="1">
+          <mxGeometry x="40" y="56" width="900" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="t_users" value="users" style="swimlane;html=1;startSize=30;horizontal=1;fillColor=#E3F2FD;strokeColor=#1565C0;fontStyle=1;fontSize=13;childLayout=none;swimlaneFillColor=#FFFFFF;" vertex="1" parent="1">
+          <mxGeometry x="60" y="130" width="330" height="250" as="geometry" />
+        </mxCell>
+        <mxCell id="n3" value="PK  id   ·   UUID" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontStyle=1;fontColor=#B71C1C;" vertex="1" parent="t_users">
+          <mxGeometry x="0" y="30" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n4" value="UK  username   ·   VARCHAR(50)  ログインID" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontStyle=1;fontColor=#1565C0;" vertex="1" parent="t_users">
+          <mxGeometry x="0" y="52" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n5" value="UK  email   ·   VARCHAR(50)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontStyle=1;fontColor=#1565C0;" vertex="1" parent="t_users">
+          <mxGeometry x="0" y="74" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n6" value="password_hash   ·   TEXT  NULL可（OAuth専用）" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_users">
+          <mxGeometry x="0" y="96" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n7" value="last_name / first_name   ·   VARCHAR(30)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_users">
+          <mxGeometry x="0" y="118" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n8" value="last_name_kana / first_name_kana   ·   VARCHAR(30)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_users">
+          <mxGeometry x="0" y="140" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n9" value="birth_date   ·   DATE" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_users">
+          <mxGeometry x="0" y="162" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n10" value="role   ·   VARCHAR(10)  member|admin" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_users">
+          <mxGeometry x="0" y="184" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n11" value="is_active   ·   BOOLEAN" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_users">
+          <mxGeometry x="0" y="206" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n12" value="created_at / updated_at   ·   TIMESTAMPTZ" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_users">
+          <mxGeometry x="0" y="228" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="t_oauth" value="oauth_accounts" style="swimlane;html=1;startSize=30;horizontal=1;fillColor=#FFFDE7;strokeColor=#F9A825;fontStyle=1;fontSize=13;childLayout=none;swimlaneFillColor=#FFFFFF;" vertex="1" parent="1">
+          <mxGeometry x="60" y="460" width="330" height="162" as="geometry" />
+        </mxCell>
+        <mxCell id="n13" value="PK  id   ·   UUID" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontStyle=1;fontColor=#B71C1C;" vertex="1" parent="t_oauth">
+          <mxGeometry x="0" y="30" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n14" value="FK  user_id   ·   UUID → users.id  CASCADE" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontColor=#EF6C00;" vertex="1" parent="t_oauth">
+          <mxGeometry x="0" y="52" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n15" value="provider   ·   VARCHAR(20)  google" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_oauth">
+          <mxGeometry x="0" y="74" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n16" value="provider_user_id   ·   TEXT  Google の sub" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_oauth">
+          <mxGeometry x="0" y="96" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n17" value="provider_email   ·   TEXT  NULL可" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_oauth">
+          <mxGeometry x="0" y="118" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n18" value="created_at   ·   TIMESTAMPTZ" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_oauth">
+          <mxGeometry x="0" y="140" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="t_login" value="login_history" style="swimlane;html=1;startSize=30;horizontal=1;fillColor=#F3E5F5;strokeColor=#6A1B9A;fontStyle=1;fontSize=13;childLayout=none;swimlaneFillColor=#FFFFFF;" vertex="1" parent="1">
+          <mxGeometry x="60" y="700" width="330" height="228" as="geometry" />
+        </mxCell>
+        <mxCell id="n19" value="PK  id   ·   UUID" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontStyle=1;fontColor=#B71C1C;" vertex="1" parent="t_login">
+          <mxGeometry x="0" y="30" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n20" value="FK  user_id   ·   UUID → users.id  SET NULL" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontColor=#EF6C00;" vertex="1" parent="t_login">
+          <mxGeometry x="0" y="52" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n21" value="login_identifier   ·   VARCHAR(50)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_login">
+          <mxGeometry x="0" y="74" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n22" value="login_method   ·   session|jwt|oauth_google" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_login">
+          <mxGeometry x="0" y="96" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n23" value="ip_address   ·   INET" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_login">
+          <mxGeometry x="0" y="118" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n24" value="user_agent   ·   TEXT" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_login">
+          <mxGeometry x="0" y="140" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n25" value="success   ·   BOOLEAN" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_login">
+          <mxGeometry x="0" y="162" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n26" value="failure_reason   ·   VARCHAR(50)  NULL可" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_login">
+          <mxGeometry x="0" y="184" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n27" value="created_at   ·   TIMESTAMPTZ" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_login">
+          <mxGeometry x="0" y="206" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="t_projects" value="projects" style="swimlane;html=1;startSize=30;horizontal=1;fillColor=#E8F5E9;strokeColor=#2E7D32;fontStyle=1;fontSize=13;childLayout=none;swimlaneFillColor=#FFFFFF;" vertex="1" parent="1">
+          <mxGeometry x="520" y="130" width="330" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="n28" value="PK  id   ·   UUID" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontStyle=1;fontColor=#B71C1C;" vertex="1" parent="t_projects">
+          <mxGeometry x="0" y="30" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n29" value="name   ·   VARCHAR(100)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_projects">
+          <mxGeometry x="0" y="52" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n30" value="description   ·   TEXT  NULL可" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_projects">
+          <mxGeometry x="0" y="74" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n31" value="FK  owner_id   ·   UUID → users.id  RESTRICT" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontColor=#EF6C00;" vertex="1" parent="t_projects">
+          <mxGeometry x="0" y="96" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n32" value="created_at / updated_at   ·   TIMESTAMPTZ" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_projects">
+          <mxGeometry x="0" y="118" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="t_members" value="project_members" style="swimlane;html=1;startSize=30;horizontal=1;fillColor=#E8F5E9;strokeColor=#2E7D32;fontStyle=1;fontSize=13;childLayout=none;swimlaneFillColor=#FFFFFF;" vertex="1" parent="1">
+          <mxGeometry x="520" y="330" width="330" height="118" as="geometry" />
+        </mxCell>
+        <mxCell id="n33" value="PK  project_id   ·   UUID → projects.id  CASCADE" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontStyle=1;fontColor=#B71C1C;" vertex="1" parent="t_members">
+          <mxGeometry x="0" y="30" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n34" value="PK  user_id   ·   UUID → users.id  CASCADE" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontStyle=1;fontColor=#B71C1C;" vertex="1" parent="t_members">
+          <mxGeometry x="0" y="52" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n35" value="FK  invited_by   ·   UUID → users.id  SET NULL" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontColor=#EF6C00;" vertex="1" parent="t_members">
+          <mxGeometry x="0" y="74" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n36" value="joined_at   ·   TIMESTAMPTZ" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_members">
+          <mxGeometry x="0" y="96" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="t_tasks" value="tasks" style="swimlane;html=1;startSize=30;horizontal=1;fillColor=#FFF3E0;strokeColor=#EF6C00;fontStyle=1;fontSize=13;childLayout=none;swimlaneFillColor=#FFFFFF;" vertex="1" parent="1">
+          <mxGeometry x="520" y="520" width="330" height="250" as="geometry" />
+        </mxCell>
+        <mxCell id="n37" value="PK  id   ·   UUID" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontStyle=1;fontColor=#B71C1C;" vertex="1" parent="t_tasks">
+          <mxGeometry x="0" y="30" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n38" value="FK  project_id   ·   UUID → projects.id  CASCADE" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontColor=#EF6C00;" vertex="1" parent="t_tasks">
+          <mxGeometry x="0" y="52" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n39" value="title   ·   VARCHAR(150)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_tasks">
+          <mxGeometry x="0" y="74" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n40" value="description   ·   TEXT  NULL可" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_tasks">
+          <mxGeometry x="0" y="96" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n41" value="status   ·   todo|in_progress|done" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_tasks">
+          <mxGeometry x="0" y="118" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n42" value="FK  assignee_id   ·   UUID → users.id  SET NULL" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontColor=#EF6C00;" vertex="1" parent="t_tasks">
+          <mxGeometry x="0" y="140" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n43" value="FK  created_by   ·   UUID → users.id  RESTRICT" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontColor=#EF6C00;" vertex="1" parent="t_tasks">
+          <mxGeometry x="0" y="162" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n44" value="position   ·   INTEGER  列内の並び順" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_tasks">
+          <mxGeometry x="0" y="184" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n45" value="due_date   ·   DATE  NULL可" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_tasks">
+          <mxGeometry x="0" y="206" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n46" value="created_at / updated_at   ·   TIMESTAMPTZ" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_tasks">
+          <mxGeometry x="0" y="228" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="t_comments" value="task_comments" style="swimlane;html=1;startSize=30;horizontal=1;fillColor=#FFF3E0;strokeColor=#EF6C00;fontStyle=1;fontSize=13;childLayout=none;swimlaneFillColor=#FFFFFF;" vertex="1" parent="1">
+          <mxGeometry x="520" y="830" width="330" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="n47" value="PK  id   ·   UUID" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontStyle=1;fontColor=#B71C1C;" vertex="1" parent="t_comments">
+          <mxGeometry x="0" y="30" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n48" value="FK  task_id   ·   UUID → tasks.id  CASCADE" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontColor=#EF6C00;" vertex="1" parent="t_comments">
+          <mxGeometry x="0" y="52" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n49" value="FK  user_id   ·   UUID → users.id  RESTRICT" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontColor=#EF6C00;" vertex="1" parent="t_comments">
+          <mxGeometry x="0" y="74" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n50" value="body   ·   TEXT  1〜2000文字" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_comments">
+          <mxGeometry x="0" y="96" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n51" value="created_at / updated_at   ·   TIMESTAMPTZ" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_comments">
+          <mxGeometry x="0" y="118" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="e52" value="1 : N  外部ID紐付け" style="edgeStyle=entityRelationEdgeStyle;html=1;rounded=0;strokeColor=#455A64;strokeWidth=1.5;fontSize=10;labelBackgroundColor=#FFFFFF;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;" edge="1" parent="1" source="t_users" target="t_oauth">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e53" value="0..1 : N  ログイン試行" style="edgeStyle=entityRelationEdgeStyle;html=1;rounded=0;strokeColor=#455A64;strokeWidth=1.5;fontSize=10;labelBackgroundColor=#FFFFFF;startArrow=ERzeroToOne;startFill=0;endArrow=ERmany;endFill=0;" edge="1" parent="1" source="t_users" target="t_login">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e54" value="1 : N  owner" style="edgeStyle=entityRelationEdgeStyle;html=1;rounded=0;strokeColor=#455A64;strokeWidth=1.5;fontSize=10;labelBackgroundColor=#FFFFFF;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;" edge="1" parent="1" source="t_users" target="t_projects">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e55" value="1 : N  所属" style="edgeStyle=entityRelationEdgeStyle;html=1;rounded=0;strokeColor=#455A64;strokeWidth=1.5;fontSize=10;labelBackgroundColor=#FFFFFF;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;" edge="1" parent="1" source="t_users" target="t_members">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e56" value="1 : N  メンバー" style="edgeStyle=entityRelationEdgeStyle;html=1;rounded=0;strokeColor=#455A64;strokeWidth=1.5;fontSize=10;labelBackgroundColor=#FFFFFF;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;" edge="1" parent="1" source="t_projects" target="t_members">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e57" value="1 : N  保有" style="edgeStyle=entityRelationEdgeStyle;html=1;rounded=0;strokeColor=#455A64;strokeWidth=1.5;fontSize=10;labelBackgroundColor=#FFFFFF;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;" edge="1" parent="1" source="t_projects" target="t_tasks">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e58" value="0..1 : N  assignee / created_by" style="edgeStyle=entityRelationEdgeStyle;html=1;rounded=0;strokeColor=#455A64;strokeWidth=1.5;fontSize=10;labelBackgroundColor=#FFFFFF;startArrow=ERzeroToOne;startFill=0;endArrow=ERmany;endFill=0;" edge="1" parent="1" source="t_users" target="t_tasks">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e59" value="1 : N  コメント" style="edgeStyle=entityRelationEdgeStyle;html=1;rounded=0;strokeColor=#455A64;strokeWidth=1.5;fontSize=10;labelBackgroundColor=#FFFFFF;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;" edge="1" parent="1" source="t_tasks" target="t_comments">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e60" value="1 : N  投稿者" style="edgeStyle=entityRelationEdgeStyle;html=1;rounded=0;strokeColor=#455A64;strokeWidth=1.5;fontSize=10;labelBackgroundColor=#FFFFFF;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;" edge="1" parent="1" source="t_users" target="t_comments">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="n61" value="Redis（永続化しない・TTLで自動失効）&lt;br&gt;&lt;br&gt;session:{session_id}        → user_id, role（TTL 30分・操作で延長）&lt;br&gt;csrf:{session_id}           → CSRFトークン（セッションと同一TTL）&lt;br&gt;refresh:{token_hash}        → user_id, family_id（TTL 14日）&lt;br&gt;user_sessions:{user_id}     → session_id の集合（強制ログアウト用）&lt;br&gt;user_refresh:{user_id}      → token_hash の集合&lt;br&gt;oauth_state:{state}         → PKCE検証値（TTL 10分・ワンタイム）&lt;br&gt;pwreset:{token_hash}        → user_id（TTL 30分・ワンタイム）&lt;br&gt;login_fail:{identifier}     → 連続失敗回数（TTL 15分）" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#FFEBEE;strokeColor=#C62828;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;align=left;verticalAlign=top;spacingLeft=12;spacingTop=8;fontSize=10;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="980" y="130" width="460" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="n62" value="凡例 / 制約&lt;br&gt;PK（赤太字）: 主キー　UK（青太字）: 一意制約　FK（橙）: 外部キー&lt;br&gt;CASCADE / RESTRICT / SET NULL は ON DELETE の挙動&lt;br&gt;・project_members は (project_id, user_id) の複合主キー&lt;br&gt;・列挙値は ENUM 型ではなく VARCHAR + CHECK 制約で表現&lt;br&gt;・users.username / email は lower() の一意インデックス&lt;br&gt;・login_history は Redis の失効状況と独立して保持し続ける" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#BDBDBD;align=left;verticalAlign=top;spacingLeft=8;spacingTop=6;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="980" y="390" width="460" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="n63" value="主なインデックス&lt;br&gt;ix_tasks_project_status_position (project_id, status, position)&lt;br&gt;　→ カンバン表示の主クエリ&lt;br&gt;ix_project_members_user_id (user_id)&lt;br&gt;　→ ダッシュボードの所属プロジェクト一覧&lt;br&gt;ix_task_comments_task_created (task_id, created_at)&lt;br&gt;ix_login_history_user_created (user_id, created_at DESC)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#BDBDBD;align=left;verticalAlign=top;spacingLeft=8;spacingTop=6;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="980" y="580" width="460" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="n64" value="DB関数 / プロシージャ（db/functions・db/procedures）&lt;br&gt;trg_set_updated_at()        BEFORE UPDATE トリガ&lt;br&gt;fn_is_project_member(pid, uid) → BOOLEAN&lt;br&gt;fn_next_task_position(pid, status) → INTEGER&lt;br&gt;sp_purge_login_history(retention_days)" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;darkOpacity=0.05;fillColor=#FFF9C4;strokeColor=#F9A825;align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;size=14;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="980" y="760" width="460" height="110" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
