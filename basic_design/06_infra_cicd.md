@@ -5,10 +5,10 @@
 | 項目 | 方針 |
 |------|------|
 | 実行環境 | ローカル（または自宅サーバー）の Docker Compose。クラウドは使用しない（要件書§0） |
-| サービス構成 | `backend` / `frontend` / `postgres` / `redis` / `mailpit`（開発用SMTP。D-1により追加） |
+| サービス構成 | `backend` / `frontend` / `postgres` / `redis`。`mailpit` は開発Compose profileだけで有効化し、デプロイ環境は外部SMTPを使う |
 | イメージ配布 | GHCR（GitHub Container Registry） |
 | デプロイ | self-hosted runner から `docker compose pull && docker compose up -d` |
-| ポート | 外部公開ポートは全て `.env` に定義。コンテナ内部ポートは固定値でよい |
+| ポート | 通常は `frontend` のみをloopbackまたは必要な公開IFへ公開。backend / PostgreSQL / Redis / SMTPはComposeネットワーク内に閉じ、開発用の追加ポートも `127.0.0.1` に限定 |
 | コマンド | `docker compose`（ハイフン付き `docker-compose` は使用しない） |
 
 ## 2. Docker Compose 構成
@@ -17,10 +17,6 @@
 flowchart TB
     subgraph host["ホスト"]
         P1["${FRONTEND_PORT} → 80"]
-        P2["${BACKEND_PORT} → 8000"]
-        P3["${POSTGRES_PORT} → 5432"]
-        P4["${REDIS_PORT} → 6379"]
-        P5["${MAILPIT_UI_PORT} → 8025"]
     end
 
     subgraph net["cerberus_net (bridge)"]
@@ -32,10 +28,6 @@ flowchart TB
     end
 
     P1 --> FE
-    P2 --> BE
-    P3 --> PG
-    P4 --> RD
-    P5 --> MP
     FE -->|"/api プロキシ"| BE
     BE --> PG
     BE --> RD
@@ -44,15 +36,17 @@ flowchart TB
 
 | サービス | イメージ | 依存 | ヘルスチェック | 備考 |
 |----------|----------|------|---------------|------|
-| `postgres` | `postgres:17-alpine` | - | `pg_isready` | volume `pgdata` で永続化 |
-| `redis` | `redis:8-alpine` | - | `redis-cli ping` | `--save "" --appendonly no --maxmemory-policy noeviction`。**volumeなし** |
+| `postgres` | `postgres:17-alpine` | - | `pg_isready` | volume `pgdata` で永続化。ホストポートは公開しない |
+| `redis` | `redis:8-alpine` | - | `redis-cli ping` | `--save "" --appendonly no --maxmemory-policy noeviction`。**volumeなし**。ホストポートは公開しない |
 | `backend` | 自ビルド（`api/Dockerfile`） | postgres, redis（`service_healthy`） | `GET /health` | 起動時に `alembic upgrade head` |
 | `frontend` | 自ビルド（`frontend/Dockerfile`） | backend | `GET /` | 本番相当はビルド成果物を nginx で配信 |
-| `mailpit` | `axllent/mailpit` | - | - | SMTP `1025` / Web UI `8025`。開発専用 |
+| `mailpit` | `axllent/mailpit` | - | - | SMTP `1025` / Web UI `8025`。`dev` profile専用。UI/SMTPはloopback公開のみ |
 
 - `redis` に volume を割り当てないことで、要件書§4の「再起動で全ログアウト」という挙動を意図的に再現する
-- `depends_on` は `condition: service_healthy` を用い、起動順序の競合を避ける
+- `depends_on` は `condition: service_healthy` を用い、起動順序の競合を避ける。backendはmailpitを使う開発profileでのみmailpitにも依存する
 - 開発時はソースをバインドマウントしてホットリロード（`uvicorn --reload` / `vite dev`）、CD時はイメージ内の成果物を使う構成を `docker-compose.override.yml` で切り替える
+- 基本Composeは `frontend` の `/api` proxyを経由する。`backend` / `postgres` / `redis` は `ports` を持たず、開発者が直接接続する場合だけ `compose.dev.yml` で `127.0.0.1:${...}` を追加する
+- `mailpit` は `profiles: [dev]` とし、production/CDでは起動しない。productionの `SMTP_HOST` は外部SMTPを指定する
 
 ## 3. Dockerfile 方針
 
@@ -87,11 +81,11 @@ flowchart TB
 | `APP_ENV` | `local` | `local` / `ci` / `production` |
 | `LOG_LEVEL` | `INFO` | ログレベル |
 | `FRONTEND_PORT` | `5173` | フロントの外部公開ポート |
-| `BACKEND_PORT` | `8000` | APIの外部公開ポート |
-| `POSTGRES_PORT` | `5432` | PostgreSQLの外部公開ポート |
-| `REDIS_PORT` | `6379` | Redisの外部公開ポート |
-| `MAILPIT_SMTP_PORT` | `1025` | Mailpit SMTPの外部公開ポート |
-| `MAILPIT_UI_PORT` | `8025` | Mailpit Web UIの外部公開ポート |
+| `BACKEND_PORT` | `8000` | 開発時にbackendへ接続する場合だけ `127.0.0.1` に公開。通常のCompose/CDでは未公開 |
+| `POSTGRES_PORT` | `5432` | 開発用DB接続が必要な場合だけ `127.0.0.1` に公開 |
+| `REDIS_PORT` | `6379` | 開発用Redis接続が必要な場合だけ `127.0.0.1` に公開 |
+| `MAILPIT_SMTP_PORT` | `1025` | Mailpitを使う開発時だけ `127.0.0.1` に公開 |
+| `MAILPIT_UI_PORT` | `8025` | Mailpitを使う開発時だけ `127.0.0.1` に公開 |
 
 ### 4.2 データストア
 
@@ -101,6 +95,7 @@ flowchart TB
 | `DATABASE_URL` | `postgresql+asyncpg://cerberus:***@postgres:5432/cerberus` | アプリ用接続文字列 |
 | `DATABASE_POOL_SIZE` / `DATABASE_MAX_OVERFLOW` | `5` / `10` | コネクションプール |
 | `REDIS_URL` | `redis://redis:6379/0` | アプリ用 |
+| `REDIS_KEY_PREFIX` | 空 | 環境を共有する場合のRedisキー名前空間 |
 | `REDIS_TEST_DB` | `1` | テスト用DB番号 |
 | `LOGIN_HISTORY_RETENTION_DAYS` | `365` | `sp_purge_login_history` に渡す保持日数 |
 
@@ -110,13 +105,14 @@ flowchart TB
 |------|-----|------|
 | `AUTH_MODE` | `session` | `session` / `jwt` |
 | `SESSION_TTL_SECONDS` | `1800` | セッションTTL |
+| `SESSION_ABSOLUTE_TTL_SECONDS` | `28800` | sessionの絶対有効期限（8時間）。アイドル延長の上限 |
 | `ACCESS_TOKEN_TTL_SECONDS` | `900` | アクセストークン有効期限 |
 | `REFRESH_TTL_SECONDS` | `1209600` | リフレッシュトークン有効期限（14日） |
 | `JWT_SECRET_KEY` | *** | JWT署名鍵（**Secret**） |
 | `JWT_ALGORITHM` | `HS256` | |
-| `COOKIE_NAME_SESSION` / `COOKIE_NAME_CSRF` / `COOKIE_NAME_REFRESH` | `cerberus_sid` / `cerberus_csrf` / `cerberus_rt` | Cookie名 |
+| `COOKIE_NAME_SESSION` / `COOKIE_NAME_CSRF` / `COOKIE_NAME_REFRESH` / `COOKIE_NAME_OAUTH_STATE` | `cerberus_sid` / `cerberus_csrf` / `cerberus_rt` / `cerberus_oauth_state` | Cookie名 |
 | `COOKIE_SECURE` | `false`（ローカルHTTP） | 本番相当では `true` |
-| `COOKIE_SAMESITE` | `lax` | refresh Cookie は `strict` を別変数で指定 |
+| `COOKIE_SAMESITE` / `COOKIE_SAMESITE_REFRESH` | `lax` / `strict` | session/CSRFはLax、jwt refreshはStrict。別オリジン構成ではSecure + 明示CSRF/Origin検証を必須 |
 | `COOKIE_DOMAIN` | 空 | 必要時のみ設定 |
 | `ARGON2_TIME_COST` / `ARGON2_MEMORY_COST` / `ARGON2_PARALLELISM` | `3` / `65536` / `4` | パスワードハッシュのコスト |
 | `LOGIN_MAX_ATTEMPTS` / `LOGIN_LOCK_WINDOW_SECONDS` | `5` / `900` | ログイン失敗のレート制限 |
@@ -128,7 +124,7 @@ flowchart TB
 | 変数 | 例 | 説明 |
 |------|-----|------|
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | *** | Google OAuth2（**Secret**） |
-| `GOOGLE_REDIRECT_URI` | `http://localhost:8000/api/auth/oauth/google/callback` | |
+| `GOOGLE_REDIRECT_URI` | `http://localhost:5173/api/auth/oauth/google/callback` | frontendのsame-origin `/api` proxyを経由。外部公開時はfrontendのHTTPS URL |
 | `OAUTH_STATE_TTL_SECONDS` | `600` | state のTTL |
 | `FRONTEND_BASE_URL` | `http://localhost:5173` | メール内リンク・OAuth後のリダイレクト先 |
 | `SMTP_HOST` / `SMTP_PORT` | `mailpit` / `1025` | 開発は Mailpit |
@@ -136,18 +132,15 @@ flowchart TB
 | `SMTP_USE_TLS` | `false` | |
 | `MAIL_FROM` | `no-reply@cerberus.local` | 送信元 |
 | `PASSWORD_RESET_TTL_SECONDS` | `1800` | リセットトークンTTL |
-| `EMAIL_VERIFY_TTL_SECONDS` | `86400` | メール認証トークンTTL（24時間、D-6） |
-| `EMAIL_VERIFY_RESEND_INTERVAL_SECONDS` | `60` | 認証メール再送の最小間隔（D-6） |
+| `EMAIL_VERIFY_TTL_SECONDS` | `86400` | メール認証トークンTTL（24時間） |
+| `EMAIL_VERIFY_RESEND_INTERVAL_SECONDS` | `60` | 認証メール再送の最小間隔 |
 
 ### 4.5 初期データ / フロント
 
 | 変数 | 例 | 説明 |
 |------|-----|------|
-| `INITIAL_ADMIN_EMAIL` / `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD` | *** | seed 用管理者（**Secret**）。ハードコードしない。seed 時点で `email_verified_at` を設定し、確認メールなしでログインできるようにする（D-6） |
-| `VITE_API_BASE_URL` | `http://localhost:8000/api` | フロント（ビルド時埋め込み） |
-| `VITE_AUTH_MODE` | `session` | フロント側の AuthAdapter 選択 |
-| `VITE_GOOGLE_LOGIN_ENABLED` | `true` | Googleログインボタン表示 |
-| `VITE_CSRF_COOKIE_NAME` | `cerberus_csrf` | |
+| `INITIAL_ADMIN_EMAIL` / `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD` | *** | seed 用管理者（**Secret**）。ハードコードしない。seed 時点で `email_verified_at` を設定し、確認メールなしでログインできるようにする |
+| `VITE_API_BASE_URL` | `/api` | フロントのAPIベースURL（ビルド時埋め込み）。認証モード等は `/auth/config` で実行時取得 |
 
 **pydantic-settings による定義**：`api/app/core/config.py` に `Settings(BaseSettings)` を定義し、上記を型付きで受け取る。既定値はコード側に持たせるが、URL・ポート・秘密情報は必ず環境変数から取得する（ハードコード禁止）。
 
@@ -239,12 +232,12 @@ sequenceDiagram
     SELF->>GHCR: docker compose pull
     SELF->>DC: docker compose up -d --remove-orphans
     DC->>DC: alembic upgrade head（backend起動時）
-    SELF->>SELF: /health をポーリングして疎通確認
+    SELF->>SELF: frontend経由の /api/health をポーリングして疎通確認
     alt ヘルスチェック失敗
-        SELF->>DC: 直前のタグへロールバック（docker compose up -d）
+        SELF->>DC: アプリイメージだけ直前タグへ戻して再起動（DB downgradeなし）
         SELF-->>GH: ジョブ失敗
     else 成功
-        SELF->>SELF: docker image prune -f
+        SELF->>SELF: Cerberus管理ラベル付きイメージだけprune
         SELF-->>GH: ジョブ成功
     end
 ```
@@ -261,6 +254,7 @@ sequenceDiagram
 | Secrets の受け渡し | deploy ジョブ内で `.env` をヒアドキュメント生成（`${{ secrets.* }}` を展開）。ワークフローログに出力しない |
 | 環境 | GitHub Environments（`production`）を使い、必要に応じて承認を必須化 |
 | 同時実行制御 | `concurrency: group: deploy-main, cancel-in-progress: false`（デプロイの競合を防ぐ） |
+| イメージ削除 | `docker image prune` は `com.cerberus.managed=true` ラベル付きイメージだけを対象にする。共有ホスト上の他プロジェクトを削除しない |
 
 ### 6.3 self-hosted runner のセットアップ
 
@@ -292,4 +286,4 @@ sequenceDiagram
 | 監視 | `/health` の手動確認のみ。監視・アラートはスコープ外（要件書§11） |
 | ログ | コンテナ標準出力（`docker compose logs`）。集約はスコープ外 |
 | シークレットローテーション | `JWT_SECRET_KEY` を変更すると全アクセストークンが無効になる（リフレッシュはRedis管理のため生存）。挙動を理解した上で実施すること |
-| マイグレーション失敗時 | backend コンテナが起動失敗するため、直前タグへロールバックし `alembic downgrade` を手動実行する。**要検討**（自動ロールバック手順の整備） |
+| マイグレーション失敗時 | backend コンテナは起動失敗とし、DBバックアップとログを確認して原因を修正する。アプリイメージだけを直前タグへ戻し、**適用済みmigrationを自動downgradeしない**。旧アプリが新しいスキーマと後方互換であることを前提にし、不可逆変更はexpand/contract方式で段階適用する |

@@ -36,11 +36,11 @@ erDiagram
         varchar_50 username UK "ログインID"
         varchar_50 email UK
         text password_hash "OAuth専用ユーザーはNULL"
-        varchar_30 last_name
-        varchar_30 first_name
-        varchar_30 last_name_kana
-        varchar_30 first_name_kana
-        date birth_date
+        varchar_30 last_name "NULL可（OAuth新規）"
+        varchar_30 first_name "NULL可（OAuth新規）"
+        varchar_30 last_name_kana "NULL可（OAuth新規）"
+        varchar_30 first_name_kana "NULL可（OAuth新規）"
+        date birth_date "NULL可（OAuth新規）"
         varchar_10 role "member / admin"
         boolean is_active
         timestamptz email_verified_at "NULL可（未認証）"
@@ -78,6 +78,7 @@ erDiagram
         uuid assignee_id FK "NULL可"
         uuid created_by FK
         integer position "列内の並び順"
+        integer version "楽観的ロック用"
         date due_date "NULL可"
         timestamptz created_at
         timestamptz updated_at
@@ -107,22 +108,20 @@ erDiagram
 
 ### 3.1 users
 
-要件書の定義に加え、pptx（slide2 / slide1）に合わせて氏名・フリガナ・生年月日・`username` を追加している（設計判断 D-2 / D-3）。
-
 | カラム | 型 | NULL | 既定値 | 制約・備考 |
 |--------|----|------|--------|-----------|
 | id | UUID | NO | `gen_random_uuid()` | PK |
 | username | VARCHAR(50) | NO | - | UNIQUE。ログインID。半角英数字と `_` `-`（`CHECK`） |
-| email | VARCHAR(50) | NO | - | UNIQUE。pptxの50文字制限に合わせる。`CHECK` で簡易形式検証 |
+| email | VARCHAR(50) | NO | - | UNIQUE。50文字上限。`CHECK` で簡易形式検証 |
 | password_hash | TEXT | YES | - | argon2id ハッシュ。Google のみで登録したユーザーは NULL |
-| last_name | VARCHAR(30) | NO | - | 姓 |
-| first_name | VARCHAR(30) | NO | - | 名 |
-| last_name_kana | VARCHAR(30) | NO | - | 姓フリガナ。`CHECK` でひらがな/カタカナ/数字のみ |
-| first_name_kana | VARCHAR(30) | NO | - | 名フリガナ。同上 |
-| birth_date | DATE | NO | - | 用途は**不明**（T-5）。保持・表示のみ |
+| last_name | VARCHAR(30) | YES | - | 姓。通常登録では必須、OAuth新規ユーザーはプロフィール補完まで NULL 可 |
+| first_name | VARCHAR(30) | YES | - | 名。同上 |
+| last_name_kana | VARCHAR(30) | YES | - | 姓フリガナ。同上。値がある場合は `CHECK` でひらがな/カタカナ/数字のみ |
+| first_name_kana | VARCHAR(30) | YES | - | 名フリガナ。同上 |
+| birth_date | DATE | YES | - | 年齢判定には使用せず、プロフィール情報として保持。OAuth新規ユーザーは NULL 可 |
 | role | VARCHAR(10) | NO | `'member'` | `CHECK (role IN ('member','admin'))` |
 | is_active | BOOLEAN | NO | `true` | 管理者による無効化用 |
-| email_verified_at | TIMESTAMPTZ | YES | `NULL` | メール認証の完了日時。`NULL` は未認証を意味しログインを拒否する（D-6）。真偽値ではなく日時で持ち、「いつ認証したか」を追跡可能にする |
+| email_verified_at | TIMESTAMPTZ | YES | `NULL` | メール認証の完了日時。`NULL` は未認証を意味しログインを拒否する。真偽値ではなく日時で持ち、「いつ認証したか」を追跡可能にする |
 | created_at | TIMESTAMPTZ | NO | `now()` | |
 | updated_at | TIMESTAMPTZ | NO | `now()` | トリガで自動更新 |
 
@@ -133,19 +132,20 @@ erDiagram
 | `uq_users_username` | UNIQUE (lower(username)) | 大文字小文字を区別しないログインID一意制約 |
 | `uq_users_email` | UNIQUE (lower(email)) | 同上（メール） |
 | `ix_users_role` | (role) | 管理者一覧・権限フィルタ |
-| `ix_users_email_verified_at` | (email_verified_at) WHERE email_verified_at IS NULL | 未認証のまま放置されたユーザーの棚卸し（**要検討**：定期削除バッチを設けるか） |
+| `ix_users_email_verified_at` | (email_verified_at) WHERE email_verified_at IS NULL | 未認証のまま放置されたユーザーの棚卸し |
+| `ix_users_created_at` | (created_at DESC) | 管理者ユーザー一覧の作成日時順 |
 
 **バリデーション（アプリ層 / pydantic）**
 
-| 項目 | ルール | 出典 |
-|------|--------|------|
-| 姓・名 | 1〜30文字 | pptx slide2 |
-| フリガナ | ひらがな・カタカナ・数字のみ、1〜30文字 | pptx slide2 |
-| 生年月日 | プルダウン選択（年/月/日）。未来日不可 | pptx slide2 |
-| メールアドレス | 50文字以内、半角英数字と `@ - _ . +` を許容 | pptx slide2 |
-| パスワード | 8文字以上、かつ「大文字英字／小文字英字／数字／記号」のうち2種類以上を含む | pptx slide2 |
+| 項目 | ルール |
+|------|--------|
+| 姓・名 | 1〜30文字 |
+| フリガナ | ひらがな・カタカナ・数字のみ、1〜30文字 |
+| 生年月日 | プルダウン選択（年/月/日）。未来日不可 |
+| メールアドレス | 50文字以内、半角英数字と `@ - _ . +` を許容 |
+| パスワード | 8文字以上、かつ「大文字英字／小文字英字／数字／記号」のうち2種類以上を含む |
 
-> pptx原文は「大文字・小文字英字、記号、数字のうち2種類以上」。本設計では上記4分類のうち2種類以上と解釈した。厳格化する場合は**要検討**。
+**OAuth新規ユーザーの補足**：Googleから `username` は取得しないため、`google_` + `sha256(provider_user_id)` の先頭16文字を候補値として生成し、`users.username` の一意制約に当たった場合は連番を付けて再試行する。プロフィール4項目は NULL のまま作成でき、`GET /auth/me` の `profile_completed=false` でフロントへ通知する。通常の会員登録では4項目を引き続き必須とする。
 
 ### 3.2 oauth_accounts
 
@@ -197,7 +197,8 @@ erDiagram
 | status | VARCHAR(20) | NO | `'todo'` | `CHECK (status IN ('todo','in_progress','done'))` |
 | assignee_id | UUID | YES | - | FK → users.id `ON DELETE SET NULL` |
 | created_by | UUID | NO | - | FK → users.id `ON DELETE RESTRICT` |
-| position | INTEGER | NO | `0` | 同一 status 列内の並び順（T-3） |
+| position | INTEGER | NO | `0` | 同一 status 列内の並び順。`CHECK (position >= 0)`、`UNIQUE (project_id, status, position) DEFERRABLE INITIALLY DEFERRED` |
+| version | INTEGER | NO | `1` | 楽観的排他制御用。更新成功時に1加算、`CHECK (version > 0)` |
 | due_date | DATE | YES | - | |
 | created_at | TIMESTAMPTZ | NO | `now()` | |
 | updated_at | TIMESTAMPTZ | NO | `now()` | トリガで自動更新 |
@@ -206,8 +207,10 @@ erDiagram
 
 | 名称 | 定義 | 用途 |
 |------|------|------|
-| `ix_tasks_project_status_position` | (project_id, status, position) | カンバン表示の主クエリ |
+| `uq_tasks_project_status_position` | UNIQUE (project_id, status, position) | 列内の重複防止とカンバン表示の主クエリを兼ねる |
 | `ix_tasks_assignee_id` | (assignee_id) | 担当タスク絞り込み |
+
+**同時更新制御**：`UNIQUE (project_id, status, position)` で列内の重複を防ぐ。タスクの作成・削除・status/position変更では、サービス層が同一トランザクション内でプロジェクト・statusごとの advisory lock を取得してから採番・再並べ替えを行う。再並べ替え中は移動対象を一時的な非負の退避値（現在の最大値 + 件数 + 1）へ置き、他の行を詰めた後に最終位置を設定する（制約は `DEFERRABLE INITIALLY DEFERRED`）。通常更新を含む `PATCH /tasks/{id}` は `version` が一致した場合だけ更新し、成功時に `version + 1` とする。削除時も同じ列の後続positionを詰める。
 
 ### 3.6 task_comments
 
@@ -224,7 +227,7 @@ erDiagram
 
 ### 3.7 login_history
 
-Redis の失効状況とは独立して保持し続ける監査ログ。
+Redis の失効状況とは独立して、設定した保持期間（既定365日）保管する監査ログ。保持期間を超えた行は `sp_purge_login_history` で削除する。
 
 | カラム | 型 | NULL | 備考 |
 |--------|----|------|------|
@@ -240,7 +243,7 @@ Redis の失効状況とは独立して保持し続ける監査ログ。
 
 **インデックス**：`ix_login_history_user_created` (user_id, created_at DESC)、`ix_login_history_created` (created_at DESC)
 
-> パスワードリセットの実行履歴はこのテーブルに含めない（`login_method` の CHECK 制約を汚さないため）。必要になった場合は `security_events` テーブルの追加を**要検討**。
+> パスワードリセットの実行履歴はこのテーブルに含めない（`login_method` の CHECK 制約を汚さないため）。本基本設計のスコープでは `security_events` テーブルも追加しない。
 
 ## 4. データ遷移図
 
@@ -268,14 +271,16 @@ stateDiagram-v2
     [*] --> unverified: 登録フォーム送信（email_verified_at=NULL）
     unverified --> unverified: 認証メール再送
     unverified --> member: 確認メール内リンクで認証完了（email_verified_at=now）
-    [*] --> member_oauth: Googleで新規登録（password_hash=NULL,<br/>email_verified_at=now：Google側で検証済み）
-    member_oauth --> member: パスワード設定（password_hash付与）
+    [*] --> member_oauth_incomplete: Googleで新規登録（password_hash=NULL,<br/>email_verified_at=now：Google側で検証済み）
+    member_oauth_incomplete --> member: プロフィール4項目を設定（profile_completed=true）
     member --> admin: 管理者が権限変更
     admin --> member: 管理者が権限変更
     member --> inactive: 管理者が無効化（is_active=false）
     inactive --> member: 再有効化
-    inactive --> [*]: 削除（オーナーのプロジェクトが無い場合のみ）
 ```
+
+OAuthユーザーのパスワード設定はプロフィール完了とは独立した操作であり、`password_hash` が NULL の間だけ現在パスワードなしで許可する。
+ユーザーの物理削除APIは本基本設計では提供せず、無効化（`is_active=false`）した行を保持する。これは `projects.owner_id` / `tasks.created_by` / `task_comments.user_id` の履歴を外部キーで保護するためである。
 
 ### 4.3 プロジェクト作成時のデータ生成
 
@@ -309,7 +314,7 @@ flowchart LR
 |------|------|
 | 引数 | `p_project_id UUID`, `p_user_id UUID` |
 | 戻り値 | `BOOLEAN` |
-| 処理 | `project_members` に該当行が存在するか、または `users.role = 'admin'` であれば `true` |
+| 処理 | `users.is_active = true` のユーザーについて、`project_members` に該当行が存在するか、または `users.role = 'admin'` であれば `true` |
 | 用途 | 認可チェックのDB側での再確認、およびSQLレベルの検証テスト |
 | 備考 | アプリ層でも同等の判定を行う（二重防御）。正はアプリ層 |
 
@@ -319,7 +324,7 @@ flowchart LR
 |------|------|
 | 引数 | `p_project_id UUID`, `p_status VARCHAR` |
 | 戻り値 | `INTEGER` |
-| 処理 | `SELECT COALESCE(MAX(position), -1) + 1` を対象 (project_id, status) で取得 |
+| 処理 | 呼び出し側が同一トランザクションで `(project_id, status)` の advisory lock を取得した後、`SELECT COALESCE(MAX(position), -1) + 1` を取得 |
 | 用途 | タスク新規作成時、および列間移動時の末尾追加 |
 
 ### 5.4 `db/procedures/sp_purge_login_history.sql`
@@ -330,7 +335,7 @@ flowchart LR
 | 戻り値 | なし（`PROCEDURE`） |
 | 処理 | `DELETE FROM login_history WHERE created_at < now() - (p_retention_days || ' days')::interval` |
 | 用途 | 監査ログの保持期間管理。保持日数は環境変数 `LOGIN_HISTORY_RETENTION_DAYS` から渡す |
-| 実行方法 | 手動またはバッチ。定期実行の仕組みは**要検討**（学習範囲ではcronを想定しない） |
+| 実行方法 | 運用者が月次で手動実行する。アプリ内cronは設けない（学習範囲外） |
 
 ## 6. マイグレーション方針
 
@@ -356,9 +361,9 @@ flowchart LR
 |----|------|------|-----------------|
 | Q-1 | ログイン | `WHERE (lower(email)=:v OR lower(username)=:v) AND is_active`（取得後に `email_verified_at IS NULL` を判定） | `uq_users_email` / `uq_users_username` |
 | Q-2 | ダッシュボード | `projects JOIN project_members ON ... WHERE pm.user_id = :me` | `ix_project_members_user_id` |
-| Q-3 | カンバン取得 | `WHERE project_id=:pid ORDER BY status, position` | `ix_tasks_project_status_position` |
+| Q-3 | カンバン取得 | `WHERE project_id=:pid`。`todo` → `in_progress` → `done` の順に列ごとに `position` 昇順でグルーピング | `uq_tasks_project_status_position` |
 | Q-4 | タスク詳細 | tasks + assignee + comments（コメントは別クエリで取得しN+1を回避） | `ix_task_comments_task_created` |
-| Q-5 | 管理者ユーザー一覧 | `ORDER BY created_at DESC LIMIT/OFFSET` | `ix_users_role` |
+| Q-5 | 管理者ユーザー一覧 | `ORDER BY created_at DESC LIMIT/OFFSET` | `ix_users_created_at` |
 | Q-6 | ログイン履歴 | `WHERE user_id=:uid ORDER BY created_at DESC LIMIT 50` | `ix_login_history_user_created` |
 
 > Q-2 / Q-3 では SQLAlchemy の `selectinload` を用い、N+1 クエリを避ける。

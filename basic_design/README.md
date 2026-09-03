@@ -6,7 +6,7 @@
 
 | No | ファイル | 対象領域 | 概要 |
 |----|----------|----------|------|
-| 00 | [00_overview.md](./00_overview.md) | 全体 | システム構成、レイヤ構成、画面遷移、全体シーケンス、要件書からの設計判断一覧 |
+| 00 | [00_overview.md](./00_overview.md) | 全体 | システム構成、レイヤ構成、画面遷移、全体シーケンス、データ全体像、非機能設計サマリ |
 | 01 | [01_database.md](./01_database.md) | PostgreSQL | ER図、テーブル定義、インデックス、制約、マイグレーション方針、DB関数 |
 | 02 | [02_redis.md](./02_redis.md) | Redis | キー設計、TTL設計、データ遷移図、操作関数詳細、障害時の挙動 |
 | 03 | [03_auth.md](./03_auth.md) | 認証・認可 | Strategyパターン設計、session/jwt/OAuth2、パスワードリセット、CSRF、RBAC |
@@ -28,8 +28,8 @@ flowchart LR
     A --> G[06 インフラ/CICD]
 ```
 
-各設計書の図は本文中の mermaid 図と、[diagrams/](./diagrams/README.md) 配下の drawio ファイルの2系統で保持している。
-mermaid はレビュー時にGitHub上でそのまま読めること、drawio はレイアウトを保って加筆・共有できることを目的としている。
+各設計書の図は本文中の Mermaid 図と、[diagrams/](./diagrams/README.md) 配下の編集用 drawio ファイル・表示用SVGで保持している。
+Mermaid はレビュー時にGitHub上でそのまま読めること、drawio はレイアウトを保って加筆・共有できること、SVGはREADMEやPRでそのまま表示できることを目的としている。
 
 ## 用語
 

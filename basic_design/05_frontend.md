@@ -29,12 +29,12 @@ frontend/
 │   │   │   ├── types.ts            # AuthAdapter インターフェース
 │   │   │   ├── sessionAdapter.ts
 │   │   │   ├── jwtAdapter.ts
-│   │   │   └── index.ts            # VITE_AUTH_MODE で選択
+│   │   │   └── index.ts            # /auth/config のauth_modeで選択
 │   │   ├── endpoints/              # auth.ts / projects.ts / tasks.ts / admin.ts
 │   │   └── errors.ts               # ApiError 型とエラーコード変換
 │   ├── auth/
 │   │   ├── authStore.ts            # Zustand（user / status）
-│   │   ├── AuthProvider.tsx        # 起動時の /auth/me による復元
+│   │   ├── AuthProvider.tsx        # /auth/config → 必要ならrefresh → /auth/me
 │   │   └── guards.tsx              # RequireAuth / RequireAdmin
 │   ├── components/                 # 汎用UI（Button, Modal, Field, Toast, Avatar…）
 │   ├── layouts/
@@ -59,23 +59,21 @@ frontend/
 
 | No | 画面 | パス | レイアウト | ガード | 出典 |
 |----|------|------|-----------|--------|------|
-| 1 | ログイン | `/login` | AuthLayout | 未認証のみ | 要件書§2-1 / pptx slide1 |
-| 2 | 会員登録 | `/register` | AuthLayout | 未認証のみ | 要件書§2-2 / pptx slide2 |
-| 3 | パスワード再設定要求 | `/password/forgot` | AuthLayout | 未認証のみ | pptx slide3（D-1） |
-| 4 | パスワード再設定 | `/password/reset?token=` | AuthLayout | 未認証のみ | D-1 |
-| 5 | メール認証 | `/verify-email?token=` | AuthLayout | 未認証のみ | D-6 |
-| 6 | ダッシュボード | `/` | AppLayout | 認証必須 | 要件書§2-3 / pptx slide4 |
-| 7 | プロジェクト詳細（カンバン） | `/projects/:projectId` | AppLayout | 認証必須 | 要件書§2-4 / pptx slide4,5 |
-| 8 | タスク詳細/編集 | `/projects/:projectId/tasks/:taskId`（モーダル） | AppLayout | 認証必須 | 要件書§2-5 / pptx slide5 |
-| 9 | アカウント設定 | `/settings` | AppLayout | 認証必須 | 要件書§2-6 / pptx slide7 |
-| 10 | 管理者ユーザー管理 | `/admin/users` | AppLayout | admin のみ | 要件書§2-7 / pptx slide6 |
-| 11 | OAuthコールバック中継 | `/oauth/callback` | なし（ローディングのみ） | 不要 | [03_auth 5.4](./03_auth.md#54-jwt-モードでのトークン受け渡し) |
-
-> **要検討**：pptx slide4 はサイドバー付きの1画面に「タスクリスト」と「新規プロジェクトの作成」が同居しており、要件書の「ダッシュボード（プロジェクト一覧）」と「プロジェクト詳細（カンバン）」の関係が判然としない。本設計では **`/` = プロジェクトカード一覧（＋新規作成ボタン）、`/projects/:id` = カンバン** の2画面に分離する解釈を採用した。
+| 1 | ログイン | `/login` | AuthLayout | 未認証のみ | 要件書§2-1 |
+| 2 | 会員登録 | `/register` | AuthLayout | 未認証のみ | 要件書§2-2 |
+| 3 | パスワード再設定要求 | `/password/forgot` | AuthLayout | 公開（認証不要） | - |
+| 4 | パスワード再設定 | `/password/reset#token=` | AuthLayout | 公開（認証不要） | - |
+| 5 | メール認証 | `/verify-email#token=` | AuthLayout | 公開（認証不要） | - |
+| 6 | ダッシュボード | `/` | AppLayout | 認証必須 | 要件書§2-3 |
+| 7 | プロジェクト詳細（カンバン） | `/projects/:projectId` | AppLayout | 認証必須 | 要件書§2-4 |
+| 8 | タスク詳細/編集 | `/projects/:projectId/tasks/:taskId`（モーダル） | AppLayout | 認証必須 | 要件書§2-5 |
+| 9 | アカウント設定 | `/settings` | AppLayout | 認証必須 | 要件書§2-6 |
+| 10 | 管理者ユーザー管理 | `/admin/users` | AppLayout | admin のみ | 要件書§2-7 |
+| 11 | OAuthコールバック中継 | `/oauth/callback` | なし（ローディングのみ） | 不要 | sessionは `/auth/me` を確認、jwtはfragmentの一時codeを `/auth/oauth/exchange` へ送り、その後 `/auth/me`。レスポンスの検証済み `redirect_to` へ遷移する。 [03_auth 5.4](./03_auth.md#54-jwt-モードでのトークン受け渡し) |
 
 ```mermaid
 flowchart TB
-    subgraph public["未認証のみ"]
+    subgraph public["認証不要（AuthLayout）"]
         L["/login"]
         R["/register"]
         PF["/password/forgot"]
@@ -99,9 +97,9 @@ flowchart TB
     PR --> L
     R -->|"登録成功（自動ログインしない）"| L
     R -->|"確認メール送信"| MAIL
-    MAIL -->|"メール内リンク"| VE
+    MAIL -->|"fragmentのメール内リンク"| VE
     PF -->|"リセットURL送信"| MAIL
-    MAIL -->|"メール内リンク"| PR
+    MAIL -->|"fragmentのメール内リンク"| PR
     VE -->|"メール認証完了"| L
     L -->|"403 EMAIL_NOT_VERIFIED → 認証メール再送"| L
     D --> B
@@ -113,7 +111,7 @@ flowchart TB
 
 ## 3. 共通レイアウト
 
-pptx 全画面で共通の左サイドバー構成（設計判断 D-5）。
+全画面で共通の左サイドバー構成。
 
 ```
 ┌────────────────────────────────────────────────────────┐
@@ -134,7 +132,7 @@ pptx 全画面で共通の左サイドバー構成（設計判断 D-5）。
 |------|------|
 | `≡`（ハンバーガー） | サイドバーの開閉。状態は `uiStore` に保持し localStorage へ永続化 |
 | home | `/` へ遷移 |
-| 管理 | `/admin/users` へ遷移。`role !== 'admin'` の場合は**要素自体を描画しない**（pptx slide6 の注記に準拠） |
+| 管理 | `/admin/users` へ遷移。`role !== 'admin'` の場合は**要素自体を描画しない** |
 | 設定 | `/settings` へ遷移 |
 | ログアウト | `POST /auth/logout` → authStore クリア → `/login` へ |
 
@@ -143,7 +141,7 @@ pptx 全画面で共通の左サイドバー構成（設計判断 D-5）。
 ```mermaid
 flowchart TB
     APP["App"] --> QP["QueryClientProvider"]
-    QP --> AP["AuthProvider<br/>起動時 /auth/me"]
+    QP --> AP["AuthProvider<br/>起動時 config → refresh → /auth/me"]
     AP --> RT["RouterProvider"]
 
     RT --> AL["AuthLayout"]
@@ -167,6 +165,8 @@ flowchart TB
     OUT --> SP["SettingsPage"]
     OUT --> AUP["AdminUsersPage"]
 
+    RT --> OCP["OAuthCallbackPage<br/>fragment code交換"]
+
     DP --> PCL["ProjectCardList"]
     DP --> PCM["ProjectCreateModal"]
     BP --> KB["KanbanBoard"]
@@ -176,7 +176,7 @@ flowchart TB
     TDM --> CL["CommentList / CommentForm"]
     SP --> PWF["PasswordChangeForm"]
     SP --> FSS["FontSizeSelector"]
-    SP --> PRF["ProfileForm"]
+    SP --> PRF["ProfileForm<br/>OAuth未完了プロフィールにも対応"]
     AUP --> UT["UserTable<br/>（ロール変更 / 有効化 / 強制ログアウト）"]
 ```
 
@@ -184,8 +184,8 @@ flowchart TB
 
 | ストア | 保持内容 | 永続化 | 備考 |
 |--------|----------|--------|------|
-| `authStore`（Zustand） | `user`, `status`（`loading` / `authenticated` / `unauthenticated`）, `accessToken`（jwtモードのみ） | **しない**（メモリのみ） | アクセストークンを localStorage に置かない（XSS対策） |
-| `uiStore`（Zustand + persist） | `fontScale`, `sidebarOpen` | localStorage | 設計判断 D-4 |
+| `authStore`（Zustand） | `user`, `status`（`loading` / `authenticated` / `unauthenticated`）, `accessToken`（jwtモードのみ）, `authAdapter` | **しない**（メモリのみ） | アクセストークンを localStorage に置かない（XSS対策）。adapterは起動時のbackend設定から選択 |
+| `uiStore`（Zustand + persist） | `fontScale`, `sidebarOpen` | localStorage | 文字サイズ・サイドバー開閉はクライアント側のみで保持 |
 | TanStack Query | プロジェクト一覧・ボード・コメント・ユーザー一覧 | しない | `queryKey` は `['projects']` / `['board', projectId]` / `['comments', taskId]` |
 
 ### 5.1 認証状態の遷移
@@ -193,8 +193,8 @@ flowchart TB
 ```mermaid
 stateDiagram-v2
     [*] --> loading: アプリ起動
-    loading --> authenticated: GET /auth/me 成功
-    loading --> unauthenticated: 401
+    loading --> authenticated: config → (jwtはrefresh) → GET /auth/me 成功
+    loading --> unauthenticated: refresh失敗 / GET /auth/me 401
     unauthenticated --> authenticated: ログイン成功
     authenticated --> unauthenticated: ログアウト / 復帰不能な401
     authenticated --> authenticated: リフレッシュ成功（jwtモード）
@@ -255,12 +255,12 @@ classDiagram
 
 | 実装 | `attach` | `onLoginSuccess` | `onUnauthorized` | `onLogout` |
 |------|----------|------------------|------------------|------------|
-| `SessionAdapter` | `withCredentials = true`、更新系には `X-CSRF-Token`（Cookieから読む）を付与 | 何もしない（Cookieはブラウザが保持） | `false`（リトライしない） | CSRF Cookie を破棄 |
-| `JwtAdapter` | `Authorization: Bearer {accessToken}` を付与 | authStore に accessToken を保存 | `/auth/refresh` を1回だけ試行し、成功なら `true` | accessToken をメモリから破棄 |
+| `SessionAdapter` | `withCredentials = true`、更新系には `X-CSRF-Token`（Cookieから読む）を付与 | 何もしない（Cookieはブラウザが保持） | `false`（リトライしない） | authStoreを破棄。Cookie破棄はbackendのlogoutに任せる |
+| `JwtAdapter` | 通常APIには `Authorization: Bearer {accessToken}`、refresh/logoutには `withCredentials=true` と `X-CSRF-Token` を付与 | authStore にaccessTokenを保存。Cookieはbackendが発行 | `/auth/refresh` を1回だけ試行し、成功なら `true` | accessTokenをメモリから破棄。Cookie破棄はbackendのlogoutに任せる |
 
 | メソッド | 引数 | 戻り値 | 責務 |
 |----------|------|--------|------|
-| `attach` | `AxiosRequestConfig` | `AxiosRequestConfig` | リクエスト直前の認証情報付与（Cookie送信設定 / CSRFヘッダ / Bearerヘッダ） |
+| `attach` | `AxiosRequestConfig` | `AxiosRequestConfig` | リクエスト直前の認証情報付与（Cookie送信設定 / CSRFヘッダ / Bearerヘッダ）。CSRF Cookie名は `/auth/config` から取得 |
 | `onLoginSuccess` | `LoginResponse` | `void` | ログインレスポンスから必要な情報を保持 |
 | `onUnauthorized` | `AxiosError` | `Promise<boolean>` | 401 時の復帰処理。`true` を返した場合のみ元リクエストを再送 |
 | `onLogout` | なし | `void` | クライアント側の後片付け |
@@ -276,7 +276,7 @@ flowchart TB
     D -->|"401"| F["adapter.onUnauthorized()"]
     F -->|"true（リフレッシュ成功）"| G["同一リクエストを1回だけ再送"]
     F -->|"false"| H["authStore を unauthenticated に<br/>→ /login へリダイレクト"]
-    D -->|"403 CSRF_INVALID"| I["セッション再取得を促すトースト"]
+    D -->|"403 CSRF_INVALID"| I["認証Cookie不整合を通知し<br/>ログインへ誘導"]
     D -->|"422"| J["フィールドエラーをフォームへ反映"]
     D -->|"その他4xx/5xx"| K["ApiError に変換してトースト表示"]
     G -->|"再度401"| H
@@ -284,81 +284,87 @@ flowchart TB
 
 | ルール | 内容 |
 |--------|------|
+| 起動時の復元 | `GET /auth/config` → jwtなら `POST /auth/refresh` → `GET /auth/me`。refresh Cookieが無い場合の401は未認証として扱う |
+| OAuth callbackの優先 | `/oauth/callback` では、jwtのrefresh Cookieが無い場合でもAuthProviderが `/login` へ先行リダイレクトせず、`OAuthCallbackPage` がfragmentのcodeを交換してから認証状態を確定する |
 | リフレッシュの多重実行防止 | `JwtAdapter` 内で進行中の `refreshPromise` を共有し、同時に発生した401をまとめて1回のリフレッシュで処理する |
 | リトライ回数 | 1回のみ（`config._retried` フラグで管理） |
-| リフレッシュ対象外 | `/auth/login`・`/auth/refresh`・`/auth/register` の401はリトライしない |
+| リフレッシュ対象外 | `/auth/login`・`/auth/refresh`・`/auth/register`・`/auth/oauth/exchange` の401はリトライしない |
 | session モード | 401 は即ログアウト扱い（リフレッシュの概念がない） |
 
 ### 6.2 環境変数（Vite）
 
 | 変数 | 例 | 用途 |
 |------|-----|------|
-| `VITE_API_BASE_URL` | `http://localhost:8000/api` | APIのベースURL |
-| `VITE_AUTH_MODE` | `session` / `jwt` | 使用する AuthAdapter の選択（バックエンドの `AUTH_MODE` と一致させる） |
-| `VITE_GOOGLE_LOGIN_ENABLED` | `true` | Googleログインボタンの表示制御 |
-| `VITE_CSRF_COOKIE_NAME` | `cerberus_csrf` | CSRFトークン読み取り元Cookie名 |
+| `VITE_API_BASE_URL` | `/api` | APIのベースURL（同一オリジンを既定） |
 
-> `VITE_AUTH_MODE` と `AUTH_MODE` の二重管理を避けるため、`GET /health` または `GET /auth/me` のレスポンスに含まれる `auth_mode` を起動時に取得して上書きする方式も**要検討**（設定不整合の防止に有効）。
+認証モード、Googleログインの有効/無効、CSRF Cookie名は `GET /auth/config` から実行時に取得する。`VITE_AUTH_MODE` / `VITE_GOOGLE_LOGIN_ENABLED` / `VITE_CSRF_COOKIE_NAME` は定義しない。これによりfrontendイメージとbackendの設定がずれても、起動時にbackendの設定へ追従できる。
 
 ## 7. 画面別の主要仕様
 
-### 7.1 ログイン（pptx slide1）
+### 7.1 ログイン
 
 | 要素 | 仕様 |
 |------|------|
-| 「IDもしくはメールアドレス」入力 | `identifier` として送信（D-3） |
-| パスワード入力 | 目のアイコンで表示/非表示をトグル（pptx の `👁️‍🗨️` に対応） |
+| 「IDもしくはメールアドレス」入力 | `identifier` として送信 |
+| パスワード入力 | 目のアイコンで表示/非表示をトグル |
 | ログインボタン | Enter キーでも送信 |
 | 「新規会員登録はこちら」 | `/register` |
 | 「パスワードを忘れた方はこちら」 | `/password/forgot` |
-| Googleログイン | `window.location.href = {API}/auth/oauth/google` へ遷移（XHRでは行わない） |
+| Googleログイン | `window.location.href = {API}/auth/oauth/google` へ遷移（XHRでは行わない）。OAuth callbackのstate Cookieを検証し、jwtではfragmentの一時codeを交換 |
 | エラー表示 | `INVALID_CREDENTIALS` は「IDまたはパスワードが正しくありません」と統一表示（どちらが誤りか示さない） |
 | メール未認証 | 403 `EMAIL_NOT_VERIFIED` の場合は「メール認証が完了していません」と表示し、「認証メールを再送する」ボタン（`POST /auth/verify-email/resend`）を出す。送信後は結果に関わらず「送信しました」と表示する |
 | 登録直後の遷移 | `/register` から遷移してきた場合、「確認メールを送信しました」のメッセージを表示する（`navigate("/login", { state: { registeredEmail } })`） |
 | レート制限 | 429 の場合は待機時間を案内 |
 
-### 7.2 会員登録（pptx slide2）
+### 7.2 会員登録
 
-- 入力順は pptx に準拠（姓 → 名 → フリガナ → 生年月日 → メール → パスワード → パスワード再入力）
+- 入力順は 姓 → 名 → フリガナ → 生年月日 → メール → パスワード → パスワード再入力
 - 生年月日は年/月/日の3プルダウン
 - パスワードは強度インジケータを表示し、zod で「8文字以上・2種類以上の文字種」を検証（バックエンドと同一規則）
 - 「Googleで新規登録」はログイン画面と同じOAuth開始URLへ遷移（ログインと登録の入口を共通化）
 - 409（重複）は該当フィールドにエラーを表示
-- **登録成功（201）後は自動ログインしない**。`/login` へリダイレクトし、「確認メールを送信しました」を表示する（D-6）。認証状態を持たないため `authStore` は更新しない
+- **登録成功（201）後は自動ログインしない**。`/login` へリダイレクトし、「確認メールを送信しました」を表示する。認証状態を持たないため `authStore` は更新しない
 
-### 7.3 メール認証（D-6）
+### 7.3 メール認証
 
 | 要素 | 仕様 |
 |------|------|
-| 到達経路 | 確認メール内のリンク `{FRONTEND_BASE_URL}/verify-email?token=xxx` |
-| 初期処理 | マウント時にクエリの `token` で `POST /auth/verify-email` を1回だけ実行（`StrictMode` の二重実行を避けるため実行済みフラグで抑止する） |
+| 到達経路 | 確認メール内のリンク `{FRONTEND_BASE_URL}/verify-email#token=xxx` |
+| 初期処理 | マウント時にfragmentの `token` で `POST /auth/verify-email` を1回だけ実行（`StrictMode` の二重実行を避けるため実行済みフラグで抑止する）。送信後は `history.replaceState` でtokenをURLから消す |
 | 成功時 | 「メール認証が完了しました」を表示し、`/login` へ遷移（3秒後の自動遷移＋即時遷移リンク） |
 | 失敗時（400） | 「リンクの有効期限が切れているか、既に使用済みです」と表示し、メールアドレス入力による再送フォームを出す |
 | token 欠落 | APIを呼ばず、再送フォームのみを表示する |
 
-### 7.4 ダッシュボード（pptx slide4）
+### 7.3.1 OAuthコールバック中継
+
+- `/oauth/callback` 到達時は、jwtモードならfragmentの `code` を取得して `POST /auth/oauth/exchange` を1回だけ実行し、成功後に `GET /auth/me` を取得してレスポンスの `redirect_to` へ遷移する
+- sessionモードはcallbackで設定済みのCookieを使って `GET /auth/me` を取得し、fragmentの `redirect_to` を同一オリジン相対パスとして再検証してから遷移する（違反時は `/`）
+- codeは送信後に `history.replaceState` でURLから除去し、失敗時は一時コードを再送しない
+- `profile_completed=false` の場合は、サーバーが返した `redirect_to` より優先して `/settings?complete_profile=1` へ遷移する
+
+### 7.4 ダッシュボード
 
 - 所属プロジェクトをカード表示（プロジェクト名・メンバー数・タスク件数バッジ）
-- 「新規プロジェクトの作成」ボタン → モーダル（pptx slide5 の「パネルがでてくる」に対応）
+- 「新規プロジェクトの作成」ボタン → モーダル
 - プロジェクト0件時は空状態メッセージと作成導線を表示
 
-### 7.5 カンバンボード（pptx slide4,5）
+### 7.5 カンバンボード
 
 - 3列（未着手 / 進行中 / 完了）を横並び表示。列ヘッダーに件数
-- `@dnd-kit` によるカード移動で `PATCH /tasks/{id}`（status + position）
+- `@dnd-kit` によるカード移動で `PATCH /tasks/{id}`（status + position + 取得時の version）。`409 TASK_CONFLICT` 時はボードを再取得して再操作を促す
 - カードクリックでタスク詳細モーダル（URLも `/projects/:pid/tasks/:tid` に同期させ、リロード・共有可能にする）
 - タスク詳細モーダル：タイトル・説明・担当者（プロジェクトメンバーから選択）・期限・ステータス・コメント一覧/投稿
 
-### 7.6 アカウント設定（pptx slide7）
+### 7.6 アカウント設定
 
 | 項目 | 仕様 |
 |------|------|
-| プロフィール編集 | 姓・名・フリガナ・生年月日を `PATCH /users/me` |
-| パスワードの変更 | 現在のパスワード + 新パスワード + 確認 → `PUT /users/me/password`。成功後は再ログインを促す（全セッション失効のため） |
-| 文字サイズの変更 | 小 / 標準 / 大 / 特大（`0.875` / `1` / `1.125` / `1.25`）。D-4 によりサーバー保存しない |
+| プロフィール編集 | 姓・名・フリガナ・生年月日を `PATCH /users/me`。OAuth新規ユーザーの未入力値は設定画面で補完し、完了後 `profile_completed=true` にする |
+| パスワードの変更 | 通常ユーザーは現在のパスワード + 新パスワード + 確認、OAuthのみのユーザーは現在のパスワードを省略して新パスワード + 確認 → `PUT /users/me/password`。成功後は再ログインを促す（全セッション失効のため） |
+| 文字サイズの変更 | 小 / 標準 / 大 / 特大（`0.875` / `1` / `1.125` / `1.25`）。サーバーには保存しない |
 | ログイン履歴 | `GET /users/me/login-history` を表形式で表示（自衛的な監査） |
 
-### 7.7 管理者ユーザー管理（pptx slide6）
+### 7.7 管理者ユーザー管理
 
 - タブ「管理」自体を `role = admin` のみ表示。直接URLアクセス時も `RequireAdmin` で `/` にリダイレクト
 - ユーザー一覧（検索・ページング）、ロール変更セレクト、有効/無効トグル、強制ログアウトボタン
@@ -367,7 +373,7 @@ flowchart TB
 
 ## 8. アクセシビリティ設定（文字サイズ）
 
-設計判断 D-4：localStorage のみで保持する。
+localStorage のみで保持する。
 
 ```mermaid
 flowchart LR

@@ -7,8 +7,8 @@
 
 | ファイル | 図 | 対応する設計書 |
 |----------|-----|----------------|
-| [01_system_architecture.drawio](./01_system_architecture.drawio) | システム構成図（Docker Compose 5サービス、公開ポート、外部サービス、CI/CD経路） | [00_overview.md §3](../00_overview.md#3-システム構成) / [06_infra_cicd.md §2](../06_infra_cicd.md#2-docker-compose-構成) |
-| [02_backend_layers.drawio](./02_backend_layers.drawio) | バックエンドのレイヤ / モジュール構成図（api → service → repository → models、認証Strategy、core） | [00_overview.md §4](../00_overview.md#4-バックエンドのレイヤ構成) / [03_auth.md §2](../03_auth.md#2-strategyパターン設計) |
+| [01_system_architecture.drawio](./01_system_architecture.drawio) | システム構成図（Docker Compose 5サービス、公開ポート、外部サービス、CI/CD経路） | [00_overview.md §2](../00_overview.md#2-システム構成) / [06_infra_cicd.md §2](../06_infra_cicd.md#2-docker-compose-構成) |
+| [02_backend_layers.drawio](./02_backend_layers.drawio) | バックエンドのレイヤ / モジュール構成図（api → service → repository → models、認証Strategy、core） | [00_overview.md §3](../00_overview.md#3-バックエンドのレイヤ構成) / [03_auth.md §2](../03_auth.md#2-strategyパターン設計) |
 | [03_er_diagram.drawio](./03_er_diagram.drawio) | ER図（PostgreSQL 7テーブル）＋ Redisキー一覧・主要インデックス・DB関数 | [01_database.md §2](../01_database.md#2-er図) / [02_redis.md §2](../02_redis.md#2-キー一覧) |
 | [04_screen_flow.drawio](./04_screen_flow.drawio) | 画面遷移図（11画面、認証ガード、モーダル、OAuth・メール認証/パスワードリセットのメール経路） | [05_frontend.md §2](../05_frontend.md#2-画面一覧とルーティング) |
 
@@ -36,11 +36,11 @@
 
 ## エクスポート
 
-README や Pull Request に貼る画像が必要な場合は、同じディレクトリに SVG を書き出す。
+README や Pull Request での表示用として、対応するSVGも同じディレクトリに保持する。編集の正は `.drawio` とし、図を変更した場合はSVGを再生成して差分を同期する。
 
 ```
 # drawio Desktop / CLI の場合
 drawio --export --format svg --output 01_system_architecture.svg 01_system_architecture.drawio
 ```
 
-> 画像ファイル（`.svg` / `.png`）はコミット対象とするか**要検討**。差分が追えないため、現時点では `.drawio` のみを管理対象としている。
+> `.drawio` が編集用の正本、`.svg` は生成物としてコミット対象、`.png` は生成しない。

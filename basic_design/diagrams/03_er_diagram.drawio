@@ -11,7 +11,7 @@
           <mxGeometry x="40" y="56" width="900" height="20" as="geometry" />
         </mxCell>
         <mxCell id="t_users" value="users" style="swimlane;html=1;startSize=30;horizontal=1;fillColor=#E3F2FD;strokeColor=#1565C0;fontStyle=1;fontSize=13;childLayout=none;swimlaneFillColor=#FFFFFF;" vertex="1" parent="1">
-          <mxGeometry x="60" y="130" width="330" height="250" as="geometry" />
+          <mxGeometry x="60" y="130" width="330" height="272" as="geometry" />
         </mxCell>
         <mxCell id="n3" value="PK  id   ·   UUID" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontStyle=1;fontColor=#B71C1C;" vertex="1" parent="t_users">
           <mxGeometry x="0" y="30" width="330" height="22" as="geometry" />
@@ -25,13 +25,13 @@
         <mxCell id="n6" value="password_hash   ·   TEXT  NULL可（OAuth専用）" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_users">
           <mxGeometry x="0" y="96" width="330" height="22" as="geometry" />
         </mxCell>
-        <mxCell id="n7" value="last_name / first_name   ·   VARCHAR(30)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_users">
+        <mxCell id="n7" value="last_name / first_name   ·   VARCHAR(30)  NULL可（OAuth新規）" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_users">
           <mxGeometry x="0" y="118" width="330" height="22" as="geometry" />
         </mxCell>
-        <mxCell id="n8" value="last_name_kana / first_name_kana   ·   VARCHAR(30)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_users">
+        <mxCell id="n8" value="last_name_kana / first_name_kana   ·   VARCHAR(30)  NULL可（OAuth新規）" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_users">
           <mxGeometry x="0" y="140" width="330" height="22" as="geometry" />
         </mxCell>
-        <mxCell id="n9" value="birth_date   ·   DATE" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_users">
+        <mxCell id="n9" value="birth_date   ·   DATE  NULL可（OAuth新規）" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_users">
           <mxGeometry x="0" y="162" width="330" height="22" as="geometry" />
         </mxCell>
         <mxCell id="n10" value="role   ·   VARCHAR(10)  member|admin" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_users">
@@ -40,8 +40,11 @@
         <mxCell id="n11" value="is_active   ·   BOOLEAN" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_users">
           <mxGeometry x="0" y="206" width="330" height="22" as="geometry" />
         </mxCell>
-        <mxCell id="n12" value="created_at / updated_at   ·   TIMESTAMPTZ" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_users">
+        <mxCell id="n12" value="email_verified_at   ·   TIMESTAMPTZ  NULL可" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_users">
           <mxGeometry x="0" y="228" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n12b" value="created_at / updated_at   ·   TIMESTAMPTZ" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_users">
+          <mxGeometry x="0" y="250" width="330" height="22" as="geometry" />
         </mxCell>
         <mxCell id="t_oauth" value="oauth_accounts" style="swimlane;html=1;startSize=30;horizontal=1;fillColor=#FFFDE7;strokeColor=#F9A825;fontStyle=1;fontSize=13;childLayout=none;swimlaneFillColor=#FFFFFF;" vertex="1" parent="1">
           <mxGeometry x="60" y="460" width="330" height="162" as="geometry" />
@@ -151,7 +154,7 @@
         <mxCell id="n43" value="FK  created_by   ·   UUID → users.id  RESTRICT" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontColor=#EF6C00;" vertex="1" parent="t_tasks">
           <mxGeometry x="0" y="162" width="330" height="22" as="geometry" />
         </mxCell>
-        <mxCell id="n44" value="position   ·   INTEGER  列内の並び順" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_tasks">
+        <mxCell id="n44" value="position   ·   INTEGER  列内の並び順（列内一意） / version INTEGER" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_tasks">
           <mxGeometry x="0" y="184" width="330" height="22" as="geometry" />
         </mxCell>
         <mxCell id="n45" value="due_date   ·   DATE  NULL可" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_tasks">
@@ -252,13 +255,13 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="n61" value="Redis（永続化しない・TTLで自動失効）&lt;br&gt;&lt;br&gt;session:{session_id}        → user_id, role（TTL 30分・操作で延長）&lt;br&gt;csrf:{session_id}           → CSRFトークン（セッションと同一TTL）&lt;br&gt;refresh:{token_hash}        → user_id, family_id（TTL 14日）&lt;br&gt;user_sessions:{user_id}     → session_id の集合（強制ログアウト用）&lt;br&gt;user_refresh:{user_id}      → token_hash の集合&lt;br&gt;oauth_state:{state}         → PKCE検証値（TTL 10分・ワンタイム）&lt;br&gt;pwreset:{token_hash}        → user_id（TTL 30分・ワンタイム）&lt;br&gt;login_fail:{identifier}     → 連続失敗回数（TTL 15分）" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#FFEBEE;strokeColor=#C62828;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;align=left;verticalAlign=top;spacingLeft=12;spacingTop=8;fontSize=10;fontFamily=Courier New;" vertex="1" parent="1">
+        <mxCell id="n61" value="Redis（永続化しない・TTLで自動失効）&lt;br&gt;&lt;br&gt;session:{session_id}        → user_id（TTL 30分・操作で延長）&lt;br&gt;csrf:{session_id}           → CSRFトークン（セッションと同一TTL）&lt;br&gt;refresh:{token_hash}        → user_id, family_id（TTL 14日）&lt;br&gt;refresh_used:{token_hash}  → family情報（再利用検知用）&lt;br&gt;refresh_family_revoked:{uid}:{family} → family失効marker&lt;br&gt;user_sessions:{user_id}     → session_id の集合（強制ログアウト用）&lt;br&gt;user_refresh:{user_id}      → token_hash の集合&lt;br&gt;oauth_state:{state}         → PKCE / nonce（TTL 10分・ワンタイム）&lt;br&gt;oauth_handoff:{code}        → OAuth一時コード（TTL 60秒）&lt;br&gt;pwreset:{token_hash}        → user_id（TTL 30分・ワンタイム）&lt;br&gt;emailverify:{token_hash}    → user_id（TTL 24時間・ワンタイム）&lt;br&gt;emailverify_current:{uid}  → 現在のtoken hash&lt;br&gt;emailverify_sent:{uid}     → 再送間隔（TTL 60秒）&lt;br&gt;login_fail:{key_hash}       → 連続失敗回数（TTL 15分）" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#FFEBEE;strokeColor=#C62828;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;align=left;verticalAlign=top;spacingLeft=12;spacingTop=8;fontSize=10;fontFamily=Courier New;" vertex="1" parent="1">
           <mxGeometry x="1080" y="130" width="460" height="230" as="geometry" />
         </mxCell>
-        <mxCell id="n62" value="凡例 / 制約&lt;br&gt;PK（赤太字）: 主キー　UK（青太字）: 一意制約　FK（橙）: 外部キー&lt;br&gt;CASCADE / RESTRICT / SET NULL は ON DELETE の挙動&lt;br&gt;・project_members は (project_id, user_id) の複合主キー&lt;br&gt;・列挙値は ENUM 型ではなく VARCHAR + CHECK 制約で表現&lt;br&gt;・users.username / email は lower() の一意インデックス&lt;br&gt;・login_history は Redis の失効状況と独立して保持し続ける" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#BDBDBD;align=left;verticalAlign=top;spacingLeft=8;spacingTop=6;fontSize=11;" vertex="1" parent="1">
+        <mxCell id="n62" value="凡例 / 制約&lt;br&gt;PK（赤太字）: 主キー　UK（青太字）: 一意制約　FK（橙）: 外部キー&lt;br&gt;CASCADE / RESTRICT / SET NULL は ON DELETE の挙動&lt;br&gt;・project_members は (project_id, user_id) の複合主キー&lt;br&gt;・列挙値は ENUM 型ではなく VARCHAR + CHECK 制約で表現&lt;br&gt;・users.username / email は lower() の一意インデックス&lt;br&gt;・tasks は (project_id, status, position) の列内一意制約 + versionで競合検知&lt;br&gt;・login_history は設定した保持期間、Redisの失効状況と独立して保管" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#BDBDBD;align=left;verticalAlign=top;spacingLeft=8;spacingTop=6;fontSize=11;" vertex="1" parent="1">
           <mxGeometry x="1080" y="390" width="460" height="160" as="geometry" />
         </mxCell>
-        <mxCell id="n63" value="主なインデックス&lt;br&gt;ix_tasks_project_status_position (project_id, status, position)&lt;br&gt;　→ カンバン表示の主クエリ&lt;br&gt;ix_project_members_user_id (user_id)&lt;br&gt;　→ ダッシュボードの所属プロジェクト一覧&lt;br&gt;ix_task_comments_task_created (task_id, created_at)&lt;br&gt;ix_login_history_user_created (user_id, created_at DESC)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#BDBDBD;align=left;verticalAlign=top;spacingLeft=8;spacingTop=6;fontSize=11;" vertex="1" parent="1">
+        <mxCell id="n63" value="主なインデックス&lt;br&gt;uq_tasks_project_status_position (project_id, status, position)&lt;br&gt;　→ 列内一意 + カンバン表示&lt;br&gt;ix_project_members_user_id (user_id)&lt;br&gt;　→ ダッシュボードの所属プロジェクト一覧&lt;br&gt;ix_task_comments_task_created (task_id, created_at)&lt;br&gt;ix_login_history_user_created (user_id, created_at DESC)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#BDBDBD;align=left;verticalAlign=top;spacingLeft=8;spacingTop=6;fontSize=11;" vertex="1" parent="1">
           <mxGeometry x="1080" y="580" width="460" height="150" as="geometry" />
         </mxCell>
         <mxCell id="n64" value="DB関数 / プロシージャ（db/functions・db/procedures）&lt;br&gt;trg_set_updated_at()        BEFORE UPDATE トリガ&lt;br&gt;fn_is_project_member(pid, uid) → BOOLEAN&lt;br&gt;fn_next_task_position(pid, status) → INTEGER&lt;br&gt;sp_purge_login_history(retention_days)" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;darkOpacity=0.05;fillColor=#FFF9C4;strokeColor=#F9A825;align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;size=14;fontSize=11;" vertex="1" parent="1">

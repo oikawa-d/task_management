@@ -13,7 +13,7 @@
         <mxCell id="n3" value="" style="ellipse;html=1;fillColor=#263238;strokeColor=#263238;" vertex="1" parent="1">
           <mxGeometry x="30" y="185" width="30" height="30" as="geometry" />
         </mxCell>
-        <mxCell id="n4" value="未認証のみアクセス可（AuthLayout）" style="container=1;collapsible=0;rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#9E9E9E;dashed=1;dashPattern=8 4;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=13;fontStyle=1;fontColor=#616161;" vertex="1" parent="1">
+        <mxCell id="n4" value="認証不要（ログイン/登録は未認証のみ）&lt;br&gt;AuthLayout" style="container=1;collapsible=0;rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#9E9E9E;dashed=1;dashPattern=8 4;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=13;fontStyle=1;fontColor=#616161;" vertex="1" parent="1">
           <mxGeometry x="200" y="120" width="440" height="790" as="geometry" />
         </mxCell>
         <mxCell id="n5" value="① ログイン&lt;br&gt;/login&lt;br&gt;&lt;br&gt;ID or メール + パスワード&lt;br&gt;目のアイコンで表示切替&lt;br&gt;Googleでログイン" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
@@ -25,13 +25,13 @@
         <mxCell id="n7" value="③ パスワード再設定要求&lt;br&gt;/password/forgot&lt;br&gt;&lt;br&gt;メールアドレスを入力 → 202" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="270" y="650" width="340" height="90" as="geometry" />
         </mxCell>
-        <mxCell id="n8" value="④ パスワード再設定&lt;br&gt;/password/reset?token=xxx&lt;br&gt;&lt;br&gt;新パスワード入力 → 全セッション失効" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
+        <mxCell id="n8" value="④ パスワード再設定&lt;br&gt;/password/reset#token=xxx&lt;br&gt;&lt;br&gt;新パスワード入力 → 全セッション失効" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="270" y="800" width="340" height="90" as="geometry" />
         </mxCell>
         <mxCell id="n9" value="Google 認可画面&lt;br&gt;（外部サイト）" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#FFFDE7;strokeColor=#F9A825;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="800" y="150" width="220" height="80" as="geometry" />
         </mxCell>
-        <mxCell id="n10" value="⑪ OAuthコールバック中継&lt;br&gt;/oauth/callback&lt;br&gt;&lt;br&gt;jwtモードは一時コードを交換" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#F9A825;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
+        <mxCell id="n10" value="⑪ OAuthコールバック中継&lt;br&gt;/oauth/callback&lt;br&gt;&lt;br&gt;jwtモードはfragmentの一時コードを交換" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#F9A825;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="800" y="320" width="220" height="100" as="geometry" />
         </mxCell>
         <mxCell id="n11" value="リセットメール&lt;br&gt;（Mailpit / SMTP）" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#6A1B9A;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
@@ -58,7 +58,7 @@
         <mxCell id="n18" value="⑩ 管理者ユーザー管理&lt;br&gt;/admin/users&lt;br&gt;&lt;br&gt;全ユーザー / 全プロジェクト&lt;br&gt;ロール変更・無効化・強制ログアウト&lt;br&gt;※ role=admin のみ" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#FFEBEE;strokeColor=#C62828;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="1470" y="500" width="240" height="140" as="geometry" />
         </mxCell>
-        <mxCell id="n40" value="⑤ メール認証&lt;br&gt;/verify-email?token=xxx&lt;br&gt;&lt;br&gt;マウント時に POST /auth/verify-email&lt;br&gt;失敗時は認証メールの再送フォームを表示" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
+        <mxCell id="n40" value="⑤ メール認証&lt;br&gt;/verify-email#token=xxx&lt;br&gt;&lt;br&gt;マウント時に POST /auth/verify-email&lt;br&gt;失敗時は認証メールの再送フォームを表示" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="270" y="500" width="340" height="90" as="geometry" />
         </mxCell>
         <mxCell id="n41" value="確認メール&lt;br&gt;（Mailpit / SMTP）" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#6A1B9A;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">

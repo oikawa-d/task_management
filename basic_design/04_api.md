@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 |------|------|
-| ベースURL | `{API_BASE_URL}/api`（例：`http://localhost:8000/api`）。要件書のパス（`/auth/login` 等）に `/api` プレフィックスを付与し、フロントの Nginx / Vite プロキシで振り分ける |
+| ベースURL | 同一オリジンの `/api`（開発時も `VITE_API_BASE_URL=/api` を基本とし、Vite/Nginxのproxyでbackendへ転送）。別オリジン構成は例外としてCORSを明示設定する |
 | 形式 | JSON（`application/json`、UTF-8） |
 | 日時形式 | ISO 8601 / UTC（例：`2026-09-03T04:05:06Z`） |
 | ID形式 | UUID v4 文字列 |
@@ -14,6 +14,7 @@
 | バリデーション | pydantic v2。失敗時は 422 |
 | ページング | `?page=1&per_page=20`（既定20・最大100）。レスポンスに `meta` を含める |
 | リクエストID | 全レスポンスに `X-Request-ID` を付与（ログ相関用） |
+| Origin検証 | Cookieを発行・利用する更新系API（ログイン、sessionの更新系、jwtの `/auth/refresh`・`/auth/logout`）とOAuth交換は許可Originを検証する。ログインはCSRF CookieがまだないためOriginのみ、その他は各方式のCSRF検証も行う。`allow_credentials=true` と `*` の併用は禁止 |
 
 ## 2. エンドポイント一覧
 
@@ -21,17 +22,18 @@
 
 | メソッド | パス | 概要 | 認証 | 備考 |
 |----------|------|------|------|------|
-| POST | `/auth/register` | 会員登録（**自動ログインしない**。確認メールを送信し、フロントはログイン画面へ戻す） | 不要 | D-2 の項目を受け取る（D-6） |
-| POST | `/auth/login` | ログイン（`AUTH_MODE` に応じて分岐） | 不要 | `identifier` は email または username（D-3）。メール未認証は 403（D-6） |
-| POST | `/auth/verify-email` | メール認証の実行 | 不要 | 確認メール内リンクのトークンを検証（D-6） |
-| POST | `/auth/verify-email/resend` | 認証メールの再送 | 不要 | 常に 202。再送間隔の制限あり（D-6） |
-| POST | `/auth/logout` | ログアウト | 必要 | |
-| POST | `/auth/refresh` | アクセストークン再発行 | リフレッシュトークン | **jwt モードのみ**。session モードは 405 |
+| POST | `/auth/register` | 会員登録（**自動ログインしない**。確認メールを送信し、フロントはログイン画面へ戻す） | 不要 | 氏名・フリガナ・生年月日・メール・パスワードを受け取る |
+| POST | `/auth/login` | ログイン（`AUTH_MODE` に応じて分岐） | 不要 | `identifier` は email または username。メール未認証は 403 |
+| GET | `/auth/config` | フロント起動用の公開設定（`auth_mode`、Google有効/無効、CSRF Cookie名） | 不要 | 認証情報・秘密情報は返さない。バックエンド設定を正とする |
+| POST | `/auth/verify-email` | メール認証の実行 | 不要 | 確認メール内リンクのトークンを検証 |
+| POST | `/auth/verify-email/resend` | 認証メールの再送 | 不要 | 常に 202。再送間隔の制限あり |
+| POST | `/auth/logout` | ログアウト | session: session Cookie、jwt: refresh Cookie + CSRF（access tokenは任意） | 成功時に認証Cookieを破棄。jwtはaccess token期限切れでも実行可能 |
+| POST | `/auth/refresh` | HttpOnly Cookieのリフレッシュトークンからアクセストークン再発行 | リフレッシュCookie + CSRF | **jwt モードのみ**。session モードは 405。bodyにrefresh tokenは受け取らない |
 | GET | `/auth/me` | 現在のログインユーザー取得 | 必要 | フロントの起動時セッション復元に使用 |
 | GET | `/auth/oauth/google` | Google OAuth2 認可開始 | 不要 | 302 リダイレクト |
 | GET | `/auth/oauth/google/callback` | Google OAuth2 コールバック | 不要 | 302 リダイレクト（フロントへ） |
-| POST | `/auth/oauth/exchange` | 一時コード → トークン交換 | 不要 | jwt モードのみ（[03_auth 5.4](./03_auth.md#54-jwt-モードでのトークン受け渡し)） |
-| POST | `/auth/password/forgot` | パスワードリセット要求（メール送信） | 不要 | D-1。常に 202 |
+| POST | `/auth/oauth/exchange` | fragmentで受け取った一時コード → jwtトークン交換 | 一時コード | jwt モードのみ。Redisの `GETDEL` で一度だけ消費し、ここでrefresh/CSRF Cookieを発行 |
+| POST | `/auth/password/forgot` | パスワードリセット要求（メール送信） | 不要 | 常に 202 |
 | POST | `/auth/password/reset` | パスワードリセット実行 | 不要 | トークン検証 |
 
 ### 2.2 ユーザー（`/api/users`）
@@ -42,7 +44,6 @@
 | PATCH | `/users/me` | プロフィール更新（氏名・フリガナ・生年月日） | 必要 |
 | PUT | `/users/me/password` | パスワード変更（現在のパスワード検証あり） | 必要 |
 | GET | `/users/me/login-history` | 自分のログイン履歴（直近50件） | 必要 |
-| GET | `/users/search?q=` | メンバー招待用のユーザー検索（username / email 前方一致） | 必要 |
 
 ### 2.3 プロジェクト（`/api/projects`）
 
@@ -55,7 +56,8 @@
 | DELETE | `/projects/{project_id}` | プロジェクト削除（タスク・コメントもCASCADE） | オーナー / admin |
 | GET | `/projects/{project_id}/members` | メンバー一覧 | プロジェクトメンバー |
 | POST | `/projects/{project_id}/members` | メンバー招待（既存ユーザーを追加） | オーナー / admin |
-| DELETE | `/projects/{project_id}/members/{user_id}` | メンバー削除（T-2：要件書に記載なく追加） | オーナー / admin |
+| GET | `/projects/{project_id}/members/candidates?q=` | 招待候補検索（username / 表示名の前方一致。emailはレスポンスに含めない） | オーナー / admin |
+| DELETE | `/projects/{project_id}/members/{user_id}` | メンバー削除 | オーナー / admin |
 
 ### 2.4 タスク・コメント
 
@@ -64,7 +66,7 @@
 | GET | `/projects/{project_id}/tasks` | タスク一覧（カンバン用。status別にソート済み） | プロジェクトメンバー |
 | POST | `/projects/{project_id}/tasks` | タスク作成 | プロジェクトメンバー |
 | GET | `/tasks/{task_id}` | タスク詳細 | プロジェクトメンバー |
-| PATCH | `/tasks/{task_id}` | タスク更新（title/description/status/assignee/position/due_date） | プロジェクトメンバー |
+| PATCH | `/tasks/{task_id}` | タスク更新（title/description/status/assignee/position/due_date/version） | プロジェクトメンバー |
 | DELETE | `/tasks/{task_id}` | タスク削除 | プロジェクトメンバー |
 | GET | `/tasks/{task_id}/comments` | コメント一覧 | プロジェクトメンバー |
 | POST | `/tasks/{task_id}/comments` | コメント投稿 | プロジェクトメンバー |
@@ -77,11 +79,13 @@
 |----------|------|------|------|
 | GET | `/admin/users` | 全ユーザー一覧（ページング・検索） | admin |
 | PATCH | `/admin/users/{user_id}/role` | ロール変更（member ⇔ admin） | admin |
-| PATCH | `/admin/users/{user_id}/status` | 有効化 / 無効化（`is_active`） | admin |
+| PATCH | `/admin/users/{user_id}/status` | 有効化 / 無効化（`is_active`）。無効化時は全セッション・refreshを失効 | admin |
 | POST | `/admin/users/{user_id}/force-logout` | 強制ログアウト（全セッション・全リフレッシュ失効） | admin |
 | GET | `/admin/projects` | 全プロジェクト一覧 | admin |
 | DELETE | `/admin/projects/{project_id}` | プロジェクト削除 | admin |
 | GET | `/admin/login-history` | 全ユーザーのログイン履歴（監査） | admin |
+
+ロール変更・無効化では、自分自身の変更を拒否し、最後の有効adminを0人にする操作も拒否する（`409 SELF_MODIFICATION_NOT_ALLOWED` / `409 LAST_ADMIN_REQUIRED`）。無効化時はDB更新とRedisの全セッション・refresh失効を同一サービス処理で完了させる。JWTの既発行access tokenは、DBの `is_active` を毎回確認するため無効化直後から拒否される。強制ログアウトだけの場合はaccess tokenが最大15分有効なままになり得る。
 
 ### 2.6 その他
 
@@ -134,8 +138,12 @@
 
 レスポンス
 - session モード：`204 No Content` + `Set-Cookie: cerberus_sid, cerberus_csrf`
-- jwt モード：`200` `{ "access_token": "...", "token_type": "bearer", "expires_in": 900 }` + `Set-Cookie: cerberus_rt`
-- `403 EMAIL_NOT_VERIFIED`：ID/パスワードは正しいがメール未認証（D-6）。フロントは再送導線を表示する
+- jwt モード：`200` `{ "access_token": "...", "token_type": "bearer", "expires_in": 900 }` + `Set-Cookie: cerberus_rt`（HttpOnly）/ `cerberus_csrf`（非HttpOnly）
+- `403 EMAIL_NOT_VERIFIED`：ID/パスワードは正しいがメール未認証。フロントは再送導線を表示する
+
+**`POST /auth/refresh`** はリクエストボディを持たず、HttpOnly `cerberus_rt` Cookieと `X-CSRF-Token` を受け取る。成功時は `200` `{ "access_token": "...", "token_type": "bearer", "expires_in": 900 }` と、新しい `cerberus_rt` / `cerberus_csrf` の `Set-Cookie` を返す。refresh tokenの平文はJSONに返さない。
+
+**`POST /auth/logout`** はsessionモードでは `cerberus_sid` を使い、jwtモードではrefresh Cookieをハッシュ化して対象キーだけを失効させる。jwtでrefresh Cookieが無い場合もCookie破棄を行うだけの冪等な `204` とし、存在する場合はCSRF headerとOrigin検証を必須にする。
 
 **`GET /auth/me`** レスポンス `200`
 
@@ -149,6 +157,7 @@
   "last_name_kana": "ヤマダ",
   "first_name_kana": "タロウ",
   "birth_date": "1995-04-01",
+  "profile_completed": true,
   "role": "member",
   "has_password": true,
   "oauth_providers": ["google"],
@@ -156,9 +165,48 @@
 }
 ```
 
+**`GET /auth/config`** レスポンス `200`
+
+```json
+{
+  "auth_mode": "jwt",
+  "google_login_enabled": true,
+  "csrf_cookie_name": "cerberus_csrf"
+}
+```
+
+このエンドポイントは秘密情報を返さず、`Cache-Control: no-store` を付与する。フロントは起動時に取得した `auth_mode` でAuthAdapterを選択するため、frontendを再ビルドせずにbackendのモードを切り替えても認証方式が不一致にならない。
+
+**`POST /auth/oauth/exchange`** レスポンス `200`
+
+```json
+{
+  "access_token": "...",
+  "token_type": "bearer",
+  "expires_in": 900,
+  "redirect_to": "/"
+}
+```
+
+`redirect_to` はOAuth開始時にサーバーが検証・正規化した同一オリジン相対パスであり、refresh tokenはJSONに含めずCookieだけで返す。sessionモードのOAuth callbackも同じ `redirect_to` をfragmentでフロントへ渡す。
+
 ### 3.2 プロジェクト・タスク
 
 **`POST /projects`** リクエスト：`{ "name": "...", "description": "..." }`（name は1〜100文字）
+
+**`POST /projects/{id}/tasks`** リクエスト
+
+```json
+{
+  "title": "設計書をレビューする",
+  "description": null,
+  "status": "todo",
+  "assignee_id": null,
+  "due_date": null
+}
+```
+
+`status` は省略時 `todo`、`assignee_id` は省略時 `null` とし、`position` は指定せず対象列の末尾へ採番する。指定された担当者は有効なプロジェクトメンバーでなければならない。レスポンスは `201 {task}` とする。
 
 **`GET /projects`** レスポンス `200`
 
@@ -180,13 +228,15 @@
 }
 ```
 
+OAuth新規ユーザーではプロフィール4項目が `null` になり得る。`profile_completed` は4項目がすべて設定済みの場合だけ `true` とし、フロントはOAuth直後に `/settings?complete_profile=1` へ誘導する。通常登録のリクエストでは4項目を必須とする。
+
 **`GET /projects/{id}/tasks`** レスポンス `200`
 
 ```json
 {
   "project_id": "…",
   "columns": {
-    "todo": [ { "id": "…", "title": "…", "assignee": null, "position": 0, "due_date": null, "comment_count": 0 } ],
+    "todo": [ { "id": "…", "title": "…", "assignee": null, "position": 0, "version": 1, "due_date": null, "comment_count": 0 } ],
     "in_progress": [],
     "done": []
   }
@@ -195,16 +245,25 @@
 
 status 別にグルーピングして返すことで、フロント側のカンバン描画をそのまま行える形にする。
 
-**`PATCH /tasks/{id}`** リクエスト（すべて任意・部分更新）
+**`PATCH /tasks/{id}`** リクエスト（`version` を必須とし、それ以外は任意の部分更新）
 
 | フィールド | 型 | 制約 |
 |-----------|----|------|
 | title | string | 1〜150文字 |
 | description | string \| null | |
 | status | string | `todo` / `in_progress` / `done` |
-| assignee_id | string(uuid) \| null | プロジェクトメンバーであること |
-| position | integer | 0以上。省略時は移動先列の末尾 |
+| assignee_id | string(uuid) \| null | 有効なプロジェクトメンバーであること |
+| position | integer | 0以上。status変更時に省略した場合は移動先列の末尾。同じstatusの通常更新で省略した場合は現在位置を維持 |
 | due_date | string(date) \| null | |
+| version | integer | **必須**。取得時の値と一致した場合だけ更新し、成功時にサーバーが1加算 |
+
+`version` が一致しない場合は `409 TASK_CONFLICT` を返す。status/position変更はDBトランザクション内で列の並べ替えと同時に行い、競合時はフロントがボードを再取得して再操作を促す。
+
+**`PUT /users/me/password`** リクエスト：`{ "current_password": "...", "new_password": "...", "password_confirm": "..." }`
+
+`current_password` は既存パスワードがあるユーザーでは必須、OAuthのみで登録され `has_password=false` のユーザーでは省略可。成功時は全セッション・リフレッシュトークンを失効し、`204` を返す。
+
+**`PATCH /users/me`** は、`last_name` / `first_name` / `last_name_kana` / `first_name_kana` / `birth_date` のうち指定された項目だけを更新する。各文字列は1〜30文字、フリガナはひらがな・カタカナ・数字のみ、生年月日は未来日不可とし、値の `null` への変更は許可しない。OAuth新規ユーザーは未設定項目をこのAPIで補完し、4項目がすべて設定された時点で `profile_completed=true` になる。
 
 ## 4. エラー設計
 
@@ -244,6 +303,7 @@ status 別にグルーピングして返すことで、フロント側のカン�
 | 400 | `INVALID_RESET_TOKEN` | パスワードリセットトークンが無効・期限切れ |
 | 400 | `INVALID_VERIFY_TOKEN` | メール認証トークンが無効・期限切れ・使用済み |
 | 400 | `OAUTH_EMAIL_UNVERIFIED` | Google 側でメール未検証のため紐付け不可 |
+| 400 | `OAUTH_HANDOFF_INVALID` | OAuthの一時コードが無効・期限切れ・使用済み |
 | 401 | `UNAUTHENTICATED` | 認証情報なし |
 | 401 | `INVALID_CREDENTIALS` | ID/パスワード不一致 |
 | 401 | `SESSION_EXPIRED` | セッションが Redis に存在しない |
@@ -259,6 +319,10 @@ status 別にグルーピングして返すことで、フロント側のカン�
 | 409 | `DUPLICATE_USERNAME` / `DUPLICATE_EMAIL` | 一意制約違反 |
 | 409 | `ALREADY_MEMBER` | 既に参加済みのユーザーを招待 |
 | 409 | `OWNER_CANNOT_BE_REMOVED` | オーナーをメンバーから外そうとした |
+| 409 | `TASK_CONFLICT` | task version不一致。別ユーザーが先に更新した |
+| 409 | `SELF_MODIFICATION_NOT_ALLOWED` | 管理者が自分自身を降格・無効化しようとした |
+| 409 | `LAST_ADMIN_REQUIRED` | 最後の有効adminを降格・無効化しようとした |
+| 409 | `ASSIGNEE_INACTIVE` | 無効化されたユーザーを担当者に指定した |
 | 422 | `VALIDATION_ERROR` | pydantic バリデーション失敗 |
 | 429 | `TOO_MANY_ATTEMPTS` | ログイン失敗回数の上限超過 |
 | 500 | `INTERNAL_ERROR` | 未捕捉例外（詳細はレスポンスに含めずログのみ） |
@@ -286,14 +350,14 @@ flowchart TB
 
 | API | 未認証 | member（非所属） | member（所属） | オーナー | admin |
 |-----|--------|-----------------|---------------|----------|-------|
-| `POST /auth/register` `/login` `/verify-email*` `/password/*` | ○ | ○ | ○ | ○ | ○ |
+| `GET /auth/config`、`POST /auth/register` `/login` `/verify-email*` `/password/*` | ○ | ○ | ○ | ○ | ○ |
 | `GET /auth/me` `/users/me` | × | ○ | ○ | ○ | ○ |
 | `GET /projects` | × | ○（自分の分のみ） | ○ | ○ | ○（全件） |
 | `POST /projects` | × | ○ | ○ | ○ | ○ |
 | `GET /projects/{id}` `/tasks` | × | ×（404） | ○ | ○ | ○ |
 | `POST /projects/{id}/tasks` `PATCH /tasks/{id}` | × | ×（404） | ○ | ○ | ○ |
 | `PATCH /projects/{id}` `DELETE /projects/{id}` | × | ×（404） | ×（403） | ○ | ○ |
-| `POST/DELETE /projects/{id}/members` | × | ×（404） | ×（403） | ○ | ○ |
+| `GET /projects/{id}/members/candidates`、`POST/DELETE /projects/{id}/members` | × | ×（404） | ×（403） | ○ | ○ |
 | `PATCH /comments/{id}` `DELETE /comments/{id}` | × | ×（404） | 投稿者本人のみ○ | 投稿者本人のみ○ | ○ |
 | `/admin/*` | × | ×（403） | ×（403） | ×（403） | ○ |
 
@@ -362,14 +426,15 @@ sequenceDiagram
 
 | 関数 | 引数 | 戻り値 | 処理概要 |
 |------|------|--------|----------|
-| `register` | `payload: RegisterRequest`, `background: BackgroundTasks` | `User` | 重複チェック → パスワードハッシュ化 → `users` INSERT（`email_verified_at=NULL`）→ 認証トークン発行 → 確認メール送信予約。**Strategy.login は呼ばない**（D-6） |
+| `register` | `payload: RegisterRequest`, `background: BackgroundTasks` | `User` | 重複チェック → パスワードハッシュ化 → `users` INSERT（`email_verified_at=NULL`）→ 認証トークン発行 → 確認メール送信予約。**Strategy.login は呼ばない** |
 | `verify_email` | `token: str` | `None` | Redis のトークンをワンタイム消費 → `email_verified_at` を更新。無効なら 400 |
 | `resend_verification` | `email: str`, `background: BackgroundTasks` | `None` | 未認証ユーザーかつ再送間隔外の場合のみ再送。該当しなくても例外を出さない |
 | `login` | `identifier: str`, `password: str`, `request`, `response` | `LoginResult` | レート制限確認 → ユーザー取得 → パスワード検証 → `is_active` / `email_verified_at` 確認 → Strategy.login → `login_history` 記録 |
-| `logout` | `request`, `response`, `user` | `None` | Strategy.logout |
+| `logout` | `request`, `response`, `user: CurrentUser \| None` | `None` | sessionはsession Cookie、jwtはrefresh Cookieを使ってStrategy.logout。jwtはaccess tokenなしでも実行可能 |
 | `refresh` | `request`, `response` | `LoginResult` | Strategy.refresh（session モードでは `NotSupportedError`） |
 | `oauth_start` | `redirect_to: str \| None` | `str`（認可URL） | state/PKCE 生成 → Redis保存 → 認可URL組み立て |
-| `oauth_callback` | `code: str`, `state: str`, `request`, `response` | `tuple[User, LoginResult]` | state消費 → トークン交換 → id_token検証 → ユーザー解決/作成 → Strategy.login → 履歴記録 |
+| `oauth_callback` | `code: str`, `state: str`, `request`, `response` | `OAuthCallbackResult` | state Cookie/Redis消費 → code交換 → id_token（nonce含む）検証 → ユーザー解決/作成。sessionはここでloginしてredirect_toを返し、jwtはhandoff codeだけ発行 |
+| `oauth_exchange` | `code: str`, `request`, `response` | `OAuthExchangeResult` | jwtのみ。handoff codeをGETDELで消費 → user_idから現在の有効ユーザーを再取得 → JwtStrategy.login → 履歴記録。正規化済みredirect_toも返す |
 | `request_password_reset` | `email: str` | `None` | ユーザー検索 → トークン生成 → Redis保存 → メール送信（存在しなくても例外を出さない） |
 | `reset_password` | `token: str`, `new_password: str` | `None` | トークン消費 → パスワード更新 → 全セッション/トークン失効 |
 
@@ -380,11 +445,11 @@ sequenceDiagram
 | `list_projects` | `user`, `page`, `per_page` | `Page[ProjectSummary]` | admin は全件、member は所属分のみ |
 | `create_project` | `user`, `payload` | `Project` | projects と project_members を同一トランザクションで作成 |
 | `update_project` / `delete_project` | `project`, `payload` | `Project` / `None` | オーナー or admin 前提（認可はdeps側） |
-| `add_member` / `remove_member` | `project`, `user_id`, `invited_by` | `Member` / `None` | オーナーは削除不可（409） |
+| `add_member` / `remove_member` | `project`, `user_id`, `invited_by` | `Member` / `None` | オーナーは削除不可（409）。削除対象者が担当中のタスクは同一トランザクションで `assignee_id=NULL` にしてからmembershipを削除 |
 | `get_board` | `project` | `BoardResponse` | status別にグルーピングして返す |
 | `create_task` | `project`, `payload`, `user` | `Task` | assignee のメンバー検証、position 採番 |
-| `update_task` | `task`, `payload`, `user` | `Task` | status変更時は移動先列の末尾へ、`position` 指定時は間の行を再採番 |
-| `delete_task` | `task` | `None` | コメントは CASCADE |
+| `update_task` | `task`, `payload`, `user` | `Task` | `version`一致を確認してから更新。status変更時は移動先列の末尾へ、`position` 指定時は列をロックして間の行を再採番 |
+| `delete_task` | `task` | `None` | 対象列の後続positionを詰めるため列のadvisory lockを取得し、コメントはCASCADE |
 | `add_comment` / `update_comment` / `delete_comment` | `task` / `comment`, `payload`, `user` | `Comment` / `None` | 編集・削除は投稿者本人または admin |
 
 ## 8. テスト方針
@@ -394,5 +459,6 @@ sequenceDiagram
 | 単体 | サービス層をリポジトリのモックで検証（認可分岐・採番ロジック・エラー変換） |
 | 結合 | `httpx.AsyncClient` + 実 PostgreSQL / Redis。主要エンドポイントを正常系・異常系（401/403/404/409/422）で検証 |
 | パラメータ化 | 認証必須APIは `AUTH_MODE=session` / `jwt` の両方で実行するフィクスチャを用意 |
+| 競合・認可 | task version不一致が409、非所属の候補検索が404、メンバー削除時に担当タスクがNULL化されること、最後のadmin保護を検証 |
 | カバレッジ | `pytest --cov=app`。`omit` には自動生成物（`alembic/versions`）のみを指定し、実装コードは除外しない |
 | 網羅できない範囲 | 外部（Google）の実通信、実SMTP送信はモックで代替し、実通信は手動確認とする |

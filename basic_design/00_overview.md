@@ -15,31 +15,7 @@
 | 認証方式 | session（Cookie + Redis） / JWT（Access + Refresh） / Google OAuth2 |
 | CI/CD | GitHub Actions（CI: Lint・型チェック・テスト、CD: GHCR + self-hosted runner） |
 
-## 2. 要件書からの設計判断一覧
-
-要件定義書と画面イメージ（pptx）の間に差異があったため、以下のとおり合意して設計している。
-（詳細は各設計書の該当章を参照）
-
-| No | 論点 | 要件書 | pptx | 本設計での決定 | 影響 |
-|----|------|--------|------|----------------|------|
-| D-1 | パスワードリセット | メール送信は「スコープ外」 | slide3 にリセット画面あり | **メール送信まで含めて実装する**（SMTP連携） | [03_auth](./03_auth.md#7-パスワードリセット), [04_api](./04_api.md), [06](./06_infra_cicd.md) |
-| D-2 | ユーザー属性 | users は id/email/password_hash/role/created_at のみ | 姓・名・フリガナ・生年月日を入力 | **pptx に合わせて users にカラム追加**。バリデーション（各30文字／メール50文字／パスワードポリシー）も設計に反映 | [01_database](./01_database.md#31-users), [05](./05_frontend.md) |
-| D-3 | ログイン識別子 | email のみ | 「IDもしくはメールアドレス」 | **username カラムを追加し、email / username のどちらでもログイン可能にする** | [01_database](./01_database.md#31-users), [03_auth](./03_auth.md#32-シーケンスログイン) |
-| D-4 | 文字サイズ変更 | 記載なし | slide7 に設定項目あり | **フロントエンドの localStorage のみで保持**（DB・API変更なし） | [05_frontend](./05_frontend.md#8-アクセシビリティ設定文字サイズ) |
-| D-5 | サイドバーナビゲーション | 記載なし | 全画面共通で `≡` / home / 管理 / 設定 / ログアウト | **共通レイアウトコンポーネントとして設計**。「管理」は `role = admin` のみ表示 | [05_frontend](./05_frontend.md#3-共通レイアウト) |
-| D-6 | 会員登録後の遷移とメール認証 | 登録APIのみ規定（遷移・メール認証の記載なし） | slide2 に会員登録画面のみ | **登録後は自動ログインせず、確認メール送信のうえログイン画面へ戻す。メール内リンクで認証を完了するまでログインを拒否する** | [03_auth](./03_auth.md#6-会員登録とメール認証), [04_api](./04_api.md#21-認証apiauth), [01_database](./01_database.md#31-users), [05_frontend](./05_frontend.md#2-画面一覧とルーティング) |
-
-### 要検討事項
-
-| No | 内容 | 状況 |
-|----|------|------|
-| T-1 | ディレクトリ構成が、要件書§9（`api/app/{auth,models,routers}`）とコーディング規約のレイヤ構成（`core/api/schemas/service/repository/models`）で食い違っている。本設計では**要件書のトップレベル構成（`api/`, `frontend/`, `db/`）を維持しつつ、`api/app/` 内部をレイヤ構成に合わせる**案を採用している | **要検討**（実装着手前に合意が必要） |
-| T-2 | プロジェクトからのメンバー削除・脱退のAPIは要件書に記載がない。設計では追加している | 要検討 |
-| T-3 | タスクの並び順（カンバン内のカード順序）の永続化方法。本設計では `tasks.position` を持たせる案とした | 要検討 |
-| T-4 | メール送信基盤（パスワードリセット・メール認証で共用）。本番SMTPを使うか、開発用のMailpit等に留めるか | **要検討**。設計上は SMTP 設定を環境変数化し、開発環境は Mailpit を推奨 |
-| T-5 | 生年月日の用途（年齢制限等）は不明。表示・保持のみとしている | **不明** |
-
-## 3. システム構成
+## 2. システム構成
 
 > drawio版：[diagrams/01_system_architecture.drawio](./diagrams/01_system_architecture.drawio)（公開ポート・CI/CD経路を含む詳細版）
 
@@ -61,8 +37,8 @@ flowchart TB
         GOOGLE["Google OAuth2<br/>認可サーバー"]
     end
 
-    BROWSER -->|"HTTPS/HTTP"| FE
-    BROWSER -->|"/api/* XHR<br/>Cookie or Bearer"| API
+    BROWSER -->|"HTTPS/HTTP<br/>same-origin /api"| FE
+    FE -->|"/api proxy<br/>Cookie or Bearer"| API
     API -->|"SQLAlchemy"| PG
     API -->|"redis-py"| RD
     API -->|"SMTP"| MAIL
@@ -70,7 +46,7 @@ flowchart TB
     BROWSER -->|"リダイレクト"| GOOGLE
 ```
 
-## 4. バックエンドのレイヤ構成
+## 3. バックエンドのレイヤ構成
 
 > drawio版：[diagrams/02_backend_layers.drawio](./diagrams/02_backend_layers.drawio)（モジュール単位の詳細版）
 
@@ -97,7 +73,7 @@ flowchart TB
     RP -.-> C
 ```
 
-### ディレクトリ構成（採用案・T-1）
+### ディレクトリ構成
 
 ```
 project-root/
@@ -131,7 +107,7 @@ project-root/
 └── tmp/   （git管理外）
 ```
 
-## 5. 画面遷移図
+## 4. 画面遷移図
 
 > drawio版：[diagrams/04_screen_flow.drawio](./diagrams/04_screen_flow.drawio)
 
@@ -159,9 +135,9 @@ stateDiagram-v2
     Dashboard --> Login: ログアウト
 ```
 
-## 6. 全体シーケンス
+## 5. 全体シーケンス
 
-### 6.1 ログイン〜カンバン表示（session モード）
+### 5.1 ログイン〜カンバン表示（session モード）
 
 ```mermaid
 sequenceDiagram
@@ -177,13 +153,14 @@ sequenceDiagram
     API->>PG: SELECT users WHERE email=? OR username=?
     PG-->>API: user行
     API->>API: パスワード検証（argon2）
+    API->>API: users の is_active / role / username を正として判定
     API->>RD: SETEX session:{sid} TTL=1800
     API->>RD: SETEX csrf:{sid} TTL=1800
     API->>PG: INSERT login_history(success=true)
     API-->>FE: 204 + Set-Cookie(sid, csrf_token)
     FE->>API: GET /api/auth/me (Cookie)
     API->>RD: GET session:{sid}
-    RD-->>API: {user_id, role}
+    RD-->>API: {user_id}
     API-->>FE: 200 {user}
     FE->>API: GET /api/projects
     API->>PG: 所属プロジェクト取得
@@ -193,7 +170,7 @@ sequenceDiagram
     FE-->>U: カンバンボード描画
 ```
 
-### 6.2 タスクのドラッグ＆ドロップによるステータス変更
+### 5.2 タスクのドラッグ＆ドロップによるステータス変更
 
 ```mermaid
 sequenceDiagram
@@ -205,9 +182,9 @@ sequenceDiagram
 
     U->>FE: カードを「進行中」列にドロップ
     FE->>FE: 楽観的更新（ローカルstate即時反映）
-    FE->>API: PATCH /api/tasks/{id} {status, position}
+    FE->>API: PATCH /api/tasks/{id} {status, position, version}
     API->>API: 認証・プロジェクト所属チェック
-    API->>PG: UPDATE tasks SET status, position, updated_at
+    API->>PG: version一致を確認してUPDATE<br/>status, position, version+1
     PG-->>API: 更新後の行
     API-->>FE: 200 {task}
     alt 失敗（403/409/500）
@@ -216,7 +193,7 @@ sequenceDiagram
     end
 ```
 
-## 7. 主要コンポーネント相関図
+## 6. 主要コンポーネント相関図
 
 ```mermaid
 flowchart LR
@@ -272,7 +249,7 @@ flowchart LR
     US --> URP
 ```
 
-## 8. データ全体像
+## 7. データ全体像
 
 ```mermaid
 flowchart LR
@@ -282,6 +259,9 @@ flowchart LR
         S3["refresh:{token_hash}"]
         S4["oauth_state:{state}"]
         S5["pwreset:{token_hash}"]
+        S6["refresh_used / refresh_family_revoked"]
+        S7["oauth_handoff:{code}"]
+        S8["emailverify / emailverify_current"]
     end
 
     subgraph pg["PostgreSQL（永続）"]
@@ -300,14 +280,14 @@ flowchart LR
     T7 -->|user_id| T1
 ```
 
-「ログインが有効かどうか」の判定は Redis のみを参照し、「誰がいつログインしたか」の履歴は PostgreSQL の `login_history` に残す。この分離により、Redis 再起動でログイン状態は失われても監査ログは残る。
+「ログインが有効かどうか」の判定は Redis のみを参照し、「誰がいつログインしたか」の履歴は設定した保持期間の範囲で PostgreSQL の `login_history` に残す。この分離により、Redis 再起動でログイン状態は失われても監査ログは独立して残る。
 
-## 9. 非機能設計サマリ
+## 8. 非機能設計サマリ
 
 | 項目 | 方針 |
 |------|------|
 | パスワード保存 | argon2id（`passlib[argon2]`）。コストパラメータは環境変数化 |
-| CSRF | session モード時のみ、Double Submit Cookie 方式で検証（[03_auth](./03_auth.md#8-csrf対策)） |
+| CSRF | sessionの更新系とjwtのrefresh/logoutでDouble Submit Cookie + Origin検証（[03_auth](./03_auth.md#8-csrf対策)） |
 | トークン失効 | session/refresh はいずれも Redis のキー削除で即時失効 |
 | ログ | 構造化ログ（JSON）。リクエストIDを付与し、認証イベントは監査目的で INFO 出力 |
 | テスト | バックエンド pytest（Redis/PostgreSQL は実コンテナ接続）、フロント Vitest |
