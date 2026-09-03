@@ -136,12 +136,14 @@ flowchart TB
 | `SMTP_USE_TLS` | `false` | |
 | `MAIL_FROM` | `no-reply@cerberus.local` | 送信元 |
 | `PASSWORD_RESET_TTL_SECONDS` | `1800` | リセットトークンTTL |
+| `EMAIL_VERIFY_TTL_SECONDS` | `86400` | メール認証トークンTTL（24時間、D-6） |
+| `EMAIL_VERIFY_RESEND_INTERVAL_SECONDS` | `60` | 認証メール再送の最小間隔（D-6） |
 
 ### 4.5 初期データ / フロント
 
 | 変数 | 例 | 説明 |
 |------|-----|------|
-| `INITIAL_ADMIN_EMAIL` / `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD` | *** | seed 用管理者（**Secret**）。ハードコードしない |
+| `INITIAL_ADMIN_EMAIL` / `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD` | *** | seed 用管理者（**Secret**）。ハードコードしない。seed 時点で `email_verified_at` を設定し、確認メールなしでログインできるようにする（D-6） |
 | `VITE_API_BASE_URL` | `http://localhost:8000/api` | フロント（ビルド時埋め込み） |
 | `VITE_AUTH_MODE` | `session` | フロント側の AuthAdapter 選択 |
 | `VITE_GOOGLE_LOGIN_ENABLED` | `true` | Googleログインボタン表示 |

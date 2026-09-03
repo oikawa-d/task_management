@@ -21,8 +21,10 @@
 
 | メソッド | パス | 概要 | 認証 | 備考 |
 |----------|------|------|------|------|
-| POST | `/auth/register` | 会員登録（登録後は自動ログイン） | 不要 | D-2 の項目を受け取る |
-| POST | `/auth/login` | ログイン（`AUTH_MODE` に応じて分岐） | 不要 | `identifier` は email または username（D-3） |
+| POST | `/auth/register` | 会員登録（**自動ログインしない**。確認メールを送信し、フロントはログイン画面へ戻す） | 不要 | D-2 の項目を受け取る（D-6） |
+| POST | `/auth/login` | ログイン（`AUTH_MODE` に応じて分岐） | 不要 | `identifier` は email または username（D-3）。メール未認証は 403（D-6） |
+| POST | `/auth/verify-email` | メール認証の実行 | 不要 | 確認メール内リンクのトークンを検証（D-6） |
+| POST | `/auth/verify-email/resend` | 認証メールの再送 | 不要 | 常に 202。再送間隔の制限あり（D-6） |
 | POST | `/auth/logout` | ログアウト | 必要 | |
 | POST | `/auth/refresh` | アクセストークン再発行 | リフレッシュトークン | **jwt モードのみ**。session モードは 405 |
 | GET | `/auth/me` | 現在のログインユーザー取得 | 必要 | フロントの起動時セッション復元に使用 |
@@ -103,7 +105,25 @@
 | last_name_kana / first_name_kana | string | ○ | 各30文字以内、ひらがな・カタカナ・数字のみ |
 | birth_date | string(date) | ○ | `YYYY-MM-DD`、未来日不可 |
 
-レスポンス `201`：`UserResponse` + モードに応じた認証情報（Cookie もしくは `TokenResponse`）
+レスポンス `201`（**認証情報は返さない**。Cookie もトークンも発行しない）
+
+```json
+{
+  "id": "3f1c...",
+  "email": "taro@example.com",
+  "message": "確認メールを送信しました。メール内のリンクから認証を完了してください。"
+}
+```
+
+**`POST /auth/verify-email`** リクエスト：`{ "token": "..." }`（確認メールのリンクに含まれるトークン）
+
+レスポンス
+- `204 No Content`：認証完了。フロントはログイン画面へ遷移する
+- `400 INVALID_VERIFY_TOKEN`：トークンが無効・期限切れ・使用済み
+
+**`POST /auth/verify-email/resend`** リクエスト：`{ "email": "..." }`
+
+レスポンス `202 Accepted`（存在しないメール・認証済みメールでも同一応答。ユーザー列挙対策）
 
 **`POST /auth/login`** リクエスト
 
@@ -115,6 +135,7 @@
 レスポンス
 - session モード：`204 No Content` + `Set-Cookie: cerberus_sid, cerberus_csrf`
 - jwt モード：`200` `{ "access_token": "...", "token_type": "bearer", "expires_in": 900 }` + `Set-Cookie: cerberus_rt`
+- `403 EMAIL_NOT_VERIFIED`：ID/パスワードは正しいがメール未認証（D-6）。フロントは再送導線を表示する
 
 **`GET /auth/me`** レスポンス `200`
 
@@ -221,6 +242,7 @@ status 別にグルーピングして返すことで、フロント側のカン�
 |------|------|----------|
 | 400 | `INVALID_STATE` | OAuth2 の state 不一致・期限切れ |
 | 400 | `INVALID_RESET_TOKEN` | パスワードリセットトークンが無効・期限切れ |
+| 400 | `INVALID_VERIFY_TOKEN` | メール認証トークンが無効・期限切れ・使用済み |
 | 400 | `OAUTH_EMAIL_UNVERIFIED` | Google 側でメール未検証のため紐付け不可 |
 | 401 | `UNAUTHENTICATED` | 認証情報なし |
 | 401 | `INVALID_CREDENTIALS` | ID/パスワード不一致 |
@@ -231,6 +253,7 @@ status 別にグルーピングして返すことで、フロント側のカン�
 | 403 | `FORBIDDEN` | ロール不足（管理者専用APIへのアクセス等） |
 | 403 | `CSRF_INVALID` | CSRFトークン不一致・欠落 |
 | 403 | `USER_INACTIVE` | `is_active = false` |
+| 403 | `EMAIL_NOT_VERIFIED` | メール認証が未完了（`email_verified_at IS NULL`）のままログインを試行 |
 | 404 | `NOT_FOUND` | リソース不存在、または権限がなく存在を隠す場合 |
 | 405 | `NOT_SUPPORTED_IN_MODE` | 現在の `AUTH_MODE` では利用不可（session時の `/auth/refresh`） |
 | 409 | `DUPLICATE_USERNAME` / `DUPLICATE_EMAIL` | 一意制約違反 |
@@ -263,7 +286,7 @@ flowchart TB
 
 | API | 未認証 | member（非所属） | member（所属） | オーナー | admin |
 |-----|--------|-----------------|---------------|----------|-------|
-| `POST /auth/register` `/login` `/password/*` | ○ | ○ | ○ | ○ | ○ |
+| `POST /auth/register` `/login` `/verify-email*` `/password/*` | ○ | ○ | ○ | ○ | ○ |
 | `GET /auth/me` `/users/me` | × | ○ | ○ | ○ | ○ |
 | `GET /projects` | × | ○（自分の分のみ） | ○ | ○ | ○（全件） |
 | `POST /projects` | × | ○ | ○ | ○ | ○ |
@@ -339,8 +362,10 @@ sequenceDiagram
 
 | 関数 | 引数 | 戻り値 | 処理概要 |
 |------|------|--------|----------|
-| `register` | `payload: RegisterRequest`, `request`, `response` | `tuple[User, LoginResult]` | 重複チェック → パスワードハッシュ化 → `users` INSERT → Strategy.login |
-| `login` | `identifier: str`, `password: str`, `request`, `response` | `LoginResult` | レート制限確認 → ユーザー取得 → パスワード検証 → Strategy.login → `login_history` 記録 |
+| `register` | `payload: RegisterRequest`, `background: BackgroundTasks` | `User` | 重複チェック → パスワードハッシュ化 → `users` INSERT（`email_verified_at=NULL`）→ 認証トークン発行 → 確認メール送信予約。**Strategy.login は呼ばない**（D-6） |
+| `verify_email` | `token: str` | `None` | Redis のトークンをワンタイム消費 → `email_verified_at` を更新。無効なら 400 |
+| `resend_verification` | `email: str`, `background: BackgroundTasks` | `None` | 未認証ユーザーかつ再送間隔外の場合のみ再送。該当しなくても例外を出さない |
+| `login` | `identifier: str`, `password: str`, `request`, `response` | `LoginResult` | レート制限確認 → ユーザー取得 → パスワード検証 → `is_active` / `email_verified_at` 確認 → Strategy.login → `login_history` 記録 |
 | `logout` | `request`, `response`, `user` | `None` | Strategy.logout |
 | `refresh` | `request`, `response` | `LoginResult` | Strategy.refresh（session モードでは `NotSupportedError`） |
 | `oauth_start` | `redirect_to: str \| None` | `str`（認可URL） | state/PKCE 生成 → Redis保存 → 認可URL組み立て |

@@ -24,6 +24,8 @@
 | `user_refresh:{user_id}` | Set（token_hash の集合） | `REFRESH_TTL_SECONDS`（都度延長） | jwt方式のログイン | 同上（JWT方式） |
 | `oauth_state:{state}` | `{redirect_to, code_verifier, created_at}` | `OAUTH_STATE_TTL_SECONDS`（既定600） | OAuth2認可開始 | CSRF対策のstate検証、PKCE検証値の保持 |
 | `pwreset:{token_hash}` | `{user_id, requested_at}` | `PASSWORD_RESET_TTL_SECONDS`（既定1800） | パスワードリセット要求 | リセットトークンの有効性判定（設計判断 D-1） |
+| `emailverify:{token_hash}` | `{user_id, requested_at}` | `EMAIL_VERIFY_TTL_SECONDS`（既定86400 = 24時間） | 会員登録・認証メール再送 | メール認証トークンの有効性判定（設計判断 D-6） |
+| `emailverify_sent:{user_id}` | 直近の送信時刻（数値） | `EMAIL_VERIFY_RESEND_INTERVAL_SECONDS`（既定60） | 認証メール送信時に `SETEX` | 認証メール再送のレート制限（メール爆撃の防止） |
 | `login_fail:{identifier}` | 連続失敗回数（数値） | `LOGIN_LOCK_WINDOW_SECONDS`（既定900） | ログイン失敗時に `INCR` | 総当たり対策のレート制限 |
 
 **値に保存しない情報**：パスワード、パスワードハッシュ、アクセストークンそのもの、リフレッシュトークンの平文。
@@ -49,7 +51,7 @@ flowchart TB
 |------|----------------------|------|
 | `session:{sid}` | **する** | 操作中にログアウトさせないため。上限は設けない（学習用途） |
 | `refresh:{hash}` | **しない** | ローテーション時に新しいキーを発行するため、TTLは発行時点から固定 |
-| `oauth_state`, `pwreset` | しない | ワンタイム用途 |
+| `oauth_state`, `pwreset`, `emailverify` | しない | ワンタイム用途 |
 
 > `session` のスライディング延長に上限（絶対有効期限）を設けるかは**要検討**。実務では絶対期限を併設するのが一般的。
 
@@ -141,6 +143,9 @@ stateDiagram-v2
 | `consume_oauth_state` | `state: str` | `OAuthStateData \| None` | `GETDEL oauth_state:{state}`（ワンタイム消費） |
 | `save_password_reset_token` | `token: str`, `user_id: UUID`, `ttl: int` | `None` | `SETEX pwreset:{sha256(token)}` |
 | `consume_password_reset_token` | `token: str` | `UUID \| None` | `GETDEL pwreset:{hash}` → user_id を返す |
+| `save_email_verify_token` | `token: str`, `user_id: UUID`, `ttl: int` | `None` | `SETEX emailverify:{sha256(token)}` |
+| `consume_email_verify_token` | `token: str` | `UUID \| None` | `GETDEL emailverify:{hash}` → user_id を返す（ワンタイム消費） |
+| `mark_email_verify_sent` | `user_id: UUID`, `interval: int` | `bool` | `SET emailverify_sent:{uid} NX EX interval`。`False` なら再送間隔内のため送信しない |
 | `incr_login_failure` | `identifier: str`, `window: int` | `int`（現在の失敗回数） | `INCR login_fail:{identifier}` → 初回のみ `EXPIRE` |
 | `reset_login_failure` | `identifier: str` | `None` | `DEL login_fail:{identifier}` |
 | `ping` | なし | `bool` | ヘルスチェック（`/health` から使用） |

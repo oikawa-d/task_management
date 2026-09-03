@@ -22,11 +22,12 @@
 
 | No | 論点 | 要件書 | pptx | 本設計での決定 | 影響 |
 |----|------|--------|------|----------------|------|
-| D-1 | パスワードリセット | メール送信は「スコープ外」 | slide3 にリセット画面あり | **メール送信まで含めて実装する**（SMTP連携） | [03_auth](./03_auth.md#6-パスワードリセット), [04_api](./04_api.md), [06](./06_infra_cicd.md) |
+| D-1 | パスワードリセット | メール送信は「スコープ外」 | slide3 にリセット画面あり | **メール送信まで含めて実装する**（SMTP連携） | [03_auth](./03_auth.md#7-パスワードリセット), [04_api](./04_api.md), [06](./06_infra_cicd.md) |
 | D-2 | ユーザー属性 | users は id/email/password_hash/role/created_at のみ | 姓・名・フリガナ・生年月日を入力 | **pptx に合わせて users にカラム追加**。バリデーション（各30文字／メール50文字／パスワードポリシー）も設計に反映 | [01_database](./01_database.md#31-users), [05](./05_frontend.md) |
-| D-3 | ログイン識別子 | email のみ | 「IDもしくはメールアドレス」 | **username カラムを追加し、email / username のどちらでもログイン可能にする** | [01_database](./01_database.md#31-users), [03_auth](./03_auth.md#41-パスワードログイン) |
+| D-3 | ログイン識別子 | email のみ | 「IDもしくはメールアドレス」 | **username カラムを追加し、email / username のどちらでもログイン可能にする** | [01_database](./01_database.md#31-users), [03_auth](./03_auth.md#32-シーケンスログイン) |
 | D-4 | 文字サイズ変更 | 記載なし | slide7 に設定項目あり | **フロントエンドの localStorage のみで保持**（DB・API変更なし） | [05_frontend](./05_frontend.md#8-アクセシビリティ設定文字サイズ) |
 | D-5 | サイドバーナビゲーション | 記載なし | 全画面共通で `≡` / home / 管理 / 設定 / ログアウト | **共通レイアウトコンポーネントとして設計**。「管理」は `role = admin` のみ表示 | [05_frontend](./05_frontend.md#3-共通レイアウト) |
+| D-6 | 会員登録後の遷移とメール認証 | 登録APIのみ規定（遷移・メール認証の記載なし） | slide2 に会員登録画面のみ | **登録後は自動ログインせず、確認メール送信のうえログイン画面へ戻す。メール内リンクで認証を完了するまでログインを拒否する** | [03_auth](./03_auth.md#6-会員登録とメール認証), [04_api](./04_api.md#21-認証apiauth), [01_database](./01_database.md#31-users), [05_frontend](./05_frontend.md#2-画面一覧とルーティング) |
 
 ### 要検討事項
 
@@ -35,7 +36,7 @@
 | T-1 | ディレクトリ構成が、要件書§9（`api/app/{auth,models,routers}`）とコーディング規約のレイヤ構成（`core/api/schemas/service/repository/models`）で食い違っている。本設計では**要件書のトップレベル構成（`api/`, `frontend/`, `db/`）を維持しつつ、`api/app/` 内部をレイヤ構成に合わせる**案を採用している | **要検討**（実装着手前に合意が必要） |
 | T-2 | プロジェクトからのメンバー削除・脱退のAPIは要件書に記載がない。設計では追加している | 要検討 |
 | T-3 | タスクの並び順（カンバン内のカード順序）の永続化方法。本設計では `tasks.position` を持たせる案とした | 要検討 |
-| T-4 | パスワードリセットのメール送信基盤（本番SMTPを使うか、開発用のMailpit等に留めるか） | **要検討**。設計上は SMTP 設定を環境変数化し、開発環境は Mailpit を推奨 |
+| T-4 | メール送信基盤（パスワードリセット・メール認証で共用）。本番SMTPを使うか、開発用のMailpit等に留めるか | **要検討**。設計上は SMTP 設定を環境変数化し、開発環境は Mailpit を推奨 |
 | T-5 | 生年月日の用途（年齢制限等）は不明。表示・保持のみとしている | **不明** |
 
 ## 3. システム構成
@@ -141,8 +142,11 @@ stateDiagram-v2
     Login --> PasswordForgot: 「パスワードを忘れた方はこちら」
     Login --> Dashboard: ログイン成功
     Login --> Google: Googleでログイン
-    Google --> Dashboard: コールバック成功
-    Register --> Dashboard: 登録成功（自動ログイン）
+    Google --> Dashboard: コールバック成功（Google側で検証済みのメールのみ）
+    Register --> Login: 登録成功（確認メール送信・自動ログインしない）
+    Login --> Login: メール未認証のためログイン拒否（認証メール再送）
+    [*] --> VerifyEmail: 確認メール内のリンク
+    VerifyEmail --> Login: メール認証完了
     PasswordForgot --> PasswordReset: メール内リンク
     PasswordReset --> Login: リセット完了
     Dashboard --> ProjectBoard: プロジェクト選択
@@ -303,7 +307,7 @@ flowchart LR
 | 項目 | 方針 |
 |------|------|
 | パスワード保存 | argon2id（`passlib[argon2]`）。コストパラメータは環境変数化 |
-| CSRF | session モード時のみ、Double Submit Cookie 方式で検証（[03_auth](./03_auth.md#7-csrf対策)） |
+| CSRF | session モード時のみ、Double Submit Cookie 方式で検証（[03_auth](./03_auth.md#8-csrf対策)） |
 | トークン失効 | session/refresh はいずれも Redis のキー削除で即時失効 |
 | ログ | 構造化ログ（JSON）。リクエストIDを付与し、認証イベントは監査目的で INFO 出力 |
 | テスト | バックエンド pytest（Redis/PostgreSQL は実コンテナ接続）、フロント Vitest |

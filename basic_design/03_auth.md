@@ -270,7 +270,7 @@ sequenceDiagram
 | `provider_user_id` が既に登録済み | 該当ユーザーとしてログイン |
 | 未登録だが `email` が既存ユーザーと一致 | 既存ユーザーに `oauth_accounts` を追加して紐付ける（Google側でメール検証済み `email_verified=true` の場合のみ） |
 | `email_verified=false` | 紐付けを行わず 400 エラー（アカウント乗っ取り防止） |
-| 完全な新規 | `users` を作成。氏名は Google の `given_name`/`family_name` から補完し、**フリガナ・生年月日は未入力となるため初回ログイン後に設定画面へ誘導する**（要検討：必須項目の扱い） |
+| 完全な新規 | `users` を作成（`email_verified_at = now()`：Google 側で検証済みのため確認メールは送らない）。氏名は Google の `given_name`/`family_name` から補完し、**フリガナ・生年月日は未入力となるため初回ログイン後に設定画面へ誘導する**（要検討：必須項目の扱い） |
 
 > D-2 で氏名・フリガナ・生年月日を必須にしたため、OAuth新規登録時に必須項目が埋まらない矛盾が生じる。本設計では「OAuth作成ユーザーは `birth_date` / カナを NULL 許容にし、プロフィール未完了フラグで補完を促す」案を採る。**要検討**。
 
@@ -281,11 +281,109 @@ OAuth コールバックはブラウザのリダイレクトであるため、�
 1. コールバックで一時コード（`token_urlsafe(32)`、TTL60秒、Redisキー `oauth_handoff:{code}`）を発行し、`/oauth/callback?code=xxx` へリダイレクト
 2. フロントが `POST /api/auth/oauth/exchange` でコードをトークンに交換
 
-## 6. パスワードリセット
+## 6. 会員登録とメール認証
+
+設計判断 D-6。**登録処理では自動ログインを行わず**、確認メールの受信を通じてメールアドレスの所有を確認してからログインさせる。
+
+| 論点 | 決定 | 理由 |
+|------|------|------|
+| 登録直後のログイン | **行わない**。`201` を返し、フロントは `/login` へ遷移させる | 認証状態の確立経路をログインの1本に集約でき、session / jwt いずれのモードでも登録APIが認証状態を持たずに済む |
+| 未認証ユーザーのログイン | **拒否**（`403 EMAIL_NOT_VERIFIED`） | 到達しないメールアドレスでの登録を防ぎ、パスワードリセットが機能する前提を担保する |
+| 認証状態の保持 | `users.email_verified_at`（`NULL` = 未認証） | 「いつ認証したか」を追跡できるようにするため（真偽値にしない） |
+| トークン | `token_urlsafe(32)`。Redis `emailverify:{sha256(token)}` に24時間TTLでワンタイム保持 | パスワードリセットと同じ方式に揃え、失効管理をRedisに集約する |
+| Google OAuth 登録 | Google 側 `email_verified=true` を検証済みとみなし、`email_verified_at` を設定してそのままログイン | 確認メールの二重送信は冗長。`email_verified=false` は 5.3 のとおり 400 で拒否する |
+
+### 6.1 シーケンス（登録 → 確認メール → ログイン）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as ユーザー
+    participant FE as React SPA
+    participant API as FastAPI
+    participant PG as PostgreSQL
+    participant RD as Redis
+    participant SMTP as SMTPサーバー<br/>(開発: Mailpit)
+
+    U->>FE: 会員登録フォーム送信
+    FE->>API: POST /api/auth/register
+    API->>PG: SELECT users（username / email の重複確認）
+    alt 重複あり
+        API-->>FE: 409 DUPLICATE_USERNAME / DUPLICATE_EMAIL
+    else 重複なし
+        API->>API: argon2 でパスワードをハッシュ化
+        API->>PG: INSERT users（email_verified_at = NULL）
+        API->>API: token = token_urlsafe(32)
+        API->>RD: SETEX emailverify:{sha256(token)} TTL=86400
+        API->>RD: SET emailverify_sent:{uid} NX EX 60
+        API->>SMTP: 認証URL付きメール送信（BackgroundTasks）
+        API-->>FE: 201 {user_id, email, message}
+        FE-->>U: ログイン画面へ遷移<br/>「確認メールを送信しました」を表示
+    end
+
+    U->>FE: メール内リンク /verify-email?token=xxx
+    FE->>API: POST /api/auth/verify-email {token}
+    API->>RD: GETDEL emailverify:{sha256(token)}
+    alt トークン無効・期限切れ
+        API-->>FE: 400 INVALID_VERIFY_TOKEN（再送導線を表示）
+    else 有効
+        API->>PG: UPDATE users SET email_verified_at = now()
+        API-->>FE: 204
+        FE-->>U: ログイン画面へ遷移（認証完了メッセージ）
+    end
+
+    U->>FE: ID/メール + パスワード
+    FE->>API: POST /api/auth/login
+    API->>PG: SELECT users
+    alt email_verified_at IS NULL
+        API->>PG: INSERT login_history(success=false, failure_reason='email_not_verified')
+        API-->>FE: 403 EMAIL_NOT_VERIFIED
+    else 認証済み
+        API->>API: 3.2 / 4.1 の通常ログイン処理へ
+    end
+```
+
+> 既に認証済みのトークンを再度開いた場合、トークンは `GETDEL` で消費済みのため 400 となる。フロントは「既に認証済みの可能性があります」と案内し、ログイン画面への導線を出す（**要検討**：冪等にするならトークンを消費せず `email_verified_at` の有無で分岐する実装も可）。
+
+### 6.2 ログイン時の判定順序
+
+```mermaid
+flowchart TB
+    A["POST /auth/login"] --> B{"レート制限内?"}
+    B -->|No| Z1["429 TOO_MANY_ATTEMPTS"]
+    B -->|Yes| C{"ユーザー存在 かつ<br/>パスワード一致?"}
+    C -->|No| Z2["401 INVALID_CREDENTIALS"]
+    C -->|Yes| D{"is_active?"}
+    D -->|No| Z3["403 USER_INACTIVE"]
+    D -->|Yes| E{"email_verified_at<br/>IS NOT NULL?"}
+    E -->|No| Z4["403 EMAIL_NOT_VERIFIED"]
+    E -->|Yes| F["Strategy.login() → 認証状態を確立"]
+```
+
+**パスワード検証を先に行う理由**：未認証であることを未検証のまま返すと、任意のメールアドレスに対して「登録済みか」を判定できてしまう（ユーザー列挙）。パスワードが正しい場合に限り `EMAIL_NOT_VERIFIED` を返す。
+
+### 6.3 認証メールの再送
+
+| 項目 | 内容 |
+|------|------|
+| エンドポイント | `POST /auth/verify-email/resend`（認証不要。`email` のみ受け取る） |
+| レスポンス | 常に `202 Accepted`。存在しないメール・認証済みメールでも同じ応答（ユーザー列挙対策） |
+| レート制限 | `emailverify_sent:{user_id}` が存在する間は送信しない（既定60秒。`EMAIL_VERIFY_RESEND_INTERVAL_SECONDS`） |
+| 旧トークン | 新トークン発行時に旧トークンを失効させる必要はない（どちらも24時間TTLのワンタイム）。**要検討**：厳密に1本に限るならユーザーIDから逆引きできるキー設計が必要 |
+
+### 6.4 登録・認証の関数（`service/auth_service.py`）
+
+| 関数 | 引数 | 戻り値 | 処理 |
+|------|------|--------|------|
+| `register` | `payload: RegisterRequest`, `background: BackgroundTasks` | `User` | 重複チェック → ハッシュ化 → `users` INSERT（`email_verified_at=NULL`）→ 認証トークン発行 → メール送信予約。**Strategy.login は呼ばない** |
+| `verify_email` | `token: str` | `None` | `consume_email_verify_token` → `UPDATE users SET email_verified_at = now()`。無効なら `InvalidVerifyTokenError`（400） |
+| `resend_verification` | `email: str`, `background: BackgroundTasks` | `None` | ユーザー検索 → 未認証かつ再送間隔外なら再送。該当なしでも例外は出さない |
+
+## 7. パスワードリセット
 
 設計判断 D-1 により、メール送信を含めて実装する。
 
-### 6.1 シーケンス
+### 7.1 シーケンス
 
 ```mermaid
 sequenceDiagram
@@ -321,22 +419,23 @@ sequenceDiagram
     end
 ```
 
-### 6.2 メール送信設計（`service/mail_service.py`）
+### 7.2 メール送信設計（`service/mail_service.py`）
 
 | 項目 | 内容 |
 |------|------|
 | ライブラリ | `aiosmtplib` + `jinja2`（テンプレート） |
-| 設定 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_USE_TLS` / `MAIL_FROM` / `FRONTEND_BASE_URL` |
+| 設定 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_USE_TLS` / `MAIL_FROM` / `FRONTEND_BASE_URL`。パスワードリセットとメール認証で共用する |
 | 開発環境 | Mailpit コンテナ（`smtp:1025` / Web UI `:8025`）。実際のメールは外部送信しない |
 | 送信方式 | `BackgroundTasks` による非同期送信。送信失敗はログに記録し、APIレスポンスは 202 のまま |
-| テンプレート | `api/app/templates/mail/password_reset.html` / `.txt`。リセットURLは `FRONTEND_BASE_URL` から組み立てる |
+| テンプレート | `api/app/templates/mail/password_reset.html` / `.txt`、`email_verification.html` / `.txt`。URLは `FRONTEND_BASE_URL` から組み立てる |
 | 本番SMTP | **要検討**（T-4）。学習範囲では Mailpit を既定とする |
 
 | 関数 | 引数 | 戻り値 | 処理 |
 |------|------|--------|------|
 | `send_password_reset_mail` | `to: str`, `token: str`, `expires_minutes: int` | `None` | テンプレートをレンダリングし SMTP 送信。トークンは本文にのみ含め、ログには出力しない |
+| `send_email_verification_mail` | `to: str`, `token: str`, `expires_hours: int` | `None` | 会員登録・再送で使用。`{FRONTEND_BASE_URL}/verify-email?token=...` を本文に含める。トークンはログに出力しない |
 
-## 7. CSRF対策
+## 8. CSRF対策
 
 | モード | 対策 | 検証対象 |
 |--------|------|----------|
@@ -349,9 +448,9 @@ sequenceDiagram
 - CORS は `CORS_ALLOW_ORIGINS`（環境変数）でフロントのオリジンのみ許可し、`allow_credentials=true`
 - `Origin` / `Referer` ヘッダの検証をミドルウェアで実施（**要検討**：学習効果としては有用だが必須ではない）
 
-## 8. 認可（RBAC）
+## 9. 認可（RBAC）
 
-### 8.1 権限モデル
+### 9.1 権限モデル
 
 ```mermaid
 flowchart TB
@@ -364,7 +463,7 @@ flowchart TB
     P -->|No| N["タスクのCRUD・コメントが可能<br/>プロジェクト設定は不可"]
 ```
 
-### 8.2 依存性関数（`core/deps.py`）
+### 9.2 依存性関数（`core/deps.py`）
 
 | 関数 | 引数 | 戻り値 | 処理 | 失敗時 |
 |------|------|--------|------|--------|
@@ -378,16 +477,17 @@ flowchart TB
 
 存在しないリソースと権限のないリソースの区別による情報漏洩を避けるため、**所属していないプロジェクトIDに対しては 404 を返す**方針とする（管理者のみ 403/404 を厳密に区別）。
 
-## 9. パスワード・トークンのハッシュ
+## 10. パスワード・トークンのハッシュ
 
 | 対象 | アルゴリズム | 備考 |
 |------|-------------|------|
 | パスワード | argon2id（`passlib[argon2]`） | `ARGON2_TIME_COST` / `ARGON2_MEMORY_COST` / `ARGON2_PARALLELISM` を環境変数化 |
 | リフレッシュトークン | SHA-256 | 高エントロピーなランダム値のためストレッチ不要 |
 | パスワードリセットトークン | SHA-256 | 同上 |
+| メール認証トークン | SHA-256 | 同上（Redis `emailverify:{hash}`） |
 | CSRFトークン | ハッシュ化しない | 値の一致比較のみ。比較は `secrets.compare_digest` を使用 |
 
-## 10. 3方式の比較（学習成果まとめ用）
+## 11. 3方式の比較（学習成果まとめ用）
 
 | 観点 | session | jwt | OAuth2（Google） |
 |------|---------|-----|------------------|
@@ -400,7 +500,7 @@ flowchart TB
 | 実装の複雑さ | 低い | ローテーション・再利用検知が必要で高い | 外部依存・リダイレクト処理があり高い |
 | 失効の粒度 | セッション単位・ユーザー単位で容易 | family単位/ユーザー単位。個別アクセストークンは不可 | - |
 
-## 11. テスト方針
+## 12. テスト方針
 
 | 区分 | 対象 | 内容 |
 |------|------|------|
@@ -411,4 +511,7 @@ flowchart TB
 | 結合 | リフレッシュ | ローテーション後に旧トークンが 401 となること、再利用検知でfamilyが全失効すること |
 | 結合 | OAuth2 | Google の token / userinfo エンドポイントを `respx` でモックし、state検証・新規作成・既存紐付けを検証 |
 | 結合 | パスワードリセット | SMTP は `aiosmtplib` をモック。存在しないメールでも202が返ること |
+| 結合 | 会員登録 | 201 が返り、レスポンスに Cookie / トークンが**含まれない**こと（自動ログインしない）。`users.email_verified_at` が NULL であること |
+| 結合 | メール認証 | 未認証ユーザーのログインが 403 `EMAIL_NOT_VERIFIED` となること。`/auth/verify-email` 成功後にログインできること。同一トークンの2回目が 400 となること |
+| 結合 | 認証メール再送 | 再送間隔内の2回目は SMTP が呼ばれずに 202 が返ること |
 | 網羅できない範囲 | 実際の Google 認可画面での同意フロー | 外部サービスのUI操作は自動テスト対象外とし、手動確認とする |

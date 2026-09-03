@@ -43,6 +43,7 @@ erDiagram
         date birth_date
         varchar_10 role "member / admin"
         boolean is_active
+        timestamptz email_verified_at "NULL可（未認証）"
         timestamptz created_at
         timestamptz updated_at
     }
@@ -121,6 +122,7 @@ erDiagram
 | birth_date | DATE | NO | - | 用途は**不明**（T-5）。保持・表示のみ |
 | role | VARCHAR(10) | NO | `'member'` | `CHECK (role IN ('member','admin'))` |
 | is_active | BOOLEAN | NO | `true` | 管理者による無効化用 |
+| email_verified_at | TIMESTAMPTZ | YES | `NULL` | メール認証の完了日時。`NULL` は未認証を意味しログインを拒否する（D-6）。真偽値ではなく日時で持ち、「いつ認証したか」を追跡可能にする |
 | created_at | TIMESTAMPTZ | NO | `now()` | |
 | updated_at | TIMESTAMPTZ | NO | `now()` | トリガで自動更新 |
 
@@ -131,6 +133,7 @@ erDiagram
 | `uq_users_username` | UNIQUE (lower(username)) | 大文字小文字を区別しないログインID一意制約 |
 | `uq_users_email` | UNIQUE (lower(email)) | 同上（メール） |
 | `ix_users_role` | (role) | 管理者一覧・権限フィルタ |
+| `ix_users_email_verified_at` | (email_verified_at) WHERE email_verified_at IS NULL | 未認証のまま放置されたユーザーの棚卸し（**要検討**：定期削除バッチを設けるか） |
 
 **バリデーション（アプリ層 / pydantic）**
 
@@ -262,14 +265,15 @@ stateDiagram-v2
 
 ```mermaid
 stateDiagram-v2
-    [*] --> pending: 登録フォーム送信
-    pending --> member: 登録成功（role=member, is_active=true）
-    pending --> member_oauth: Googleで新規登録（password_hash=NULL）
+    [*] --> unverified: 登録フォーム送信（email_verified_at=NULL）
+    unverified --> unverified: 認証メール再送
+    unverified --> member: 確認メール内リンクで認証完了（email_verified_at=now）
+    [*] --> member_oauth: Googleで新規登録（password_hash=NULL,<br/>email_verified_at=now：Google側で検証済み）
+    member_oauth --> member: パスワード設定（password_hash付与）
     member --> admin: 管理者が権限変更
     admin --> member: 管理者が権限変更
     member --> inactive: 管理者が無効化（is_active=false）
     inactive --> member: 再有効化
-    member_oauth --> member: パスワード設定（password_hash付与）
     inactive --> [*]: 削除（オーナーのプロジェクトが無い場合のみ）
 ```
 
@@ -350,7 +354,7 @@ flowchart LR
 
 | No | 用途 | 概要 | 使用インデックス |
 |----|------|------|-----------------|
-| Q-1 | ログイン | `WHERE lower(email)=:v OR lower(username)=:v AND is_active` | `uq_users_email` / `uq_users_username` |
+| Q-1 | ログイン | `WHERE (lower(email)=:v OR lower(username)=:v) AND is_active`（取得後に `email_verified_at IS NULL` を判定） | `uq_users_email` / `uq_users_username` |
 | Q-2 | ダッシュボード | `projects JOIN project_members ON ... WHERE pm.user_id = :me` | `ix_project_members_user_id` |
 | Q-3 | カンバン取得 | `WHERE project_id=:pid ORDER BY status, position` | `ix_tasks_project_status_position` |
 | Q-4 | タスク詳細 | tasks + assignee + comments（コメントは別クエリで取得しN+1を回避） | `ix_task_comments_task_created` |

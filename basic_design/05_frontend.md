@@ -41,7 +41,7 @@ frontend/
 │   │   ├── AppLayout.tsx           # サイドバー付き共通レイアウト
 │   │   └── AuthLayout.tsx          # ログイン系画面のレイアウト
 │   ├── features/
-│   │   ├── auth/                   # ログイン・登録・パスワードリセット
+│   │   ├── auth/                   # ログイン・登録・メール認証・パスワードリセット
 │   │   ├── projects/               # ダッシュボード・プロジェクト
 │   │   ├── board/                  # カンバン・タスク詳細
 │   │   ├── settings/               # アカウント設定
@@ -63,12 +63,13 @@ frontend/
 | 2 | 会員登録 | `/register` | AuthLayout | 未認証のみ | 要件書§2-2 / pptx slide2 |
 | 3 | パスワード再設定要求 | `/password/forgot` | AuthLayout | 未認証のみ | pptx slide3（D-1） |
 | 4 | パスワード再設定 | `/password/reset?token=` | AuthLayout | 未認証のみ | D-1 |
-| 5 | ダッシュボード | `/` | AppLayout | 認証必須 | 要件書§2-3 / pptx slide4 |
-| 6 | プロジェクト詳細（カンバン） | `/projects/:projectId` | AppLayout | 認証必須 | 要件書§2-4 / pptx slide4,5 |
-| 7 | タスク詳細/編集 | `/projects/:projectId/tasks/:taskId`（モーダル） | AppLayout | 認証必須 | 要件書§2-5 / pptx slide5 |
-| 8 | アカウント設定 | `/settings` | AppLayout | 認証必須 | 要件書§2-6 / pptx slide7 |
-| 9 | 管理者ユーザー管理 | `/admin/users` | AppLayout | admin のみ | 要件書§2-7 / pptx slide6 |
-| 10 | OAuthコールバック中継 | `/oauth/callback` | なし（ローディングのみ） | 不要 | [03_auth 5.4](./03_auth.md#54-jwt-モードでのトークン受け渡し) |
+| 5 | メール認証 | `/verify-email?token=` | AuthLayout | 未認証のみ | D-6 |
+| 6 | ダッシュボード | `/` | AppLayout | 認証必須 | 要件書§2-3 / pptx slide4 |
+| 7 | プロジェクト詳細（カンバン） | `/projects/:projectId` | AppLayout | 認証必須 | 要件書§2-4 / pptx slide4,5 |
+| 8 | タスク詳細/編集 | `/projects/:projectId/tasks/:taskId`（モーダル） | AppLayout | 認証必須 | 要件書§2-5 / pptx slide5 |
+| 9 | アカウント設定 | `/settings` | AppLayout | 認証必須 | 要件書§2-6 / pptx slide7 |
+| 10 | 管理者ユーザー管理 | `/admin/users` | AppLayout | admin のみ | 要件書§2-7 / pptx slide6 |
+| 11 | OAuthコールバック中継 | `/oauth/callback` | なし（ローディングのみ） | 不要 | [03_auth 5.4](./03_auth.md#54-jwt-モードでのトークン受け渡し) |
 
 > **要検討**：pptx slide4 はサイドバー付きの1画面に「タスクリスト」と「新規プロジェクトの作成」が同居しており、要件書の「ダッシュボード（プロジェクト一覧）」と「プロジェクト詳細（カンバン）」の関係が判然としない。本設計では **`/` = プロジェクトカード一覧（＋新規作成ボタン）、`/projects/:id` = カンバン** の2画面に分離する解釈を採用した。
 
@@ -79,6 +80,7 @@ flowchart TB
         R["/register"]
         PF["/password/forgot"]
         PR["/password/reset"]
+        VE["/verify-email"]
     end
     subgraph private["認証必須（AppLayout）"]
         D["/"]
@@ -89,13 +91,19 @@ flowchart TB
     subgraph adminonly["admin のみ"]
         AU["/admin/users"]
     end
+    MAIL["確認メール / リセットメール<br/>（Mailpit / SMTP）"]
 
     L --> D
     L --> R
     L --> PF
-    PF --> PR
     PR --> L
-    R --> D
+    R -->|"登録成功（自動ログインしない）"| L
+    R -->|"確認メール送信"| MAIL
+    MAIL -->|"メール内リンク"| VE
+    PF -->|"リセットURL送信"| MAIL
+    MAIL -->|"メール内リンク"| PR
+    VE -->|"メール認証完了"| L
+    L -->|"403 EMAIL_NOT_VERIFIED → 認証メール再送"| L
     D --> B
     B --> T
     D --> S
@@ -305,6 +313,8 @@ flowchart TB
 | 「パスワードを忘れた方はこちら」 | `/password/forgot` |
 | Googleログイン | `window.location.href = {API}/auth/oauth/google` へ遷移（XHRでは行わない） |
 | エラー表示 | `INVALID_CREDENTIALS` は「IDまたはパスワードが正しくありません」と統一表示（どちらが誤りか示さない） |
+| メール未認証 | 403 `EMAIL_NOT_VERIFIED` の場合は「メール認証が完了していません」と表示し、「認証メールを再送する」ボタン（`POST /auth/verify-email/resend`）を出す。送信後は結果に関わらず「送信しました」と表示する |
+| 登録直後の遷移 | `/register` から遷移してきた場合、「確認メールを送信しました」のメッセージを表示する（`navigate("/login", { state: { registeredEmail } })`） |
 | レート制限 | 429 の場合は待機時間を案内 |
 
 ### 7.2 会員登録（pptx slide2）
@@ -314,21 +324,32 @@ flowchart TB
 - パスワードは強度インジケータを表示し、zod で「8文字以上・2種類以上の文字種」を検証（バックエンドと同一規則）
 - 「Googleで新規登録」はログイン画面と同じOAuth開始URLへ遷移（ログインと登録の入口を共通化）
 - 409（重複）は該当フィールドにエラーを表示
+- **登録成功（201）後は自動ログインしない**。`/login` へリダイレクトし、「確認メールを送信しました」を表示する（D-6）。認証状態を持たないため `authStore` は更新しない
 
-### 7.3 ダッシュボード（pptx slide4）
+### 7.3 メール認証（D-6）
+
+| 要素 | 仕様 |
+|------|------|
+| 到達経路 | 確認メール内のリンク `{FRONTEND_BASE_URL}/verify-email?token=xxx` |
+| 初期処理 | マウント時にクエリの `token` で `POST /auth/verify-email` を1回だけ実行（`StrictMode` の二重実行を避けるため実行済みフラグで抑止する） |
+| 成功時 | 「メール認証が完了しました」を表示し、`/login` へ遷移（3秒後の自動遷移＋即時遷移リンク） |
+| 失敗時（400） | 「リンクの有効期限が切れているか、既に使用済みです」と表示し、メールアドレス入力による再送フォームを出す |
+| token 欠落 | APIを呼ばず、再送フォームのみを表示する |
+
+### 7.4 ダッシュボード（pptx slide4）
 
 - 所属プロジェクトをカード表示（プロジェクト名・メンバー数・タスク件数バッジ）
 - 「新規プロジェクトの作成」ボタン → モーダル（pptx slide5 の「パネルがでてくる」に対応）
 - プロジェクト0件時は空状態メッセージと作成導線を表示
 
-### 7.4 カンバンボード（pptx slide4,5）
+### 7.5 カンバンボード（pptx slide4,5）
 
 - 3列（未着手 / 進行中 / 完了）を横並び表示。列ヘッダーに件数
 - `@dnd-kit` によるカード移動で `PATCH /tasks/{id}`（status + position）
 - カードクリックでタスク詳細モーダル（URLも `/projects/:pid/tasks/:tid` に同期させ、リロード・共有可能にする）
 - タスク詳細モーダル：タイトル・説明・担当者（プロジェクトメンバーから選択）・期限・ステータス・コメント一覧/投稿
 
-### 7.5 アカウント設定（pptx slide7）
+### 7.6 アカウント設定（pptx slide7）
 
 | 項目 | 仕様 |
 |------|------|
@@ -337,7 +358,7 @@ flowchart TB
 | 文字サイズの変更 | 小 / 標準 / 大 / 特大（`0.875` / `1` / `1.125` / `1.25`）。D-4 によりサーバー保存しない |
 | ログイン履歴 | `GET /users/me/login-history` を表形式で表示（自衛的な監査） |
 
-### 7.6 管理者ユーザー管理（pptx slide6）
+### 7.7 管理者ユーザー管理（pptx slide6）
 
 - タブ「管理」自体を `role = admin` のみ表示。直接URLアクセス時も `RequireAdmin` で `/` にリダイレクト
 - ユーザー一覧（検索・ページング）、ロール変更セレクト、有効/無効トグル、強制ログアウトボタン
