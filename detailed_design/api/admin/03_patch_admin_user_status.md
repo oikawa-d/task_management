@@ -1,0 +1,319 @@
+# PATCH /api/admin/users/{user_id}/status（有効化 / 無効化）
+
+## 0. 関連ドキュメント
+
+| ドキュメント | 内容 |
+|--------------|------|
+| [../../../basic_design/04_api.md](../../../basic_design/04_api.md) | §2.5 管理者API一覧（無効化時の全失効・JWTのis_active毎回確認の記述）、§4.2 エラーコード体系 |
+| [../../../basic_design/03_auth.md](../../../basic_design/03_auth.md) | §9.2 `get_current_user`（`is_active` 確認）、§4.2 jwtは毎回Redisを参照せず署名検証のみ |
+| [../../../basic_design/02_redis.md](../../../basic_design/02_redis.md) | §2 キー一覧（`user_sessions:{uid}` / `user_refresh:{uid}`）、§5.1/5.2 `delete_all_sessions` / `revoke_all_refresh_tokens` |
+| [../../database/01_table_users.md](../../database/01_table_users.md) | users テーブル定義（`is_active`、`update_role_and_status`） |
+| [./02_patch_admin_user_role.md](./02_patch_admin_user_role.md) | 同じ「自己変更禁止・最後のadmin保護」の判定順序を共有するロール変更API |
+| [./04_post_admin_user_force_logout.md](./04_post_admin_user_force_logout.md) | 全セッション・全リフレッシュ失効のみを行うAPI（本APIはDB更新も併せて行う点が異なる） |
+
+## 1. 概要
+
+| 項目 | 内容 |
+|------|------|
+| エンドポイント | `PATCH /api/admin/users/{user_id}/status` |
+| 目的 | 管理者が対象ユーザーの `is_active` を切り替える。無効化時はDB更新とRedis上の全セッション・全リフレッシュトークン失効を同一サービス処理内で完了させる |
+| 認証 | 必要 |
+| 認可 | admin のみ |
+| CSRF検証 | 必要（session モードの更新系メソッド） |
+| Origin検証 | 必要（Cookieを利用する更新系のため） |
+| AUTH_MODE差異 | DB更新自体はモード非依存だが、無効化直後の効果に差がある（3章参照） |
+| 冪等性 | あり（同じ `is_active` 値を再指定しても結果は同じ状態になる。ただしRedis失効処理は無効化のたびに実行される） |
+| レート制限 | 対象外 |
+| トランザクション境界 | PostgreSQL：`UPDATE users` の単一トランザクション。Redis：`delete_all_sessions` / `revoke_all_refresh_tokens` は同一サービス関数内でDB更新の直後に実行し、処理全体を1つの業務トランザクションとして扱う（Redis操作はPostgreSQLの2相コミットには含まれない。10章参照） |
+
+## 2. 入出力仕様
+
+### 2.1 リクエスト
+
+**パスパラメータ**
+
+| 名前 | 型 | 必須 | 制約 | 説明 |
+|------|----|------|------|------|
+| user_id | string(uuid) | ○ | UUID形式 | 対象ユーザーID |
+
+**ボディ**
+
+| フィールド | 型 | 必須 | 制約 | 説明 |
+|-----------|----|------|------|------|
+| is_active | boolean | ○ | - | `false`＝無効化、`true`＝再有効化 |
+
+クエリパラメータ／該当ヘッダ（認証・CSRF・Cookieを除く）：なし。
+
+### 2.2 レスポンス
+
+**`200 OK`**
+
+```json
+{
+  "id": "3f1c2a10-...",
+  "username": "taro",
+  "email": "taro@example.com",
+  "role": "member",
+  "is_active": false,
+  "updated_at": "2026-09-04T00:00:00Z"
+}
+```
+
+| フィールド | 型 | NULL | 説明 |
+|-----------|----|----|------|
+| id / username / email / role | 各種 | 不可 | [01_get_admin_users.md](./01_get_admin_users.md) と同一定義 |
+| is_active | boolean | 不可 | 更新後の値 |
+| updated_at | string(datetime) | 不可 | トリガにより自動更新された日時 |
+
+`Set-Cookie` なし。共通ヘッダ `X-Request-ID` を全レスポンスに付与する。
+
+## 3. エラー仕様
+
+| HTTP | code | 発生条件 | メッセージ | 備考 |
+|------|------|----------|------------|------|
+| 401 | `UNAUTHENTICATED` / `SESSION_EXPIRED` / `TOKEN_EXPIRED` / `TOKEN_INVALID` | 認証情報なし・失効・不正 | 認証情報が無効です | |
+| 403 | `USER_INACTIVE` | 実行者自身が `is_active=false` | アカウントが無効化されています | |
+| 403 | `FORBIDDEN` | 実行者の `role != admin` | 権限がありません | |
+| 403 | `CSRF_INVALID` | sessionモードでCSRFヘッダ不一致・欠落 | CSRFトークンが不正です | |
+| 404 | `NOT_FOUND` | `user_id` が存在しない | ユーザーが見つかりません | |
+| 409 | `SELF_MODIFICATION_NOT_ALLOWED` | `user_id` が実行者自身 | 自分自身は無効化できません | 4章の判定順序を参照 |
+| 409 | `LAST_ADMIN_REQUIRED` | 対象が現在 `role=admin` かつ `is_active=true` で、`is_active=false` にすると有効なadminが0人になる | 最後の管理者を無効化することはできません | 4章の判定順序を参照 |
+| 422 | `VALIDATION_ERROR` | `is_active` が boolean でない・`user_id` がUUID形式でない | 入力内容に誤りがあります | `details` にフィールド情報 |
+| 503 | `SERVICE_UNAVAILABLE` | PostgreSQL / Redis 接続不能 | しばらくしてから再度お試しください | fail-close |
+
+`basic_design/04_api.md` §4.2 のエラーコード体系から逸脱しない。
+
+## 4. 処理シーケンス
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant FE as "React SPA"
+    participant R as "admin_router"
+    participant D as "deps.require_admin"
+    participant CSRF as "deps.verify_csrf"
+    participant S as "admin_user_service"
+    participant RP as "user_repository"
+    participant PG as "PostgreSQL"
+    participant RD as "Redis"
+
+    FE->>R: PATCH /api/admin/users/{user_id}/status {is_active}
+    R->>D: 認証 + admin確認
+    D-->>R: CurrentUser(role=admin)
+    R->>CSRF: Origin/CSRF検証（sessionモードのみCSRF必須）
+    CSRF-->>R: OK
+    R->>S: change_status(actor=CurrentUser, target_id, new_is_active)
+    S->>RP: get_for_update(target_id)
+    RP->>PG: "SELECT * FROM users WHERE id=:target_id FOR UPDATE"
+    alt 対象が存在しない
+        PG-->>RP: 0件
+        S-->>R: NotFoundError
+        R-->>FE: 404 NOT_FOUND
+    else 存在する
+        PG-->>RP: user行（行ロック取得）
+        S->>S: target_id == actor.id ?
+        alt 自分自身
+            S-->>R: SelfModificationError
+            R-->>FE: 409 SELF_MODIFICATION_NOT_ALLOWED
+        else 他ユーザー
+            S->>S: 無効化（is_active: true→false）かつ現在role=adminか判定
+            alt 無効化 かつ admin
+                S->>PG: "SELECT pg_advisory_xact_lock(hashtext('admin_role_change'))"
+                S->>RP: count_active_admins_excluding(target_id)
+                RP->>PG: "SELECT COUNT(*) ... role='admin' AND is_active=true AND id<>:target_id"
+                alt 残る有効admin数が0
+                    RP-->>S: 0
+                    S-->>R: LastAdminRequiredError
+                    R-->>FE: 409 LAST_ADMIN_REQUIRED
+                end
+            end
+            S->>RP: update_role_and_status(target_id, role=None, is_active=new_is_active)
+            RP->>PG: "UPDATE users SET is_active=:new_is_active WHERE id=:target_id RETURNING *"
+            PG-->>RP: 更新後の行
+            alt 無効化（new_is_active=false）
+                S->>RD: delete_all_sessions(target_id)
+                RD-->>S: SMEMBERS→各session/csrf DEL→SREM
+                S->>RD: revoke_all_refresh_tokens(target_id)
+                RD-->>S: SMEMBERS→各refresh DEL→SREM
+            end
+            RP-->>S: User
+            S-->>R: UserDetail
+            R-->>FE: 200 {user}
+        end
+    end
+```
+
+## 5. 処理フロー・分岐
+
+```mermaid
+flowchart TB
+    A["リクエスト受信"] --> B["pydanticでuser_id/is_activeを検証"]
+    B -->|"制約外"| B1["422 VALIDATION_ERROR"]
+    B -->|"OK"| C["deps.get_current_user + require_admin"]
+    C -->|"認証NG"| C1["401系"]
+    C -->|"role != admin"| C2["403 FORBIDDEN"]
+    C -->|"OK"| D["Origin/CSRF検証（sessionモード）"]
+    D -->|"不一致"| D1["403 CSRF_INVALID"]
+    D -->|"OK"| E["対象ユーザーをFOR UPDATEで取得"]
+    E -->|"存在しない"| E1["404 NOT_FOUND"]
+    E -->|"存在する"| F{"target_id == actor.id?"}
+    F -->|"Yes"| F1["409 SELF_MODIFICATION_NOT_ALLOWED"]
+    F -->|"No"| G{"無効化（true→false）かつ<br/>現在role=admin?"}
+    G -->|"No"| I["UPDATE users SET is_active"]
+    G -->|"Yes"| H["advisory lock取得 →<br/>残る有効admin数をCOUNT"]
+    H -->|"0"| H1["409 LAST_ADMIN_REQUIRED"]
+    H -->|"1以上"| I
+    I --> J{"new_is_active == false?"}
+    J -->|"Yes"| K["Redis: delete_all_sessions<br/>+ revoke_all_refresh_tokens"]
+    J -->|"No（再有効化）"| L["200 {user}"]
+    K --> L
+    E -.->|"DB/Redis接続不能"| M["503 SERVICE_UNAVAILABLE"]
+```
+
+**判定順序の理由**：[02_patch_admin_user_role.md](./02_patch_admin_user_role.md) と同一の考え方で、自己変更禁止（追加問い合わせ不要）を最後のadmin判定（COUNT + advisory lock）より先に確認する。DB更新後にRedis失効を行う順序とすることで、「DB上は無効化されたがRedisのセッションだけが生き残る」中間状態が発生してもフェイルセーフ側（無効化済み）に倒れる。逆に「Redisは失効したがDB更新前に失敗した」場合はトランザクションがロールバックされDB上は有効なままとなり、この場合はユーザーが再ログインすればセッションが再発行されるため実害はない。
+
+## 6. 関数詳細
+
+### 6.1 `api/routers/admin_router.py :: patch_admin_user_status`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `async def patch_admin_user_status(user_id: UUID, payload: AdminUserStatusUpdateRequest, actor: CurrentUser = Depends(require_admin), _: None = Depends(verify_csrf), db: AsyncSession = Depends(get_db)) -> AdminUserDetailResponse` |
+| 引数 | `user_id`: パス / `payload.is_active`: ボディ / `actor`: admin確認済みユーザー / `db`: DBセッション |
+| 戻り値 | `AdminUserDetailResponse` |
+| 送出例外 | なし（サービス層の例外をそのまま伝播） |
+| 処理内容 | 1. `require_admin`・`verify_csrf` を通過 2. `admin_user_service.change_status` を呼び出す 3. 結果をそのまま返す |
+| 副作用 | なし |
+
+### 6.2 `service/admin_user_service.py :: change_status`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `async def change_status(actor: CurrentUser, target_id: UUID, new_is_active: bool, db: AsyncSession) -> User` |
+| 引数 | `actor`: 実行者（admin） / `target_id`: 対象ユーザーID / `new_is_active`: 変更後の値 / `db`: DBセッション |
+| 戻り値 | 更新後の `User` |
+| 送出例外 | `NotFoundError`（404）/ `SelfModificationError`（409）/ `LastAdminRequiredError`（409） |
+| 処理内容 | 1. `user_repository.get_for_update(target_id)` で対象行をロック付き取得。存在しなければ `NotFoundError` 2. `target_id == actor.id` なら `SelfModificationError` 3. 「現在 `is_active=true` かつ `role=='admin'` かつ `new_is_active is False`」の場合のみ無効化とみなし、`acquire_admin_role_change_lock()` 取得後に `count_active_admins_excluding(target_id)` が0なら `LastAdminRequiredError` 4. `user_repository.update_role_and_status(target_id, role=None, is_active=new_is_active)` を実行しDBをコミット 5. `new_is_active is False` の場合に限り、同一関数内で `redis_store.delete_all_sessions(target_id)` と `redis_store.revoke_all_refresh_tokens(target_id)` を続けて実行する（`AUTH_MODE` に関わらず両方呼び出し、対象ユーザーが現在どちらの方式を使っていたか判別しない） |
+| 副作用 | DB更新（`users.is_active`）。無効化時はRedisの `session:{sid}` / `csrf:{sid}` / `user_sessions:{uid}` / `refresh:{hash}` / `user_refresh:{uid}` を全削除 |
+
+### 6.3 `repository/redis_store.py :: delete_all_sessions`（既存関数の再掲）
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `async def delete_all_sessions(user_id: UUID) -> int` |
+| 引数 / 戻り値 | `user_id`：対象ユーザー / 削除したセッション件数 |
+| 処理内容 | 1. `SMEMBERS user_sessions:{uid}` で有効な `session_id` 一覧を取得 2. 各 `session_id` について `DEL session:{sid}` / `DEL csrf:{sid}` 3. `DEL user_sessions:{uid}` |
+| 送出例外 | `RedisError`（Redis接続不能） |
+| 副作用 | Redis上の該当セッション関連キーを全削除。詳細は[02_redis.md §5.1](../../../basic_design/02_redis.md#51-セッション操作) |
+
+### 6.4 `repository/redis_store.py :: revoke_all_refresh_tokens`（既存関数の再掲）
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `async def revoke_all_refresh_tokens(user_id: UUID) -> int` |
+| 引数 / 戻り値 | `user_id`：対象ユーザー / 削除したリフレッシュトークン件数 |
+| 処理内容 | 1. `SMEMBERS user_refresh:{uid}` で有効な `token_hash` 一覧を取得 2. 各 `token_hash` について `DEL refresh:{hash}` 3. `DEL user_refresh:{uid}` |
+| 送出例外 | `RedisError` |
+| 副作用 | Redis上の該当リフレッシュトークン関連キーを全削除。詳細は[02_redis.md §5.2](../../../basic_design/02_redis.md#52-リフレッシュトークン操作) |
+
+## 7. 関数相関図
+
+```mermaid
+flowchart LR
+    R["admin_router.patch_admin_user_status"] --> S["admin_user_service.change_status"]
+    S --> RP1["user_repository.get_for_update"]
+    S --> L["admin_user_service.acquire_admin_role_change_lock"]
+    S --> RP2["user_repository.count_active_admins_excluding"]
+    S --> RP3["user_repository.update_role_and_status"]
+    S --> RS1["redis_store.delete_all_sessions"]
+    S --> RS2["redis_store.revoke_all_refresh_tokens"]
+    RP1 --> M["models.User"]
+    RP3 --> M
+    RS1 --> RD[("Redis")]
+    RS2 --> RD
+```
+
+## 8. データ遷移図
+
+```mermaid
+stateDiagram-v2
+    [*] --> is_active_current: 対象ユーザーの現在is_active/role
+    is_active_current --> self_rejected: target_id == actor.id<br/>409 SELF_MODIFICATION_NOT_ALLOWED
+    is_active_current --> last_admin_rejected: 無効化 かつ 残る有効admin=0<br/>409 LAST_ADMIN_REQUIRED
+    is_active_current --> status_updated_reactivate: is_active=true へUPDATE
+    is_active_current --> status_updated_deactivate: is_active=false へUPDATE<br/>直後に同一サービス関数内でRedis全失効
+    status_updated_deactivate --> redis_sessions_cleared: user_sessions:{uid}配下を全DEL
+    status_updated_deactivate --> redis_refresh_cleared: user_refresh:{uid}配下を全DEL
+    self_rejected --> [*]
+    last_admin_rejected --> [*]
+    status_updated_reactivate --> [*]
+    redis_sessions_cleared --> [*]
+    redis_refresh_cleared --> [*]
+```
+
+## 9. データアクセス一覧
+
+**PostgreSQL**
+
+| テーブル／関数 | 操作 | 条件・TTL | 備考 |
+|----------------|------|-----------|------|
+| users | SELECT ... FOR UPDATE | `id=:target_id` | 対象行ロック |
+| users | SELECT COUNT | `role='admin' AND is_active=true AND id<>:target_id` | 無効化かつ現在adminの場合のみ実行 |
+| `pg_advisory_xact_lock` | 関数呼び出し | キー `hashtext('admin_role_change')` | 同上の場合のみ実行。[02_patch_admin_user_role.md](./02_patch_admin_user_role.md)と共通のロックキー |
+| users | UPDATE | `id=:target_id` | `is_active` のみ更新 |
+
+**Redis**（無効化時のみ実行。再有効化時は実行しない）
+
+| キー | 操作 | TTL | 備考 |
+|------|------|-----|------|
+| `user_sessions:{target_id}` | SMEMBERS → DEL | - | 有効session_id一覧取得後に集合ごと削除 |
+| `session:{sid}`（各session_idごと） | DEL | - | 即時失効 |
+| `csrf:{sid}`（各session_idごと） | DEL | - | 即時失効 |
+| `user_refresh:{target_id}` | SMEMBERS → DEL | - | 有効token_hash一覧取得後に集合ごと削除 |
+| `refresh:{hash}`（各token_hashごと） | DEL | - | 即時失効 |
+
+## 10. バリデーション規則
+
+| pydanticスキーマ | フィールド | 制約 | フロント（zod）との整合 |
+|-------------------|-----------|------|--------------------------|
+| パスパラメータ | user_id | UUID形式 | `zod.string().uuid()` |
+| `AdminUserStatusUpdateRequest` | is_active | `bool` | `zod.boolean()` |
+
+## 11. 非機能・セキュリティ考慮
+
+| 観点 | 内容 |
+|------|------|
+| ログ出力 | 監査ログ対象。`actor.id`, `target_id`, `old_is_active`, `new_is_active`, Redis失効件数（session/refreshそれぞれ）, `X-Request-ID` をINFO出力 |
+| ユーザー列挙対策 | admin専用APIのため対象外 |
+| タイミング攻撃対策 | 該当なし |
+| レート制限 | なし |
+| fail-close方針 | PostgreSQL/Redis接続不能時は `503 SERVICE_UNAVAILABLE`。DB更新成功後にRedis失効が失敗した場合はエラーを返しつつログに残し、運用者が手動で `user_sessions:{uid}` / `user_refresh:{uid}` の状態を確認できるようにする（要検討。13章参照） |
+| sessionモードへの効果 | `session:{sid}` の即時DELにより、無効化直後のリクエストから `401 SESSION_EXPIRED` となる |
+| jwtモードへの効果 | アクセストークンはRedisを参照しない署名検証のみのため、`user_refresh` 配下のリフレッシュトークンを失効させても既発行のアクセストークンは失効しない。ただし `deps.get_current_user` は認証成立後に必ず `users` テーブルの `is_active` を再確認するため（[03_auth.md §9.2](../../../basic_design/03_auth.md#92-依存性関数coredepspy)）、無効化直後のリクエストからは `403 USER_INACTIVE` で拒否される。すなわち「アクセストークンの署名は有効だがDB確認により403で弾かれる」という形で実質的に即時遮断される |
+| 最後のadmin保護 | ロール変更API（[02](./02_patch_admin_user_role.md)）と同一の `pg_advisory_xact_lock` キーを用いた直列化で、無効化とロール変更が同時に発生しても有効adminが0人になることを防ぐ |
+
+## 12. テスト設計
+
+| No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
+|----|------|--------|------|----------|-----------------|
+| 1 | 単体 | 自己変更は最後のadmin判定より先に拒否される | `target_id == actor.id` | `409 SELF_MODIFICATION_NOT_ALLOWED`、`count_active_admins_excluding`未呼び出し | `test_change_status_self_modification_checked_before_last_admin` |
+| 2 | 単体 | 最後の有効adminの無効化は拒否される | 有効admin1名のみ、それを対象に`is_active=false` | `409 LAST_ADMIN_REQUIRED` | `test_change_status_last_admin_required` |
+| 3 | 単体 | member対象の無効化は最後のadmin判定を経由しない | 対象が `role=member` | `count_active_admins_excluding`未呼び出しで更新処理へ | `test_change_status_member_deactivation_skips_last_admin_check` |
+| 4 | 単体 | 無効化時にDB更新後、同一サービス関数内でRedis失効2種が呼ばれる | repositoryとredis_storeをモック | `update_role_and_status`→`delete_all_sessions`→`revoke_all_refresh_tokens`の順で呼び出し | `test_change_status_deactivate_calls_db_then_redis_in_same_call` |
+| 5 | 単体 | 再有効化時はRedis失効を呼ばない | `new_is_active=True` | `delete_all_sessions`/`revoke_all_refresh_tokens`未呼び出し | `test_change_status_reactivate_skips_redis_revocation` |
+| 6 | 結合 | 対象ユーザーが存在しない場合は404 | 存在しないUUID | `404 NOT_FOUND` | `test_change_status_target_not_found` |
+| 7 | 結合(session) | 無効化直後にsession Cookieでのリクエストが401になる | 対象ユーザーでログイン中にadminが無効化 | `401 SESSION_EXPIRED` | `test_change_status_session_invalidated_immediately` |
+| 8 | 結合(jwt) | 無効化直後にaccess tokenでのリクエストが403 USER_INACTIVEになる | 対象ユーザーでログイン中（access token未失効）にadminが無効化 | `403 USER_INACTIVE`（署名検証は通過するがDBのis_active確認で拒否） | `test_change_status_jwt_access_token_rejected_by_db_check` |
+| 9 | 結合(jwt) | 無効化直後に対象ユーザーのrefreshが失効している | 無効化前に発行済みのrefresh tokenで`/auth/refresh`を実行 | `401 TOKEN_REVOKED`相当（`refresh:{hash}`が存在しない） | `test_change_status_jwt_refresh_revoked_after_deactivation` |
+| 10 | 結合 | 複数端末でログイン中のユーザーを無効化すると全端末が失効する | 同一ユーザーでsession 2件を作成 | 両方の`session:{sid}`がDELされ、両端末とも401になる | `test_change_status_deactivate_invalidates_all_devices` |
+| 11 | 結合 | 再有効化後は新規ログインが可能 | 無効化→再有効化 | 再有効化後のログインが200/204で成功する | `test_change_status_reactivate_allows_new_login` |
+| 12 | 結合 | member（非admin）はアクセス不可 | `role=member` の実行者 | `403 FORBIDDEN` | `test_change_status_forbidden_for_member` |
+
+No.7〜9は本APIの中核（session/jwt双方での失効挙動の違い）であり、`AUTH_MODE=session` と `AUTH_MODE=jwt` をそれぞれ専用のテストケースとして実施する（両方を1つのパラメータ化テストにまとめず、モードごとの挙動差そのものを検証対象とするため）。
+
+## 13. 不明点・要検討事項
+
+| 区分 | 内容 | 影響 |
+|------|------|------|
+| 要検討 | DB更新（`is_active=false`のコミット）に成功した後、Redis失効（`delete_all_sessions`/`revoke_all_refresh_tokens`）が接続断で失敗した場合の扱いは基本設計に明記がない。本書ではAPIとして`503`を返しつつログに記録する方針としたが、DB上は無効化済みのため後続リクエストは`deps.get_current_user`のis_active確認で403になり実害は限定的である旨を要確認・明文化が望ましい |
+| 要検討 | ロール変更API（[02](./02_patch_admin_user_role.md)）と同一の `pg_advisory_xact_lock` キーを共有する設計としたが、ロック粒度（役割変更と無効化を同一キーで直列化するか、別キーにするか）は基本設計に記載がなく本書での提案 |
