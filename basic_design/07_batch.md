@@ -7,6 +7,8 @@
 - 詳細設計：[../detailed_design/batch/00_overview.md](../detailed_design/batch/00_overview.md)、[../detailed_design/batch/01_scheduler.md](../detailed_design/batch/01_scheduler.md)、[../detailed_design/batch/02_due_notification_job.md](../detailed_design/batch/02_due_notification_job.md)
 - 関連インフラ詳細：[../detailed_design/infra/01_docker_compose.md](../detailed_design/infra/01_docker_compose.md)、[../detailed_design/infra/04_env_config.md](../detailed_design/infra/04_env_config.md)、[../detailed_design/infra/07_operation.md](../detailed_design/infra/07_operation.md)
 
+> 構成図：[diagrams/05_batch_architecture.drawio](./diagrams/05_batch_architecture.drawio)（編集用） / [05_batch_architecture.svg](./diagrams/05_batch_architecture.svg)（表示用）
+
 ## 1. 設計方針
 
 タスク期限のアプリ内通知（要件 N-1）を、バックエンドAPIとは独立した `batch` コンテナで定期実行する。`batch` はHTTP APIを経由せず、PostgreSQLから対象タスクを抽出し、PostgreSQLへ通知を登録する。Redisは同一実行枠の二重実行を防ぐロックに使用する。
