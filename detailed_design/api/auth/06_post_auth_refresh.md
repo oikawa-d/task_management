@@ -78,7 +78,7 @@ refresh tokenの平文はJSONに含めない。共通ヘッダ：`X-Request-ID`�
 
 | HTTP | code | 発生条件 | メッセージ | 備考 |
 |------|------|----------|------------|------|
-| 400 | `CSRF_INVALID` | Origin不一致 | 許可されていないOriginからのリクエストです | |
+| 403 | `CSRF_INVALID` | Origin不一致 | 許可されていないOriginからのリクエストです | |
 | 401 | `UNAUTHENTICATED` | `cerberus_rt` Cookieが存在しない | ログインが必要です | |
 | 401 | `TOKEN_REVOKED` | 旧リフレッシュトークンが失効済み・再利用検知・family失効中 | セッションが無効になりました。再度ログインしてください | §4・§11参照 |
 | 403 | `CSRF_INVALID` | `X-CSRF-Token`とCookie不一致・欠落 | CSRFトークンが正しくありません | |
@@ -103,7 +103,7 @@ sequenceDiagram
     R->>D: verify_origin(request)
     alt Origin不一致
         D-->>R: CsrfInvalidError
-        R-->>FE: 400 CSRF_INVALID
+        R-->>FE: 403 CSRF_INVALID
     else Origin一致
         R->>S: refresh(request, response, strategy)
         alt AUTH_MODE=session
@@ -149,7 +149,7 @@ sequenceDiagram
 ```mermaid
 flowchart TB
     A["リクエスト受信"] --> B{"Origin検証"}
-    B -->|"不一致"| E400["400 CSRF_INVALID"]
+    B -->|"不一致"| E403["403 CSRF_INVALID"]
     B -->|"一致"| C{"AUTH_MODE"}
     C -->|"session"| E405["405 NOT_SUPPORTED_IN_MODE"]
     C -->|"jwt"| D{"cerberus_rt Cookie あり?"}
@@ -308,7 +308,7 @@ stateDiagram-v2
 | 9 | 結合 | 再利用検知でfamily全失効 | 旧トークンを2回使用 | 2回目が`401 TOKEN_REVOKED`、同familyの他トークンも失効 | `test_refresh_endpoint_reuse_revokes_family` |
 | 10 | 結合 | 競合：同時2リクエスト | 同一refresh tokenで`asyncio.gather`により同時実行 | 成功が1回だけ、2回目はfamily失効マーカーが設定される | `test_refresh_endpoint_concurrent_rotation_only_one_succeeds` |
 | 11 | 結合 | CSRFヘッダ欠落 | Cookieはあるがヘッダ無し | `403 CSRF_INVALID` | `test_refresh_endpoint_missing_csrf_header` |
-| 12 | 結合 | Origin不一致 | 許可外Origin | `400 CSRF_INVALID` | `test_refresh_endpoint_invalid_origin` |
+| 12 | 結合 | Origin不一致 | 許可外Origin | `403 CSRF_INVALID` | `test_refresh_endpoint_invalid_origin` |
 
 sessionモードは6の405確認のみで足り、それ以外の異常系（CSRF・再利用検知等）はjwtモード固有の機能のためjwtモードのみで実施する（`AUTH_MODE`両モードでの網羅パラメータ化は本APIの性質上不要と判断）。
 

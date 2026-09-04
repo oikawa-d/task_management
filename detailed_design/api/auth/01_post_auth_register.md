@@ -75,7 +75,7 @@ Cookie／認証トークンは一切発行しない（自動ログインしな�
 
 | HTTP | code | 発生条件 | メッセージ | 備考 |
 |------|------|----------|------------|------|
-| 400 | `CSRF_INVALID` | Origin不一致 | 許可されていないOriginからのリクエストです | `verify_origin` |
+| 403 | `CSRF_INVALID` | Origin不一致 | 許可されていないOriginからのリクエストです | `verify_origin` |
 | 409 | `DUPLICATE_USERNAME` | `username` が既存行と重複（大文字小文字無視） | このユーザーIDは既に使用されています | |
 | 409 | `DUPLICATE_EMAIL` | `email` が既存行と重複（大文字小文字無視） | このメールアドレスは既に使用されています | ユーザー列挙対策は行わない方針（`basic_design/04_api.md` の設計に準拠。要検討として§13に記載） |
 | 422 | `VALIDATION_ERROR` | pydanticバリデーション失敗（文字数・形式・パスワード確認不一致等） | 入力内容に誤りがあります | `details` にフィールド単位のエラー |
@@ -102,7 +102,7 @@ sequenceDiagram
     R->>D: verify_origin(request)
     alt Origin不一致
         D-->>R: CsrfInvalidError
-        R-->>FE: 400 CSRF_INVALID
+        R-->>FE: 403 CSRF_INVALID
     else Origin一致
         R->>R: RegisterRequestで入力検証(422はFastAPIが自動応答)
         R->>S: register(payload, background)
@@ -137,7 +137,7 @@ sequenceDiagram
 ```mermaid
 flowchart TB
     A["リクエスト受信"] --> B{"Origin検証"}
-    B -->|"不一致"| E400["400 CSRF_INVALID"]
+    B -->|"不一致"| E403["403 CSRF_INVALID"]
     B -->|"一致"| C{"pydanticバリデーション"}
     C -->|"NG"| E422["422 VALIDATION_ERROR"]
     C -->|"OK"| F{"username/email重複?"}
@@ -289,7 +289,7 @@ stateDiagram-v2
 | 4 | 単体 | パスワード確認不一致 | pydanticスキーマ単体 | `ValidationError` | `test_register_schema_password_mismatch` |
 | 5 | 単体 | 未来日birth_date | pydanticスキーマ単体 | `ValidationError` | `test_register_schema_future_birth_date` |
 | 6 | 結合 | 正常系201 | 実PostgreSQL/Redis | `201`、レスポンスにCookie/トークンが**含まれない**、`email_verified_at`がNULL | `test_register_endpoint_returns_201_without_auth` |
-| 7 | 結合 | Origin不一致 | `Origin`ヘッダを許可外に設定 | `400 CSRF_INVALID` | `test_register_endpoint_invalid_origin` |
+| 7 | 結合 | Origin不一致 | `Origin`ヘッダを許可外に設定 | `403 CSRF_INVALID` | `test_register_endpoint_invalid_origin` |
 | 8 | 結合 | 重複登録 | 事前に同一usernameで登録済み | `409 DUPLICATE_USERNAME` | `test_register_endpoint_duplicate_username` |
 | 9 | 結合 | メール送信予約確認 | `aiosmtplib`をモック | `send_email_verification_mail`が1回呼ばれる | `test_register_endpoint_sends_verification_mail` |
 | 10 | 結合 | Redisキー確認 | 実Redis | `emailverify:{hash}`と`emailverify_current:{uid}`がTTL付きで存在 | `test_register_endpoint_stores_email_verify_token` |

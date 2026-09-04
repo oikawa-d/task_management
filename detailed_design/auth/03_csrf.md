@@ -51,7 +51,7 @@
 | 入力 | `request.cookies["cerberus_csrf"]` | Cookie側のCSRFトークン |
 | 入力（sessionのみ） | Redis `csrf:{session_id}` | Cookie値との照合対象（Redis値を正とする） |
 | 出力 | `None`（検証成功時、後続処理へ進む） | 副作用なし |
-| 出力（失敗時） | `403 CSRF_INVALID`（Origin不一致は`04_api.md`§4.2上も`CSRF_INVALID`扱い。ログイン系エンドポイントでは実装上`400`で返す個別設計もあるため、各APIファイルの規定を優先する） | エラーレスポンス |
+| 出力（失敗時） | `403 CSRF_INVALID`（Origin不一致・CSRFトークン不一致・欠落のいずれも同一コード。`../../basic_design/04_api.md` §4.2 のエラーコード体系および `03_auth.md` §9.2 に従い、全エンドポイントで403に統一する） | エラーレスポンス |
 
 ## 5. シーケンス図
 
@@ -104,7 +104,7 @@ sequenceDiagram
     FE->>DEP: Cookie(cerberus_rt, cerberus_csrf) + X-CSRF-Token + Origin
     DEP->>DEP: Originを検証
     alt Origin不一致
-        DEP-->>FE: 400 CSRF_INVALID（[../api/auth/03_post_auth_logout.md]の規定に準じ400/403はAPIごとに規定）
+        DEP-->>FE: 403 CSRF_INVALID
     else Origin一致
         DEP->>DEP: compare_digest(Cookie(cerberus_csrf), X-CSRF-Tokenヘッダ)
         alt 不一致
@@ -125,7 +125,7 @@ flowchart TB
     C --> D{"Originが許可リストに一致?"}
     D -->|No| E1["Originなし & HTTPS環境?"]
     E1 -->|"Yes（CSRF_TRUST_REFERER_ON_HTTPS=true時のみ）"| F["Refererの同一オリジン検証"]
-    F -->|不一致/欠落| ERR["403/400 CSRF_INVALID"]
+    F -->|"不一致/欠落"| ERR["403 CSRF_INVALID"]
     E1 -->|"No"| ERR
     D -->|Yes| G{"AUTH_MODEとエンドポイント種別"}
     G -->|"session: 更新系エンドポイント全て"| H["verify_csrf: Redis csrf:{sid} と比較"]
@@ -165,7 +165,7 @@ stateDiagram-v2
 | シグネチャ / 定義 | `async def verify_origin(request: Request) -> None` |
 | 引数 / 入力 | `request.headers.get("origin")`、`request.headers.get("referer")`、`settings.cors_allow_origins` |
 | 戻り値 / 出力 | `None`（検証通過時） |
-| 送出例外 / 失敗条件 | `Origin`が存在し許可リストに無い場合、または`Origin`が無く`Referer`も同一オリジンでない場合に`CsrfInvalidError`（403、ログイン等一部エンドポイントでは400として扱う。個別APIファイルの規定を優先） |
+| 送出例外 / 失敗条件 | `Origin`が存在し許可リストに無い場合、または`Origin`が無く`Referer`も同一オリジンでない場合に`CsrfInvalidError`（403 `CSRF_INVALID`。エンドポイントによる差異はない） |
 | 処理内容 | 1. `Origin`ヘッダを取得<br/>2. 存在すれば`cors_allow_origins`との完全一致を確認<br/>3. 存在しない場合、HTTPS環境かつ`CSRF_TRUST_REFERER_ON_HTTPS=true`のときに限り`Referer`のオリジン部分を同様に検証<br/>4. いずれも満たさなければ例外を送出 |
 | 副作用 | なし |
 
@@ -255,5 +255,5 @@ flowchart LR
 | 区分 | 内容 | 影響 |
 |------|------|------|
 | 要検討 | `Origin`ヘッダが存在しない場合の`Referer`フォールバック可否（`CSRF_TRUST_REFERER_ON_HTTPS`相当の設定）は基本設計に明記が無く、本ファイルで既定`false`（フォールバックしない＝より厳格側）として仮置きした。学習用途としてはOriginを必須とする方が単純で説明しやすいため、有効化する場合は要合意 | 中。旧式クライアント・一部プロキシ経由アクセスを拒否する可能性がある |
-| 要検討 | Origin不一致時のHTTPステータスが基本設計内で`400`（ログイン・ログアウトAPIの例）と`403`（`04_api.md`のエラーコード一覧、および認可を含む通常API）とで混在している。本ファイルは両者を並記し、最終的な採否は各APIファイルの規定に委ねる整理としたが、横断的な統一ルールとしてどちらかに揃えるべきか要検討 | 低〜中。フロントのエラーハンドリング分岐に影響 |
+| 解消済 | Origin不一致時のHTTPステータスは、基本設計（[../../basic_design/04_api.md](../../basic_design/04_api.md) §4.2 のエラーコード一覧、[../../basic_design/03_auth.md](../../basic_design/03_auth.md) §9.2）に従い **全エンドポイントで `403 CSRF_INVALID`** に統一済み。関連する各APIの詳細設計も修正済み | なし（統一により、フロントのエラーハンドリングは403の単一分岐でよい） |
 | 不明 | `verify_origin`/`verify_csrf`を単一の依存関数（例：`require_csrf_protected`）にまとめるか、ルーターごとに2つ列挙するかは基本設計・実装ファイル一覧に明記が無い | 低。実装方針の違いのみで機能上の差はない |

@@ -68,7 +68,7 @@ Set-Cookie（破棄。`Max-Age=0`）
 
 | HTTP | code | 発生条件 | メッセージ | 備考 |
 |------|------|----------|------------|------|
-| 400 | `CSRF_INVALID` | Origin不一致 | 許可されていないOriginからのリクエストです | |
+| 403 | `CSRF_INVALID` | Origin不一致 | 許可されていないOriginからのリクエストです | |
 | 403 | `CSRF_INVALID` | 対象Cookieが存在するのに`X-CSRF-Token`が欠落・不一致 | CSRFトークンが正しくありません | session：`csrf:{sid}`との比較／jwt：Cookie`cerberus_csrf`値との比較 |
 | 503 | `SERVICE_UNAVAILABLE` | Redis接続不能 | 現在サービスをご利用いただけません | fail-close。ただし対象Cookieが無い場合はRedisにアクセスしないため503は発生しない |
 | 500 | `INTERNAL_ERROR` | 未捕捉例外 | サーバーエラーが発生しました | |
@@ -90,7 +90,7 @@ sequenceDiagram
     R->>D: verify_origin(request)
     alt Origin不一致
         D-->>R: CsrfInvalidError
-        R-->>FE: 400 CSRF_INVALID
+        R-->>FE: 403 CSRF_INVALID
     else Origin一致
         R->>S: logout(request, response)
         S->>STR: get_auth_strategy()
@@ -132,7 +132,7 @@ sequenceDiagram
 ```mermaid
 flowchart TB
     A["リクエスト受信"] --> B{"Origin検証"}
-    B -->|"不一致"| E400["400 CSRF_INVALID"]
+    B -->|"不一致"| E403["403 CSRF_INVALID"]
     B -->|"一致"| C{"AUTH_MODE"}
     C -->|"session"| D1{"cerberus_sid あり?"}
     D1 -->|"No"| G["Cookie破棄のみ"]
@@ -281,7 +281,7 @@ stateDiagram-v2
 | 7 | 結合 | jwt：正常系 | 実Redis、事前ログイン済み | `204`、`refresh:{hash}`が削除される | `test_logout_endpoint_jwt_success` |
 | 8 | 結合 | 未ログイン状態での呼び出し | Cookie無し | `204`（冪等） | `test_logout_endpoint_idempotent_without_cookie` |
 | 9 | 結合 | CSRFヘッダ欠落 | Cookieはあるがヘッダ無し | `403 CSRF_INVALID` | `test_logout_endpoint_missing_csrf_header` |
-| 10 | 結合 | Origin不一致 | 許可外Origin | `400 CSRF_INVALID` | `test_logout_endpoint_invalid_origin` |
+| 10 | 結合 | Origin不一致 | 許可外Origin | `403 CSRF_INVALID` | `test_logout_endpoint_invalid_origin` |
 | 11 | 結合 | jwt：access token期限切れでもログアウト成功 | access tokenを期限切れに設定 | `204`（refresh Cookieのみで成立） | `test_logout_endpoint_jwt_success_without_valid_access_token` |
 
 `AUTH_MODE=session`/`jwt`双方で6・7を実施。両モードのCookie無し冪等性は8で代表確認する。
