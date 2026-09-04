@@ -37,6 +37,9 @@
         <mxCell id="n11" value="リセットメール&lt;br&gt;（Mailpit / SMTP）" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#6A1B9A;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="800" y="660" width="220" height="80" as="geometry" />
         </mxCell>
+        <mxCell id="n80" value="通知パネル（画面ではなく AppLayout ヘッダーのポップオーバー）&lt;br&gt;&lt;br&gt;認証必須の全画面でヘッダー右端にベルアイコン🔔を表示し、未読があればバッジを重ねる。&lt;br&gt;クリックで通知一覧を開き、通知行の選択で ⑦ プロジェクト詳細（カンバン）＋⑧ タスク詳細モーダルへ遷移する。&lt;br&gt;「すべて既読にする」ボタンで自分の未読をまとめて既読化する。未読件数は一定間隔でポーリングして更新する。" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;darkOpacity=0.05;fillColor=#E1F5FE;strokeColor=#0277BD;align=left;verticalAlign=top;spacingLeft=12;spacingTop=8;size=16;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1110" y="790" width="620" height="110" as="geometry" />
+        </mxCell>
         <mxCell id="n12" value="認証必須（AppLayout：サイドバー home / 管理 / 設定 / ログアウト）" style="container=1;collapsible=0;rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#9E9E9E;dashed=1;dashPattern=8 4;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=13;fontStyle=1;fontColor=#616161;" vertex="1" parent="1">
           <mxGeometry x="1110" y="120" width="620" height="640" as="geometry" />
         </mxCell>

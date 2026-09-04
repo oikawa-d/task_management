@@ -1,6 +1,6 @@
 <mxfile host="app.diagrams.net" type="device">
   <diagram name="システム構成" id="システム構成">
-    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1650" pageHeight="1200" math="0" shadow="0">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1650" pageHeight="1320" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
@@ -17,7 +17,7 @@
           <mxGeometry x="60" y="230" width="210" height="140" as="geometry" />
         </mxCell>
         <mxCell id="n5" value="Docker Compose  /  network: cerberus_net" style="container=1;collapsible=0;rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#9E9E9E;dashed=1;dashPattern=8 4;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=13;fontStyle=1;fontColor=#616161;" vertex="1" parent="1">
-          <mxGeometry x="400" y="170" width="800" height="760" as="geometry" />
+          <mxGeometry x="400" y="170" width="800" height="860" as="geometry" />
         </mxCell>
         <mxCell id="n6" value="frontend&lt;br&gt;node:26 build → nginx:alpine&lt;br&gt;&lt;br&gt;公開: ${FRONTEND_PORT} → 80&lt;br&gt;/api を backend へ proxy_pass" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#2E7D32;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="450" y="230" width="310" height="120" as="geometry" />
@@ -25,14 +25,34 @@
         <mxCell id="n7" value="backend&lt;br&gt;python:3.14-slim / FastAPI + Uvicorn&lt;br&gt;&lt;br&gt;Compose内部のみ（通常は非公開）&lt;br&gt;起動時 alembic upgrade head&lt;br&gt;AUTH_MODE = session | jwt" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#2E7D32;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="450" y="430" width="310" height="160" as="geometry" />
         </mxCell>
-        <mxCell id="n8" value="postgres:17-alpine&lt;br&gt;&lt;br&gt;Compose内部のみ（通常は非公開）&lt;br&gt;volume: pgdata（永続化あり）&lt;br&gt;永続データ 7テーブル" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#FFF3E0;strokeColor=#EF6C00;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
+        <mxCell id="n8" value="postgres:17-alpine&lt;br&gt;&lt;br&gt;Compose内部のみ（通常は非公開）&lt;br&gt;volume: pgdata（永続化あり）&lt;br&gt;永続データ 8テーブル（notifications を含む）" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#FFF3E0;strokeColor=#EF6C00;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="880" y="410" width="270" height="140" as="geometry" />
         </mxCell>
-        <mxCell id="n9" value="redis:8-alpine&lt;br&gt;&lt;br&gt;Compose内部のみ（通常は非公開）&lt;br&gt;volume なし / RDB・AOF 無効&lt;br&gt;maxmemory-policy=noeviction&lt;br&gt;ログイン状態のみ（TTL失効）" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#FFEBEE;strokeColor=#C62828;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
+        <mxCell id="n9" value="redis:8-alpine&lt;br&gt;&lt;br&gt;Compose内部のみ（通常は非公開）&lt;br&gt;volume なし / RDB・AOF 無効&lt;br&gt;maxmemory-policy=noeviction&lt;br&gt;ログイン状態＋バッチ実行ロック&lt;br&gt;（いずれもTTL失効）" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#FFEBEE;strokeColor=#C62828;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="880" y="680" width="270" height="180" as="geometry" />
         </mxCell>
         <mxCell id="n10" value="mailpit（dev profile専用）&lt;br&gt;&lt;br&gt;SMTP/UI: loopbackのみ公開可&lt;br&gt;productionは外部SMTP&lt;br&gt;外部へは送信しない" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#6A1B9A;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="450" y="700" width="310" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="n31" value="batch&lt;br&gt;python:3.14-slim / APScheduler（常駐）&lt;br&gt;&lt;br&gt;Compose内部のみ（ポート非公開）&lt;br&gt;毎朝 NOTIFY_DUE_CRON_HOUR 時に&lt;br&gt;期限タスクを抽出し notifications へ登録&lt;br&gt;マイグレーションは実行しない" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#2E7D32;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="450" y="850" width="310" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="e32" value="SQLAlchemy&lt;br&gt;tasks 走査 / notifications INSERT" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;jettySize=auto;orthogonalLoop=1;strokeColor=#EF6C00;strokeWidth=1.5;fontSize=10;fontColor=#EF6C00;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.3;exitDx=0;exitDy=0;entryX=0;entryY=0.9;entryDx=0;entryDy=0;" edge="1" parent="1" source="n31" target="n8">
+          <mxGeometry relative="1" as="geometry" x="0.4">
+            <Array as="points">
+              <mxPoint x="815" y="895" />
+              <mxPoint x="815" y="536" />
+            </Array>
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e33" value="redis-py&lt;br&gt;実行ロック" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;jettySize=auto;orthogonalLoop=1;strokeColor=#C62828;strokeWidth=1.5;fontSize=10;fontColor=#C62828;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.7;exitDx=0;exitDy=0;entryX=0;entryY=0.85;entryDx=0;entryDy=0;" edge="1" parent="1" source="n31" target="n9">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="850" y="955" />
+              <mxPoint x="850" y="833" />
+            </Array>
+          </mxGeometry>
         </mxCell>
         <mxCell id="n11" value="外部サービス" style="container=1;collapsible=0;rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#9E9E9E;dashed=1;dashPattern=8 4;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=13;fontStyle=1;fontColor=#616161;" vertex="1" parent="1">
           <mxGeometry x="1260" y="170" width="320" height="440" as="geometry" />
@@ -44,16 +64,16 @@
           <mxGeometry x="1290" y="440" width="260" height="110" as="geometry" />
         </mxCell>
         <mxCell id="n14" value="CI / CD" style="container=1;collapsible=0;rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#9E9E9E;dashed=1;dashPattern=8 4;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=13;fontStyle=1;fontColor=#616161;" vertex="1" parent="1">
-          <mxGeometry x="400" y="970" width="1180" height="180" as="geometry" />
+          <mxGeometry x="400" y="1080" width="1180" height="180" as="geometry" />
         </mxCell>
         <mxCell id="n15" value="GitHub Actions&lt;br&gt;ci.yml（Lint/型/テスト/build）" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#ECEFF1;strokeColor=#546E7A;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="450" y="1010" width="290" height="60" as="geometry" />
+          <mxGeometry x="450" y="1120" width="290" height="60" as="geometry" />
         </mxCell>
         <mxCell id="n16" value="self-hosted runner&lt;br&gt;cd.yml（pull → compose up -d）" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#ECEFF1;strokeColor=#546E7A;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="1240" y="1010" width="290" height="60" as="geometry" />
+          <mxGeometry x="1240" y="1120" width="290" height="60" as="geometry" />
         </mxCell>
         <mxCell id="n17" value="main へのマージで&lt;br&gt;GHCR へ push → runner が反映" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#BDBDBD;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=11;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="1240" y="1085" width="290" height="50" as="geometry" />
+          <mxGeometry x="1240" y="1195" width="290" height="50" as="geometry" />
         </mxCell>
         <mxCell id="e18" value="HTTP&lt;br&gt;静的配信" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;jettySize=auto;orthogonalLoop=1;strokeColor=#1565C0;strokeWidth=1.5;fontSize=10;fontColor=#1565C0;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.25;exitDx=0;exitDy=0;entryX=0;entryY=0.3;entryDx=0;entryDy=0;" edge="1" parent="1" source="n4" target="n6">
           <mxGeometry relative="1" as="geometry" />
@@ -104,7 +124,7 @@
         <mxCell id="e26" value="docker push&lt;br&gt;latest, sha-xxxx" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;jettySize=auto;orthogonalLoop=1;strokeColor=#546E7A;strokeWidth=1.5;fontSize=10;fontColor=#546E7A;labelBackgroundColor=#FFFFFF;dashed=1;dashPattern=6 4;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="n15" target="n13">
           <mxGeometry relative="1" as="geometry" x="-0.3">
             <Array as="points">
-              <mxPoint x="1215" y="1040" />
+              <mxPoint x="1215" y="1150" />
               <mxPoint x="1215" y="495" />
             </Array>
             <mxPoint as="offset" />
@@ -116,11 +136,11 @@
         <mxCell id="e28" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;jettySize=auto;orthogonalLoop=1;strokeColor=#BDBDBD;strokeWidth=1.5;fontSize=10;fontColor=#BDBDBD;labelBackgroundColor=#FFFFFF;dashed=1;dashPattern=6 4;endArrow=none;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="n16" target="n17">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="n29" value="凡例&lt;br&gt;■ 青: クライアント　■ 緑: アプリケーション&lt;br&gt;■ 橙: 永続データ　■ 赤: 揮発データ（TTL失効）&lt;br&gt;■ 紫: 開発用途　■ 灰: CI/CD・レジストリ&lt;br&gt;実線: 常時通信　破線: リダイレクト / デプロイ経路&lt;br&gt;${...} は .env で定義する外部公開ポート" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#BDBDBD;align=left;verticalAlign=top;spacingLeft=10;spacingTop=6;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="40" y="520" width="340" height="130" as="geometry" />
+        <mxCell id="n29" value="凡例&lt;br&gt;■ 青: クライアント　■ 緑: アプリケーション&lt;br&gt;■ 橙: 永続データ　■ 赤: 揮発データ（TTL失効）&lt;br&gt;■ 紫: 開発用途　■ 灰: CI/CD・レジストリ&lt;br&gt;実線: 常時通信　破線: リダイレクト / デプロイ経路&lt;br&gt;${...} は .env で定義する外部公開ポート&lt;br&gt;batch は HTTP API を経由せず DB / Redis へ直接アクセスする" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#BDBDBD;align=left;verticalAlign=top;spacingLeft=10;spacingTop=6;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="520" width="340" height="145" as="geometry" />
         </mxCell>
         <mxCell id="n30" value="Redis に volume を割り当てないため、&lt;br&gt;コンテナ再起動で全ユーザーが&lt;br&gt;ログアウト状態になる（要件書§4で許容）。&lt;br&gt;「誰がいつログインしたか」は&lt;br&gt;PostgreSQL の login_history に残る。" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;darkOpacity=0.05;fillColor=#FFF9C4;strokeColor=#F9A825;align=left;verticalAlign=top;spacingLeft=10;spacingTop=6;size=14;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="40" y="690" width="340" height="115" as="geometry" />
+          <mxGeometry x="40" y="700" width="340" height="115" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>
