@@ -55,7 +55,7 @@
 ```
 
 - ⑦ロールセレクトと⑧有効/無効トグルは、対象行が現在ログイン中の管理者自身（`user.id === authStore.user.id`）の場合は非活性化しツールチップ「自分自身は変更できません」を表示する（自己変更禁止のUI抑止。§3参照）
-- ⑨強制ログアウトボタンは自分自身に対しても活性のまま（自己対象の禁止規定がAPI側にないため。[04_post_admin_user_force_logout.md](../api/admin/04_post_admin_user_force_logout.md) §13）
+- ⑨強制ログアウトボタンは自分自身に対しても活性のまま（自己対象の禁止規定がAPI側にないため。[04_post_admin_user_force_logout.md](../api/admin/04_post_admin_user_force_logout.md) §13）。session/refreshは即時失効するが、JWT access tokenは最大15分（`ACCESS_TOKEN_TTL_SECONDS`既定900秒）残る旨を確認ダイアログに表示する
 - レスポンシブ：幅768px未満ではテーブルを横スクロール可能な`overflow-x: auto`コンテナに収め、列の折り返しは行わない
 
 ## 3. UI要素仕様

@@ -291,4 +291,4 @@ flowchart LR
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 要検討 | `members[].display_name` の姓名未設定時（OAuth新規ユーザー等）のフォールバック仕様は基本設計に明記がないため、`01_get_projects.md` と同様に `username` へフォールバックする方針を本書で提案している。基本設計側での明文化が望ましい |
+| 確定 | `members[].display_name` は`last_name`と`first_name`がともに空でない場合に結合し、それ以外は`username`へフォールバックする | プロジェクトメンバー表示の規則をownerと統一する |

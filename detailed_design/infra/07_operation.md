@@ -278,6 +278,16 @@ stateDiagram-v2
 | 保持期間 | API・batch履歴は各30日、ログイン履歴は90日。値は環境変数で管理し、パージ失敗は標準出力と`batch_history`で確認する |
 | セキュリティ | body、error_detail、標準出力のいずれにもパスワード、token、Cookie、接続文字列を出力しない |
 
+### 8.11 認証失効・監査書き込み失敗の復旧
+
+| 障害 | 安全側の挙動 | 復旧手順 |
+|------|--------------|----------|
+| Redis失効失敗 | DB更新を実行せず `503 SERVICE_UNAVAILABLE`。部分削除は維持 | `docker compose exec redis redis-cli ping`、ERRORイベントのuser_id/request_idを確認し、Redis復旧後に同じ管理操作またはパスワード再設定を再実行 |
+| `login_history` INSERT失敗 | ログインを返さず、作成済みsession/refreshを補償削除 | PostgreSQL接続・権限・容量を復旧し、`event=login_history_write_failed`を確認してログインを再試行。補償削除失敗時は対象user_idの全失効を手動実行 |
+| 初期管理者設定不足 | backendはHTTP受付前に起動失敗 | `INITIAL_ADMIN_EMAIL`、`INITIAL_ADMIN_USERNAME`、`INITIAL_ADMIN_PASSWORD`をSecretから注入し、`docker compose up -d backend`後に`/api/health`を確認 |
+
+上記の再実行は削除操作が冪等であることを前提とする。復旧中に認証を許可するためのfail-open変更は禁止する。
+
 ## 9. 関数・要素相関図
 
 ```mermaid

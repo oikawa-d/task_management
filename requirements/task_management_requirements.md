@@ -12,6 +12,8 @@
 - GitHub Actions上でビルド・テスト・Dockerイメージ作成までを自動化する
 - self-hosted runner（自分のPCまたは自宅サーバー等にGitHub Actionsのランナーを常駐させる仕組み）を使い、mainブランチへのマージをトリガーにローカル環境のDocker Composeを再起動して反映する
 
+セキュリティ・業務ルールの確定値は [security_business_rules.md](./security_business_rules.md) に集約する。認証、監査、環境変数、画面の詳細設計は同書の採用案を正とする。
+
 クラウド上に実際にデプロイする構成を学びたい場合は、別案（無料枠のあるクラウドサービスを使う構成）も提示できるため、その場合は教えてほしい。
 
 ---
@@ -63,6 +65,8 @@
 メールアドレス・パスワードによる会員登録では、確認メールによるメールアドレス認証を行う。パスワードを忘れた場合は、メール内のワンタイムトークンで再設定できる。開発環境ではMailpitを使用し、本番相当環境ではSMTP接続先を環境変数で設定する。
 
 ログイン状態（有効なセッション／リフレッシュトークン）はRedisで一元管理し、期限切れになると自動的に失効させる。ログアウト時はRedis上の該当キーを削除することで即時失効させる。
+
+Issue #8で、ログイン以外のRate Limit、パスワード再設定トークン、Redis障害時の補償、Proxy境界、監査ログ失敗時の動作、初期管理者、表示名、コメント競合、JWT強制ログアウトの遅延を確定した。具体的な上限値・環境変数・エラー・テスト観点は [security_business_rules.md](./security_business_rules.md) に従う。
 
 **学習の進め方（比較の観点）**
 - セッション方式とJWT方式で、ログアウト時の処理・トークン/セッションの失効方法がどう異なるか
@@ -137,7 +141,7 @@
 | tasks | id, project_id, title, status, assignee_id, due_at, created_at | statusは`todo`/`in_progress`/`done`。`due_at`は期限（日付＋終了時刻） |
 | task_comments | id, task_id, user_id, body, created_at | |
 | notifications | id, user_id, task_id, type, title, read_at, dedupe_key, created_at | アプリ内通知。`type`は`due_soon_batch`/`due_today_created`/`due_today_updated`。`dedupe_key`で重複作成を防ぐ |
-| login_history | id, user_id, login_method, ip_address, success, created_at | ログイン試行の監査ログ。login_methodは`session`/`jwt`/`oauth_google`。Redis側の失効状況とは独立して保持し続ける |
+| login_history | id, user_id, login_method, ip_address, success, created_at | ログイン試行の監査ログ。login_methodは`session`/`jwt`/`oauth_google`。Redis側の失効状況とは独立して保持し、INSERT失敗時はログインを成立させない |
 | api_history | id, request_id, method, path, status, status_code, error_code, error_detail, body, user_id, duration_ms, created_at | `/api`配下の全APIリクエスト履歴。bodyはマスキング済み。既定30日保持 |
 | batch_history | id, run_id, batch_name, trigger_type, slot, status, started_at, ended_at, error_code, error_detail, target_count, success_count, skipped_count, updated_at | batchの開始・完了・失敗履歴。既定30日保持 |
 
@@ -149,6 +153,7 @@
 |--------|---------|-----|------|
 | `session:{session_id}` | user_id, role等（JSON） | セッション有効期限（例：30分〜数時間） | session方式のログイン状態確認 |
 | `refresh:{token_hash}` | user_id, 発行日時（JSON） | リフレッシュトークン有効期限（例：14日） | jwt方式のリフレッシュトークン有効性確認。ログアウト時に即削除して失効させる |
+| `pwreset_current:{user_id}` | 現在のtoken_hash | `PASSWORD_RESET_TTL_SECONDS` | 最新のパスワードリセットトークン以外を失効させる |
 
 **補足**
 - Redisの永続化設定（RDB/AOF）は行わない前提とする。サーバー再起動時にログイン状態が失われる点は許容する

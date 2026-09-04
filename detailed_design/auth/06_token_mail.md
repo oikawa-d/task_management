@@ -26,7 +26,7 @@
 | `verify_email` | 関数（`auth_service`） | トークン消費・`email_verified_at`更新 | ワンタイム消費（`GETDEL`） |
 | `resend_verification` | 関数（`auth_service`） | 再送レート制限確認 → `issue_email_verify_token`呼び出し | ユーザー不存在・認証済みでも例外を出さない |
 | `request_password_reset` | 関数（`auth_service`） | token生成・Redis登録・送信予約 | ユーザー不存在でも例外を出さず202を維持 |
-| `reset_password` | 関数（`auth_service`） | トークン消費・パスワード更新・全セッション/全リフレッシュ失効 | ワンタイム消費 |
+| `reset_password` | 関数（`auth_service`） | トークン消費・Redis全失効・パスワード更新 | Redis失効成功後にDB更新 |
 | `send_email_verification_mail` | 関数（`mail_service`） | テンプレートレンダリング＋SMTP送信 | `{FRONTEND_BASE_URL}/verify-email#token=...` |
 | `send_password_reset_mail` | 関数（`mail_service`） | 同上 | `{FRONTEND_BASE_URL}/password/reset#token=...` |
 | `BackgroundTasks` | FastAPI標準機能 | レスポンス返却後にSMTP送信を非同期実行 | 送信失敗はログのみ、APIレスポンスへは影響させない |
@@ -40,7 +40,7 @@
 |--------|----|--------|------|------|
 | `EMAIL_VERIFY_TTL_SECONDS` | int | `86400` | `emailverify:{hash}` / `emailverify_current:{uid}` のTTL | `.env` |
 | `EMAIL_VERIFY_RESEND_INTERVAL_SECONDS` | int | `60` | `emailverify_sent:{uid}` のTTL＝再送最小間隔 | `.env` |
-| `PASSWORD_RESET_TTL_SECONDS` | int | `1800` | `pwreset:{hash}` のTTL | `.env` |
+| `PASSWORD_RESET_TTL_SECONDS` | int | `1800` | `pwreset:{hash}` / `pwreset_current:{uid}` のTTL | `.env` |
 | `SMTP_HOST` / `SMTP_PORT` | str / int | `mailpit` / `1025` | 開発：Mailpit接続先。本番は外部SMTP値で上書き | `.env` |
 | `SMTP_USER` / `SMTP_PASSWORD` | str | 空文字 | 本番外部SMTP利用時のみ設定 | **Secret**（値がある場合） |
 | `SMTP_USE_TLS` | bool | `false` | SMTP接続のTLS有効化 | `.env` |
@@ -57,7 +57,7 @@
 | 入力 | `POST /auth/verify-email` の`token` | `verify_email`が`GETDEL emailverify:{sha256(token)}`で消費 |
 | 入力 | `POST /auth/verify-email/resend` の`email` | `resend_verification`のトリガー |
 | 入力 | `POST /auth/password/forgot` の`email` | `request_password_reset`のトリガー |
-| 入力 | `POST /auth/password/reset` の`token`/`new_password` | `reset_password`が`GETDEL pwreset:{sha256(token)}`で消費 |
+| 入力 | `POST /auth/password/reset` の`token`/`new_password` | `reset_password`がcurrent一致を確認して原子的に消費 |
 | 出力 | Redis `emailverify:{hash}` / `emailverify_current:{uid}` / `emailverify_sent:{uid}` | §7参照 |
 | 出力 | Redis `pwreset:{hash}` | ワンタイムトークン |
 | 出力 | SMTP送信（`BackgroundTasks`経由） | 認証メール／リセットメール |
@@ -145,14 +145,14 @@ sequenceDiagram
     API->>PG: "SELECT users WHERE lower(email)=?"
     API->>API: "token = secrets.token_urlsafe(32)"
     opt ユーザーが存在
-        API->>RD: "SETEX pwreset:{sha256(token)} TTL=PASSWORD_RESET_TTL_SECONDS"
+        API->>RD: "Luaで旧pwresetとcurrentを削除し新token/currentを原子的にSETEX"
         API->>SMTP: "BackgroundTasksでメール送信予約<br/>{FRONTEND_BASE_URL}/password/reset#token=..."
     end
     API-->>FE: "202 Accepted（存在有無を問わず同一応答）"
 
     U->>FE: "メール内リンクを開く"
     FE->>API: "POST /api/auth/password/reset {token, new_password}"
-    API->>RD: "GETDEL pwreset:{sha256(token)}"
+    API->>RD: "Luaでcurrent一致を確認しpwreset/currentを原子的に消費"
     alt トークンが無効・期限切れ
         API-->>FE: "400 INVALID_RESET_TOKEN"
     else 有効
@@ -206,14 +206,14 @@ stateDiagram-v2
     再送クールダウン中 --> 再送可能: "60秒（EMAIL_VERIFY_RESEND_INTERVAL_SECONDS）経過でTTL失効"
     再送可能 --> [*]
 
-    [*] --> pwresetトークン発行: "SETEX pwreset:{hash} TTL=PASSWORD_RESET_TTL_SECONDS"
-    pwresetトークン発行 --> pwreset消費済み: "POST /password/reset<br/>GETDEL pwreset:{hash} 成功"
+    [*] --> pwresetトークン発行: "Luaでpwreset_currentと実体を原子置換<br/>TTL=PASSWORD_RESET_TTL_SECONDS"
+    pwresetトークン発行 --> pwreset消費済み: "POST /password/reset<br/>current一致をLuaで検証・消費"
     pwresetトークン発行 --> pwreset_TTL失効: "30分（PASSWORD_RESET_TTL_SECONDS）経過"
     pwreset消費済み --> [*]
     pwreset_TTL失効 --> [*]
 ```
 
-`emailverify:{hash}` と `emailverify_current:{uid}` は常に対で管理し、ユーザーごとに有効なメール認証トークンを最大1本に保つ（再送時は旧トークンを必ず失効させる）。`pwreset:{hash}` にはユーザー単位の「現在有効なトークン」を追跡する逆引きキーを持たない点が `emailverify` 系との差である（基本設計に `pwreset_current` 相当のキーが定義されていないため、複数回`forgot`を呼ぶと複数の`pwreset:{hash}`が並存し得る。§12で要検討として明記）。
+`emailverify:{hash}` と `emailverify_current:{uid}` は常に対で管理し、ユーザーごとに有効なメール認証トークンを最大1本に保つ。`pwreset:{hash}` も `pwreset_current:{uid}` と対で管理し、ユーザーごとに最新の1本だけをLuaで原子的に有効化・消費する。
 
 ## 8. 関数・処理詳細
 
@@ -269,7 +269,7 @@ stateDiagram-v2
 | 引数 / 入力 | `token`（平文）、`new_password`（バリデーション済み） |
 | 戻り値 / 出力 | `None` |
 | 送出例外 / 失敗条件 | `InvalidResetTokenError`（→400 `INVALID_RESET_TOKEN`）：`consume_password_reset_token`が`None`を返した場合 |
-| 処理内容 | 1. `user_id = await redis_store.consume_password_reset_token(token)` 2. `None`なら例外 3. `password_hash = hash_password(new_password)`（[./07_password_security.md](./07_password_security.md)） 4. `user_repository.update_password(db, user_id, password_hash)` 5. `redis_store.delete_all_sessions(user_id)` 6. `redis_store.revoke_all_refresh_tokens(user_id)` |
+| 処理内容 | 1. `user_id = await redis_store.consume_password_reset_token(token)` 2. `None`なら例外 3. `delete_all_sessions` と `revoke_all_refresh_tokens` を実行 4. 成功後に `hash_password` と `user_repository.update_password` を同一DBトランザクションで実行。Redis失敗時はDB更新しない |
 | 副作用 | Redis削除（ワンタイム消費＋全失効）、PostgreSQL UPDATE |
 
 ### 8.6 `service/mail_service.py :: send_email_verification_mail` / `send_password_reset_mail`
@@ -319,7 +319,7 @@ flowchart LR
 | トークンのログ非出力 | `token`（平文・ハッシュ双方）はアプリログに出力しない。成功/失敗の別のみを記録する | 共通ルール／[04_google_oauth.md](./04_google_oauth.md) §10と同方針 |
 | URLへの埋め込み位置 | query stringではなくfragment（`#token=...`）を使用し、サーバーログ・Refererへの記録を避ける | [基本設計§7.2末尾](../../basic_design/03_auth.md) |
 | 再送レート制限 | `emailverify_sent:{uid}`（`SETEX ... NX`）により`EMAIL_VERIFY_RESEND_INTERVAL_SECONDS`間隔でのみ送信を許可し、メール爆撃を防ぐ | [基本設計§6.3](../../basic_design/03_auth.md) |
-| パスワードリセットの再送制限 | 基本設計に専用レート制限キーの定義がなく、本書でも新設しない（[../api/auth/09_post_auth_password_forgot.md](../api/auth/09_post_auth_password_forgot.md)と同じ判断） | §12参照 |
+| パスワードリセットの再送制限 | `password/forgot` はIP単位5回/900秒、`password/reset` はIP単位10回/900秒。超過時は429、Redis障害時は503 | [要件の確定表](../../requirements/security_business_rules.md#21-ログイン以外のrate-limit) |
 | リセット成功時の全失効 | `reset_password`成功時は該当ユーザーの全セッション・全リフレッシュトークンを失効させ、漏洩した旧パスワードでのセッション継続を断つ | [基本設計§7.2末尾](../../basic_design/03_auth.md) |
 | fail-close | Redis接続不能時は各関数が例外を送出し、APIハンドラは`503 SERVICE_UNAVAILABLE`を返す（メール未送信のまま201/202を返すことはしない） | [./08_redis_store.md](./08_redis_store.md) §10 |
 | SMTP送信失敗の非ブロッキング | メール送信は`BackgroundTasks`で非同期化し、送信失敗がAPIレスポンスの成否に影響しない | [基本設計§7.2](../../basic_design/03_auth.md) |
@@ -341,10 +341,9 @@ flowchart LR
 | 11 | 結合 | メール本文にfragment形式のURLが含まれる | テンプレートレンダリング結果を検証 | `#token=`形式でquery stringを含まない | `test_mail_template_uses_fragment_url` |
 | 網羅できない範囲 | 実際のSMTPサーバー（本番外部SMTP）への到達性・迷惑メール判定 | - | 外部サービス依存のため自動テスト対象外。開発環境ではMailpit Web UIでの手動確認とする |
 
-## 12. 不明点・要検討事項
+## 12. Issue #8で確定した事項
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 要検討 | `pwreset:{hash}`には`emailverify_current`に相当する「ユーザー単位の現在有効なトークン」逆引きキーが基本設計（[../../basic_design/02_redis.md](../../basic_design/02_redis.md) §2）に定義されていない。`password/forgot`を複数回呼ぶと複数の`pwreset:{hash}`キーが同時に有効となり得るが、実害（リセットは1回で全セッションを失効させるため最終的な状態は同じ）は小さいと判断し、本書では新設しなかった | 低〜中。将来的に「旧リセットリンクを即時無効化したい」要件が出た場合は`pwreset_current:{uid}`相当のキー追加が必要 |
-| 要検討 | パスワードリセット要求（`password/forgot`）に再送レート制限キーが存在しない点は[../api/auth/09_post_auth_password_forgot.md](../api/auth/09_post_auth_password_forgot.md)でも既に「対象外・要検討」とされており、本書もその方針を踏襲した。メール認証の再送とは異なる方針である理由（リセットは`login_fail`のような別経路の悪用対策が無い）は基本設計に明記がない | 中。メール送信コストの濫用対策として将来的にレート制限キーの追加を検討する余地がある |
-| 不明 | トークンの生成バイト数（32）・ハッシュアルゴリズム（SHA-256）を環境変数化するかどうかは基本設計に明記がなく、本書では固定値のままとした（TTL等の可変値のみ環境変数化） | 低。実装時に定数として1箇所に集約すれば変更コストは小さい |
+| 採用 | `pwreset_current:{uid}`を追加し、最新トークンだけをLuaで発行・消費する。Rate LimitとRedis障害時のfail-closeも適用する | 旧トークンの無効化とメール爆撃防止 |
+| 採用 | トークン生成32バイト・SHA-256は既存の共通方式を維持し、変更可能なTTLだけ環境変数で管理する | 各メールトークン方式の一貫性 |

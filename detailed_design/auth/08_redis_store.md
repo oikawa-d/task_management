@@ -71,7 +71,8 @@
 | `user_refresh:{user_id}` | Set（token_hashの集合） | `REFRESH_TTL_SECONDS`（延長） | する（新規発行・ローテーション時） | jwt方式ログイン | 同上（JWT） |
 | `oauth_state:{state}` | `{redirect_to, code_verifier, nonce, created_at}` | `OAUTH_STATE_TTL_SECONDS`（既定600） | しない | OAuth2認可開始 | state・PKCE・nonceの検証値 |
 | `oauth_handoff:{code}` | `{user_id, redirect_to, created_at}` | `OAUTH_HANDOFF_TTL_SECONDS`（既定60） | しない | jwt OAuthコールバック | フロントへの一時コード（ワンタイム） |
-| `pwreset:{token_hash}` | `{user_id, requested_at}` | `PASSWORD_RESET_TTL_SECONDS`（既定1800） | しない | パスワードリセット要求 | リセットトークン有効性判定 |
+| `pwreset:{token_hash}` | `{user_id, requested_at}` | `PASSWORD_RESET_TTL_SECONDS`（既定1800） | しない | パスワードリセット要求 | 現在トークンの実体 |
+| `pwreset_current:{user_id}` | 現在のtoken_hash | `PASSWORD_RESET_TTL_SECONDS`（既定1800） | しない（再発行時に原子的に置換） | パスワードリセット要求 | 最新トークンのみ有効にする逆引き |
 | `emailverify:{token_hash}` | `{user_id, requested_at}` | `EMAIL_VERIFY_TTL_SECONDS`（既定86400） | しない | 会員登録・認証メール再送 | メール認証トークン有効性判定 |
 | `emailverify_current:{user_id}` | 現在のtoken_hash | `EMAIL_VERIFY_TTL_SECONDS` | しない（再発行時に新TTLで置換） | 会員登録・認証メール再送 | 再送時に旧トークンを失効させる逆引き |
 | `emailverify_sent:{user_id}` | 直近送信時刻（数値） | `EMAIL_VERIFY_RESEND_INTERVAL_SECONDS`（既定60） | しない | 認証メール送信時（`SETEX`） | 認証メール再送のレート制限 |
@@ -174,8 +175,8 @@ stateDiagram-v2
 
 | 関数 | シグネチャ | 処理概要 |
 |------|-----------|----------|
-| `save_password_reset_token` | `async def save_password_reset_token(token: str, user_id: UUID, ttl: int) -> None` | `SETEX pwreset:{sha256(token)}` |
-| `consume_password_reset_token` | `async def consume_password_reset_token(token: str) -> UUID \| None` | `GETDEL pwreset:{hash}` → `user_id`を返す |
+| `save_password_reset_token` | `async def save_password_reset_token(token: str, user_id: UUID, ttl: int) -> None` | Luaで旧`pwreset_current:{uid}`と実体を置換し、新hashを`pwreset`と`pwreset_current`へ原子的に登録 |
+| `consume_password_reset_token` | `async def consume_password_reset_token(token: str) -> UUID \| None` | Luaで`pwreset_current:{uid}`との一致を確認して実体・currentを原子的に消費し、`user_id`を返す |
 | `replace_email_verify_token` | `async def replace_email_verify_token(token: str, user_id: UUID, ttl: int) -> None` | `GET emailverify_current:{uid}`で旧hash取得 → 存在すれば`DEL emailverify:{旧hash}` → `SETEX emailverify:{新hash}` → `SET emailverify_current:{uid} 新hash EX ttl`（パイプラインで実行し、途中失敗時も新旧いずれかは残る想定。厳密なLua原子化は§12で要検討） |
 | `consume_email_verify_token` | `async def consume_email_verify_token(token: str) -> UUID \| None` | `GETDEL emailverify:{hash}` → `user_id`を返す（ワンタイム消費） |
 | `mark_email_verify_sent` | `async def mark_email_verify_sent(user_id: UUID, interval: int) -> bool` | `SET emailverify_sent:{uid} <now> NX EX interval`。`False`なら間隔内につき送信しない |
@@ -186,6 +187,7 @@ stateDiagram-v2
 |------|-----------|----------|
 | `incr_login_failure` | `async def incr_login_failure(identifier: str, client_ip: str, window: int) -> int` | `key_hash = build_login_fail_key(identifier, client_ip)`（[./07_password_security.md](./07_password_security.md) §8.4） → `INCR login_fail:{key_hash}` → 戻り値が`1`（初回）なら`EXPIRE login_fail:{key_hash} window`を追加実行 → 現在の失敗回数を返す |
 | `reset_login_failure` | `async def reset_login_failure(identifier: str, client_ip: str) -> None` | 同一`key_hash`で`DEL login_fail:{key_hash}` |
+| `check_rate_limit` | `async def check_rate_limit(scope: str, key: str, max_requests: int, window: int) -> int` | `rate_limit:{scope}:{key_hash}`を原子的に加算し、超過時は残りTTLとともに拒否する |
 | `ping` | `async def ping() -> bool` | `redis.ping()`の成否を返す。`/api/health`から呼ばれる |
 
 ## 9. 原子性（GETDELとLuaスクリプト）

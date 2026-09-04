@@ -82,6 +82,19 @@ sequenceDiagram
 4. bodyとerror_detailは設定した上限を超えた場合に切り詰めるかNULLにする。切り詰めでJSON構造を壊さないため、bodyは上限超過時NULLとする。
 5. error_detailには利用者へ返す安全な詳細だけを保存し、stack traceは標準出力へ出す。`DATABASE_URL`、JWT鍵、SMTP資格情報等は常にマスキングする。
 
+### 3.1 Issue #8の監査イベント
+
+認証・セキュリティ上の判断は構造化標準出力へ監査イベントとして記録する。`login_history`はログイン試行の正規履歴、`api_history`は全APIの正規履歴であり、次のイベントを両者の`request_id`で突合できるようにする。
+
+| event | 記録項目 | 失敗時の扱い |
+|-------|----------|--------------|
+| `rate_limit_rejected` | route、scope、limit、window、client_ip、request_id | APIは429。Redis障害なら503 |
+| `login_history_write_failed` | user_id（NULL可）、login_method、client_ip、request_id | ログインを成立させず、作成済みRedis状態を補償削除 |
+| `auth_state_revoke_failed` | user_id、operation、deleted_session_count、deleted_refresh_count、request_id | DB更新を行わず503。Redis復旧後に同じ操作を再実行 |
+| `force_logout` | actor_user_id、target_user_id、mode、access_token_revocation_delay_seconds、request_id | 成功時INFO。JWTの遅延上限は`ACCESS_TOKEN_TTL_SECONDS` |
+
+監査IPは `TRUSTED_PROXY_CIDRS` で確定した `client_ip` とし、`proxy_peer_ip`、`ip_source`（`direct` / `trusted_xff`）も記録する。パスワード、トークン、Cookie、Authorization値、未ハッシュの識別子は記録しない。
+
 ## 4. batch記録方式
 
 各ジョブを `with_batch_history` 相当の共通ラッパーで包む。scheduler起動と `--run-once` の両方で、ジョブ本体より先に `batch_history`へ `inprogress` をINSERTする。ジョブの結果を集計し、正常時は `complete`、例外時は `error`へ更新する。

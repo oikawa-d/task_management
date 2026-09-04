@@ -23,7 +23,7 @@
 | AUTH_MODE差異 | CSRF検証の要否のみ差異あり |
 | 冪等性 | あり（同一bodyでの再送信は同じ結果になる。ただし`updated_at`は都度更新される） |
 | レート制限 | 対象外 |
-| トランザクション境界 | `task_comments` の1行UPDATEのみ。`version` 列を持たないため楽観ロックは行わない（§13参照） |
+| トランザクション境界 | `task_comments` の1行UPDATEのみ。Last Write Winsを採用し、`version` 列や楽観ロックは追加しない |
 
 ## 2. 入出力仕様
 
@@ -273,7 +273,7 @@ stateDiagram-v2
 |------|------|
 | XSS対策 | [07_post_task_comments.md](./07_post_task_comments.md) §11 と同一方針（サーバーは無加工保存、表示側でエスケープ） |
 | 403/404の切り分け | §3.1参照。プロジェクト所属可否は隠し、所属後の権限不足は明示する設計とし、ユーザーへのフィードバック可読性と情報漏洩防止を両立する |
-| 楽観ロック | `task_comments` に `version` 列を持たないため、同時編集は後勝ち（last-write-wins）となる。タスクの`version`のような競合検出は行わない（要検討、§13参照） |
+| 楽観ロック | 採用しない。同時編集は後勝ち（Last Write Wins）とし、競合エラーは返さない |
 | CSRF対策 | 07番と同一方針 |
 | ログ出力 | INFO：`comment_id`, `task_id`, `actor_user_id`（実行者）, `is_admin_override`（投稿者以外＝admin代理編集かどうか）, `request_id` |
 | fail-close | PostgreSQL接続不能時は `503 SERVICE_UNAVAILABLE` |
@@ -292,9 +292,9 @@ stateDiagram-v2
 | 8 | 結合 | adminが他人のコメントを編集 | 実DB、adminユーザー | `200` | `test_patch_comment_admin_can_edit_others` |
 | 9 | パラメータ化 | `AUTH_MODE=session` / `jwt` の両方で正常系を確認 | 両モードのfixture | いずれも `200` | `test_patch_comment_both_auth_modes` |
 
-## 13. 不明点・要検討事項
+## 13. Issue #8で確定した事項
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 要検討 | `task_comments` に楽観ロック用の`version`列がなく、同時編集は後勝ちになる。`tasks`同様の競合検出を導入するかは基本設計未記載のため要判断 | 同時編集時にどちらかの変更が無言で失われる可能性 |
+| 採用 | `task_comments`にはversionを追加せず、同時更新はLast Write Winsとする。両リクエストは200を返し、後からcommitされた本文を最終値とする | 実装を既存スキーマ内に限定し、短文編集の再入力を求めない |
 | 要検討 | 編集履歴（編集済みマークの表示要否）が基本設計・要件定義に規定されていない。本設計では`updated_at`のみで判定する前提とした | UI上の「編集済み」表示可否 |

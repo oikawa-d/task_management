@@ -83,6 +83,16 @@
 | `COOKIE_DOMAIN` | str | 空文字 | Cookieの`Domain`属性（必要時のみ設定） | 平文可 |
 | `LOGIN_MAX_ATTEMPTS` | int | `5` | ログイン失敗の許容回数上限 | 平文可 |
 | `LOGIN_LOCK_WINDOW_SECONDS` | int | `900` | ログイン失敗カウントのロック窓TTL | 平文可 |
+| `RATE_LIMIT_REGISTER_MAX_REQUESTS` | int | `5` | 会員登録のIP単位上限（時間窓900秒） | 平文可 |
+| `RATE_LIMIT_EMAIL_VERIFY_MAX_REQUESTS` | int | `10` | メール認証実行のIP単位上限（時間窓900秒） | 平文可 |
+| `RATE_LIMIT_EMAIL_VERIFY_RESEND_MAX_REQUESTS` | int | `5` | 認証メール再送のIP単位上限（時間窓900秒） | 平文可 |
+| `RATE_LIMIT_PASSWORD_FORGOT_MAX_REQUESTS` | int | `5` | パスワード再設定要求のIP単位上限（時間窓900秒） | 平文可 |
+| `RATE_LIMIT_PASSWORD_RESET_MAX_REQUESTS` | int | `10` | パスワード再設定実行のIP単位上限（時間窓900秒） | 平文可 |
+| `RATE_LIMIT_OAUTH_MAX_REQUESTS` | int | `10` | OAuth開始・callback・exchange各APIのIP単位上限 | 平文可 |
+| `RATE_LIMIT_OAUTH_WINDOW_SECONDS` | int | `900` | OAuth Rate Limit時間窓 | 平文可 |
+| `RATE_LIMIT_NOTIFICATION_READ_MAX_REQUESTS` | int | `120` | 通知GETのuser_id + IP単位上限（時間窓60秒） | 平文可 |
+| `RATE_LIMIT_NOTIFICATION_WRITE_MAX_REQUESTS` | int | `60` | 通知PATCH/POSTのuser_id + IP単位上限（時間窓60秒） | 平文可 |
+| `TRUSTED_PROXY_CIDRS` | list[str] | 空 | `X-Forwarded-For`を信頼する直近ProxyのCIDR一覧。空なら接続元IPを使用 | 平文可 |
 | `ARGON2_TIME_COST` | int | `3` | argon2idコストパラメータ | 平文可 |
 | `ARGON2_MEMORY_COST` | int | `65536` | argon2idコストパラメータ（KiB） | 平文可 |
 | `ARGON2_PARALLELISM` | int | `4` | argon2idコストパラメータ | 平文可 |
@@ -148,7 +158,7 @@
 
 | 変数名 | 型 | 既定値 | 用途 | 秘匿 |
 |--------|-----|--------|------|------|
-| `INITIAL_ADMIN_EMAIL` | str | なし（必須） | seed用管理者メール | **Secret** |
+| `INITIAL_ADMIN_EMAIL` | str | なし（必須） | seed用管理者メール。空文字も不可 | **Secret** |
 | `INITIAL_ADMIN_USERNAME` | str | なし（必須） | seed用管理者ユーザー名 | **Secret** |
 | `INITIAL_ADMIN_PASSWORD` | str | なし（必須） | seed用管理者パスワード（平文はseedスクリプト内でのみ使用しargon2化して保存） | **Secret** |
 | `VITE_API_BASE_URL` | str | `/api` | フロントのAPIベースURL。**ビルド時にArgとして埋め込み**（backendの`Settings`には含めない） | 平文可 |
@@ -188,6 +198,7 @@
 | `DEPLOY_HEALTHCHECK_RETRIES` | int | `10` | CDのヘルスチェック最大試行回数 | CI/CD・平文可 |
 | `DEPLOY_HEALTHCHECK_INTERVAL_SECONDS` | int | `5` | CDのヘルスチェック試行間隔 | CI/CD・平文可 |
 | `CI_JWT_SECRET_KEY` / `CI_INITIAL_ADMIN_PASSWORD` | GitHub Secret | CI専用値 | CIのJWT署名鍵・初期adminパスワード。実行時は `JWT_SECRET_KEY` / `INITIAL_ADMIN_PASSWORD` へ渡す | CI/CD・Secret |
+`INITIAL_ADMIN_EMAIL`、`INITIAL_ADMIN_USERNAME`、`INITIAL_ADMIN_PASSWORD` は3項目すべて起動時に検証する。いずれかが未設定または空文字の場合、seedをスキップせずbackendをHTTP受付前に終了させる。CIでは専用のダミーSecretを注入する。
 
 ## 4. 全体の出入力
 

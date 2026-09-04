@@ -18,6 +18,10 @@
 | 履歴保存失敗 | `api_history`への保存失敗はAPI本体の応答を変更せず、構造化標準出力へERRORを記録する |
 | Origin検証 | Cookieを発行・利用する更新系API（ログイン、sessionの更新系、jwtの `/auth/refresh`・`/auth/logout`）とOAuth交換は許可Originを検証する。ログインはCSRF CookieがまだないためOriginのみ、その他は各方式のCSRF検証も行う。`allow_credentials=true` と `*` の併用は禁止 |
 
+### 1.1 Rate Limit
+
+`/auth/register`、メール認証・パスワード再設定、OAuth開始・callback・exchange、通知APIにRate Limitを適用する。上限・時間窓は [要件の確定表](../requirements/security_business_rules.md#21-ログイン以外のrate-limit) と `06_infra_cicd.md` §4.3を正とする。超過時は `429 TOO_MANY_ATTEMPTS` と `Retry-After` を返し、Rate Limit判定のRedis障害時は `503 SERVICE_UNAVAILABLE`（fail-close）とする。通常の参照系GETは対象外とする。
+
 ## 2. エンドポイント一覧
 
 ### 2.1 認証（`/api/auth`）
@@ -75,6 +79,8 @@
 | PATCH | `/comments/{comment_id}` | コメント編集 | 投稿者本人 / admin |
 | DELETE | `/comments/{comment_id}` | コメント削除 | 投稿者本人 / admin |
 
+コメント更新はLast Write Winsとし、`task_comments`にversion列を追加しない。同時更新は後からcommitされた本文を最終値とする。
+
 ### 2.5 管理者（`/api/admin`）
 
 | メソッド | パス | 概要 | 認可 |
@@ -87,7 +93,7 @@
 | DELETE | `/admin/projects/{project_id}` | プロジェクト削除 | admin |
 | GET | `/admin/login-history` | 全ユーザーのログイン履歴（監査） | admin |
 
-ロール変更・無効化では、自分自身の変更を拒否し、最後の有効adminを0人にする操作も拒否する（`409 SELF_MODIFICATION_NOT_ALLOWED` / `409 LAST_ADMIN_REQUIRED`）。無効化時はDB更新とRedisの全セッション・refresh失効を同一サービス処理で完了させる。JWTの既発行access tokenは、DBの `is_active` を毎回確認するため無効化直後から拒否される。強制ログアウトだけの場合はaccess tokenが最大15分有効なままになり得る。
+ロール変更・無効化では、自分自身の変更を拒否し、最後の有効adminを0人にする操作も拒否する（`409 SELF_MODIFICATION_NOT_ALLOWED` / `409 LAST_ADMIN_REQUIRED`）。無効化時はRedisの全セッション・refresh失効を先に完了してからDBを更新する。Redis失敗時はDBを更新せず `503 SERVICE_UNAVAILABLE` とし、部分失効は同じ処理を再実行する。JWTの既発行access tokenは、DBの `is_active` を毎回確認するため無効化直後から拒否される。強制ログアウトだけの場合はaccess tokenが最大 `ACCESS_TOKEN_TTL_SECONDS`（既定900秒）有効なままになり得る。
 
 ### 2.6 通知（`/api/notifications`）
 
@@ -257,7 +263,7 @@ OAuthコールバックはブラウザの直接リダイレクトを受けるた
 }
 ```
 
-OAuth新規ユーザーではプロフィール5項目が `null` になり得る。`profile_completed` は5項目がすべて設定済みの場合だけ `true` とし、フロントはOAuth直後に `/settings?complete_profile=1` へ誘導する。通常登録のリクエストでは5項目を必須とする。
+OAuth新規ユーザーではプロフィール5項目が `null` になり得る。`profile_completed` は5項目がすべて設定済みの場合だけ `true` とし、フロントはOAuth直後に `/settings?complete_profile=1` へ誘導する。通常登録のリクエストでは5項目を必須とする。`display_name` は姓・名が両方そろった場合だけ「姓 名」とし、それ以外は `username` を返す。
 
 **`GET /projects/{id}/tasks`** レスポンス `200`
 
@@ -403,7 +409,7 @@ status 別にグルーピングして返すことで、フロント側のカン�
 | 409 | `LAST_ADMIN_REQUIRED` | 最後の有効adminを降格・無効化しようとした |
 | 409 | `ASSIGNEE_INACTIVE` | 無効化されたユーザーを担当者に指定した |
 | 422 | `VALIDATION_ERROR` | pydantic バリデーション失敗 |
-| 429 | `TOO_MANY_ATTEMPTS` | ログイン失敗回数の上限超過 |
+| 429 | `TOO_MANY_ATTEMPTS` | ログインその他のRate Limit上限超過。`Retry-After`を付与 |
 | 500 | `INTERNAL_ERROR` | 未捕捉例外（詳細はレスポンスに含めずログのみ） |
 | 503 | `SERVICE_UNAVAILABLE` | Redis / DB 接続不能（fail-close） |
 

@@ -150,6 +150,12 @@ flowchart TB
 | `COOKIE_DOMAIN` | 空 | 必要時のみ設定 |
 | `ARGON2_TIME_COST` / `ARGON2_MEMORY_COST` / `ARGON2_PARALLELISM` | `3` / `65536` / `4` | パスワードハッシュのコスト |
 | `LOGIN_MAX_ATTEMPTS` / `LOGIN_LOCK_WINDOW_SECONDS` | `5` / `900` | ログイン失敗のレート制限 |
+| `RATE_LIMIT_REGISTER_MAX_REQUESTS` / `RATE_LIMIT_REGISTER_WINDOW_SECONDS` | `5` / `900` | 会員登録のIP単位Rate Limit |
+| `RATE_LIMIT_EMAIL_VERIFY_MAX_REQUESTS` / `RATE_LIMIT_EMAIL_VERIFY_RESEND_MAX_REQUESTS` | `10` / `5` | メール認証・再送のIP単位Rate Limit |
+| `RATE_LIMIT_PASSWORD_FORGOT_MAX_REQUESTS` / `RATE_LIMIT_PASSWORD_RESET_MAX_REQUESTS` | `5` / `10` | パスワード再設定要求・実行のIP単位Rate Limit |
+| `RATE_LIMIT_OAUTH_MAX_REQUESTS` / `RATE_LIMIT_OAUTH_WINDOW_SECONDS` | `10` / `900` | OAuth開始・callback・exchangeの各IP単位Rate Limit |
+| `RATE_LIMIT_NOTIFICATION_READ_MAX_REQUESTS` / `RATE_LIMIT_NOTIFICATION_WRITE_MAX_REQUESTS` | `120` / `60` | 通知APIのuser_id + IP単位Rate Limit（時間窓60秒） |
+| `TRUSTED_PROXY_CIDRS` | 空 | `X-Forwarded-For`を信頼するProxyのCIDR。空の場合は接続元IPのみ使用 |
 | `CORS_ALLOW_ORIGINS` | `http://localhost:5173` | カンマ区切り |
 | `ENABLE_API_DOCS` | `true` | `/api/docs` の有効化 |
 
@@ -194,11 +200,13 @@ flowchart TB
 
 | 変数 | 例 | 説明 |
 |------|-----|------|
-| `INITIAL_ADMIN_EMAIL` / `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD` | *** | seed 用管理者（**Secret**）。ハードコードしない。seed 時点で `email_verified_at` を設定し、確認メールなしでログインできるようにする |
+| `INITIAL_ADMIN_EMAIL` / `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD` | *** | seed 用管理者（**Secret**）。3項目すべて必須。未設定・空文字ならAlembic/backendを起動しない。ハードコードしない |
 | `VITE_API_BASE_URL` | `/api` | フロントのAPIベースURL（ビルド時埋め込み）。認証モード等は `/auth/config` で実行時取得 |
 | `VITE_NOTIFICATION_POLL_INTERVAL_MS` | `60000` | 未読通知件数のポーリング間隔（ミリ秒。ビルド時埋め込み） |
 
 **pydantic-settings による定義**：`api/app/core/config.py` に `BackendSettings(BaseSettings)`、`batch/app/core/config.py` に `BatchSettings(BaseSettings)` を定義し、各サービスの項目を型付きで受け取る。既定値はコード側に持たせるが、URL・ポート・秘密情報は必ず環境変数から取得する（ハードコード禁止）。
+
+初期管理者の3環境変数は起動時に空文字も含めて検証する。不足時はseedをスキップせず、HTTP受付前にbackendをfail-closeで終了させる。CIでは専用のダミーSecretを注入する。
 
 ## 5. CI設計（`.github/workflows/ci.yml`）
 

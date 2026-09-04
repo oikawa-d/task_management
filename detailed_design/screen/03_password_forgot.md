@@ -216,11 +216,11 @@ flowchart LR
 | 5 | コンポーネント | 送信中の二重クリック防止 | 送信APIをpending状態でモック | ⑤が非活性化され2回目のmutateが呼ばれない | `PasswordForgotForm disables submit button while pending` |
 | 6 | コンポーネント | 送信完了後にフォーム欄が再表示されないこと | 202受信後 | ③⑤が画面上に存在しない（`sent`状態から`idle`へ戻る導線がないことの確認） | `PasswordForgotForm does not offer resubmission after sent` |
 | 7 | 結合 | ⑦クリックで`/login`へ遷移 | - | `navigate('/login')` | `PasswordForgotPage back link navigates to /login` |
-| 網羅できない範囲 | - | サーバー側のメール送信間隔制限（レート制限）挙動 | - | [09_post_auth_password_forgot.md §13](../api/auth/09_post_auth_password_forgot.md) のとおり基本設計にレート制限の記載がなく、フロント側で検証すべきサーバー挙動が定義されていないため対象外とする | - |
+| 8 | 結合 | サーバー側レート制限 | MSW: 429 `TOO_MANY_ATTEMPTS`、`Retry-After`付き | 待機時間を案内し、送信完了画面を維持 | `shows password forgot rate limit message` |
 
 ## 15. 不明点・要検討事項
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 要検討 | サーバー側にレート制限が無い（[09_post_auth_password_forgot.md §13](../api/auth/09_post_auth_password_forgot.md)）ため、連投抑止は本画面の「送信完了後はフォームへ戻さない」というUI制約のみで実現している。ページ再読み込みや再訪問で再度送信できてしまう点は防げない。サーバー側レート制限が新設された場合はUI側の待機時間表示等の追加が必要 | 連投抑止の実効性はクライアント側のみでは限定的 |
+| 確定 | サーバー側はIP単位5回/900秒で制限し、超過時は429 `TOO_MANY_ATTEMPTS`（`Retry-After`付き）を返す | ページ再読み込み・再訪問を含む連投を抑止する |
 | 要検討 | 認証済みユーザーが本画面にアクセスした場合にダッシュボードへリダイレクトすべきかは基本設計（[05_frontend.md §2](../../basic_design/05_frontend.md#2-画面一覧とルーティング)）に明記がなく、本設計では「公開画面のためリダイレクトしない」とした | ログイン中ユーザーの導線として不要なアクセスを許容する点の妥当性確認 |
