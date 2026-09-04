@@ -265,7 +265,6 @@ flowchart LR
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 要検討 | `backend-lint`が`ruff`と`flake8`のどちらを使うかは要件書§8.1で「ruffまたはflake8」と両論併記されている。基本設計・既存詳細設計（[04_env_config.md](./04_env_config.md)等）は`ruff`を前提としており、本書もそれに合わせたが、正式決定は実装着手時に確認が必要 |依存パッケージ（`api/requirements-dev.txt`）の内容 |
 | 要検討 | `frontend-test`のカバレッジ閾値70%を`vitest.config.ts`側の`coverage.thresholds`で強制するか、CIステップ内で`--coverage.lines=70`のようにコマンド引数化するかは基本設計に明記がなく、実装時にどちらか一方へ統一する必要がある | `frontend/vitest.config.ts`、CIステップの引数 |
 | 要検討 | `backend-test`の`cov-fail-under`対象範囲は基本設計§5.4で「`omit`は`alembic/versions/*`のみ」と明記されている。本書もこれに従うが、`api/app/main.py`等の起動処理を含めた実測値が本当に80%を達成できるかは実装時の検証が必要 |`api/.coveragerc`または`pyproject.toml`の`[tool.coverage]`設定 |
 | 不明 | `requirements-dev.txt`（lint/test専用パッケージ群）というファイル名・分割方針は基本設計に明記がなく、本書が実装レベルの詳細として補った提案である | `api/requirements-dev.txt`の実在否 |

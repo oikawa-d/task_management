@@ -182,7 +182,7 @@ stateDiagram-v2
     unverified --> unverified: 認証メール再送
     unverified --> member: 確認メール内リンクで認証完了<br/>email_verified_at=now
     [*] --> member_oauth_incomplete: Googleで新規登録<br/>password_hash=NULL,<br/>email_verified_at=now
-    member_oauth_incomplete --> member: プロフィール4項目を設定<br/>PATCH /api/users/me
+    member_oauth_incomplete --> member: プロフィール5項目を設定<br/>PATCH /api/users/me
     member --> admin: 管理者が権限変更<br/>PATCH /api/admin/users/{id}/role
     admin --> member: 管理者が権限変更
     member --> inactive: 管理者が無効化<br/>PATCH /api/admin/users/{id}/status<br/>is_active=false
@@ -286,7 +286,7 @@ flowchart LR
 | 楽観ロック | なし（`version` カラムを持たない）。同時更新はプロフィール更新・管理者による権限変更のいずれも「最後の書き込みが勝つ」方式で許容する（同時実行頻度が低いため） |
 | advisory lock | 使用しない |
 | トランザクション境界 | `create`（会員登録）・`update_role_and_status`（管理者操作）はいずれも単一UPDATE/INSERTのため明示的なトランザクション制御は不要。service層の呼び出し単位でコミットする |
-| 一意制約違反時の扱い | `uq_users_username` / `uq_users_email` 違反は `IntegrityError` を捕捉し `409 CONFLICT`（`USERNAME_TAKEN` / `EMAIL_TAKEN`）に変換する |
+| 一意制約違反時の扱い | `uq_users_username` / `uq_users_email` 違反は `IntegrityError` を捕捉し `409 CONFLICT`（`DUPLICATE_USERNAME` / `DUPLICATE_EMAIL`）に変換する |
 
 ## 12. テスト設計
 

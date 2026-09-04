@@ -77,7 +77,7 @@
 | last_name / first_name | string | 可（OAuth新規未補完時） | |
 | last_name_kana / first_name_kana | string | 可（同上） | |
 | birth_date | string(date) | 可（同上） | |
-| profile_completed | boolean | 不可 | 上記4項目がすべて設定済みかをサーバーで算出（`02_patch_users_me.md` §算出タイミング参照） |
+| profile_completed | boolean | 不可 | 上記5項目がすべて設定済みかをサーバーで算出（`02_patch_users_me.md` §算出タイミング参照） |
 | role | string | 不可 | `member` / `admin`。PostgreSQLの現在値 |
 | has_password | boolean | 不可 | `password_hash IS NOT NULL`。`03_put_users_me_password.md` の分岐に使用 |
 | oauth_providers | string[] | 不可（空配列可） | `oauth_accounts.provider` の一覧 |
@@ -159,7 +159,7 @@ flowchart TB
 | 引数 | `current_user`、`db` |
 | 戻り値 | `UserProfileResponse` |
 | 送出例外 | `NotFoundError`（`user_repository.get_by_id`が`None`を返した場合。認証済み後の取得のため通常発生しない） |
-| 処理内容 | 1. `user_repository.get_by_id(db, current_user.id)` 2. `oauth_account_repository.list_providers(db, current_user.id)` 3. 4項目（`last_name`/`first_name`/`last_name_kana`/`first_name_kana`/`birth_date`）の非NULL判定で`profile_completed`を算出 4. `UserProfileResponse`を構築して返す |
+| 処理内容 | 1. `user_repository.get_by_id(db, current_user.id)` 2. `oauth_account_repository.list_providers(db, current_user.id)` 3. 5項目（`last_name`/`first_name`/`last_name_kana`/`first_name_kana`/`birth_date`）の非NULL判定で`profile_completed`を算出 4. `UserProfileResponse`を構築して返す |
 | 副作用 | なし |
 
 ### 6.3 `repository/user_repository.py :: get_by_id`
@@ -229,7 +229,7 @@ sessionモードの認証解決（`GET session:{sid}` → `EXPIRE`）以外の�
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 単体 | profile_completed算出（4項目全て非NULL） | user_service.get_profile | `true` | `test_get_profile_completed_true` |
+| 1 | 単体 | profile_completed算出（5項目全て非NULL） | user_service.get_profile | `true` | `test_get_profile_completed_true` |
 | 2 | 単体 | profile_completed算出（未補完） | いずれかがNULL | `false` | `test_get_profile_completed_false` |
 | 3 | 単体 | `auth_mode`フィールドが含まれないこと | `UserProfileResponse`スキーマ | フィールド未定義 | `test_user_profile_response_has_no_auth_mode` |
 | 4 | 結合 | 正常系（session） | 実PostgreSQL/Redis、ログイン済み | `200`、`GET /auth/me`と同一の基本フィールドを返す | `test_users_me_endpoint_session_success` |

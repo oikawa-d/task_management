@@ -244,7 +244,7 @@ sequenceDiagram
     participant PG as PostgreSQL
 
     U->>FE: 「Googleでログイン」
-    FE->>API: GET /api/auth/oauth/google?redirect_to=/
+    FE->>API: GET /api/auth/oauth/google?redirect_to=/dashboard
     API->>API: state / code_verifier / nonce 生成
     API->>RD: SETEX oauth_state:{state} TTL=600
     API-->>FE: 302 + Set-Cookie(oauth_state) → Googleの認可URL
@@ -293,7 +293,7 @@ sequenceDiagram
 | `email_verified=false` | 紐付けを行わず 400 エラー（アカウント乗っ取り防止） |
 | 完全な新規 | `users` を作成（`email_verified_at = now()`：Google 側で検証済みのため確認メールは送らない）。`username` は `google_` + `sha256(sub)` 先頭16文字から生成する。氏名は Google の `given_name`/`family_name` から補完し、フリガナ・生年月日は NULL のまま作成して初回ログイン後に設定画面へ誘導する |
 
-> 通常登録では氏名・フリガナ・生年月日を必須とするが、OAuth新規登録時はこれらが埋まらない。通常登録の入力要件は維持したまま、DBのプロフィール4項目は OAuth 新規ユーザーに限り NULL を許容し、`profile_completed`（4項目がすべて設定済みかをサーバーで算出）で補完を促す。OAuthユーザーの `username` はサーバーで必ず生成する。
+> 通常登録では氏名・フリガナ・生年月日を必須とするが、OAuth新規登録時はこれらが埋まらない。通常登録の入力要件は維持したまま、DBのプロフィール5項目は OAuth 新規ユーザーに限り NULL を許容し、`profile_completed`（5項目がすべて設定済みかをサーバーで算出）で補完を促す。OAuthユーザーの `username` はサーバーで必ず生成する。
 
 ### 5.4 jwt モードでのトークン受け渡し
 
@@ -302,6 +302,8 @@ OAuth コールバックはブラウザのリダイレクトであるため、�
 1. jwtモードのコールバックでは、ログイン処理を完了させずに一時コード（`token_urlsafe(32)`、TTL60秒、Redisキー `oauth_handoff:{code}`）を発行し、`/oauth/callback#code=xxx` へリダイレクトする。URLクエリには置かない
 2. フロントがfragmentからコードを読み取り、`POST /api/auth/oauth/exchange` で一度だけ交換する。交換時に初めてJwtAuthStrategy.loginを実行し、refresh/CSRF Cookieとaccess token、およびstateに保存した正規化済み `redirect_to` を返す
 3. sessionモードではコールバック中にSessionAuthStrategy.loginを実行し、正規化済み `redirect_to` をfragmentで付けた同じフロント経路へリダイレクトする
+
+fragmentの形式は、jwtモードでは `#code=xxx`、sessionモードでは `#redirect_to=<URLエンコード済みの相対パス>` とする。
 
 `LoginResult` の `refresh_token` / `csrf_token` はサーバー内部でCookieを設定するための一時値であり、JSONレスポンスやURLには含めない。`redirect_to` はstate保存時に検証済みの相対パスだけを返し、フロントは任意URLとして解釈しない。
 

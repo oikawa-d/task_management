@@ -60,7 +60,7 @@ frontend/
 
 | No | 画面 | パス | レイアウト | ガード | 出典 |
 |----|------|------|-----------|--------|------|
-| 0 | （ルート） | `/` | なし（画面を持たない） | なし | 認証状態にかかわらず `/login` へリダイレクトする。追加要件（2026-09-04） |
+| 0 | （ルート） | `/` | なし（画面を持たない） | なし | 認証状態にかかわらず `/login` へリダイレクトする |
 | 1 | ログイン | `/login` | AuthLayout | 未認証のみ | 要件書§2-1 |
 | 2 | 会員登録 | `/register` | AuthLayout | 未認証のみ | 要件書§2-2 |
 | 3 | パスワード再設定要求 | `/password/forgot` | AuthLayout | 公開（認証不要） | - |
@@ -122,7 +122,7 @@ flowchart TB
 | 未認証で `/` | `/` → `/login`（ログイン画面を表示） |
 | 認証済みで `/` | `/` → `/login` → `/login` の未認証ガードにより `/dashboard` |
 
-認証済みユーザーが `/` を経由すると2ホップになるため、アプリ内の遷移・OAuthの `redirect_to` 既定値・ログアウト後以外のリダイレクト先には `/` を使わず `/dashboard` を指定する。
+認証済みユーザーが `/` を経由すると2ホップになるため、アプリ内の遷移・OAuthの `redirect_to`・ログアウト後以外のリダイレクト先には `/` を使わず `/dashboard` を指定する。
 
 パスはコンポーネントに直書きせず `src/routes.ts` の定数（`ROUTES.ROOT` / `ROUTES.LOGIN` / `ROUTES.DASHBOARD` …）を参照する。パス変更時の追従漏れを防ぐため、`router.tsx`・ガード・`navigate` の遷移先・サイドバーのリンクはすべて同一定数を用いる。
 
@@ -234,7 +234,10 @@ sequenceDiagram
     alt 成功
         API-->>Q: 200
         Q->>Q: onSettled: invalidateQueries(['board', pid])
-    else 失敗
+    else 409 TASK_CONFLICT
+        API-->>Q: 409
+        Q->>Q: 最新ボードを再取得し、再操作を促す
+    else その他の失敗
         API-->>Q: 4xx/5xx
         Q->>Q: onError: snapshot へロールバック
         Q->>KB: エラートースト表示
@@ -368,7 +371,7 @@ flowchart TB
 ### 7.5 カンバンボード
 
 - 3列（未着手 / 進行中 / 完了）を横並び表示。列ヘッダーに件数
-- `@dnd-kit` によるカード移動で `PATCH /tasks/{id}`（status + position + 取得時の version）。`409 TASK_CONFLICT` 時はボードを再取得して再操作を促す
+- `@dnd-kit` によるカード移動で `PATCH /tasks/{id}`（status + position + 取得時の version）。`409 TASK_CONFLICT` 時はボードを再取得して再操作を促し、それ以外の更新失敗時は楽観的更新をロールバックする
 - カードクリックでタスク詳細モーダル（URLも `/projects/:pid/tasks/:tid` に同期させ、リロード・共有可能にする）
 - タスク詳細モーダル：タイトル・説明・担当者（プロジェクトメンバーから選択）・期限・ステータス・コメント一覧/投稿
 

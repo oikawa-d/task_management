@@ -210,7 +210,7 @@ flowchart TB
 | シグネチャ | `async def login(payload: LoginRequest, request: Request, response: Response, _: None = Depends(verify_origin), db: AsyncSession = Depends(get_db), strategy: AuthStrategy = Depends(get_auth_strategy)) -> LoginResponse | None` |
 | 引数 | `payload`、`request`（IPアドレス取得用）、`response`（Cookie書き込み対象）、`db`、`strategy` |
 | 戻り値 | sessionモード：`None`（204）／jwtモード：`LoginResponse`（200） |
-| 送出例外 | `CsrfInvalidError`(400)、`InvalidCredentialsError`(401)、`UserInactiveError`(403)、`EmailNotVerifiedError`(403)、`TooManyAttemptsError`(429) |
+| 送出例外 | `CsrfInvalidError`(403)、`InvalidCredentialsError`(401)、`UserInactiveError`(403)、`EmailNotVerifiedError`(403)、`TooManyAttemptsError`(429) |
 | 処理内容 | 1. `verify_origin`でOrigin確認 2. `auth_service.login`を呼び出す 3. `auth_mode`に応じてレスポンスを組み立てる（204 or 200） |
 | 副作用 | `response`へのSet-Cookie設定（service層が`response`を受け取り内部で設定） |
 

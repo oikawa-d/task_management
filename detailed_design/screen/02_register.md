@@ -220,7 +220,7 @@ flowchart TB
 | `password` | `registerSchema.password` | `z.string().min(8).refine(2種類以上の文字種)` | 「8文字以上で、英大文字/英小文字/数字/記号のうち2種類以上を含めてください」 | `password`（同一規則） |
 | `password_confirm` | `registerSchema` の `.refine`（オブジェクト全体） | `password_confirm === password` | 「パスワードが一致しません」 | `password_confirm` |
 | `last_name` / `first_name` | `registerSchema.last_name` / `first_name` | `z.string().min(1).max(30)` | 「30文字以内で入力してください」 | `last_name` / `first_name` |
-| `last_name_kana` / `first_name_kana` | 同上 | `z.string().min(1).max(30).regex(/^[ァ-ヶひらがな0-9]+$/)`（ひらがな・カタカナ・数字のみ） | 「ひらがな・カタカナ・数字で入力してください」 | `last_name_kana` / `first_name_kana` |
+| `last_name_kana` / `first_name_kana` | 同上 | `z.string().min(1).max(30).regex(/^[ぁ-んァ-ヶー0-9]+$/)`（ひらがな・カタカナ・数字のみ） | 「ひらがな・カタカナ・数字で入力してください」 | `last_name_kana` / `first_name_kana` |
 | `birth_date`（⑥⑦⑧統合） | `registerSchema.birth_date` | `z.string()`（3プルダウンから合成した `YYYY-MM-DD`）＋未来日不可 | 「正しい生年月日を選択してください」 | `birth_date`（未来日不可） |
 
 zodスキーマは `registerSchema`（`src/features/auth/schemas/registerSchema.ts`）に集約し、バックエンドの pydantic 規則（[04_api.md §3.1](../../basic_design/04_api.md#31-認証)）と1対1で対応させる。規則を変更する場合は両方を同時に更新する運用とする。

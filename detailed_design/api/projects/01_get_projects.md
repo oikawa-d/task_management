@@ -287,5 +287,4 @@ flowchart LR
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 要検討 | ページングの既定値・上限（20/100）は `basic_design/04_api.md` §1 に明記されているが、対応する `core/config.py` の環境変数名（`PAGINATION_DEFAULT_PER_PAGE` / `PAGINATION_MAX_PER_PAGE`）は基本設計に未記載のため本書での提案値。命名は実装時に確定が必要 |
 | 要検討 | `owner.display_name` の算出規則（姓名未設定時に`username`へフォールバックする方針）は基本設計に明記がないため本書での提案。基本設計側での明文化が望ましい |

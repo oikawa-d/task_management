@@ -75,7 +75,7 @@ sequenceDiagram
     participant PG as PostgreSQL
 
     U->>FE: 「Googleでログイン」
-    FE->>API: GET /api/auth/oauth/google?redirect_to=/
+    FE->>API: GET /api/auth/oauth/google?redirect_to=/dashboard
     API->>API: normalize_redirect_to("/dashboard")
     API->>API: state / code_verifier / code_challenge / nonce 生成
     API->>RD: SETEX oauth_state:{state} TTL=OAUTH_STATE_TTL_SECONDS
@@ -96,7 +96,7 @@ sequenceDiagram
     API->>API: resolve_or_create_user
     API->>API: SessionAuthStrategy.login()
     API->>PG: INSERT login_history(method='oauth_google')
-    API-->>FE: 302 → /oauth/callback#redirect_to=/（Cookie設定済み）
+    API-->>FE: 302 → /oauth/callback#redirect_to=/dashboard（Cookie設定済み）
 ```
 
 ### 5.2 異常系（state不一致・id_token検証失敗・email未検証）

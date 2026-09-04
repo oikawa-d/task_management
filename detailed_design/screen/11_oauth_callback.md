@@ -285,5 +285,4 @@ flowchart LR
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 要検討 | sessionモードでの`redirect_to`のfragment受け渡し形式（キー名・URLエンコード方式）が基本設計（[05_frontend.md §2](../../basic_design/05_frontend.md#2-画面一覧とルーティング) No.11、[03_auth.md §5.4](../../basic_design/03_auth.md#54-jwt-モードでのトークン受け渡し)）に厳密なフォーマット定義がなく、本書では`#redirect_to=...`形式を前提とした。バックエンド（`GET /auth/oauth/google/callback`）側の実際のfragment組み立て仕様との整合を要確認 | fragment解析処理の実装がバックエンド仕様とずれるリスク |
 | 不明 | `profile_completed=false`による`/settings?complete_profile=1`への優先遷移は、jwt（レスポンスの`redirect_to`を破棄）・session（fragmentの`redirect_to`を破棄）のいずれの経路でも同様に適用されるが、元の`redirect_to`（例：招待リンク経由の特定プロジェクトURL）を設定完了後に復元する導線が基本設計に明記されていない。本設計では復元せず`/settings`完了後は`/dashboard`へ遷移する前提とした | プロフィール未補完のOAuth新規ユーザーが招待リンク経由で登録した場合、元の遷移先を失う可能性 |

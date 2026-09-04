@@ -159,7 +159,7 @@ flowchart TB
 | シグネチャ | `async def logout(request: Request, response: Response, _: None = Depends(verify_origin), strategy: AuthStrategy = Depends(get_auth_strategy)) -> None` |
 | 引数 | `request`、`response`、`strategy` |
 | 戻り値 | なし（204） |
-| 送出例外 | `CsrfInvalidError`(400/403) |
+| 送出例外 | `CsrfInvalidError`(403) |
 | 処理内容 | 1. `verify_origin`でOrigin確認 2. `auth_service.logout(request, response, strategy)`を呼び出す |
 | 副作用 | `response`へのCookie破棄 |
 

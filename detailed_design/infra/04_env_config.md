@@ -100,7 +100,7 @@
 | 変数名 | 型 | 既定値 | 用途 | 秘匿 |
 |--------|-----|--------|------|------|
 | `PAGINATION_DEFAULT_PER_PAGE` | int | `20` | `per_page`未指定時の既定件数（[../../basic_design/04_api.md](../../basic_design/04_api.md) §該当箇所） | 平文可 |
-| `PAGINATION_MAX_PER_PAGE` | int | `100` | `per_page`の上限。超過指定は`422`または上限値へクランプ（要検討＝12章参照） | 平文可 |
+| `PAGINATION_MAX_PER_PAGE` | int | `100` | `per_page`の上限。超過指定は`422 VALIDATION_ERROR` | 平文可 |
 
 ### 3.7 Google OAuth2
 
@@ -260,6 +260,4 @@ flowchart LR
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 解消済 | ログイン失敗上限の環境変数名は、基本設計（[../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §4.3）の表記である `LOGIN_MAX_ATTEMPTS` に全詳細設計で統一済み（`LOGIN_LOCK_WINDOW_SECONDS` と対で用いる） | `Settings`のフィールド名、[../api/auth/02_post_auth_login.md](../api/auth/02_post_auth_login.md) |
-| 要検討 | `PAGINATION_DEFAULT_PER_PAGE`/`PAGINATION_MAX_PER_PAGE`は基本設計に環境変数名の明記がなく、本書で「ハードコーディングしない」方針に沿って新規に定義した。既定値20/上限100は[../../basic_design/04_api.md](../../basic_design/04_api.md)の記述値をそのまま採用しているが、上限超過時に`422`とするかクランプするかは基本設計に明記がなく未確定 | `schemas/`のページングDTO実装 |
 | 不明 | `SMTP_USER`/`SMTP_PASSWORD`が空文字の場合に認証なしSMTP（Mailpit相当）として扱うか、空文字も含めて常時Secret区分とするかの厳密な切り分けは基本設計に明記がない | `service/mail_service.py`の接続分岐 |

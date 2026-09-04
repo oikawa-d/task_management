@@ -145,7 +145,7 @@ erDiagram
 | メールアドレス | 50文字以内、半角英数字と `@ - _ . +` を許容 |
 | パスワード | 8文字以上、かつ「大文字英字／小文字英字／数字／記号」のうち2種類以上を含む |
 
-**OAuth新規ユーザーの補足**：Googleから `username` は取得しないため、`google_` + `sha256(provider_user_id)` の先頭16文字を候補値として生成し、`users.username` の一意制約に当たった場合は連番を付けて再試行する。プロフィール4項目は NULL のまま作成でき、`GET /auth/me` の `profile_completed=false` でフロントへ通知する。通常の会員登録では4項目を引き続き必須とする。
+**OAuth新規ユーザーの補足**：Googleから `username` は取得しないため、`google_` + `sha256(provider_user_id)` の先頭16文字を候補値として生成し、`users.username` の一意制約に当たった場合は連番を付けて再試行する。プロフィール5項目は NULL のまま作成でき、`GET /auth/me` の `profile_completed=false` でフロントへ通知する。通常の会員登録では5項目を引き続き必須とする。
 
 ### 3.2 oauth_accounts
 
@@ -272,7 +272,7 @@ stateDiagram-v2
     unverified --> unverified: 認証メール再送
     unverified --> member: 確認メール内リンクで認証完了（email_verified_at=now）
     [*] --> member_oauth_incomplete: Googleで新規登録（password_hash=NULL,<br/>email_verified_at=now：Google側で検証済み）
-    member_oauth_incomplete --> member: プロフィール4項目を設定（profile_completed=true）
+    member_oauth_incomplete --> member: プロフィール5項目を設定（profile_completed=true）
     member --> admin: 管理者が権限変更
     admin --> member: 管理者が権限変更
     member --> inactive: 管理者が無効化（is_active=false）

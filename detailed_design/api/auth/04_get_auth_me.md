@@ -74,7 +74,7 @@ Cookie
 | last_name / first_name | string | 可（OAuth新規未補完時） | |
 | last_name_kana / first_name_kana | string | 可（同上） | |
 | birth_date | string(date) | 可（同上） | |
-| profile_completed | boolean | 不可 | 上記4項目がすべて設定済みかをサーバーで算出 |
+| profile_completed | boolean | 不可 | 上記5項目がすべて設定済みかをサーバーで算出 |
 | role | string | 不可 | `member` / `admin`。PostgreSQLの現在値（JWT/Redis内の値は使わない） |
 | has_password | boolean | 不可 | `password_hash IS NOT NULL` |
 | oauth_providers | string[] | 不可（空配列可） | `oauth_accounts.provider`の一覧 |
@@ -181,7 +181,7 @@ flowchart TB
 | 引数 | `current_user`（DI経由で解決済み）、`db`、`settings` |
 | 戻り値 | `MeResponse`（200） |
 | 送出例外 | `get_current_user`から伝播する401/403系 |
-| 処理内容 | 1. `current_user`をそのまま利用（既にDB取得済み） 2. `oauth_account_repository.list_providers`でproviders取得 3. `profile_completed`を4項目の非NULL判定で算出 4. `settings.auth_mode`を付与して`MeResponse`を返す |
+| 処理内容 | 1. `current_user`をそのまま利用（既にDB取得済み） 2. `oauth_account_repository.list_providers`でproviders取得 3. `profile_completed`を5項目の非NULL判定で算出 4. `settings.auth_mode`を付与して`MeResponse`を返す |
 | 副作用 | なし（参照のみ。sessionモードのTTL延長は`get_current_user`内のStrategy.authenticateで発生） |
 
 ### 6.2 `core/deps.py :: get_current_user`
@@ -302,7 +302,7 @@ jwtモードではRedisアクセスなし。
 | 2 | 単体 | sessionキー無し | Redisモック | `SessionExpiredError` | `test_get_current_user_session_expired` |
 | 3 | 単体 | jwt期限切れ | トークンモック | `TokenExpiredError` | `test_get_current_user_token_expired` |
 | 4 | 単体 | is_active=false | user_repositoryモック | `UserInactiveError` | `test_get_current_user_inactive` |
-| 5 | 単体 | profile_completed算出 | 4項目すべて非NULL | `true` | `test_me_response_profile_completed_true` |
+| 5 | 単体 | profile_completed算出 | 5項目すべて非NULL | `true` | `test_me_response_profile_completed_true` |
 | 6 | 単体 | profile_completed算出（未補完） | いずれかがNULL | `false` | `test_me_response_profile_completed_false` |
 | 7 | 結合 | 正常系（session） | 実PostgreSQL/Redis、ログイン済み | `200`、`auth_mode=session`、TTLが延長される | `test_auth_me_endpoint_session_success` |
 | 8 | 結合 | 正常系（jwt） | 実PostgreSQL、有効なaccess token | `200`、`auth_mode=jwt`、Redisアクセスが発生しないことをモニタリング | `test_auth_me_endpoint_jwt_success` |

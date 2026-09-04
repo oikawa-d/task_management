@@ -160,7 +160,7 @@ flowchart TB
 | シグネチャ | `async def register(payload: RegisterRequest, background: BackgroundTasks, request: Request, _: None = Depends(verify_origin), db: AsyncSession = Depends(get_db)) -> RegisterResponse` |
 | 引数 | `payload`（検証済みリクエストボディ）、`background`（メール送信予約）、`request`（Origin検証用）、`db`（DBセッション） |
 | 戻り値 | `RegisterResponse`（201） |
-| 送出例外 | `CsrfInvalidError`→400、`DuplicateUsernameError`/`DuplicateEmailError`→409 |
+| 送出例外 | `CsrfInvalidError`→403、`DuplicateUsernameError`/`DuplicateEmailError`→409 |
 | 処理内容 | 1. `verify_origin` 依存性でOrigin確認 2. `auth_service.register` を呼び出す 3. 結果を `RegisterResponse` に詰めて201で返す |
 | 副作用 | なし（service層に委譲） |
 

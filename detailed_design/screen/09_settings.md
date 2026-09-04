@@ -144,7 +144,7 @@ sequenceDiagram
     U->>PF: 保存ボタン押下
     PF->>EP: PATCH /users/me {変更項目}
     EP->>API: PATCH /api/users/me
-    alt 4項目すべて充足
+    alt 5項目すべて充足
         API-->>EP: 200 {profile_completed: true}
         EP-->>PF: 成功
         PF->>SP: バナー非表示、['users','me']をinvalidate

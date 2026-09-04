@@ -174,7 +174,7 @@ flowchart TB
 | シグネチャ | `async def refresh(request: Request, response: Response, _: None = Depends(verify_origin), strategy: AuthStrategy = Depends(get_auth_strategy)) -> RefreshResponse` |
 | 引数 | `request`、`response`、`strategy` |
 | 戻り値 | `RefreshResponse`（200） |
-| 送出例外 | `CsrfInvalidError`(400/403)、`NotSupportedError`(405)、`UnauthenticatedError`(401)、`TokenRevokedError`(401) |
+| 送出例外 | `CsrfInvalidError`(403)、`NotSupportedError`(405)、`UnauthenticatedError`(401)、`TokenRevokedError`(401) |
 | 処理内容 | 1. `verify_origin`でOrigin確認 2. `auth_service.refresh(request, response, strategy)`を呼び出す 3. 結果を`RefreshResponse`として200で返す |
 | 副作用 | `response`へのSet-Cookie設定 |
 

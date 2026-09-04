@@ -12,7 +12,7 @@
 | CSRF | session モードの更新系リクエストは `X-CSRF-Token` ヘッダ必須 |
 | APIドキュメント | FastAPI 自動生成（`/api/docs`、`/api/openapi.json`）。本番相当設定では無効化可能（`ENABLE_API_DOCS`） |
 | バリデーション | pydantic v2。失敗時は 422 |
-| ページング | `?page=1&per_page=20`（既定20・最大100）。レスポンスに `meta` を含める |
+| ページング | 一覧系は原則 `?page=1&per_page=20`（既定20・最大100）とし、レスポンスに `meta` を含める。ただし、カンバン用タスク一覧・プロジェクトメンバー一覧・タスクコメント一覧はページングなし、自分のログイン履歴は直近50件固定とする |
 | リクエストID | 全レスポンスに `X-Request-ID` を付与（ログ相関用） |
 | Origin検証 | Cookieを発行・利用する更新系API（ログイン、sessionの更新系、jwtの `/auth/refresh`・`/auth/logout`）とOAuth交換は許可Originを検証する。ログインはCSRF CookieがまだないためOriginのみ、その他は各方式のCSRF検証も行う。`allow_credentials=true` と `*` の併用は禁止 |
 
@@ -22,7 +22,7 @@
 
 | メソッド | パス | 概要 | 認証 | 備考 |
 |----------|------|------|------|------|
-| POST | `/auth/register` | 会員登録（**自動ログインしない**。確認メールを送信し、フロントはログイン画面へ戻す） | 不要 | 氏名・フリガナ・生年月日・メール・パスワードを受け取る |
+| POST | `/auth/register` | 会員登録（**自動ログインしない**。確認メールを送信し、フロントはログイン画面へ戻す） | 不要 | ユーザー名・氏名・フリガナ・生年月日・メール・パスワードを受け取る |
 | POST | `/auth/login` | ログイン（`AUTH_MODE` に応じて分岐） | 不要 | `identifier` は email または username。メール未認証は 403 |
 | GET | `/auth/config` | フロント起動用の公開設定（`auth_mode`、Google有効/無効、CSRF Cookie名） | 不要 | 認証情報・秘密情報は返さない。バックエンド設定を正とする |
 | POST | `/auth/verify-email` | メール認証の実行 | 不要 | 確認メール内リンクのトークンを検証 |
@@ -43,7 +43,7 @@
 | GET | `/users/me` | 自分のプロフィール取得 | 必要 |
 | PATCH | `/users/me` | プロフィール更新（氏名・フリガナ・生年月日） | 必要 |
 | PUT | `/users/me/password` | パスワード変更（現在のパスワード検証あり） | 必要 |
-| GET | `/users/me/login-history` | 自分のログイン履歴（直近50件） | 必要 |
+| GET | `/users/me/login-history` | 自分のログイン履歴（直近50件、ページングなし） | 必要 |
 
 ### 2.3 プロジェクト（`/api/projects`）
 
@@ -190,6 +190,8 @@
 
 `redirect_to` はOAuth開始時にサーバーが検証・正規化した同一オリジン相対パスであり、refresh tokenはJSONに含めずCookieだけで返す。sessionモードのOAuth callbackも同じ `redirect_to` をfragmentでフロントへ渡す。
 
+OAuthコールバックはブラウザの直接リダイレクトを受けるため、異常時もJSONの400応答ではなく `/login?error=...` への302リダイレクトを返す。§4.2のOAuth関連コードは内部判定およびフロント表示へのマッピングに使用する。
+
 ### 3.2 プロジェクト・タスク
 
 **`POST /projects`** リクエスト：`{ "name": "...", "description": "..." }`（name は1〜100文字）
@@ -228,7 +230,7 @@
 }
 ```
 
-OAuth新規ユーザーではプロフィール4項目が `null` になり得る。`profile_completed` は4項目がすべて設定済みの場合だけ `true` とし、フロントはOAuth直後に `/settings?complete_profile=1` へ誘導する。通常登録のリクエストでは4項目を必須とする。
+OAuth新規ユーザーではプロフィール5項目が `null` になり得る。`profile_completed` は5項目がすべて設定済みの場合だけ `true` とし、フロントはOAuth直後に `/settings?complete_profile=1` へ誘導する。通常登録のリクエストでは5項目を必須とする。
 
 **`GET /projects/{id}/tasks`** レスポンス `200`
 
@@ -263,7 +265,7 @@ status 別にグルーピングして返すことで、フロント側のカン�
 
 `current_password` は既存パスワードがあるユーザーでは必須、OAuthのみで登録され `has_password=false` のユーザーでは省略可。成功時は全セッション・リフレッシュトークンを失効し、`204` を返す。
 
-**`PATCH /users/me`** は、`last_name` / `first_name` / `last_name_kana` / `first_name_kana` / `birth_date` のうち指定された項目だけを更新する。各文字列は1〜30文字、フリガナはひらがな・カタカナ・数字のみ、生年月日は未来日不可とし、値の `null` への変更は許可しない。OAuth新規ユーザーは未設定項目をこのAPIで補完し、4項目がすべて設定された時点で `profile_completed=true` になる。
+**`PATCH /users/me`** は、`last_name` / `first_name` / `last_name_kana` / `first_name_kana` / `birth_date` のうち指定された項目だけを更新する。各文字列は1〜30文字、フリガナはひらがな・カタカナ・数字のみ、生年月日は未来日不可とし、値の `null` への変更は許可しない。OAuth新規ユーザーは未設定項目をこのAPIで補完し、5項目がすべて設定された時点で `profile_completed=true` になる。
 
 ## 4. エラー設計
 
@@ -299,11 +301,11 @@ status 別にグルーピングして返すことで、フロント側のカン�
 
 | HTTP | code | 発生条件 |
 |------|------|----------|
-| 400 | `INVALID_STATE` | OAuth2 の state 不一致・期限切れ |
+| 400相当 | `INVALID_STATE` | OAuth2 の state 不一致・期限切れ（callbackは302リダイレクト） |
 | 400 | `INVALID_RESET_TOKEN` | パスワードリセットトークンが無効・期限切れ |
 | 400 | `INVALID_VERIFY_TOKEN` | メール認証トークンが無効・期限切れ・使用済み |
-| 400 | `OAUTH_EMAIL_UNVERIFIED` | Google 側でメール未検証のため紐付け不可 |
-| 400 | `OAUTH_HANDOFF_INVALID` | OAuthの一時コードが無効・期限切れ・使用済み |
+| 400相当 | `OAUTH_EMAIL_UNVERIFIED` | Google 側でメール未検証のため紐付け不可（callbackは302リダイレクト） |
+| 400 | `OAUTH_HANDOFF_INVALID` | OAuthの一時コードが無効・期限切れ・使用済み（exchangeはJSONの400） |
 | 401 | `UNAUTHENTICATED` | 認証情報なし |
 | 401 | `INVALID_CREDENTIALS` | ID/パスワード不一致 |
 | 401 | `SESSION_EXPIRED` | セッションが Redis に存在しない |

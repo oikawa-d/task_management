@@ -98,6 +98,7 @@ flowchart TB
 | `REDIS_KEY_PREFIX` | 空 | 環境を共有する場合のRedisキー名前空間 |
 | `REDIS_TEST_DB` | `1` | テスト用DB番号 |
 | `LOGIN_HISTORY_RETENTION_DAYS` | `365` | `sp_purge_login_history` に渡す保持日数 |
+| `PAGINATION_DEFAULT_PER_PAGE` / `PAGINATION_MAX_PER_PAGE` | `20` / `100` | ページング対象APIの既定件数・上限。上限超過は422 |
 
 ### 4.3 認証
 
@@ -124,8 +125,16 @@ flowchart TB
 | 変数 | 例 | 説明 |
 |------|-----|------|
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | *** | Google OAuth2（**Secret**） |
+| `GOOGLE_LOGIN_ENABLED` | `true` | Googleログイン機能の有効/無効 |
 | `GOOGLE_REDIRECT_URI` | `http://localhost:5173/api/auth/oauth/google/callback` | frontendのsame-origin `/api` proxyを経由。外部公開時はfrontendのHTTPS URL |
+| `GOOGLE_AUTHORIZE_ENDPOINT` | `https://accounts.google.com/o/oauth2/v2/auth` | Google認可エンドポイント |
+| `GOOGLE_TOKEN_ENDPOINT` | `https://oauth2.googleapis.com/token` | Google tokenエンドポイント |
+| `GOOGLE_USERINFO_ENDPOINT` | `https://openidconnect.googleapis.com/v1/userinfo` | Google userinfoエンドポイント |
+| `GOOGLE_JWKS_URI` | `https://www.googleapis.com/oauth2/v3/certs` | Google公開鍵取得元 |
+| `GOOGLE_JWKS_CACHE_TTL_SECONDS` | `3600` | Google公開鍵キャッシュTTL |
 | `OAUTH_STATE_TTL_SECONDS` | `600` | state のTTL |
+| `OAUTH_HANDOFF_TTL_SECONDS` | `60` | jwtモードのOAuth一時コードTTL |
+| `OAUTH_DEFAULT_REDIRECT_TO` | `/dashboard` | OAuth完了後の既定遷移先 |
 | `FRONTEND_BASE_URL` | `http://localhost:5173` | メール内リンク・OAuth後のリダイレクト先 |
 | `SMTP_HOST` / `SMTP_PORT` | `mailpit` / `1025` | 開発は Mailpit |
 | `SMTP_USER` / `SMTP_PASSWORD` | 空 | 本番SMTP利用時のみ（**Secret**） |

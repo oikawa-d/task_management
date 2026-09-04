@@ -185,9 +185,16 @@ sequenceDiagram
     FE->>API: PATCH /api/tasks/{id} {status, position, version}
     API->>API: 認証・プロジェクト所属チェック
     API->>PG: version一致を確認してUPDATE<br/>status, position, version+1
-    PG-->>API: 更新後の行
-    API-->>FE: 200 {task}
-    alt 失敗（403/409/500）
+    alt version一致
+        PG-->>API: 更新後の行
+        API-->>FE: 200 {task}
+    else version不一致
+        PG-->>API: 更新対象なし
+        API-->>FE: 409
+        FE->>FE: 最新ボードを再取得し、再操作を促す
+        FE-->>U: 最新状態を表示
+    else 認証・認可失敗またはその他の失敗
+        API-->>FE: 4xx/5xx
         FE->>FE: ロールバック（元の列に戻す）
         FE-->>U: エラートースト表示
     end

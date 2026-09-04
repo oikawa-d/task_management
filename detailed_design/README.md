@@ -6,7 +6,7 @@
 - **画面は1画面につき1ファイル**（全11画面）
 - DB・認証・インフラは対象単位（テーブル／認証方式／コンテナ・ワークフロー）で分割
 
-全80ファイル。各ファイルは「関連ドキュメント／概要／全体の出入力／シーケンス図／処理フロー／関数詳細／関数相関図／データ遷移図／テスト設計／不明点・要検討事項」を共通の章立てで持つ。図はすべて Mermaid 記法。
+全81ファイル。各ファイルは「関連ドキュメント／概要／全体の出入力／シーケンス図／処理フロー／関数詳細／関数相関図／データ遷移図／テスト設計／不明点・要検討事項」を共通の章立てで持つ。図はすべて Mermaid 記法。
 
 ## 読む順番
 
@@ -148,24 +148,19 @@ flowchart LR
 
 各詳細設計書の「不明点・要検討事項」節から、**基本設計側の修正・追記が必要**なものを抜粋する。詳細は各リンク先を参照。
 
-「解消済」は本詳細設計の作成過程で基本設計・詳細設計の双方を修正して整合させたもの、「未定義／仕様差／運用制約／選択」は実装着手前に方針決定が必要なもの。
+「未定義／仕様差／運用制約」は実装着手前に方針決定が必要なもの。
 
 | 区分 | 内容 | 該当 |
 |------|------|------|
-| 解消済 | `require_project_owner` の失敗時ステータス。基本設計 [03_auth.md](../basic_design/03_auth.md) §9.2 の表を「非所属→404 / 所属だが非オーナー→403」に修正し、04_api §5 認可マトリクスおよび詳細設計と整合させた | [api/projects/04](./api/projects/04_patch_project.md) |
-| 解消済 | Origin検証失敗時のHTTPステータス。基本設計（04_api §4.2、03_auth §9.2）が定める **`403 CSRF_INVALID`** に全詳細設計を統一した（一部APIで400と記載していたものを修正） | [auth/03_csrf.md](./auth/03_csrf.md) |
-| 解消済 | ルート `/` を `/login` へのリダイレクト専用パスとし、ダッシュボードを `/dashboard` へ移動した（追加要件 issue #1）。`OAUTH_DEFAULT_REDIRECT_TO` の既定値も `/dashboard` に変更し、[infra/04](./infra/04_env_config.md) へ変数を追記した | [screen/01](./screen/01_login.md), [screen/06](./screen/06_dashboard.md) |
 | 未定義 | ログイン以外のレート制限（register / verify-email/resend / password/forgot / コメント投稿）が未定義。IP単位の制限を含め要検討 | [api/auth/01](./api/auth/01_post_auth_register.md), [08](./api/auth/08_post_auth_verify_email_resend.md) |
 | 未定義 | `pwreset` に `emailverify_current` 相当の逆引きキーがなく、短時間の複数要求で複数トークンが同時に有効になり得る | [auth/06_token_mail.md](./auth/06_token_mail.md) |
 | 未定義 | DB更新成功後にRedis失効が失敗した場合の補償処理（管理者による無効化・パスワード変更時） | [api/admin/03](./api/admin/03_patch_admin_user_status.md), [api/users/03](./api/users/03_put_users_me_password.md) |
 | 未定義 | `display_name` のフォールバック規則（OAuth新規ユーザーで姓名未設定の場合。詳細設計では `username` 代替とした） | [api/projects/01](./api/projects/01_get_projects.md) |
 | 未定義 | `X-Forwarded-For` の信頼範囲（`login_history` のIP記録とレート制限のキーに影響） | [auth/07](./auth/07_password_security.md), [infra/07](./infra/07_operation.md) |
-| 未定義 | ページング設定値の環境変数（`PAGINATION_DEFAULT_PER_PAGE` / `PAGINATION_MAX_PER_PAGE`）は詳細設計での新規命名。上限超過時に422とするかクランプするかも未確定 | [infra/04](./infra/04_env_config.md) |
 | 未定義 | `login_history` へのINSERT失敗時にログイン処理自体を失敗とするか | [database/03](./database/03_table_login_history.md) |
 | 未定義 | `INITIAL_ADMIN_PASSWORD` 等が未設定の場合の起動挙動（詳細設計では起動失敗を既定とした） | [database/09](./database/09_migration.md) |
 | 仕様差 | `task_comments` に楽観ロック用 `version` 列がなく、コメントの同時編集は後勝ちになる（`tasks` との仕様差） | [api/tasks/08](./api/tasks/08_patch_comment.md) |
 | 運用制約 | jwtモードのaccess tokenは即時失効できず、強制ログアウト後も最大 `ACCESS_TOKEN_TTL_SECONDS`（15分）有効なまま残る。無効化（status変更）はDBの `is_active` 再確認により即時遮断される | [api/admin/04](./api/admin/04_post_admin_user_force_logout.md), [auth/02](./auth/02_jwt_auth.md) |
-| 選択 | Lintツールを ruff / flake8 のどちらにするか（要件書§8.1が両論併記。詳細設計は ruff 前提で統一） | [infra/05](./infra/05_ci_workflow.md) |
 
 ## 7. 記述上の取り決め
 
