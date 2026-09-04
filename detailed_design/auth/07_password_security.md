@@ -39,10 +39,10 @@
 | `ARGON2_TIME_COST` | int | `3` | argon2idの反復回数コスト | `.env` |
 | `ARGON2_MEMORY_COST` | int | `65536` | argon2idのメモリコスト（KiB） | `.env` |
 | `ARGON2_PARALLELISM` | int | `4` | argon2idの並列度コスト | `.env` |
-| `LOGIN_LOCK_MAX_ATTEMPTS` | int | `5` | `login_fail:{key_hash}`の許容失敗回数上限 | `.env` |
+| `LOGIN_MAX_ATTEMPTS` | int | `5` | `login_fail:{key_hash}`の許容失敗回数上限 | `.env` |
 | `LOGIN_LOCK_WINDOW_SECONDS` | int | `900` | `login_fail:{key_hash}`のTTL＝カウント窓 | `.env` |
 
-**環境変数名の揺れに関する注記**：ログイン失敗上限の環境変数名について、[../infra/04_env_config.md](../infra/04_env_config.md) §3.3・§12では詳細設計側の既存表記に合わせて `LOGIN_LOCK_MAX_ATTEMPTS` を採用しているが、`../../basic_design/06_infra_cicd.md` §4.3では `LOGIN_MAX_ATTEMPTS` という表記が使われていると報告されている。本書は詳細設計の既存資産（[../api/auth/02_post_auth_login.md](../api/auth/02_post_auth_login.md)、[../infra/04_env_config.md](../infra/04_env_config.md)）に合わせて **`LOGIN_LOCK_MAX_ATTEMPTS` に統一して記述する**。実装時にどちらか一方の名称へ確定させる必要がある（§12で改めて要検討として記載）。
+**環境変数名に関する注記**：ログイン失敗上限の環境変数名は、基本設計（`../../basic_design/06_infra_cicd.md` §4.3）の表記である `LOGIN_MAX_ATTEMPTS` を正とし、全詳細設計で統一している（対となる時間窓は `LOGIN_LOCK_WINDOW_SECONDS`）。
 
 ## 4. 全体の出入力
 
@@ -70,7 +70,7 @@ sequenceDiagram
     FE->>API: "POST /api/auth/login {identifier, password}"
     API->>API: "key_hash = sha256(normalize(identifier) + ':' + client_ip)"
     API->>RD: "GET login_fail:{key_hash}"
-    alt "失敗回数 >= LOGIN_LOCK_MAX_ATTEMPTS"
+    alt "失敗回数 >= LOGIN_MAX_ATTEMPTS"
         API-->>FE: "429 TOO_MANY_ATTEMPTS"
     else 継続
         API->>PG: "SELECT users WHERE email=? OR username=?"
@@ -120,7 +120,7 @@ sequenceDiagram
 flowchart TB
     A["POST /auth/login"] --> B["key_hash = sha256(identifier_normalized + client_ip)"]
     B --> C["GET login_fail:{key_hash}"]
-    C --> D{"失敗回数 >= LOGIN_LOCK_MAX_ATTEMPTS?"}
+    C --> D{"失敗回数 >= LOGIN_MAX_ATTEMPTS?"}
     D -->|Yes| E["429 TOO_MANY_ATTEMPTS"]
     D -->|No| F["SELECT users WHERE identifier一致"]
     F --> G{"該当ユーザーあり?"}
@@ -149,7 +149,7 @@ stateDiagram-v2
     [*] --> 未ロック: "login_fail:{key_hash} 不存在"
     未ロック --> 失敗カウント中: "認証失敗<br/>INCR login_fail:{key_hash}（初回のみEXPIRE設定）"
     失敗カウント中 --> 失敗カウント中: "再度の失敗<br/>INCR（TTLは初回設定値のまま延長しない）"
-    失敗カウント中 --> ロック: "失敗回数 >= LOGIN_LOCK_MAX_ATTEMPTS"
+    失敗カウント中 --> ロック: "失敗回数 >= LOGIN_MAX_ATTEMPTS"
     ロック --> 未ロック: "LOGIN_LOCK_WINDOW_SECONDS（既定900秒）経過でTTL失効"
     失敗カウント中 --> 未ロック: "認証成功<br/>DEL login_fail:{key_hash}"
     ロック --> 未ロック: "認証成功時にDEL<br/>（TTL満了を待たず即時解除、ただし成功するには先に429を解消する必要がある）"
@@ -243,7 +243,7 @@ flowchart LR
 | ハッシュアルゴリズム | argon2id（`passlib[argon2]`）を採用し、bcrypt/PBKDF2は使用しない | [基本設計§10](../../basic_design/03_auth.md) |
 | コストパラメータの外部化 | `ARGON2_TIME_COST`/`ARGON2_MEMORY_COST`/`ARGON2_PARALLELISM`を環境変数化し、ハードコードしない | 共通コーディングルール |
 | タイミング攻撃対策 | ユーザー不存在時もダミーハッシュで`verify_password`を実行し、応答時間差からユーザー存在有無を推測させない | [基本設計§3.2](../../basic_design/03_auth.md) |
-| ブルートフォース対策 | `login_fail:{key_hash}`により`LOGIN_LOCK_WINDOW_SECONDS`内の失敗回数を`LOGIN_LOCK_MAX_ATTEMPTS`で制限し、上限到達時は429を返す | [../../basic_design/02_redis.md](../../basic_design/02_redis.md) §2 |
+| ブルートフォース対策 | `login_fail:{key_hash}`により`LOGIN_LOCK_WINDOW_SECONDS`内の失敗回数を`LOGIN_MAX_ATTEMPTS`で制限し、上限到達時は429を返す | [../../basic_design/02_redis.md](../../basic_design/02_redis.md) §2 |
 | キーの秘匿 | Redisキーには識別子・IPの平文を保存せず、正規化済み識別子とIPを結合した`sha256`ハッシュのみを使用する | [../../basic_design/02_redis.md](../../basic_design/02_redis.md) §2の注記 |
 | fail-close | Redis接続不能時はレート制限判定ができないため、ログイン処理自体を`503`で拒否する（無条件許可にフォールバックしない） | [./08_redis_store.md](./08_redis_store.md) §10 |
 | 再ハッシュの段階移行 | `needs_rehash`により、コストパラメータ変更後もログイン成功のたびに順次新パラメータへ移行できる（一括再ハッシュのバッチ処理は行わない） | 要検討（§12参照） |
@@ -259,7 +259,7 @@ flowchart LR
 | 4 | 単体 | `build_login_fail_key`が同一入力で同一キーを生成する | 同じidentifier/IP | 同一ハッシュ値 | `test_build_login_fail_key_deterministic` |
 | 5 | 単体 | `build_login_fail_key`が大文字小文字・前後空白を正規化する | `" User@Example.com "`と`"user@example.com"` | 同一キーになる | `test_build_login_fail_key_normalizes_identifier` |
 | 6 | 結合 | 存在しないユーザーでもダミー検証で応答時間が実ユーザーと近似する | ベンチマーク的な結合テスト | 極端な時間差が発生しない（許容範囲の定義は実装時に決定） | `test_login_timing_similar_for_unknown_user`（要検討：厳密な閾値は基本設計に無し） |
-| 7 | 結合 | `LOGIN_LOCK_MAX_ATTEMPTS`回失敗後に429となる | `fakeredis`でカウントを積み上げ | `429 TOO_MANY_ATTEMPTS` | `test_login_rate_limited_after_max_attempts` |
+| 7 | 結合 | `LOGIN_MAX_ATTEMPTS`回失敗後に429となる | `fakeredis`でカウントを積み上げ | `429 TOO_MANY_ATTEMPTS` | `test_login_rate_limited_after_max_attempts` |
 | 8 | 結合 | ログイン成功で`login_fail`がDELされる | 失敗を数回重ねた後に成功 | 次回リクエストで`GET login_fail`が空 | `test_login_success_resets_failure_count` |
 | 9 | 結合 | `LOGIN_LOCK_WINDOW_SECONDS`経過後にロックが解除される | TTLを短く上書きしたテスト設定 | TTL経過後は429にならない | `test_login_lock_expires_after_window` |
 | 10 | 網羅できない範囲 | argon2の実際のメモリ使用量・処理時間の絶対値 | - | 環境依存のためCIでは相対比較・存在確認のみとし、絶対値の性能保証は対象外とする | - |
@@ -268,7 +268,7 @@ flowchart LR
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 要検討 | ログイン失敗上限の環境変数名に揺れがある：[../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §4.3では`LOGIN_MAX_ATTEMPTS`、詳細設計（[../api/auth/02_post_auth_login.md](../api/auth/02_post_auth_login.md)、[../infra/04_env_config.md](../infra/04_env_config.md)）では`LOGIN_LOCK_MAX_ATTEMPTS`と表記されている。本書は詳細設計側の既存表記`LOGIN_LOCK_MAX_ATTEMPTS`を正として記述したが、`core/config.py`実装前にどちらか一方の名称へ統一する必要がある | `Settings`のフィールド名、`.env.example`、本書および関連詳細設計ファイル全体 |
-| 要検討 | `LOGIN_LOCK_MAX_ATTEMPTS`の具体的な既定値（本書・[../infra/04_env_config.md](../infra/04_env_config.md)では`5`）は基本設計（[../../basic_design/02_redis.md](../../basic_design/02_redis.md)）にはTTL（900秒）のみ記載があり閾値自体の明記がないため、詳細設計側で仮定した値である | 実装時に運用ポリシーとして正式値を確定する必要がある |
+| 要検討 | `LOGIN_MAX_ATTEMPTS` の具体値（既定5）は基本設計 §4.3 の例示値であり、学習用途としての妥当性は運用開始時に再確認する | `.env.example`、`core/config.py` |
+| 要検討 | `LOGIN_MAX_ATTEMPTS`の具体的な既定値（本書・[../infra/04_env_config.md](../infra/04_env_config.md)では`5`）は基本設計（[../../basic_design/02_redis.md](../../basic_design/02_redis.md)）にはTTL（900秒）のみ記載があり閾値自体の明記がないため、詳細設計側で仮定した値である | 実装時に運用ポリシーとして正式値を確定する必要がある |
 | 要検討 | `needs_rehash`による段階的再ハッシュは基本設計に明記された機能ではなく、コーディングルール（ハードコーディング禁止・コストパラメータの環境変数化）から実装レベルで妥当と判断し追加した。コストパラメータ変更時に既存ハッシュを一括で再計算するバッチ処理の要否は未定義 | 低〜中。運用でコストパラメータを変更する頻度次第で一括移行機能の要否が変わる |
 | 不明 | タイミング攻撃対策（ダミーハッシュ検証）の効果を検証する結合テストの合格基準（許容される時間差の閾値）が基本設計に定義されていない | テスト実装時に閾値を独自に設定する必要があり、CI環境差による不安定化のリスクがある |

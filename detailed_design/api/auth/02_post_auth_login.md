@@ -26,7 +26,7 @@
 | Origin検証 | 必要（Cookie/トークンを新規発行する更新系APIのため） |
 | AUTH_MODE差異 | **あり**。詳細は§4・§5・§9を参照 |
 | 冪等性 | なし（成功のたびに新規セッション/リフレッシュトークンを発行し、多重ログインを許容する） |
-| レート制限 | ログイン失敗回数（`login_fail:{key_hash}`、`LOGIN_LOCK_WINDOW_SECONDS`既定900秒）。上限は`LOGIN_LOCK_MAX_ATTEMPTS`で環境変数化 |
+| レート制限 | ログイン失敗回数（`login_fail:{key_hash}`、`LOGIN_LOCK_WINDOW_SECONDS`既定900秒）。上限は`LOGIN_MAX_ATTEMPTS`で環境変数化 |
 | トランザクション境界 | `login_history` INSERT 1件（成功/失敗いずれも記録）。`users` SELECTのみで更新なし |
 
 ## 2. 入出力仕様
@@ -285,7 +285,7 @@ flowchart LR
 stateDiagram-v2
     [*] --> 未認証
     未認証 --> 失敗カウント中: "認証失敗<br/>INCR login_fail:{key_hash}"
-    失敗カウント中 --> ロック: "上限到達（LOGIN_LOCK_MAX_ATTEMPTS）<br/>TTL=LOGIN_LOCK_WINDOW_SECONDS"
+    失敗カウント中 --> ロック: "上限到達（LOGIN_MAX_ATTEMPTS）<br/>TTL=LOGIN_LOCK_WINDOW_SECONDS"
     ロック --> 未認証: "TTL満了"
     未認証 --> セッション確立_session: "AUTH_MODE=session 成功<br/>DEL login_fail<br/>SETEX session:{sid}/csrf:{sid}<br/>SADD user_sessions:{uid}"
     未認証 --> トークン発行_jwt: "AUTH_MODE=jwt 成功<br/>DEL login_fail<br/>SETEX refresh:{hash}<br/>SADD user_refresh:{uid}"
@@ -357,5 +357,5 @@ stateDiagram-v2
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 要検討 | `LOGIN_LOCK_MAX_ATTEMPTS`（許容失敗回数の上限値）が`02_redis.md`に明記されていない（TTLのみ既定900秒と記載） | 実装時に具体的な閾値を別途決定する必要がある |
+| 要検討 | `LOGIN_MAX_ATTEMPTS`（許容失敗回数の上限値）が`02_redis.md`に明記されていない（TTLのみ既定900秒と記載） | 実装時に具体的な閾値を別途決定する必要がある |
 | 要検討 | `client_ip`の確定方法（`X-Forwarded-For`の何番目を信頼するか）が基本設計に未記載 | `TrustedProxy`設定と合わせてinfra側の詳細設計と整合を取る必要がある |

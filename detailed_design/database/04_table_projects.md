@@ -179,7 +179,7 @@ flowchart LR
 | 発行SQL | ```sql\n-- is_admin=false の場合\nSELECT p.id, p.name, p.description, p.owner_id, p.created_at, p.updated_at\nFROM projects p\nJOIN project_members pm ON pm.project_id = p.id\nWHERE pm.user_id = :user_id\nORDER BY p.created_at DESC\nLIMIT :limit OFFSET :offset;\n-- is_admin=true の場合は JOIN/WHERE を省略し全件を対象にする\n``` |
 | 使用インデックス | `ix_project_members_user_id`（[`05_table_project_members.md`](./05_table_project_members.md)） |
 | 送出例外 | なし |
-| 処理内容 | 1. `is_admin` により全件/所属分岐<br/>2. 件数取得は `COUNT(*)` を同条件で別途発行<br/>3. `per_page` は環境変数 `PAGINATION_DEFAULT_PAGE_SIZE`（既定20）/ `PAGINATION_MAX_PAGE_SIZE`（上限100）でクランプ（サービス層で実施） |
+| 処理内容 | 1. `is_admin` により全件/所属分岐<br/>2. 件数取得は `COUNT(*)` を同条件で別途発行<br/>3. `per_page` は環境変数 `PAGINATION_DEFAULT_PER_PAGE`（既定20）/ `PAGINATION_MAX_PER_PAGE`（上限100）でクランプ（サービス層で実施） |
 
 ### 8.4 `repository/project_repository.py :: update`
 
@@ -264,6 +264,6 @@ flowchart LR
 
 ## 13. 不明点・要検討事項
 
-- ページングの既定値・上限値（`per_page` 既定20・最大100）は `basic_design/04_api.md` §1 に記載があるが、対応する `core/config.py` の環境変数名は基本設計に明記がないため、本書では `PAGINATION_DEFAULT_PAGE_SIZE` / `PAGINATION_MAX_PAGE_SIZE` と仮称した。実装時に確定名称を確認すること（要検討）。
+- ページングの既定値・上限値（`per_page` 既定20・最大100）は `basic_design/04_api.md` §1 に記載があるが、対応する `core/config.py` の環境変数名は基本設計に明記がないため、本書では `PAGINATION_DEFAULT_PER_PAGE` / `PAGINATION_MAX_PER_PAGE` と仮称した。実装時に確定名称を確認すること（要検討）。
 - 管理者用全件一覧（Q-Proj-3）は `created_at` 順ソートだが専用インデックスは基本設計になく、Seq Scanを許容する設計とした。件数増加時の要否は要検討。
 - `name` に対するDB側 `CHECK` 制約（例：空文字禁止）の要否は基本設計に明記がないため、アプリ層バリデーションのみとした。
