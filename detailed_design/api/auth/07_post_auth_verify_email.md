@@ -27,7 +27,7 @@
 | AUTH_MODE差異 | 差異なし（session/jwtいずれのモードでも同一処理） |
 | 冪等性 | **なし**。トークンは `GETDEL` によりワンタイム消費されるため、2回目のリクエストは同一トークンでも `400 INVALID_VERIFY_TOKEN` になる |
 | レート制限 | `verify-email` はIP単位で10回/900秒。超過時は429 `TOO_MANY_ATTEMPTS`（`Retry-After`付き）、Redis障害時は503 `SERVICE_UNAVAILABLE` |
-| トランザクション境界 | `UPDATE users SET email_verified_at = now()` の1文のみ。Redisのトークン消費とPostgreSQL更新はアプリケーションレベルで直列実行し、DBトランザクションでは1テーブルの単純更新のため明示的なトランザクション制御は不要 |
+| トランザクション境界 | `CALL sp_verify_user_email(:user_id)` 1回。Redisのトークン消費はAPI層、users更新はSPの1業務トランザクション |
 
 ## 2. 入出力仕様（全体の出入力）
 
@@ -104,7 +104,7 @@ sequenceDiagram
     else トークンが有効
         RD-->>S: "user_id"
         S->>UR: "mark_email_verified(user_id)"
-        UR->>PG: "UPDATE users SET email_verified_at = now() WHERE id = :user_id"
+        UR->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
         PG-->>UR: "更新後の行"
         UR-->>S: "User"
         S-->>R: "None"
@@ -148,7 +148,7 @@ flowchart TB
 | 引数 | `token: str`（メールリンクのトークン） |
 | 戻り値 | `None` |
 | 送出例外 | `InvalidVerifyTokenError`（HTTP 400） |
-| 処理内容 | 1. `redis_store.consume_email_verify_token(token)` を呼び user_id を取得 2. `None` の場合は `InvalidVerifyTokenError` を送出 3. `user_repository.mark_email_verified(user_id)` を呼ぶ |
+| 処理内容 | 1. `redis_store.consume_email_verify_token(token)` を呼び user_id を取得 2. `None` の場合は `InvalidVerifyTokenError` を送出 3. `user_repository.sp_verify_user_email(user_id)` を呼ぶ |
 | 副作用 | Redis：`emailverify:{hash}` の削除（`GETDEL` の副作用）。PostgreSQL：`users.email_verified_at` 更新 |
 
 ### 6.3 `repository/redis_store.py :: consume_email_verify_token`
@@ -162,7 +162,7 @@ flowchart TB
 | 処理内容 | 1. `hash = sha256(token).hexdigest()` を計算 2. `GETDEL emailverify:{hash}` を実行 3. 値が存在すれば JSON をデコードし `user_id` を返す |
 | 副作用 | Redis：キー `emailverify:{hash}` を削除（ワンタイム消費）。`emailverify_current:{user_id}` はこの関数では削除しない（登録・再送時に上書きされるため、GETDELの成否と無関係に残存し得る＝要検討） |
 
-### 6.4 `repository/user_repository.py :: mark_email_verified`
+### 6.4 `repository/user_repository.py :: sp_verify_user_email`
 
 | 項目 | 内容 |
 |------|------|
@@ -170,7 +170,7 @@ flowchart TB
 | 引数 | `user_id: UUID` |
 | 戻り値 | 更新後の `User` |
 | 送出例外 | `NotFoundError`（対象ユーザーが存在しない場合。通常はトークン発行時に存在確認済みのため理論上発生しないが防御的に扱う） |
-| 処理内容 | 1. `UPDATE users SET email_verified_at = now() WHERE id = :user_id RETURNING *` を実行 2. 行が取得できなければ `NotFoundError` |
+| 処理内容 | `CALL sp_verify_user_email(:user_id)` を実行する。対象なし・使用済みはAPI層で既定の認証エラーへ変換する |
 | 副作用 | PostgreSQL：`users` テーブル1行の更新 |
 
 ## 7. 関数相関図
@@ -179,7 +179,7 @@ flowchart TB
 flowchart LR
     R["auth_router.verify_email"] --> S["auth_service.verify_email"]
     S --> RD["redis_store.consume_email_verify_token"]
-    S --> UR["user_repository.mark_email_verified"]
+    S --> UR["user_repository.sp_verify_user_email"]
     RD --> REDIS[("Redis<br/>emailverify:*")]
     UR --> PG[("PostgreSQL<br/>users")]
 ```
@@ -228,7 +228,7 @@ stateDiagram-v2
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 単体（モック） | 有効なトークンで認証成功 | `redis_store.consume_email_verify_token` が `user_id` を返すようモック | `user_repository.mark_email_verified` が呼ばれ204相当が返る | `test_verify_email_service_success` |
+| 1 | 単体（モック） | 有効なトークンで認証成功 | `redis_store.consume_email_verify_token` が `user_id` を返すようモック | `user_repository.sp_verify_user_email` が呼ばれ204相当が返る | `test_verify_email_service_success` |
 | 2 | 単体（モック） | 無効なトークン | `consume_email_verify_token` が `None` を返す | `InvalidVerifyTokenError` 送出 | `test_verify_email_service_invalid_token` |
 | 3 | 結合（実Redis/PostgreSQL） | 会員登録直後のトークンで認証成功 | `register` 実行済み、`emailverify:*` キー存在 | `204`、`users.email_verified_at` が `NOT NULL` に更新 | `test_verify_email_endpoint_success` |
 | 4 | 結合（実Redis/PostgreSQL） | 同一トークンを2回送信 | 1回目成功済み | 2回目は `400 INVALID_VERIFY_TOKEN` | `test_verify_email_endpoint_reuse_rejected` |
@@ -244,3 +244,13 @@ stateDiagram-v2
 |------|------|------|
 | 要検討 | `emailverify_current:{user_id}` の後始末：`verify_email` 成功後もキーが残存する（TTL失効まで）。実害はないが、認証済みユーザーに対する不要な逆引きキーが残る点の要否 | 低（TTL失効で自然解消するため機能影響なし） |
 | 確定 | トークン検証にもIP単位10回/900秒の汎用レート制限を適用する | 総当たり時は429、Redis障害時は503で安全側に停止する |
+
+## DBアクセス契約
+
+本APIのDBアクセスは、下記のFN/SP呼び出しをrepositoryの薄いラッパーから実行する。テーブルへの直接CRUD、認証業務の判定、履歴のINSERTはrepositoryに実装しない。healthの `SELECT 1` だけは本契約の対象外である。
+
+| 正式な呼び出し | 契約 |
+|----------------|------|
+| sp_verify_user_email(p_user_id) | `detailed_design/database/08_db_functions.md` のシグネチャに従う |
+
+SQLSTATE P0xxxは同文書 §4 の対応表でAPIエラーへ変換し、Redis・メール・JWTの処理はAPI/service層に残す。

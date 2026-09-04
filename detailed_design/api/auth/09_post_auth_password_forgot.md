@@ -88,7 +88,7 @@ sequenceDiagram
     FE->>R: "POST /api/auth/password/forgot {email}"
     R->>S: "request_password_reset(email, background)"
     S->>UR: "get_by_email(email)"
-    UR->>PG: "SELECT users WHERE lower(email) = ?"
+    UR->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
     PG-->>UR: "User or None"
     alt ユーザーが存在する
         UR-->>S: "User"
@@ -142,10 +142,10 @@ flowchart TB
 | 引数 | `email: str`、`background: BackgroundTasks` |
 | 戻り値 | `None`（常に正常終了、例外を送出しない） |
 | 送出例外 | なし |
-| 処理内容 | 1. `user_repository.get_by_email(email)` でユーザー取得。`None` なら終了 2. `token = secrets.token_urlsafe(32)` を生成 3. `redis_store.save_password_reset_token(token, user.id, ttl)` を呼ぶ 4. `background.add_task(mail_service.send_password_reset_mail, user.email, token, expires_minutes)` を登録 |
+| 処理内容 | 1. `user_repository.fn_find_user_by_email(email)` でユーザー取得。`None` なら終了 2. `token = secrets.token_urlsafe(32)` を生成 3. `redis_store.save_password_reset_token(token, user.id, ttl)` を呼ぶ 4. `background.add_task(mail_service.send_password_reset_mail, user.email, token, expires_minutes)` を登録 |
 | 副作用 | Redis：`pwreset:{hash}` の新規作成。メール：`BackgroundTasks` 経由で非同期送信 |
 
-### 6.3 `repository/user_repository.py :: get_by_email`
+### 6.3 `repository/user_repository.py :: fn_find_user_by_email`
 
 | 項目 | 内容 |
 |------|------|
@@ -153,7 +153,7 @@ flowchart TB
 | 引数 | `email: str` |
 | 戻り値 | `User` または `None` |
 | 送出例外 | なし |
-| 処理内容 | 1. `SELECT * FROM users WHERE lower(email) = lower(:email)` を実行 2. 行があれば `User`、なければ `None` |
+| 処理内容 | `SELECT fn_find_user_by_email(:email)` を実行する。空集合でも同一の正常応答とし、ユーザー列挙を許さない |
 | 副作用 | なし（参照のみ）。`07_post_auth_verify_email.md` / `08_post_auth_verify_email_resend.md` と共通の関数を再利用する |
 
 ### 6.4 `repository/redis_store.py :: save_password_reset_token`
@@ -183,7 +183,7 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["auth_router.password_forgot"] --> S["auth_service.request_password_reset"]
-    S --> UR["user_repository.get_by_email"]
+    S --> UR["user_repository.fn_find_user_by_email"]
     S --> RD["redis_store.save_password_reset_token"]
     S -.->|"BackgroundTasks"| MS["mail_service.send_password_reset_mail"]
     UR --> PG[("PostgreSQL<br/>users")]
@@ -249,3 +249,13 @@ stateDiagram-v2
 | 採用 | `pwreset_current:{uid}`を発行時に置き換え、最新トークン以外を失効させる | 旧メールリンクの再利用防止 |
 | 確定 | メール爆撃対策としてIP単位5回/900秒の`rate_limit:password_forgot:{key_hash}`を使用する。ユーザー不存在時も同じ制限・応答規則とする | 429 `TOO_MANY_ATTEMPTS`（`Retry-After`付き）、Redis障害時503 |
 | 要検討 | 無効化ユーザー（`is_active=false`）に対してもリセットメールを送信すべきかは基本設計に明記がなく、本設計では「送信する」と解釈した | 低（ログイン自体は`is_active`チェックで別途拒否されるため悪用余地は限定的） |
+
+## DBアクセス契約
+
+本APIのDBアクセスは、下記のFN/SP呼び出しをrepositoryの薄いラッパーから実行する。テーブルへの直接CRUD、認証業務の判定、履歴のINSERTはrepositoryに実装しない。healthの `SELECT 1` だけは本契約の対象外である。
+
+| 正式な呼び出し | 契約 |
+|----------------|------|
+| fn_find_user_by_email(p_email) | `detailed_design/database/08_db_functions.md` のシグネチャに従う |
+
+SQLSTATE P0xxxは同文書 §4 の対応表でAPIエラーへ変換し、Redis・メール・JWTの処理はAPI/service層に残す。

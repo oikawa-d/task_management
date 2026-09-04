@@ -135,16 +135,16 @@ sequenceDiagram
     R->>S: "list_tasks(user, filters)"
     alt "project_idが有効なUUID"
         S->>PR: "is_member(project_id, user.id)"
-        PR->>PG: "SELECT project_members WHERE project_id AND user_id"
+        PR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         alt "非所属 かつ 非admin"
             S-->>R: "NotFoundError"
             R-->>FE: "404 NOT_FOUND"
         end
     end
     S->>TR: "count(user, filters) / list(user, filters)"
-    TR->>PG: "SELECT COUNT(*) / SELECT tasks<br/>WHERE (admin: 制約なし) OR<br/>(project_id IN 所属project_ids) OR<br/>(project_id IS NULL AND created_by=user.id)<br/>[AND project_idフィルタ] [AND status] [AND is_active=true]<br/>ORDER BY :sort :order LIMIT/OFFSET"
+    TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>TR: "tasks行 + COUNT(task_comments)相関サブクエリ"
-    TR->>PG: "selectinload(assignee) / selectinload(created_by) / selectinload(project) の追加SELECT"
+    TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>TR: "users行 / projects行"
     TR-->>S: "list[TaskWithRelations], total"
     S-->>R: "Page[TaskSummary]"
@@ -191,7 +191,7 @@ flowchart TB
 | 引数 | 6.1と対応 |
 | 戻り値 | `Page[TaskSummary]`（`items`, `total`） |
 | 送出例外 | `NotFoundError`（`project_id_filter`がUUIDで非所属の場合） |
-| 処理内容 | 1. `project_id_filter` がUUIDの場合、`user.role != 'admin'` なら `project_repository.is_member(project_id_filter, user.id)` を確認し、非所属なら `NotFoundError`<br/>2. `task_repository.count(user, ...)` と `task_repository.list(user, ...)` を呼び出す。認可範囲（admin=全件、member=所属project_ids＋自分が作成者の未所属タスク）はリポジトリ層のWHERE句に集約する（6.3参照）<br/>3. 取得した行を `TaskSummary`（`project_is_active`は`project`をeager loadした値、`project_id=NULL`なら`None`）に整形する |
+| 処理内容 | `SELECT fn_list_tasks(:user_id, :project_id, :status, :include_inactive, :limit, :offset)` を1回呼び出し、認可範囲・フィルタ・関連情報を含むFN結果を`TaskSummary`へ写像する |
 | 副作用 | なし |
 
 ### 6.3 `repository/task_repository.py :: list`
@@ -202,7 +202,7 @@ flowchart TB
 | 引数 | 6.2と対応 |
 | 戻り値 | `assignee` / `created_by` / `project` をEager Loadした `Task` のリスト |
 | 送出例外 | `OperationalError`（503へ変換） |
-| 処理内容 | 1. 認可範囲のベース条件を構築：`user.role == 'admin'` なら条件なし（全件）。それ以外は `tasks.project_id IN (SELECT project_id FROM project_members WHERE user_id=:uid) OR (tasks.project_id IS NULL AND tasks.created_by=:uid)`<br/>2. `project_id_filter` がUUIDなら `AND tasks.project_id = :project_id_filter` を追加。`"unassigned"` なら `AND tasks.project_id IS NULL` を追加（この場合、非adminは手順1の条件と合わせて実質的に「自分が作成した未所属タスク」のみに絞られる）<br/>3. `status` 指定時は `AND tasks.status = :status`<br/>4. `include_inactive=False` の場合は `AND tasks.is_active = true`<br/>5. `ORDER BY :sort :order`、`OFFSET (page-1)*per_page LIMIT per_page`<br/>6. `comment_count` は `01_get_project_tasks.md` と同様に相関サブクエリで算出し、`assignee`/`created_by`/`project`（`project_id`が非NULLの行のみ対象）を`selectinload`で追加取得する |
+| 処理内容 | `SELECT fn_list_tasks(:user_id, :project_id, :status, :include_inactive, :limit, :offset)` を1回実行する。admin/所属/未所属作成者のスコープ、フィルタ、ソート、コメント件数・関連情報の集約はFN内部で処理する |
 | 副作用 | なし |
 
 ## 7. 関数相関図
@@ -210,7 +210,7 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["tasks_router.list_tasks"] --> S["task_service.list_tasks"]
-    S --> PR["project_repository.is_member"]
+    S --> PR["project_repository.fn_is_project_member"]
     S --> C["task_repository.count"]
     S --> L["task_repository.list"]
     L --> DB[("PostgreSQL<br/>tasks / users / projects")]
@@ -226,8 +226,8 @@ flowchart LR
 flowchart LR
     subgraph read["参照範囲（PostgreSQL）"]
         T["tasks<br/>WHERE 認可範囲 ∩ 各種フィルタ"]
-        U["users<br/>assignee / created_by（selectinload）"]
-        P["projects<br/>project_is_active算出（project_id非NULL分のみselectinload）"]
+        U["users<br/>assignee / created_by（FN結果の一括マッピング）"]
+        P["projects<br/>project_is_active算出（project_id非NULL分のみFN結果の一括マッピング）"]
         PM["project_members<br/>認可範囲の算出・project_idフィルタ時の所属確認"]
         C["task_comments<br/>COUNT（相関サブクエリ）"]
     end
@@ -237,7 +237,17 @@ flowchart LR
     T -->|"id"| C
 ```
 
-## 9. データアクセス一覧
+## 9. SP/FNデータアクセス一覧
+
+### 9.1 正式なDBアクセス契約
+
+本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+
+| 種別 | 契約 | 説明 |
+|------|------|------|
+| fn_list_tasks | `fn_list_tasks(p_user_id, p_project_id, p_status, p_include_inactive, p_limit, p_offset)` | fn_list_tasksを呼び出し、結果をレスポンスへ写像する |
+
+repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
 **PostgreSQL**
 
@@ -246,8 +256,8 @@ flowchart LR
 | project_members | SELECT | `user_id=:uid`（認可範囲の所属project_id集合の算出）、`project_id`指定時の所属確認 | admin時は省略 |
 | tasks | SELECT | 認可範囲 ∩ `project_id`/`status`/`is_active`フィルタ、`ORDER BY :sort :order` | 主クエリ |
 | tasks | SELECT COUNT | 同上の条件 | `meta.total`算出用 |
-| users | SELECT（`selectinload`の追加SELECT） | `assignee_id` / `created_by` | 表示用情報 |
-| projects | SELECT（`selectinload`の追加SELECT） | `tasks.project_id`（非NULLのみ） | `project_is_active`算出用 |
+| users | SELECT（`FN結果の一括マッピング`の追加SELECT） | `assignee_id` / `created_by` | 表示用情報 |
+| projects | SELECT（`FN結果の一括マッピング`の追加SELECT） | `tasks.project_id`（非NULLのみ） | `project_is_active`算出用 |
 | task_comments | SELECT（相関サブクエリ COUNT） | `task_id = tasks.id` | `comment_count`算出 |
 
 **Redis**：使用なし。
@@ -273,17 +283,17 @@ flowchart LR
 | タイミング攻撃対策 | 対象外 |
 | レート制限 | なし |
 | fail-close方針 | DB接続不能時は503 |
-| N+1対策・クエリ回数 | 認可範囲の算出（`project_members`）、主クエリ（COUNT＋一覧の計2回）、`users`/`projects`の`selectinload`追加SELECT各1回の計5回程度。ページサイズに比例しない |
+| N+1対策・クエリ回数 | 認可範囲の算出（`project_members`）、主クエリ（COUNT＋一覧の計2回）、`users`/`projects`の`FN結果の一括マッピング`追加SELECT各1回の計5回程度。ページサイズに比例しない |
 | 大量データ時の性能 | `project_id IN (サブクエリ)` は所属プロジェクト数に比例したインデックス参照になる。学習規模のデータ量では許容し、要検討事項に記載 |
 
 ## 12. テスト設計
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 単体（モック） | project_id省略時のデフォルト範囲 | user=member、リポジトリをモック | `project_id_filter=None`でリポジトリ呼び出し | `test_list_tasks_default_scope` |
-| 2 | 単体（モック） | project_id指定・非所属 | `is_member=False`、非admin | `NotFoundError`送出 | `test_list_tasks_project_filter_forbidden` |
-| 3 | 単体（モック） | project_id="null"の正規化 | クエリ文字列`"null"` | `project_id_filter="unassigned"`としてサービス層へ渡る | `test_list_tasks_null_literal_normalized` |
-| 4 | 単体（モック） | 不正なproject_id文字列 | `"not-a-uuid"` | `ValidationError`（422） | `test_list_tasks_invalid_project_id_string` |
+| 1 | 結合（実DB・実SP） | project_id省略時のデフォルト範囲 | user=member、リポジトリをモック | `project_id_filter=None`でリポジトリ呼び出し | `test_list_tasks_default_scope` |
+| 2 | 結合（実DB・実SP） | project_id指定・非所属 | `is_member=False`、非admin | `NotFoundError`送出 | `test_list_tasks_project_filter_forbidden` |
+| 3 | 結合（実DB・実SP） | project_id="null"の正規化 | クエリ文字列`"null"` | `project_id_filter="unassigned"`としてサービス層へ渡る | `test_list_tasks_null_literal_normalized` |
+| 4 | 結合（実DB・実SP） | 不正なproject_id文字列 | `"not-a-uuid"` | `ValidationError`（422） | `test_list_tasks_invalid_project_id_string` |
 | 5 | 結合 | memberは所属プロジェクトの全タスクを横断取得 | 実DB、所属プロジェクト2件・各2タスク | 200、4件返る | `test_list_tasks_member_cross_project` |
 | 6 | 結合 | memberは自分の未所属タスクも含む | 実DB、`project_id=NULL`の自作タスク1件 | 200、所属プロジェクト分＋1件 | `test_list_tasks_includes_own_unassigned` |
 | 7 | 結合 | memberは他人の未所属タスクを見えない | 実DB、他ユーザー作成の`project_id=NULL`タスク | 200、含まれない | `test_list_tasks_excludes_others_unassigned` |

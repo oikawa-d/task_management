@@ -23,7 +23,7 @@
 | AUTH_MODE差異 | session: `X-CSRF-Token` 検証あり／jwt: ヘッダ方式のためCSRF検証なし。作成処理自体に差異なし |
 | 冪等性 | なし（同名でも複数作成可能。冪等キーは提供しない） |
 | レート制限 | 対象外 |
-| トランザクション境界 | `projects` INSERT と `project_members` INSERT を **同一トランザクション** で実行し、いずれか失敗時は全体ロールバック |
+| トランザクション境界 | `CALL sp_create_project(...)` 1回を1業務トランザクションとして実行し、projectとowner membershipを一体でcommit/rollback |
 
 ## 2. 入出力仕様
 
@@ -110,14 +110,14 @@ sequenceDiagram
     R->>R: pydanticでリクエストボディを検証（end_at>=start_atを含む）
     R->>S: create_project(user, payload)
     S->>PG: BEGIN
-    S->>RP: insert_project(name, description, start_at, end_at, owner_id=user.id)
-    RP->>PG: "INSERT INTO projects (..., start_at, end_at, is_active) VALUES (..., true) RETURNING *"
+    S->>RP: sp_create_project(name, description, start_at, end_at, owner_id=user.id)
+    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>RP: project行
     RP-->>S: Project
-    S->>RP: insert_member(project_id, user_id=user.id, invited_by=NULL)
-    RP->>PG: "INSERT INTO project_members (project_id, user_id, invited_by, joined_at) VALUES (...)"
+    S->>RP: sp_create_project(project_id, user_id=user.id, invited_by=NULL)
+    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>RP: OK
-    S->>PG: COMMIT
+    S->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     alt INSERTのいずれかが失敗
         S->>PG: ROLLBACK
         S-->>R: InternalError
@@ -170,19 +170,19 @@ flowchart TB
 | 引数 | `user`: 作成者 / `payload`: `name`, `description`, `start_at`, `end_at` / `db`: DBセッション |
 | 戻り値 | `ProjectSummary`（`member_count=1`, `task_counts`全0, `is_owner=True`, `is_active=True` を固定値として組み立てる） |
 | 送出例外 | `ValidationError`（`end_at < start_at`）→422、`InternalError`（INSERT失敗）→500、`ServiceUnavailableError`（DB接続不能）→503 |
-| 処理内容 | 1. `payload.start_at`・`payload.end_at` が両方とも値を持つ場合 `end_at >= start_at` をpydanticのモデルバリデータで検証（違反時422、サービス層到達前に弾く） 2. `db.begin()` でトランザクションを開始（FastAPIのDIで払い出された `AsyncSession` のコンテキストを使用） 3. `project_repository.insert_project(db, name, description, start_at, end_at, owner_id=user.id)` を呼び出す（`is_active` はDBの `DEFAULT true` に委ねる） 4. 返却された `project.id` を用いて `project_repository.insert_member(db, project_id, user_id=user.id, invited_by=None)` を呼び出す 5. 両方成功した場合のみ `commit`。いずれかで例外が発生した場合は `rollback` してから再送出する 6. `ProjectSummary` を構築して返す（集計クエリは発行せず固定値を使う） |
-| 副作用 | `projects` へのINSERT、`project_members` へのINSERT（同一トランザクション） |
+| 処理内容 | 1. 入力形式をpydanticで検証し、API側で`project_id`を生成 2. repositoryが `CALL sp_create_project(project_id, user.id, name, description, start_at, end_at)` を1回呼ぶ 3. 成功後に `SELECT fn_get_project(project_id)` で応答を取得 4. SQLSTATE P0009等はAPIのAppErrorへ変換し、SP失敗時は全体をrollback |
+| 副作用 | SP内部で `projects` とownerの `project_members` を更新 |
 
-### 6.3 `repository/project_repository.py :: insert_project` / `insert_member`
+### 6.3 `repository/project_repository.py :: sp_create_project`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def insert_project(db: AsyncSession, name: str, description: str \| None, start_at: datetime \| None, end_at: datetime \| None, owner_id: UUID) -> Project` ／ `async def insert_member(db: AsyncSession, project_id: UUID, user_id: UUID, invited_by: UUID \| None) -> None` |
+| シグネチャ | `async def sp_create_project(db: AsyncSession, project_id: UUID, owner_id: UUID, name: str, description: str \| None, start_at: datetime \| None, end_at: datetime \| None) -> None` |
 | 引数 | 上記の通り |
-| 戻り値 | `insert_project`: 作成された `Project` エンティティ（`is_active=true`）／`insert_member`: なし |
-| 送出例外 | `IntegrityError`（外部キー制約違反、または `ck_projects_period` CHECK制約違反。後者はpydantic側で事前に弾くため想定上は発生しない） |
-| 処理内容 | `insert_project`: `INSERT INTO projects (name, description, start_at, end_at, owner_id) VALUES (...) RETURNING *`（`is_active` はカラムDEFAULT `true` に委ねる）。`insert_member`: `INSERT INTO project_members (project_id, user_id, invited_by, joined_at) VALUES (:pid, :uid, :invited_by, now())` |
-| 副作用 | DBへのINSERT（コミットは呼び出し元のservice層が制御） |
+| 戻り値 | なし。`project_id` は呼び出し元が生成済みの値を使用する |
+| 送出例外 | SQLSTATE `P0009`（期間不正）等。APIの対応表でAppErrorへ変換 |
+| 処理内容 | `CALL sp_create_project(:project_id, :owner_id, :name, :description, :start_at, :end_at)` のみを発行する。DB更新本体とowner登録はSP内部 |
+| 副作用 | SP内のDB更新。repositoryは直接CRUDを持たない |
 
 ## 7. 関数相関図
 
@@ -191,26 +191,34 @@ flowchart LR
     R["projects_router.create_project"] --> D1["deps.verify_origin"]
     R --> D2["deps.verify_csrf"]
     R --> S["project_service.create_project"]
-    S --> RP1["project_repository.insert_project"]
-    S --> RP2["project_repository.insert_member"]
-    RP1 --> M1["models.Project"]
-    RP2 --> M2["models.ProjectMember"]
+    S --> RP["repository.sp_create_project"]
+    RP --> SP["CALL sp_create_project"]
+    SP --> FN["SELECT fn_get_project"]
 ```
 
 ## 8. データ遷移図
 
 ```mermaid
 flowchart LR
-    A["POST /api/projects"] --> B["BEGIN"]
-    B --> C["INSERT projects<br/>(owner_id = current_user.id)"]
-    C --> D["INSERT project_members<br/>(project_id, user_id = owner_id, invited_by = NULL)"]
-    D --> E["COMMIT"]
+    A["POST /api/projects"] --> B["CALL sp_create_project"]
+    B --> C["SP内部: project + owner membership"]
+    C --> D["COMMIT（1業務トランザクション）"]
     E --> F["201 Created"]
     C -.->|"失敗"| G["ROLLBACK / 500 INTERNAL_ERROR"]
     D -.->|"失敗"| G
 ```
 
-## 9. データアクセス一覧
+## 9. SP/FNデータアクセス一覧
+
+### 9.1 正式なDBアクセス契約
+
+本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+
+| 種別 | 契約 | 説明 |
+|------|------|------|
+| create_project | `sp_create_project(p_project_id, p_owner_id, p_name, p_description, p_start_at, p_end_at)` | API生成IDでsp_create_projectを呼び出し、fn_get_projectの結果をレスポンスへ写像する |
+
+repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
 **PostgreSQL**
 
@@ -251,8 +259,8 @@ flowchart LR
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 単体 | 正常作成でinsert_project→insert_memberの順に呼ばれる | repositoryをモック | 呼び出し順序とowner_id/user_idの整合を検証 | `test_create_project_calls_repository_in_order` |
-| 2 | 単体 | insert_member失敗時にロールバックされる | `insert_member`がIntegrityErrorを送出するようモック | `rollback`が呼ばれ例外が再送出される | `test_create_project_rollback_on_member_insert_failure` |
+| 1 | 結合（実DB・実SP） | 正常作成でsp_create_project→sp_create_projectの順に呼ばれる | 実DB・実SPで検証 | 呼び出し順序とowner_id/user_idの整合を検証 | `test_create_project_calls_repository_in_order` |
+| 2 | 単体 | sp_create_project失敗時にロールバックされる | `sp_create_project`がIntegrityErrorを送出するようモック | `rollback`が呼ばれ例外が再送出される | `test_create_project_rollback_on_member_insert_failure` |
 | 3 | 結合 | 正常系でprojectsとproject_membersが同一トランザクションで作成される | 実PostgreSQL | 201、`project_members`に自分自身が1行存在 | `test_create_project_success` |
 | 4 | 結合 | nameが101文字で422 | リクエストボディ不正 | `422 VALIDATION_ERROR` | `test_create_project_name_too_long` |
 | 5 | 結合 | sessionモードでCSRFヘッダ欠落時403 | `X-CSRF-Token`を送らない | `403 CSRF_INVALID` | `test_create_project_missing_csrf_session_mode` |

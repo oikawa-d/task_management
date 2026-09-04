@@ -154,7 +154,7 @@ sequenceDiagram
                 R-->>FE: 302 /login?error=oauth_failed
             else 検証OK
                 S->>UR: find_by_oauth(provider='google', sub)
-                UR->>PG: SELECT oauth_accounts JOIN users
+                UR->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
                 alt 紐付け済み
                     PG-->>UR: user
                 else 未紐付け かつ email一致ユーザーあり
@@ -163,17 +163,17 @@ sequenceDiagram
                         R-->>FE: 302 /login?error=oauth_email_unverified
                     else email_verified=true
                         S->>UR: link_oauth_account(user, provider, sub)
-                        UR->>PG: INSERT oauth_accounts<br/>UPDATE users SET email_verified_at=now() (NULLの場合)
+                        UR->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
                         PG-->>UR: user
                     end
                 else 完全な新規
                     S->>UR: create_oauth_user(userinfo)
-                    UR->>PG: INSERT users(password_hash=NULL)<br/>INSERT oauth_accounts
+                    UR->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
                     PG-->>UR: user
                 end
                 alt AUTH_MODE=session
                     S->>S: SessionAuthStrategy.login(user, request, response)
-                    S->>PG: INSERT login_history(method='oauth_google', success=true)
+                    S->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
                     S-->>R: OAuthCallbackResult(mode='session', redirect_to)
                     R-->>FE: 302 /oauth/callback#redirect_to=...<br/>Set-Cookie(sid, csrf)
                 else AUTH_MODE=jwt
@@ -252,7 +252,7 @@ flowchart TB
 | 引数 | `userinfo`：`sub`, `email`, `email_verified`, `given_name`, `family_name`を含む |
 | 戻り値 | `User`（解決または新規作成されたエンティティ） |
 | 送出例外 | `OAuthEmailUnverifiedError`（未紐付けかつ`email_verified=false`） |
-| 処理内容 | 1. `user_repository.find_by_oauth('google', userinfo.sub)`で紐付け済みか確認し、あれば返す 2. 無ければ`user_repository.find_by_email(userinfo.email)`で既存ユーザーを検索 3. 既存ユーザーがあり`userinfo.email_verified=false`なら`OAuthEmailUnverifiedError`を送出 4. 既存ユーザーがあり`email_verified=true`なら`oauth_accounts`をINSERTし、`users.email_verified_at`が`NULL`なら`now()`に更新 5. 既存ユーザーがなければ`username=f"google_{sha256(userinfo.sub).hexdigest()[:16]}"`を生成し、`users`（`password_hash=NULL`, `email_verified_at=now()`, `last_name/first_name`はGoogleの`family_name`/`given_name`から補完、フリガナ・生年月日は`NULL`）と`oauth_accounts`をINSERT |
+| 処理内容 | 1. `SELECT fn_find_oauth_account('google', userinfo.sub)`で紐付け済みか確認し、あれば返す 2. 無ければ`SELECT fn_find_user_by_email(userinfo.email)`で既存ユーザーを検索 3. 既存ユーザーがあり`userinfo.email_verified=false`なら`OAuthEmailUnverifiedError`を送出 4. `CALL sp_upsert_oauth_account(...)`で既存ユーザーの検証日時・OAuth紐付け、または新規ユーザー作成を同一トランザクションで実行する |
 | 副作用 | PostgreSQL：`users`/`oauth_accounts`のINSERTまたはUPDATE（同一トランザクション） |
 
 ### 6.4 `auth/oauth.py :: GoogleOAuthProvider.exchange_code`
@@ -287,13 +287,13 @@ flowchart LR
     S --> OA2["GoogleOAuthProvider._verify_id_token"]
     S --> OA3["GoogleOAuthProvider.fetch_userinfo"]
     S --> RES["_resolve_or_create_user"]
-    RES --> URP1["user_repository.find_by_oauth"]
-    RES --> URP2["user_repository.find_by_email"]
+    RES --> URP1["user_repository.fn_find_oauth_account"]
+    RES --> URP2["user_repository.fn_find_user_by_email"]
     RES --> URP3["user_repository.link_oauth_account"]
-    RES --> URP4["user_repository.create_oauth_user"]
+    RES --> URP4["user_repository.sp_upsert_oauth_account"]
     S --> SESS["SessionAuthStrategy.login"]
     S --> RS2["redis_store.save_oauth_handoff"]
-    S --> LRP["login_history_repository.record"]
+    S --> LRP["login_history_repository.sp_record_login_history"]
     RS1 --> RD[("Redis")]
     RS2 --> RD
     URP1 --> PG[("PostgreSQL")]
@@ -393,3 +393,13 @@ stateDiagram-v2
 | 要検討 | Redis接続不能時、他APIは503を返す方針だが、本APIはブラウザ直接遷移のため`/login?error=oauth_failed`とした。ユーザーには「503」と「認証失敗」の区別がつかない | UXおよび障害切り分けに影響。フロント側で`error`値ごとのメッセージ出し分けを検討する必要がある |
 | 要検討 | `GOOGLE_JWKS_CACHE_TTL_SECONDS`の既定値が基本設計に明記されていない | JWKSキャッシュの鮮度と外部通信頻度のトレードオフに影響。実装時に確定が必要 |
 | 不明 | Googleの`family_name`/`given_name`が未提供（スコープ上取得できない場合）だった場合の`last_name`/`first_name`の扱いが基本設計に記載がない | 新規ユーザー作成時にNULL許容とするか空文字にするか要確認 |
+
+## DBアクセス契約
+
+本APIのDBアクセスは、下記のFN/SP呼び出しをrepositoryの薄いラッパーから実行する。テーブルへの直接CRUD、認証業務の判定、履歴のINSERTはrepositoryに実装しない。healthの `SELECT 1` だけは本契約の対象外である。
+
+| 正式な呼び出し | 契約 |
+|----------------|------|
+| fn_find_oauth_account(p_provider, p_provider_user_id), fn_find_user_by_email(p_email), sp_upsert_oauth_account(p_user_id, p_provider, p_provider_user_id) | `detailed_design/database/08_db_functions.md` のシグネチャに従う |
+
+SQLSTATE P0xxxは同文書 §4 の対応表でAPIエラーへ変換し、Redis・メール・JWTの処理はAPI/service層に残す。

@@ -101,14 +101,14 @@ sequenceDiagram
     FE->>R: PATCH /api/projects/{project_id} {name?, description?, start_at?, end_at?, is_active?}
     R->>R: verify_origin / verify_csrf（session時）
     R->>D: 認証 + 所属チェック + オーナー判定
-    D->>PG: "SELECT * FROM projects WHERE id=:pid"
+    D->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>D: project行 または 0件
     alt project不存在
         D-->>R: NotFoundError
         R-->>FE: 404 NOT_FOUND
     end
     alt user.role != admin
-        D->>PG: "SELECT 1 FROM project_members WHERE project_id=:pid AND user_id=:uid"
+        D->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>D: 0件 または 1件
         alt 非所属
             D-->>R: NotFoundError
@@ -122,7 +122,7 @@ sequenceDiagram
     R->>S: update_project(project, payload)
     S->>S: exclude_unsetで指定フィールドのみ抽出、start_at/end_atの最終値でend_at>=start_atを再検証
     S->>RP: update(project.id, name?, description?, start_at?, end_at?, is_active?)
-    RP->>PG: "UPDATE projects SET name=COALESCE(:name,name), description=..., start_at=..., end_at=..., is_active=... WHERE id=:pid RETURNING *"
+    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>RP: 更新後の行（トリガでupdated_at更新）
     RP-->>S: Project
     S-->>R: ProjectSummary
@@ -171,7 +171,7 @@ flowchart TB
 | 引数 | `project_id`: パスパラメータ / `user`: 認証済みユーザー / `db`: DBセッション |
 | 戻り値 | `Project`（存在・所属・オーナー確認済み） |
 | 送出例外 | `NotFoundError`（プロジェクト不存在、または非所属member）→404／`ForbiddenError`（所属memberだが非オーナー）→403 |
-| 処理内容 | 1. `project_repository.get_by_id(db, project_id)` を取得。存在しなければ `NotFoundError` 2. `user.role == 'admin'` なら無条件で `Project` を返す 3. `project_member_repository.exists(db, project_id, user.id)` が `False` なら `NotFoundError`（非所属は存在有無を問わず404とする §9.2の方針） 4. 所属している場合、`project.owner_id != user.id` なら `ForbiddenError` 5. いずれも満たせば `Project` を返す |
+| 処理内容 | 1. `project_repository.fn_get_project(db, project_id)` を取得。存在しなければ `NotFoundError` 2. `user.role == 'admin'` なら無条件で `Project` を返す 3. `project_repository.fn_is_project_member(db, project_id, user.id)` が `False` なら `NotFoundError`（非所属は存在有無を問わず404とする §9.2の方針） 4. 所属している場合、`project.owner_id != user.id` なら `ForbiddenError` 5. いずれも満たせば `Project` を返す |
 | 副作用 | なし |
 
 ### 6.2 `api/routers/projects_router.py :: update_project`
@@ -193,10 +193,10 @@ flowchart TB
 | 引数 | `project`: 更新対象（`require_project_owner` 済み） / `payload`: `name`, `description`, `start_at`, `end_at`, `is_active` の部分更新値 |
 | 戻り値 | `ProjectSummary` |
 | 送出例外 | `ValidationError`（`start_at`/`end_at`の最終値が`end_at<start_at`）→422、`ServiceUnavailableError`（DB接続不能）→503 |
-| 処理内容 | 1. `payload.model_dump(exclude_unset=True)` で指定されたフィールドのみ抽出 2. `start_at`/`end_at`それぞれについて「payloadに指定があればその値、なければ`project`の現行値」を最終値として算出し、両方が最終的に値を持つ場合のみ`end_at >= start_at`を検証（違反時`ValidationError`） 3. `project_repository.update(db, project.id, **fields)` を呼び出す（`is_active`は`require_project_owner`によりオーナー/adminのみ到達するため、`payload`に含まれる場合はそのまま渡してよい） 4. 更新後の `Project` を取得し、`member_count` / `task_counts` / `is_owner` を集計・付与して `ProjectSummary` を返す |
+| 処理内容 | 1. `payload.model_dump(exclude_unset=True)` で指定されたフィールドのみ抽出 2. `start_at`/`end_at`それぞれについて「payloadに指定があればその値、なければ`project`の現行値」を最終値として算出し、両方が最終的に値を持つ場合のみ`end_at >= start_at`を検証（違反時`ValidationError`） 3. `sp_update_project(db, project.id, **fields)` を呼び出す（`is_active`は`require_project_owner`によりオーナー/adminのみ到達するため、`payload`に含まれる場合はそのまま渡してよい） 4. 更新後の `Project` を取得し、`member_count` / `task_counts` / `is_owner` を集計・付与して `ProjectSummary` を返す |
 | 副作用 | `projects` のUPDATE（`updated_at` はDBトリガが自動更新） |
 
-### 6.4 `repository/project_repository.py :: update`
+### 6.4 `repository/project_repository.py :: sp_update_project`
 
 | 項目 | 内容 |
 |------|------|
@@ -204,7 +204,7 @@ flowchart TB
 | 引数 | `project_id`: 対象 / `**fields`: `name` / `description` / `start_at` / `end_at` / `is_active` のうち指定されたもの |
 | 戻り値 | 更新後の `Project` |
 | 送出例外 | `OperationalError`、`IntegrityError`（`ck_projects_period` CHECK制約違反。サービス層で事前検証するため想定上は発生しない） |
-| 処理内容 | `UPDATE projects SET <指定フィールドのみ> WHERE id = :project_id RETURNING *` を実行する。未指定フィールドはSQL文自体に含めず現状値を保持する |
+| 処理内容 | `CALL sp_update_project(:project_id, ...)` を実行する。未指定フィールドはSP内部で現状値を保持し、更新後の行をFNで取得する |
 | 副作用 | DBのUPDATE |
 
 ## 7. 関数相関図
@@ -212,11 +212,11 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["projects_router.update_project"] --> D["deps.require_project_owner"]
-    D --> RP1["project_repository.get_by_id"]
-    D --> RP2["project_member_repository.exists"]
+    D --> RP1["project_repository.fn_get_project"]
+    D --> RP2["project_repository.fn_is_project_member"]
     R --> S["project_service.update_project"]
-    S --> RP3["project_repository.update"]
-    S --> RP4["project_repository.aggregate_member_counts / aggregate_task_counts"]
+    S --> RP3["sp_update_project"]
+    S --> RP4["project_repository.fn_get_project"]
     RP1 --> M1["models.Project"]
     RP2 --> M2["models.ProjectMember"]
     RP3 --> M1
@@ -232,7 +232,17 @@ stateDiagram-v2
     After --> [*]
 ```
 
-## 9. データアクセス一覧
+## 9. SP/FNデータアクセス一覧
+
+### 9.1 正式なDBアクセス契約
+
+本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+
+| 種別 | 契約 | 説明 |
+|------|------|------|
+| update_project | `sp_update_project(p_project_id, p_name, p_description, p_start_at, p_end_at)` | sp_update_projectを呼び出し、結果をレスポンスへ写像する |
+
+repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
 **PostgreSQL**
 
@@ -240,7 +250,7 @@ stateDiagram-v2
 |----------|------|------|------|
 | projects | SELECT | `id=:project_id` | 存在確認・オーナー判定 |
 | project_members | SELECT (EXISTS) | `project_id=:pid AND user_id=:uid` | admin以外の所属確認 |
-| projects | UPDATE | `id=:project_id` | 指定フィールドのみ更新（`name`/`description`/`start_at`/`end_at`/`is_active`）、`updated_at` はトリガ更新。`ck_projects_period` CHECK制約あり |
+| `sp_update_project` | SP | `p_project_id=:project_id` | 指定フィールドのみ更新。`updated_at` はトリガ更新、`ck_projects_period`を適用 |
 | project_members / tasks | SELECT + GROUP BY | `project_id=:pid` | レスポンス用の集計（`01_get_projects.md` と同じ方式） |
 
 **Redis**

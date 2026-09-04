@@ -14,20 +14,20 @@
 | 項目 | 内容 |
 |------|------|
 | 対象 | `core/deps.py`（`require_admin` / `require_project_member` / `require_project_owner`）、`service/*` 内の投稿者判定ロジック |
-| 責務 | `users.role`（`member`/`admin`）、プロジェクト所属（`project_members`）、プロジェクトオーナー（`projects.owner_id`）、コメント投稿者（`task_comments.user_id`）の4段階で認可を判定し、[基本設計§5 認可マトリクス](../../basic_design/04_api.md)をDI関数として実装する |
+| 責務 | `users.role`（`member`/`admin`）、プロジェクト所属（`project_members`）、プロジェクトオーナー（`projects.owner_id`）、コメント投稿者（`task_comments.user_id`）を、DBの事実判定とAPIのHTTP変換に分離して実装する |
 | 適用条件 | `get_current_user`（[./00_strategy_base.md](./00_strategy_base.md)）で解決済みの `CurrentUser` が存在するリクエストすべて |
 | 依存先 | PostgreSQL（`users` / `projects` / `project_members` / `task_comments`）。Redis・トークンには依存しない（認可はDBの現在値のみを見る） |
-| 実装ファイル | `api/app/core/deps.py`、`api/app/repository/project_repository.py`（`is_member` 等）、`api/app/service/task_service.py` / `comment_service.py`（投稿者判定） |
+| 実装ファイル | `api/app/core/deps.py`、`api/app/repository/`（SP/FN薄いラッパー）、`api/app/service/`（取得済みデータ同士の比較・HTTP変換） |
 
 ## 2. 構成要素
 
 | 要素 | 種別 | 責務 | 備考 |
 |------|------|------|------|
 | `require_admin` | DI関数 | `role == 'admin'` を強制 | [./00_strategy_base.md](./00_strategy_base.md) §8.7 で定義済み。本書では認可マトリクスとの対応のみ扱う |
-| `require_project_member` | DI関数 | admin以外は `project_members` の存在を確認し、`Project` を返す | 非所属・不存在は区別せず404 |
-| `require_project_owner` | DI関数 | admin または `owner_id == user.id` を確認し、`Project` を返す | `require_project_member` を内部で合成する |
-| `project_repository.is_member` | リポジトリ関数 | `project_members` にレコードが存在するかを真偽値で返す | `require_project_member` から呼ばれる |
-| `project_repository.get_by_id` | リポジトリ関数 | `project_id` に対応する `Project` を取得 | 存在しなければ `None` |
+| `require_project_member` | DI関数 | `fn_get_project` と `fn_is_project_member` の戻り値を受け、非所属・不存在を404へ変換 | 所属可否の事実判定はDB側 |
+| `require_project_owner` | DI関数 | `fn_get_project` の `owner_id` と取得済み `CurrentUser.id` を比較し、非オーナーを403へ変換 | admin bypassは取得済みroleとの比較 |
+| `project_repository.is_member` | リポジトリ関数 | `SELECT fn_is_project_member(:project_id, :user_id)` の結果を返す | 業務SQLを持たない |
+| `project_repository.get_by_id` | リポジトリ関数 | `SELECT fn_get_project(:project_id)` の結果を返す | 存在しなければ `None` |
 | コメント投稿者判定 | サービス内関数（DIではなく通常関数） | `user.id == comment.user_id or user.role == 'admin'` を判定 | `project_members` 経由の404判定の後段でのみ実行（§6参照） |
 
 ## 3. 設定項目（環境変数）
@@ -44,7 +44,7 @@
 |------|------|------|
 | 入力 | `CurrentUser`（`get_current_user` の戻り値） | `id` / `role` / `is_active` |
 | 入力 | パスパラメータ `project_id` / `comment_id` / `task_id` 等 | ルーターからDIへ渡される |
-| 入力 | `AsyncSession`（`get_db`） | `project_members` / `projects` / `task_comments` のSELECT |
+| 入力 | `AsyncSession`（`get_db`） | repository経由の `fn_get_project` / `fn_is_project_member` / `fn_get_comment_with_task` 呼び出し |
 | 出力 | `Project`（`require_project_member` / `require_project_owner`） | 後続のルーター・サービスが再利用する、認可確認済みのORMオブジェクト |
 | 出力 | HTTP 403 `FORBIDDEN` | ロール・オーナー・投稿者いずれの条件も満たさない場合 |
 | 出力 | HTTP 404 `NOT_FOUND` | プロジェクト非所属・プロジェクト不存在・非所属コメント |
@@ -63,7 +63,7 @@ sequenceDiagram
 
     R->>DEP: "Depends(require_project_member)"
     DEP->>PR: "get_by_id(project_id)"
-    PR->>PG: "SELECT * FROM projects WHERE id = :project_id"
+    PR->>PG: "SELECT fn_get_project(:project_id)"
     alt プロジェクトが存在しない
         PG-->>PR: なし
         DEP-->>R: "404 NOT_FOUND"
@@ -73,7 +73,7 @@ sequenceDiagram
             DEP-->>R: "Project（所属確認をスキップ）"
         else "user.role == 'member'"
             DEP->>PR: "is_member(project_id, user.id)"
-            PR->>PG: "SELECT 1 FROM project_members WHERE project_id=? AND user_id=?"
+            PR->>PG: "SELECT fn_is_project_member(:project_id, :user_id)"
             alt 所属している
                 PG-->>PR: 1行
                 DEP-->>R: Project
@@ -122,11 +122,12 @@ sequenceDiagram
 
     R->>S: "update_comment(comment_id, user, payload)"
     S->>TR: "get_comment_with_task(comment_id)"
+    TR->>TR: "SELECT fn_get_comment_with_task(:comment_id)"
     alt コメントが存在しない
         TR-->>S: None
         S-->>R: "NotFoundError → 404"
     else 存在する
-        TR-->>S: "comment（taskをselectinload）"
+        TR-->>S: "fn_get_comment_with_taskの結果"
         alt "user.role != 'admin' かつ project_membersに非所属"
             S-->>R: "NotFoundError → 404（所属有無を秘匿）"
         else 所属している or admin
@@ -176,8 +177,8 @@ flowchart TB
 | 引数 / 入力 | `project_id`：パスパラメータ。`user`：認証済みユーザー。`db`：DBセッション |
 | 戻り値 / 出力 | `Project`（ORMインスタンス） |
 | 送出例外 / 失敗条件 | `NotFoundError`（→404）：`project_id` が存在しない、または `user.role == 'member'` かつ `project_members` に不在 |
-| 処理内容 | 1. `project_repository.get_by_id(db, project_id)` 2. `None` なら `NotFoundError` 3. `user.role == 'admin'` なら即座にProjectを返す 4. それ以外は `project_repository.is_member(db, project_id, user.id)` を確認 5. `False` なら `NotFoundError` 6. `True` ならProjectを返す |
-| 副作用 | なし（SELECTのみ） |
+| 処理内容 | 1. `project_repository.get_by_id` が `SELECT fn_get_project(:project_id)` を呼ぶ 2. 空集合なら404 3. `project_repository.is_member` が `SELECT fn_is_project_member(:project_id, :user_id)` を呼ぶ 4. `False`なら404、`True`ならProjectを返す。admin bypassはFNの戻り値に含める |
+| 副作用 | なし（FN呼び出しのみ） |
 
 ### 8.2 `core/deps.py :: require_project_owner`
 
@@ -198,7 +199,7 @@ flowchart TB
 | 引数 / 入力 | `project_id` / `user_id` |
 | 戻り値 / 出力 | `bool` |
 | 送出例外 / 失敗条件 | なし |
-| 処理内容 | `SELECT 1 FROM project_members WHERE project_id = :project_id AND user_id = :user_id` を実行し、行の有無を返す |
+| 処理内容 | `SELECT fn_is_project_member(:project_id, :user_id)` を実行し、FNのbooleanを返す。repositoryに所属判定SQLを持たせない |
 | 副作用 | なし |
 
 ### 8.4 `service/comment_service.py :: assert_comment_editable`（投稿者判定・イメージ）
@@ -226,11 +227,13 @@ flowchart LR
     DEP_ADMIN --> DEP_USER
 
     DEP_MEMBER --> PROJREPO["project_repository<br/>get_by_id / is_member"]
-    PROJREPO --> DB[("PostgreSQL:<br/>projects / project_members")]
+    PROJREPO --> FN["fn_get_project / fn_is_project_member"]
+    FN --> DB[("PostgreSQL:<br/>projects / project_members")]
 
     COMMENTSVC["service/comment_service.py<br/>assert_comment_editable"] --> DEP_MEMBER
     COMMENTSVC --> TASKREPO["task_repository::get_comment_with_task"]
-    TASKREPO --> DB2[("PostgreSQL: task_comments")]
+    TASKREPO --> FN2["fn_get_comment_with_task"]
+    FN2 --> DB2[("PostgreSQL: task_comments")]
 ```
 
 ## 10. セキュリティ・非機能考慮
@@ -239,7 +242,7 @@ flowchart LR
 |------|------|------|
 | 情報漏洩防止（存在有無の秘匿） | 非所属メンバーには一貫して404を返し、プロジェクト・タスク・コメントの存在有無を推測させない | [基本設計§9.2](../../basic_design/03_auth.md) |
 | 権限不足の明示 | 所属が確認できた後の権限不足（非オーナー・非投稿者）は403とし、404で隠す対象を「所属可否」に限定する | 同上・利用者へのフィードバック可読性 |
-| admin優先 | `require_project_member` / `require_project_owner` は `role == 'admin'` を最初に判定し、以降のDB問い合わせ（`is_member`）を省略する | パフォーマンスと単純化 |
+| admin判定 | `fn_is_project_member` が有効adminを含めて事実判定する。API層は戻り値を404/403へ変換し、同じSQL条件を複製しない | DB責務の一元化 |
 | DBの現在値を正とする | `CurrentUser.role` は `get_current_user`（[./00_strategy_base.md](./00_strategy_base.md)）内で毎リクエストDBから再取得済みであり、本書のDI関数はそれをそのまま用いる。RBAC層独自のキャッシュは持たない | ロール変更・所属変更を即時反映するため |
 | `/admin/*` の扱い | プロジェクト単位のリソースとは異なる名前空間として扱い、非adminには404ではなく一律403を返す | 認可マトリクス（[../../basic_design/04_api.md](../../basic_design/04_api.md) §5）との整合 |
 | ログ出力 | 403/404いずれも発生時にアプリログへ `user_id` / `project_id` / 判定結果を記録し、レスポンスボディには含めない | 運用調査と情報漏洩防止の両立 |
@@ -248,17 +251,17 @@ flowchart LR
 
 | No | 区分 | ケース | 前提 | 期待結果 | テスト名案 |
 |----|------|--------|------|----------|-----------|
-| 1 | 単体 | `require_project_member` がadminで所属確認をスキップして通過 | `role='admin'`、非所属プロジェクト | 例外を送出せずProjectを返す | `test_require_project_member_admin_bypass` |
-| 2 | 単体 | `require_project_member` が所属memberで通過 | `role='member'`、`project_members`に登録済み | Projectを返す | `test_require_project_member_member_ok` |
-| 3 | 単体 | `require_project_member` が非所属memberで404 | `role='member'`、`project_members`に未登録 | `NotFoundError` | `test_require_project_member_non_member_404` |
-| 4 | 単体 | `require_project_member` が不存在project_idで404 | 存在しないUUID | `NotFoundError` | `test_require_project_member_project_missing_404` |
+| 1 | 結合 | `fn_is_project_member` がadminを所属扱いにする | `role='admin'`、非所属プロジェクト | `true` → APIはProjectを返す | `test_fn_is_project_member_admin_bypass` |
+| 2 | 結合 | `fn_is_project_member` が所属memberを許可する | `role='member'`、`project_members`に登録済み | `true` → Projectを返す | `test_fn_is_project_member_member_ok` |
+| 3 | 結合 | `fn_is_project_member` が非所属memberを拒否する | `role='member'`、`project_members`に未登録 | `false` → `404 NOT_FOUND` | `test_fn_is_project_member_non_member_404` |
+| 4 | 結合 | `fn_get_project` が不存在を空集合で返す | 存在しないUUID | 空集合 → `404 NOT_FOUND` | `test_fn_get_project_missing_404` |
 | 5 | 単体 | `require_project_owner` がオーナーで通過 | `owner_id == user.id` | Projectを返す | `test_require_project_owner_owner_ok` |
 | 6 | 単体 | `require_project_owner` が所属member（非オーナー）で403 | `owner_id != user.id`、所属済み | `ForbiddenError` | `test_require_project_owner_non_owner_403` |
 | 7 | 単体 | `require_project_owner` がadminで403にならず通過 | `role='admin'`、非オーナー・非所属 | Projectを返す | `test_require_project_owner_admin_bypass` |
 | 8 | 単体 | `assert_comment_editable` が投稿者本人で許可 | `user.id == comment.user_id` | 例外なし | `test_assert_comment_editable_author_ok` |
 | 9 | 単体 | `assert_comment_editable` がadminで許可 | `role='admin'`、非投稿者 | 例外なし | `test_assert_comment_editable_admin_ok` |
 | 10 | 単体 | `assert_comment_editable` が非投稿者・非adminで403 | `role='member'`、非投稿者 | `ForbiddenError` | `test_assert_comment_editable_forbidden` |
-| 11 | 結合 | ロール変更直後にadmin判定が即時反映される | member→adminへ更新後、既存セッション/トークンのまま`require_project_member`実行 | admin bypassが適用される | `test_role_change_reflected_in_rbac`（[./00_strategy_base.md](./00_strategy_base.md) テスト6と対）|
+| 11 | 結合 | ロール変更直後にadmin判定が即時反映される | member→adminへSP更新後、既存セッション/トークンのままFN実行 | `fn_is_project_member=true` | `test_role_change_reflected_in_rbac`（[./00_strategy_base.md](./00_strategy_base.md) テスト6と対）|
 | 12 | 網羅できない範囲 | 大量プロジェクト・大量メンバーでの`is_member`のクエリ性能 | - | 自動テスト対象外（[../database/05_table_project_members.md](../database/05_table_project_members.md)のインデックス設計で担保） | - |
 
 ## 12. 不明点・要検討事項

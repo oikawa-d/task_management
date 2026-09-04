@@ -96,9 +96,9 @@ sequenceDiagram
     FE->>R: "GET /api/projects/{pid}/members/candidates?q=han"
     R->>D: 認証 + オーナー/admin判定
     D-->>R: Project
-    R->>S: search_candidates(project, q)
-    S->>UR: search_by_prefix(q, exclude_project_id=project.id, limit=MEMBER_CANDIDATE_SEARCH_LIMIT)
-    UR->>PG: "SELECT id, username, last_name, first_name FROM users\nWHERE (lower(username) LIKE lower(:q)||'%' OR ...)\nAND id NOT IN (SELECT user_id FROM project_members WHERE project_id=:pid)\nAND is_active = true\nLIMIT :limit"
+    R->>S: fn_search_member_candidates(project, q)
+    S->>UR: SELECT fn_search_member_candidates(project.id, q, limit)
+    UR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>UR: 行集合
     UR-->>S: list[CandidateRow]
     S-->>R: CandidateListResponse
@@ -117,7 +117,7 @@ flowchart TB
     C -->|Yes| D{"require_project_owner"}
     D -->|非所属 or 不存在| E4["404 NOT_FOUND"]
     D -->|所属だが権限不足| E5["403 FORBIDDEN"]
-    D -->|Yes| F["user_repository.search_by_prefix実行<br/>既存メンバー除外・is_active=trueのみ・LIMIT付き"]
+    D -->|Yes| F["fn_search_member_candidates実行<br/>既存メンバー除外・is_active=trueのみ・LIMIT付き"]
     F --> G["CandidateListResponseへ変換<br/>emailを含めない"]
     G --> H["200 レスポンス返却"]
 ```
@@ -132,29 +132,29 @@ flowchart TB
 | 引数 | q：検索キーワード、project：検証済みプロジェクト |
 | 戻り値 | `CandidateListResponse` |
 | 送出例外 | なし |
-| 処理内容 | 1. `project_service.search_candidates(project, q)` を呼び出す 2. 結果をそのまま返す |
+| 処理内容 | 1. `project_service.fn_search_member_candidates(project, q)` を呼び出す 2. 結果をそのまま返す |
 | 副作用 | なし |
 
-### 6.2 `service/project_service.py :: search_candidates`
+### 6.2 `service/project_service.py :: fn_search_member_candidates`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def search_candidates(project: Project, q: str) -> CandidateListResponse` |
+| シグネチャ | `async def fn_search_member_candidates(project: Project, q: str) -> CandidateListResponse` |
 | 引数 | project、q（前後空白をトリム済みの検索文字列） |
 | 戻り値 | `CandidateListResponse`（emailを含まない） |
 | 送出例外 | なし |
-| 処理内容 | 1. `q.strip()` を行い空文字なら空配列を返す 2. `user_repository.search_by_prefix(q, exclude_project_id=project.id, limit=settings.MEMBER_CANDIDATE_SEARCH_LIMIT)` を呼び出す 3. 各行を `CandidateSummary`（user_id/username/display_name）へ変換 |
+| 処理内容 | 1. `q.strip()` を行い空文字なら空配列を返す 2. `fn_search_member_candidates(q, exclude_project_id=project.id, limit=settings.MEMBER_CANDIDATE_SEARCH_LIMIT)` を呼び出す 3. 各行を `CandidateSummary`（user_id/username/display_name）へ変換 |
 | 副作用 | なし |
 
-### 6.3 `repository/user_repository.py :: search_by_prefix`
+### 6.3 `repository/project_repository.py :: fn_search_member_candidates`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def search_by_prefix(db: AsyncSession, q: str, exclude_project_id: UUID, limit: int) -> list[UserRow]` |
+| シグネチャ | `async def fn_search_member_candidates(db: AsyncSession, project_id: UUID, q: str, limit: int) -> list[UserRow]` |
 | 引数 | db、q、exclude_project_id：この`project_id`の既存メンバーを除外、limit：`MEMBER_CANDIDATE_SEARCH_LIMIT` から渡す上限件数 |
-| 戻り値 | 条件に合致する `users` 行（`id`, `username`, `last_name`, `first_name`） |
+| 戻り値 | `fn_search_member_candidates` の結果を写像した候補行 |
 | 送出例外 | なし |
-| 処理内容 | 1. `lower(username) LIKE lower(:q) \|\| '%'` または `lower(last_name \|\| first_name) LIKE lower(:q) \|\| '%'` で前方一致検索 2. `project_members` のサブクエリで既存メンバーを除外 3. `is_active = true` で絞り込み（無効化ユーザーは招待対象から除外） 4. `ORDER BY username LIMIT :limit` |
+| 処理内容 | `SELECT fn_search_member_candidates(:project_id, :query, :limit, :offset)` のみを発行する。前方一致、既存メンバー除外、`is_active=true`、順序、上限はFN内部で処理する |
 | 副作用 | なし |
 
 ## 7. 関数相関図
@@ -162,8 +162,8 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["projects_router.search_member_candidates"] --> D["deps.require_project_owner"]
-    R --> S["project_service.search_candidates"]
-    S --> UR["user_repository.search_by_prefix"]
+    R --> S["project_service.fn_search_member_candidates"]
+    S --> UR["fn_search_member_candidates"]
     UR --> PG[("PostgreSQL<br/>users LEFT NOT IN project_members")]
 ```
 
@@ -183,7 +183,17 @@ flowchart LR
     API -->|"SELECT"| P
 ```
 
-## 9. データアクセス一覧
+## 9. SP/FNデータアクセス一覧
+
+### 9.1 正式なDBアクセス契約
+
+本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+
+| 種別 | 契約 | 説明 |
+|------|------|------|
+| fn_search_member_candidates | `fn_search_member_candidates(p_project_id, p_query, p_limit, p_offset)` | fn_search_member_candidatesを呼び出し、結果をレスポンスへ写像する |
+
+repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
 | ストア | テーブル／キー | 操作 | 条件・TTL | 備考 |
 |--------|----------------|------|-----------|------|
@@ -216,18 +226,18 @@ flowchart LR
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|----------------|
-| T1 | 結合 | usernameの前方一致検索 | `q="han"`、`username="hanako"`が存在 | 200、該当ユーザーを含む | `test_search_candidates_username_prefix` |
-| T2 | 結合 | 表示名の前方一致検索 | `q="鈴木"`、`last_name="鈴木"` | 200、該当ユーザーを含む | `test_search_candidates_display_name_prefix` |
-| T3 | 結合 | 既存メンバーは除外される | 対象ユーザーが既にproject_membersに存在 | 200、items に含まれない | `test_search_candidates_excludes_existing_members` |
-| T4 | 結合 | 無効化ユーザーは除外される | `is_active=false` | 200、items に含まれない | `test_search_candidates_excludes_inactive_users` |
-| T5 | 結合 | レスポンスにemailが含まれない | 任意の検索結果 | レスポンスJSONに `email` キーが存在しない | `test_search_candidates_response_excludes_email` |
-| T6 | 結合 | qが空文字 | `q=""` | 422 VALIDATION_ERROR | `test_search_candidates_empty_q_422` |
-| T7 | 結合 | qが51文字以上 | 51文字の文字列 | 422 VALIDATION_ERROR | `test_search_candidates_too_long_q_422` |
-| T8 | 結合 | 所属memberだがオーナーでない | 一般memberが実行 | 403 FORBIDDEN | `test_search_candidates_forbidden_403` |
-| T9 | 結合 | 非所属memberが実行 | project_membersに未登録 | 404 NOT_FOUND | `test_search_candidates_non_member_404` |
-| T10 | 結合 | 該当ユーザーなし | `q="zzz999"` | 200、items=[] | `test_search_candidates_no_match_empty_list` |
-| T11 | 結合 | 結果件数がLIMITを超える | 該当ユーザーが上限超過数存在 | items.length == MEMBER_CANDIDATE_SEARCH_LIMIT | `test_search_candidates_limit_applied` |
-| T12 | 単体 | user_repository.search_by_prefixの呼び出し引数検証 | repositoryをモック | exclude_project_id/limitが正しく渡る | `test_service_search_candidates_calls_repository` |
+| T1 | 結合 | usernameの前方一致検索 | `q="han"`、`username="hanako"`が存在 | 200、該当ユーザーを含む | `test_fn_search_member_candidates_username_prefix` |
+| T2 | 結合 | 表示名の前方一致検索 | `q="鈴木"`、`last_name="鈴木"` | 200、該当ユーザーを含む | `test_fn_search_member_candidates_display_name_prefix` |
+| T3 | 結合 | 既存メンバーは除外される | 対象ユーザーが既にproject_membersに存在 | 200、items に含まれない | `test_fn_search_member_candidates_excludes_existing_members` |
+| T4 | 結合 | 無効化ユーザーは除外される | `is_active=false` | 200、items に含まれない | `test_fn_search_member_candidates_excludes_inactive_users` |
+| T5 | 結合 | レスポンスにemailが含まれない | 任意の検索結果 | レスポンスJSONに `email` キーが存在しない | `test_fn_search_member_candidates_response_excludes_email` |
+| T6 | 結合 | qが空文字 | `q=""` | 422 VALIDATION_ERROR | `test_fn_search_member_candidates_empty_q_422` |
+| T7 | 結合 | qが51文字以上 | 51文字の文字列 | 422 VALIDATION_ERROR | `test_fn_search_member_candidates_too_long_q_422` |
+| T8 | 結合 | 所属memberだがオーナーでない | 一般memberが実行 | 403 FORBIDDEN | `test_fn_search_member_candidates_forbidden_403` |
+| T9 | 結合 | 非所属memberが実行 | project_membersに未登録 | 404 NOT_FOUND | `test_fn_search_member_candidates_non_member_404` |
+| T10 | 結合 | 該当ユーザーなし | `q="zzz999"` | 200、items=[] | `test_fn_search_member_candidates_no_match_empty_list` |
+| T11 | 結合 | 結果件数がLIMITを超える | 該当ユーザーが上限超過数存在 | items.length == MEMBER_CANDIDATE_SEARCH_LIMIT | `test_fn_search_member_candidates_limit_applied` |
+| T12 | 結合（実DB・実SP） | fn_search_member_candidatesの呼び出し引数検証 | 実DB・実SPで検証 | exclude_project_id/limitが正しく渡る | `test_service_fn_search_member_candidates_calls_repository` |
 
 ## 13. 不明点・要検討事項
 

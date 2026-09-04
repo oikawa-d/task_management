@@ -14,6 +14,12 @@
 | ORM | SQLAlchemy 2.x（`Mapped` / `mapped_column` の宣言的スタイル） |
 | マイグレーション | Alembic。`db/migrations/` は SQL の手動DDL置き場、`api/alembic/versions/` が実行される正 |
 
+### 1.1 業務ロジックを伴うDBアクセスの責務
+
+参照系・更新系を問わず、業務ロジックを伴うDBアクセスの正はPostgreSQLのSP/FN層とする。APIのrepository層は `CALL sp_xxx(...)` / `SELECT fn_xxx(...)` の薄いラッパーとDTO写像だけを担い、テーブルへの直接CRUD、業務判定、複数テーブルの整合性制御を行わない。詳細な全シグネチャとSQLSTATE対応は[詳細設計08](../detailed_design/database/08_db_functions.md)を正とする。
+
+例外は `GET /api/health` の `SELECT 1`、AlembicのDDL/seed、テストfixtureだけである。`sp_create_task` / `sp_update_task` はadvisory lock、position再採番、条件付き通知INSERTまでを1業務トランザクションで完結し、`is_due_today` の独立サービス関数は設けない。
+
 ## 2. ER図
 
 > drawio版：[diagrams/03_er_diagram.drawio](./diagrams/03_er_diagram.drawio)（Redisキー・インデックス・DB関数の一覧を併記）
@@ -474,7 +480,7 @@ flowchart LR
 | 戻り値 | `BOOLEAN` |
 | 処理 | `users.is_active = true` のユーザーについて、`project_members` に該当行が存在するか、または `users.role = 'admin'` であれば `true` |
 | 用途 | 認可チェックのDB側での再確認、およびSQLレベルの検証テスト |
-| 備考 | アプリ層でも同等の判定を行う（二重防御）。正はアプリ層 |
+| 備考 | `require_project_member` 等の実運用RBACで呼び出す。所属の事実判定は本関数を正とし、404/403へのHTTP変換だけAPI層で行う |
 
 ### 5.3 `db/functions/fn_next_task_position.sql`
 
@@ -523,6 +529,17 @@ flowchart LR
 | 用途 | batch履歴の保持期間管理。`BATCH_HISTORY_RETENTION_DAYS`（既定30日）から渡す |
 | 実行方法 | `batch`のジョブ終了処理で日次実行 |
 
+### 5.8 業務CRUD・参照系SP/FN
+
+projects、project_members、tasks、task_comments、notifications、admin操作のDBアクセスは、[詳細設計08](../detailed_design/database/08_db_functions.md) §2のSP/FNへ統一する。repositoryからの直接 `SELECT` / `INSERT` / `UPDATE` / `DELETE` は作成しない。`sp_create_task` / `sp_update_task` 内の通知INSERTは独立した通知作成SPを経由せず、`(user_id, dedupe_key)` の一意制約と `ON CONFLICT DO NOTHING` で冪等性を確保する。
+
+| DB責務 | 正となる呼び出し |
+|--------|------------------|
+| プロジェクト・所属 | `fn_get_project` / `fn_list_projects` / `fn_is_project_member` / `fn_search_member_candidates` / `fn_list_project_members`、`sp_create_project` / `sp_update_project` / `sp_deactivate_project` / `sp_add_project_member` / `sp_remove_project_member` |
+| タスク・コメント | `fn_get_project_board` / `fn_get_task` / `fn_list_tasks` / `fn_list_task_comments` / `fn_get_comment_with_task`、`sp_create_task` / `sp_update_task` / `sp_deactivate_task` / `sp_add_task_comment` / `sp_update_task_comment` / `sp_delete_task_comment` |
+| 通知 | `fn_list_notifications` / `fn_count_unread_notifications`、`sp_mark_notification_read` / `sp_mark_all_notifications_read` |
+| admin | `fn_admin_list_users` / `fn_admin_list_projects` / `fn_admin_list_login_history`、`sp_admin_update_user_role` / `sp_admin_update_user_status` / `sp_admin_deactivate_project` |
+
 ## 6. マイグレーション方針
 
 ```mermaid
@@ -546,13 +563,13 @@ flowchart LR
 | No | 用途 | 概要 | 使用インデックス |
 |----|------|------|-----------------|
 | Q-1 | ログイン | `WHERE (lower(email)=:v OR lower(username)=:v) AND is_active`（取得後に `email_verified_at IS NULL` を判定） | `uq_users_email` / `uq_users_username` |
-| Q-2 | ダッシュボード | `projects JOIN project_members ON ... WHERE pm.user_id = :me` | `ix_project_members_user_id` |
-| Q-3 | カンバン取得 | `WHERE project_id=:pid`。`todo` → `in_progress` → `done` の順に列ごとに `position` 昇順でグルーピング | `uq_tasks_project_status_position` |
-| Q-4 | タスク詳細 | tasks + assignee + comments（コメントは別クエリで取得しN+1を回避） | `ix_task_comments_task_created` |
-| Q-5 | 管理者ユーザー一覧 | `ORDER BY created_at DESC LIMIT/OFFSET` | `ix_users_created_at` |
-| Q-6 | ログイン履歴 | `WHERE user_id=:uid ORDER BY created_at DESC LIMIT 50` | `ix_login_history_user_created` |
-| Q-7 | 期限通知バッチ | `WHERE status <> 'done' AND assignee_id IS NOT NULL AND due_at IS NOT NULL AND due_at <= :threshold`（`:threshold` = 翌日10:00 JST をUTCへ変換した値） | `ix_tasks_due_at_open` |
-| Q-8 | 未読通知件数 | `SELECT count(*) FROM notifications WHERE user_id=:me AND read_at IS NULL` | `ix_notifications_user_unread` |
-| Q-9 | 通知一覧 | `WHERE user_id=:me ORDER BY created_at DESC LIMIT/OFFSET` | `ix_notifications_user_created` |
+| Q-2 | ダッシュボード | `SELECT fn_list_projects(:me, false, :limit, :offset)` | `ix_project_members_user_id` |
+| Q-3 | カンバン取得 | `SELECT fn_get_project_board(:pid, false)`。`todo` → `in_progress` → `done`、position昇順 | `uq_tasks_project_status_position` |
+| Q-4 | タスク詳細 | `SELECT fn_get_task(:task_id)` + `SELECT fn_list_task_comments(:task_id)` | `ix_task_comments_task_created` |
+| Q-5 | 管理者ユーザー一覧 | `SELECT fn_admin_list_users(...)` | `ix_users_created_at` |
+| Q-6 | ログイン履歴 | `SELECT fn_admin_list_login_history(:uid, ..., 50, 0)` | `ix_login_history_user_created` |
+| Q-7 | 期限通知バッチ | `SELECT fn_list_due_notification_tasks(:threshold)`（`:threshold` = 翌日10:00 JST をUTCへ変換した値） | `ix_tasks_due_at_open` |
+| Q-8 | 未読通知件数 | `SELECT fn_count_unread_notifications(:me)` | `ix_notifications_user_unread` |
+| Q-9 | 通知一覧 | `SELECT fn_list_notifications(:me, :unread_only, :limit, :offset)` | `ix_notifications_user_created` |
 
-> Q-2 / Q-3 では SQLAlchemy の `selectinload` を用い、N+1 クエリを避ける。
+> Q-2 / Q-3 の結合・集約はFN内部で行い、repositoryはORMの `selectinload` を使わない。FNの戻り値を1回の結果セットとしてDTOへ写像し、N+1を避ける。

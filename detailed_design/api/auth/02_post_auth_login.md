@@ -127,14 +127,14 @@ sequenceDiagram
             R-->>FE: 429 TOO_MANY_ATTEMPTS
         else 継続可能
             S->>URP: find_by_identifier(identifier)
-            URP->>PG: SELECT * FROM users WHERE lower(username)=? OR lower(email)=?
+            URP->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
             PG-->>URP: user行 or なし
             S->>S: argon2 verify（該当なしでもダミーハッシュ検証してタイミングを均一化）
             alt 認証失敗（該当なし or パスワード不一致）
                 S->>RS: incr_login_failure(identifier, client_ip, window)
                 RS->>RD: INCR login_fail:{key_hash} / 初回EXPIRE
                 S->>LRP: insert(login_history, success=false, failure_reason='invalid_credentials')
-                LRP->>PG: INSERT login_history
+                LRP->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
                 S-->>R: InvalidCredentialsError
                 R-->>FE: 401 INVALID_CREDENTIALS
             else 認証成功
@@ -161,7 +161,7 @@ sequenceDiagram
                         STR-->>S: LoginResult(auth_mode='jwt', access_token, refresh_token, csrf_token)
                     end
                     S->>LRP: insert(success=true, login_method=auth_mode)
-                    LRP->>PG: INSERT login_history
+                    LRP->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
                     S-->>R: LoginResult
                     alt session
                         R-->>FE: 204 + Set-Cookie(cerberus_sid, cerberus_csrf)
@@ -222,7 +222,7 @@ flowchart TB
 | 引数 | `identifier`、`password`、`request`、`response`、`db`、`strategy` |
 | 戻り値 | `LoginResult`（`auth_mode`、必要に応じ`access_token`等を保持。Cookie設定は内部で完了済み） |
 | 送出例外 | `InvalidCredentialsError`(401)、`UserInactiveError`(403)、`EmailNotVerifiedError`(403)、`TooManyAttemptsError`(429) |
-| 処理内容 | 1. `redis_store`でレート制限確認 2. `user_repository.find_by_identifier`でユーザー取得 3. `core/security.verify_password`で照合（該当なし時もダミーハッシュで検証しタイミング差を縮小） 4. 失敗時は`incr_login_failure`＋`login_history`記録＋例外送出 5. 成功時は`reset_login_failure` 6. `is_active`/`email_verified_at`を順に確認（§6.2判定順序） 7. `strategy.login(user, request, response)`を呼び認証状態を確立 8. `login_history_repository.insert`で成功記録 9. `LoginResult`を返す |
+| 処理内容 | 1. `redis_store`でレート制限確認 2. `user_repository.fn_find_user_by_identifier`でユーザー取得 3. `core/security.verify_password`で照合（該当なし時もダミーハッシュで検証しタイミング差を縮小） 4. 失敗時は`incr_login_failure`＋`login_history`記録＋例外送出 5. 成功時は`reset_login_failure` 6. `is_active`/`email_verified_at`を順に確認（§6.2判定順序） 7. `strategy.login(user, request, response)`を呼び認証状態を確立 8. `login_history_repository.sp_record_login_history`で成功記録 9. `LoginResult`を返す |
 | 副作用 | Redis: `login_fail:{key_hash}`のINCR/DEL、Strategy経由で`session:{sid}`等またはRefresh系キーを作成。DB: `login_history` INSERT。Cookie: `response`へSet-Cookie |
 
 ### 6.3 `auth/session_auth.py :: SessionAuthStrategy.login`
@@ -247,7 +247,7 @@ flowchart TB
 | 処理内容 | 1. `family_id = uuid4()` を生成 2. `_issue_tokens(user, family_id)`でaccess token（HS256, TTL=`ACCESS_TOKEN_TTL_SECONDS`）とrefresh token（`token_urlsafe(48)`）を発行 3. `redis_store.store_refresh_token(refresh, user.id, family_id, ttl=REFRESH_TTL_SECONDS)` 4. `csrf_token = token_urlsafe(32)`を生成（Redis保存なし、Cookie値がそのまま検証値） 5. `response.set_cookie`で`cerberus_rt`（HttpOnly, Path=`/api/auth`）と`cerberus_csrf`（非HttpOnly, Path=`/`）を設定 |
 | 副作用 | Redis: `refresh:{hash}` / `user_refresh:{uid}` 作成。Cookie発行（access_tokenはCookie化しない） |
 
-### 6.5 `repository/login_history_repository.py :: insert`
+### 6.5 `repository/login_history_repository.py :: sp_record_login_history`
 
 | 項目 | 内容 |
 |------|------|
@@ -255,7 +255,7 @@ flowchart TB
 | 引数 | 上記のとおり |
 | 戻り値 | なし |
 | 送出例外 | `RedisError`は無関係。DB接続不能時は`OperationalError`（503） |
-| 処理内容 | `INSERT INTO login_history(...)` を実行（`login_method`は`'session'`/`'jwt'`、OAuthは別API） |
+| 処理内容 | `CALL sp_record_login_history(:user_id, :login_method, :ip_address, :success)` を実行（`login_method`は`'session'`/`'jwt'`、OAuthは別API） |
 | 副作用 | DB: `login_history` へ1行追加 |
 
 ## 7. 関数相関図
@@ -264,14 +264,14 @@ flowchart TB
 flowchart LR
     R["auth_router.login"] --> S["auth_service.login"]
     S --> RS1["redis_store.incr/reset_login_failure"]
-    S --> URP["user_repository.find_by_identifier"]
+    S --> URP["user_repository.fn_find_user_by_identifier"]
     S --> SEC["core/security.verify_password"]
     S --> FACT["auth/factory.get_auth_strategy"]
     FACT --> SESS["SessionAuthStrategy.login"]
     FACT --> JWTS["JwtAuthStrategy.login"]
     SESS --> RS2["redis_store.create_session"]
     JWTS --> RS3["redis_store.store_refresh_token"]
-    S --> LRP["login_history_repository.insert"]
+    S --> LRP["login_history_repository.sp_record_login_history"]
     RS1 --> RD[("Redis")]
     RS2 --> RD
     RS3 --> RD
@@ -359,3 +359,13 @@ stateDiagram-v2
 |------|------|------|
 | 要検討 | `LOGIN_MAX_ATTEMPTS`（許容失敗回数の上限値）が`02_redis.md`に明記されていない（TTLのみ既定900秒と記載） | 実装時に具体的な閾値を別途決定する必要がある |
 | 確定 | `client_ip`は接続元が`TRUSTED_PROXY_CIDRS`内の場合だけXFFを右から検証して解決し、`login_history`・レート制限と共通化する | 監査ログには`client_ip`、`proxy_peer_ip`、`ip_source`を記録する |
+
+## DBアクセス契約
+
+本APIのDBアクセスは、下記のFN/SP呼び出しをrepositoryの薄いラッパーから実行する。テーブルへの直接CRUD、認証業務の判定、履歴のINSERTはrepositoryに実装しない。healthの `SELECT 1` だけは本契約の対象外である。
+
+| 正式な呼び出し | 契約 |
+|----------------|------|
+| fn_find_user_by_identifier(p_identifier), sp_record_login_history(p_user_id, p_login_method, p_ip_address, p_success) | `detailed_design/database/08_db_functions.md` のシグネチャに従う |
+
+SQLSTATE P0xxxは同文書 §4 の対応表でAPIエラーへ変換し、Redis・メール・JWTの処理はAPI/service層に残す。

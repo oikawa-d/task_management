@@ -238,9 +238,25 @@ flowchart LR
 
 論理削除（`is_active=false`）はDELETE時点の `position`/`status` をそのまま保持し、後続タスクの `position` 詰めは行わない。無効化されたタスクは一覧・カンバンから除外されるだけで、`position` にギャップが生じても列内の並び順（`ORDER BY position`）自体は崩れないため実用上問題ない（物理削除時代の詰め直しロジックは廃止する。§8.8参照）。
 
-## 8. リポジトリ関数詳細
+## 8. SP/FNリポジトリ契約
 
-### 8.1 `repository/task_repository.py :: acquire_status_lock`
+repositoryは下表のSP/FN呼び出しとDTO写像だけを行う。advisory lock、position再採番、version検証、通知INSERTはSP内部へ移し、repositoryで直接 `SELECT` / `INSERT` / `UPDATE` / `DELETE` を行わない。
+
+| repository契約 | DB呼び出し | 戻り値・エラー |
+|----------------|------------|----------------|
+| `acquire_status_lock` / `next_position` | 単独公開しない。`sp_create_task` / `sp_update_task` 内でlock→`fn_next_task_position` | SPトランザクション内でのみ有効 |
+| `insert` | `CALL sp_create_task(:project_id, :created_by, :assignee_id, :title, :body, :status, :due_at, :position)` | `fn_get_task`で作成結果を取得 |
+| `get_by_id_for_update` | `SELECT fn_get_task(:task_id)` | 存在しなければ空集合。行ロックはSP内部 |
+| `update_with_optimistic_lock` / reorder | `CALL sp_update_task(:task_id, :editor_id, :version, ...)` | version不一致は `P0005 TASK_CONFLICT` |
+| `deactivate` / `reactivate` | `CALL sp_deactivate_task(:task_id, :is_active)` | `is_active`だけ変更、position詰めなし |
+| `list_by_project_grouped` | `SELECT fn_get_project_board(:project_id, :include_inactive)` | status/position順のFN結果を3列へ写像 |
+| 横断一覧 | `SELECT fn_list_tasks(:user_id, :project_id, :status, :include_inactive, :limit, :offset)` | 権限スコープはFN内で判定 |
+
+### 8.1 SQL実装参考（SP/FN内部）
+
+以下の既存小節に記載するSQLはSP/FN本体の実装参考であり、repositoryから直接発行しない。`fn_next_task_position` の呼び出し、advisory lock、楽観ロックはSP内へ統合する。
+
+### 8.2 `repository/task_repository.py :: acquire_status_lock`
 
 | 項目 | 内容 |
 |------|------|
@@ -251,7 +267,7 @@ flowchart LR
 | 送出例外 | なし（`pg_advisory_xact_lock` はトランザクション終了時に自動解放） |
 | 処理内容 | 1. `project_id` が `NULL`（未所属タスク）の場合は固定プレースホルダ文字列 `'00000000-0000-0000-0000-000000000000'` に変換してからロックキーを生成する（未所属タスク全体を1つの仮想グループとして直列化し、`uq_tasks_project_status_position` がNULL同士の重複を検出できない問題をアプリ層で補う。§13参照）<br/>2. `project_id`（または上記プレースホルダ）と `status` の組み合わせを64bitハッシュ化してロックキーとする<br/>3. 同一列に対する position 採番・再採番を直列化し、同時作成/移動時の一意制約違反やpositionの飛び・重複を防ぐ |
 
-### 8.2 `repository/task_repository.py :: next_position`
+### 8.3 `repository/task_repository.py :: next_position`
 
 | 項目 | 内容 |
 |------|------|
@@ -262,7 +278,7 @@ flowchart LR
 | 送出例外 | なし |
 | 処理内容 | 1. 呼び出し前に `acquire_status_lock` を同一トランザクションで取得済みであることが前提<br/>2. `fn_next_task_position`（[`08_db_functions.md`](./08_db_functions.md)）が `COALESCE(MAX(position), -1) + 1` を返す |
 
-### 8.3 `repository/task_repository.py :: insert`
+### 8.4 `repository/task_repository.py :: insert`
 
 | 項目 | 内容 |
 |------|------|
@@ -273,7 +289,7 @@ flowchart LR
 | 送出例外 | `ConflictError`（`uq_tasks_project_status_position` 違反時。advisory lock内で `next_position` を呼んでいれば通常発生しない） |
 | 処理内容 | `session.add()` + `flush()`。`version` はDB既定値 `1` を使用 |
 
-### 8.4 `repository/task_repository.py :: get_by_id_for_update`
+### 8.5 `repository/task_repository.py :: get_by_id_for_update`
 
 | 項目 | 内容 |
 |------|------|
@@ -284,7 +300,7 @@ flowchart LR
 | 送出例外 | なし |
 | 処理内容 | 1. `PATCH /tasks/{id}` の直前に行ロック（`FOR UPDATE`）を取得し、`version` チェックとUPDATEの間の競合を防ぐ（advisory lockは「列全体」、本ロックは「この1行」が対象という違いに注意） |
 
-### 8.5 `repository/task_repository.py :: update_with_optimistic_lock`
+### 8.6 `repository/task_repository.py :: update_with_optimistic_lock`
 
 | 項目 | 内容 |
 |------|------|
@@ -295,7 +311,7 @@ flowchart LR
 | 送出例外 | `ConflictError("TASK_CONFLICT")`（`RETURNING` が0行、すなわち `version` 不一致） |
 | 処理内容 | 1. `UPDATE ... WHERE id=:id AND version=:expected_version` で行を絞り込む<br/>2. 影響行数0件なら `version` 不一致とみなし `409 TASK_CONFLICT` に変換<br/>3. status/position が変わる場合は事前に §8.6〜8.7 の再採番処理を同一トランザクションで実施してから本UPDATEを発行する |
 
-### 8.6 `repository/task_repository.py :: reorder_within_status`
+### 8.7 `repository/task_repository.py :: reorder_within_status`
 
 | 項目 | 内容 |
 |------|------|
@@ -306,7 +322,7 @@ flowchart LR
 | 送出例外 | `ConflictError`（COMMIT時に制約違反が残っていた場合。ロジック上は発生しない想定） |
 | 処理内容 | 1. `acquire_status_lock` 済みであることが前提<br/>2. 退避値へ一時移動 → 間の行をシフト → 最終位置を設定、の3段階UPDATEで一意制約の一時的な重複（`DEFERRABLE INITIALLY DEFERRED` によりCOMMITまで許容）を回避しつつ整合させる |
 
-### 8.7 `repository/task_repository.py :: move_to_status_tail`
+### 8.8 `repository/task_repository.py :: move_to_status_tail`
 
 | 項目 | 内容 |
 |------|------|
@@ -317,7 +333,7 @@ flowchart LR
 | 送出例外 | なし（advisory lockで直列化済み） |
 | 処理内容 | `acquire_status_lock(project_id, old_status)` と `(project_id, new_status)` を**キー文字列の昇順**で取得しデッドロックを防止 → 旧列の詰め → 新列末尾へ挿入、の順で実行。`update_with_optimistic_lock` の直前に呼ばれる |
 
-### 8.8 `repository/task_repository.py :: deactivate`
+### 8.9 `repository/task_repository.py :: deactivate`
 
 | 項目 | 内容 |
 |------|------|
@@ -328,7 +344,7 @@ flowchart LR
 | 送出例外 | なし |
 | 処理内容 | 1. `task.is_active = False` としてORMエンティティを更新し `flush()`（`trg_set_updated_at` により `updated_at` も更新）<br/>2. **position の詰め（compaction）は行わない**（物理削除時代の `delete_and_compact` とは異なり、`status`/`position` は変更しない）<br/>3. `task_comments` はDBの `ON DELETE CASCADE` を持つが、`tasks` 行自体を物理削除しないため発火しない。無効化後もコメント履歴は参照可能なまま残る<br/>4. advisory lockは不要（`position` を変更しないため列内の直列化対象にならない） |
 
-### 8.9 `repository/task_repository.py :: reactivate`
+### 8.10 `repository/task_repository.py :: reactivate`
 
 | 項目 | 内容 |
 |------|------|
@@ -339,7 +355,7 @@ flowchart LR
 | 送出例外 | なし |
 | 処理内容 | `PATCH /tasks/{id}` に `is_active=true` を指定した場合に呼ばれる。認可はルータ側（作成者/プロジェクトオーナー/admin）で事前判定する。`position`/`status` はDELETE時点の値のまま復元される |
 
-### 8.10 `repository/task_repository.py :: list_by_project_grouped`
+### 8.11 `repository/task_repository.py :: list_by_project_grouped`
 
 | 項目 | 内容 |
 |------|------|

@@ -126,11 +126,11 @@ sequenceDiagram
     else 検証OK
         R->>S: update_profile(current_user, payload)
         S->>URP: update_profile(db, user_id, 非NULLフィールドのみ)
-        URP->>PG: "UPDATE users SET ... WHERE id=? RETURNING *"
+        URP->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
         PG-->>URP: 更新後のuser行
         URP-->>S: User
         S->>OARP: list_providers(user_id)
-        OARP->>PG: SELECT provider FROM oauth_accounts WHERE user_id=?
+        OARP->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
         PG-->>OARP: providers
         S->>S: profile_completed再算出
         S-->>R: UserProfileResponse
@@ -151,8 +151,8 @@ flowchart TB
     E -->|"一致"| F["pydanticバリデーション"]
     D -->|"No（jwt）"| F
     F -->|"NG（null指定/空文字/文字数/フリガナ形式/未来日）"| E3["422 VALIDATION_ERROR"]
-    F -->|"OK"| G["user_repository.update_profile<br/>指定フィールドのみUPDATE"]
-    G --> H["oauth_accounts SELECT"]
+    F -->|"OK"| G["CALL sp_update_user_profile"]
+    G --> H["SELECT fn_list_user_oauth_accounts"]
     H --> I["profile_completed再算出"]
     I --> J["200 {UserProfileResponse}"]
 ```
@@ -181,7 +181,7 @@ flowchart TB
 | 処理内容 | 1. 各文字列項目は1〜30文字 2. カナ項目は`^[ぁ-んァ-ヶー0-9]+$`相当の正規表現で検証（`01_table_users.md`のDB CHECK制約と同じパターンをアプリ層でも二重防御） 3. `birth_date`は`date.today()`以下であることを検証 4. モデル自体は`None`（未指定）を許可するが、明示的な`null`または空文字列が来た場合にエラーとする判定はservice層の`update_profile`で行う（pydanticの`None`と「JSONで`null`を明示送信」を区別するため、フィールドごとの送信有無は`model_fields_set`で判定する） |
 | 副作用 | なし |
 
-### 6.3 `service/user_service.py :: update_profile`
+### 6.3 `service/user_service.py :: sp_update_user_profile`
 
 | 項目 | 内容 |
 |------|------|
@@ -189,10 +189,10 @@ flowchart TB
 | 引数 | `current_user`、`payload`、`db` |
 | 戻り値 | `UserProfileResponse` |
 | 送出例外 | `ValidationError`（422。`payload.model_fields_set`に含まれるフィールドの値が`None`または空文字列の場合に送出。「指定した値の`null`化禁止」をサービス層で最終確認） |
-| 処理内容 | 1. `payload.model_fields_set`で「クライアントが実際に送信したフィールド」を特定 2. 送信されたフィールドの値が`None`ならバリデーションエラー（`null`への変更禁止） 3. 送信されなかったフィールドは更新対象から除外し`user_repository.update_profile`へは渡さない 4. `user_repository.update_profile(db, current_user.id, 更新対象のみ)`を呼び出す 5. `oauth_account_repository.list_providers`でproviders取得 6. 5項目（`last_name`/`first_name`/`last_name_kana`/`first_name_kana`/`birth_date`）の非NULL判定で`profile_completed`を再算出 7. `UserProfileResponse`を構築して返す |
+| 処理内容 | 1. `payload.model_fields_set`で送信フィールドを特定 2. API層で入力を検証 3. `CALL sp_update_user_profile(current_user.id, ...)` を1回呼ぶ 4. `SELECT fn_list_user_oauth_accounts(current_user.id)` でproviderを取得 5. 取得済みデータから`profile_completed`を算出し応答を構築 |
 | 副作用 | DB更新（`users`テーブルの指定フィールドのみ） |
 
-### 6.4 `repository/user_repository.py :: update_profile`
+### 6.4 `repository/user_repository.py :: sp_update_user_profile`
 
 `../../database/01_table_users.md` §8.4 を参照（担当外だが再利用する既存関数）。本APIでは「呼び出し元（service層）が送信済みフィールドのみを渡す」ため、`COALESCE`ではなく渡されたフィールドのみを`SET`句に含める動的SQL構築を行う（`08_db_functions.md`にも該当関数はなくアプリ層のSQLAlchemy動的更新で実現する）。
 
@@ -202,8 +202,8 @@ flowchart TB
 flowchart LR
     R["users_router.patch_my_profile"] --> DEP["deps.get_current_user / verify_csrf"]
     R --> S["user_service.update_profile"]
-    S --> URP["user_repository.update_profile"]
-    S --> OARP["oauth_account_repository.list_providers"]
+    S --> URP["user_repository.sp_update_user_profile"]
+    S --> OARP["oauth_account_repository.fn_list_user_oauth_accounts"]
     URP --> PG[("PostgreSQL: users")]
     OARP --> PG2[("PostgreSQL: oauth_accounts")]
 ```
@@ -277,3 +277,13 @@ sessionモードの認証解決・CSRF検証（`GET session:{sid}` / `GET csrf:{
 |------|------|------|
 | 要検討 | 基本設計（`04_api.md`§3.2）は「値の`null`への変更は許可しない」とのみ記載し、空文字列（`""`）の扱いには言及がない。本書では空文字列も`null`と同様に拒否する仕様として補完したが、フロントの実装と一致させる必要がある |
 | 要検討 | JSONで「フィールドを省略」した場合と「明示的に`null`を送信」した場合をpydantic側でどう区別するかは、実装（`model_fields_set`の利用）に依存する実装詳細であり、基本設計には記述がない |
+
+## DBアクセス契約
+
+本APIのDBアクセスは、下記のFN/SP呼び出しをrepositoryの薄いラッパーから実行する。テーブルへの直接CRUD、認証業務の判定、履歴のINSERTはrepositoryに実装しない。healthの `SELECT 1` だけは本契約の対象外である。
+
+| 正式な呼び出し | 契約 |
+|----------------|------|
+| sp_update_user_profile(p_user_id, p_last_name, p_first_name, p_last_name_kana, p_first_name_kana, p_birth_date) | `detailed_design/database/08_db_functions.md` のシグネチャに従う |
+
+SQLSTATE P0xxxは同文書 §4 の対応表でAPIエラーへ変換し、Redis・メール・JWTの処理はAPI/service層に残す。

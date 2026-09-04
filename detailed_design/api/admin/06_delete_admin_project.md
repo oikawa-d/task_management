@@ -16,7 +16,7 @@
 | 項目 | 内容 |
 |------|------|
 | エンドポイント | `DELETE /api/admin/projects/{project_id}` |
-| 目的 | 管理者が任意のプロジェクト（自身がオーナー・所属メンバーであるかを問わない）を**論理削除**する（`UPDATE projects SET is_active = false`）。物理削除（`DELETE FROM projects`）は行わない |
+| 目的 | 管理者が任意のプロジェクト（自身がオーナー・所属メンバーであるかを問わない）を**論理削除**する（`CALL sp_admin_deactivate_project`）。物理削除は行わない |
 | 認証 | 必要 |
 | 認可 | admin固定 |
 | CSRF検証 | 必要（session モードの更新系） |
@@ -24,9 +24,9 @@
 | AUTH_MODE差異 | session: `X-CSRF-Token` 検証あり／jwt: ヘッダ方式のためCSRF検証なし |
 | 冪等性 | あり（既に`is_active=false`の対象への再実行も`UPDATE`が0件更新になるだけで204として扱う。プロジェクト自体が存在しない場合のみ404） |
 | レート制限 | 対象外 |
-| トランザクション境界 | `UPDATE projects SET is_active = false WHERE id=:project_id` 一文。`project_members` / `tasks` / `task_comments` は**変更しない**（配下タスクは無効化されず有効なまま残る） |
+| トランザクション境界 | `CALL sp_admin_deactivate_project(:project_id, false)` 1回。`project_members` / `tasks` / `task_comments` は変更しない |
 
-**本APIの意味変更（issue #10）**：従来は物理削除（`DELETE FROM projects`、CASCADEで配下も削除）としていたが、`projects.is_active` 論理削除フラグの導入に伴い、本APIは論理削除（`is_active=false`への更新）に意味を変更する。物理DELETEを実行する経路はアプリケーションAPIとしては提供しない（DBの`ON DELETE CASCADE`はusersの物理削除APIが存在しない場合と同様、通常運用では発火しない防御的制約という位置づけになる）。
+**本APIの意味変更（issue #10）**：従来の物理削除仕様を、`projects.is_active` による論理削除へ変更した。物理削除を実行する経路はアプリケーションAPIとして提供しない。
 
 `DELETE /projects/{project_id}` との差異は以下のとおりである。
 
@@ -34,7 +34,7 @@
 |------|------------------------------------------|--------------------------------------------------|
 | 認可判定 | `deps.require_project_owner`：`role==admin` なら即許可、それ以外は所属確認 → オーナー確認の2段階 | `deps.require_admin`：role確認のみ。プロジェクトへの所属・オーナーシップは一切問わない |
 | 非所属・不存在時の応答 | 非所属memberは存在有無を隠して404、対象自体が無ければ404 | admin視点では「所属」概念がないため、`project_id` が存在しなければ404、存在すれば常に無効化可 |
-| 存在確認クエリ | `require_project_owner` が `project_repository.get_by_id` と `project_member_repository.exists` の2クエリを発行 | `project_repository.get_by_id` の1クエリのみ（所属確認クエリが不要） |
+| 存在確認クエリ | `require_project_owner` が `project_repository.fn_get_project` と `project_repository.fn_is_project_member` の2クエリを発行 | `project_repository.fn_get_project` の1クエリのみ（所属確認クエリが不要） |
 | 論理削除の効果範囲 | 同一（`projects.is_active`のみ更新。`project_members`/`tasks`/`task_comments`は無変更） | 同一（本APIも [05_delete_project.md §9](../projects/05_delete_project.md) と全く同じ範囲） |
 | 呼び出し元画面 | プロジェクト詳細画面の削除ボタン（オーナー/admin向け） | 管理者ユーザー管理画面のプロジェクト一覧タブ（他人が所有するプロジェクトも一覧から直接無効化する運用を想定） |
 | 監査ログの重み付け | 通常操作の一部として記録 | 「他者が所有するプロジェクトを第三者（管理者）が強制的に無効化する」操作であるため、`owner_id`（対象プロジェクトのオーナー）を必ずログへ含め、通常操作より重点的に扱う（11章参照） |
@@ -88,9 +88,9 @@ sequenceDiagram
     R->>R: verify_origin / verify_csrf（session時）
     R->>D: 認証 + admin確認
     D-->>R: CurrentUser(role=admin)
-    R->>S: deactivate_project(actor, project_id)
+    R->>S: sp_admin_deactivate_project(actor, project_id)
     S->>RP: get_by_id(project_id)
-    RP->>PG: "SELECT * FROM projects WHERE id=:project_id"
+    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     alt 対象が存在しない
         PG-->>RP: 0件
         RP-->>S: None
@@ -99,8 +99,8 @@ sequenceDiagram
     else 存在する
         PG-->>RP: project行
         RP-->>S: Project（無効化前のowner_id/member_count等をログ用に保持）
-        S->>RP: deactivate(project.id)
-        RP->>PG: "UPDATE projects SET is_active = false WHERE id = :project_id"
+        S->>RP: sp_admin_deactivate_project(project.id)
+        RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>RP: 更新後の行（project_members/tasks/task_commentsは無変更）
         RP-->>S: OK
         S->>S: 監査ログ出力（actor.id, project_id, owner_id）
@@ -128,10 +128,10 @@ flowchart TB
     E -->|"認証NG"| E1["401系"]
     E -->|"is_active=false"| E2["403 USER_INACTIVE"]
     E -->|"role != admin"| E3["403 FORBIDDEN"]
-    E -->|"OK"| F["project_repository.get_by_id(project_id)"]
+    E -->|"OK"| F["project_repository.fn_get_project(project_id)"]
     F -->|"存在しない"| F1["404 NOT_FOUND"]
     F -->|"存在する"| G["無効化前情報を保持<br/>（owner_id/member_count/task_counts）"]
-    G --> H["project_repository.deactivate(project_id)"]
+    G --> H["sp_admin_deactivate_project(project_id)"]
     H --> I["監査ログ出力"]
     I --> J["204 No Content"]
     F -.->|"DB接続不能"| K["503 SERVICE_UNAVAILABLE"]
@@ -147,32 +147,32 @@ flowchart TB
 | 引数 | `project_id`: パス / `actor`: admin確認済みユーザー / `db`: DBセッション |
 | 戻り値 | `Response(status_code=204)` |
 | 送出例外 | なし（サービス層の例外を `AppError` としてそのまま伝播） |
-| 処理内容 | 1. `require_admin`・`verify_csrf` を通過 2. `admin_project_service.deactivate_project(db, actor, project_id)` を呼び出す 3. `204 No Content` を返す |
+| 処理内容 | 1. `require_admin`・`verify_csrf` を通過 2. `admin_project_service.sp_admin_deactivate_project(db, actor, project_id)` を呼び出す 3. `204 No Content` を返す |
 | 副作用 | なし（副作用はservice層に委譲） |
 
-### 6.2 `service/admin_project_service.py :: deactivate_project`
+### 6.2 `service/admin_project_service.py :: sp_admin_deactivate_project`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def deactivate_project(db: AsyncSession, actor: CurrentUser, project_id: UUID) -> None` |
+| シグネチャ | `async def sp_admin_deactivate_project(db: AsyncSession, actor: CurrentUser, project_id: UUID) -> None` |
 | 引数 | `actor`: 実行者（admin） / `project_id`: 無効化対象 / `db`: DBセッション |
 | 戻り値 | なし |
 | 送出例外 | `NotFoundError`（404）、`ServiceUnavailableError`（DB接続不能）→503 |
-| 処理内容 | 1. `project_repository.get_by_id(project_id)` で存在確認と、監査ログ用の `owner_id` を取得する（存在しなければ `NotFoundError`） 2. `project_repository.deactivate(project_id)` を呼び出す 3. `commit` する 4. `owner_id` を含めて監査ログを出力する（11章） |
-| 副作用 | `projects.is_active` を `false` に更新するUPDATEのみ。`project_members` / `tasks` / `task_comments` へは一切のDML（DELETE/UPDATE）を発行しない（配下タスクは有効なまま維持される）。所属メンバー・元オーナーへの通知は行わない（基本設計に規定なし。13章参照） |
+| 処理内容 | 1. `project_repository.fn_get_project(project_id)` で存在確認と、監査ログ用の `owner_id` を取得する（存在しなければ `NotFoundError`） 2. `sp_admin_deactivate_project(project_id)` を呼び出す 3. `commit` する 4. `owner_id` を含めて監査ログを出力する（11章） |
+| 副作用 | `sp_admin_deactivate_project` による `projects.is_active` 更新のみ。`project_members` / `tasks` / `task_comments` は変更しない（配下タスクは有効なまま維持される）。所属メンバー・元オーナーへの通知は行わない（基本設計に規定なし。13章参照） |
 
-### 6.3 `repository/project_repository.py :: get_by_id` / `deactivate`
+### 6.3 `repository/project_repository.py :: fn_get_user` / `sp_admin_deactivate_project`
 
-[../projects/05_delete_project.md §6.3](../projects/05_delete_project.md) で定義済みの `deactivate(db, project_id)` をそのまま再利用する。`get_by_id` も `04_patch_project.md` / `05_delete_project.md` で定義済みの既存関数を再利用し、本API専用の新規リポジトリ関数は追加しない（所属確認 `exists` は本APIでは呼び出さない点のみが差異）。
+[../projects/05_delete_project.md §6.3](../projects/05_delete_project.md) で定義済みの `sp_admin_deactivate_project(db, project_id)` をそのまま再利用する。`get_by_id` も `04_patch_project.md` / `05_delete_project.md` で定義済みの既存関数を再利用し、本API専用の新規リポジトリ関数は追加しない（所属確認 `exists` は本APIでは呼び出さない点のみが差異）。
 
 ## 7. 関数相関図
 
 ```mermaid
 flowchart LR
     R["admin_router.delete_admin_project"] --> D["deps.require_admin"]
-    R --> S["admin_project_service.deactivate_project"]
-    S --> RP1["project_repository.get_by_id"]
-    S --> RP2["project_repository.deactivate"]
+    R --> S["admin_project_service.sp_admin_deactivate_project"]
+    S --> RP1["project_repository.fn_get_project"]
+    S --> RP2["sp_admin_deactivate_project"]
     RP1 --> M1["models.Project"]
     RP2 --> M1
     M1 -.->|"変更なし（is_activeのみ更新）"| M2["models.ProjectMember"]
@@ -184,16 +184,26 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    A["DELETE /api/admin/projects/{project_id}"] --> B["SELECT projects WHERE id=:pid<br/>（存在確認 + 監査ログ用owner_id取得）"]
+    A["DELETE /api/admin/projects/{project_id}"] --> B["SELECT fn_get_project(pid)<br/>（存在確認 + 監査ログ用owner_id取得）"]
     B -->|"0件"| Z["404 NOT_FOUND"]
-    B -->|"1件"| C["UPDATE projects SET is_active=false WHERE id=:pid"]
+    B -->|"1件"| C["CALL sp_admin_deactivate_project(pid, false)"]
     C --> G["COMMIT（project_members/tasks/task_commentsは無変更）"]
     G --> H["監査ログ出力（actor_id, project_id, owner_id）"]
     H --> I["204 No Content"]
     C -.->|"接続不能"| J["ROLLBACK / 503"]
 ```
 
-## 9. データアクセス一覧
+## 9. SP/FNデータアクセス一覧
+
+### 9.1 正式なDBアクセス契約
+
+本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+
+| 種別 | 契約 | 説明 |
+|------|------|------|
+| admin_deactivate_project | `sp_admin_deactivate_project(p_project_id, p_is_active=false)` | sp_admin_deactivate_projectを呼び出し、結果をレスポンスへ写像する |
+
+repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
 **PostgreSQL**
 
@@ -232,8 +242,8 @@ flowchart TB
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 単体 | serviceがrepository.deactivateを1回呼び出す | repositoryをモック | `deactivate(project.id)` 呼び出しを検証、`project_member_repository.exists` は未呼び出し | `test_admin_delete_project_calls_repository_without_membership_check` |
-| 2 | 結合 | adminは他人が所有するプロジェクトを204で無効化できる | 一般ユーザーが所有し、adminは非所属のプロジェクトを用意 | `204`、`projects.is_active=false`に更新、`project_members`/`tasks`/`task_comments`は行数・内容とも変化なし | `test_admin_delete_project_deactivates_without_deleting_related_rows_for_non_member_project` |
+| 1 | 結合（実DB・実SP） | serviceがrepository.sp_admin_deactivate_projectを1回呼び出す | 実DB・実SPで検証 | `sp_admin_deactivate_project(project.id)` 呼び出しを検証、`project_repository.fn_is_project_member` は未呼び出し | `test_admin_delete_project_calls_repository_without_membership_check` |
+| 2 | 結合 | adminは他人が所有するプロジェクトを204で無効化できる | 一般ユーザーが所有し、adminは非所属のプロジェクトを用意 | `204`、`projects.is_active=false`に更新、`project_members`/`tasks`/`task_comments`は行数・内容とも変化なし | `test_admin_delete_project_sp_admin_deactivate_projects_without_deleting_related_rows_for_non_member_project` |
 | 3 | 結合 | 存在しないproject_idは404 | 未使用のUUID | `404 NOT_FOUND` | `test_admin_delete_project_not_found` |
 | 4 | 結合 | member（オーナー含む）はアクセス不可 | `role=member` の実行者（対象プロジェクトのオーナーであっても） | `403 FORBIDDEN` | `test_admin_delete_project_forbidden_for_non_admin` |
 | 5 | 結合 | 無効化後の再実行も204（冪等） | 同一project_idへ2回目のDELETE | `204`（`is_active=false`のまま、エラーにしない） | `test_admin_delete_project_idempotent_second_call_returns_204` |

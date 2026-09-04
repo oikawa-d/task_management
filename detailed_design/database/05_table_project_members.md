@@ -133,9 +133,23 @@ flowchart LR
 
 メンバー削除（DELETEメンバーAPI）では、担当タスクの `assignee_id` を先に `NULL` 化してから `project_members` を削除する（`06_table_tasks.md` の `assignee_id` FKは `ON DELETE SET NULL` だが、これは `users` 行自体の削除時のみ発火するため、所属解除だけを行う本ケースではアプリ層のUPDATEが必須）。
 
-## 8. リポジトリ関数詳細
+## 8. SP/FNリポジトリ契約
 
-### 8.1 `repository/project_member_repository.py :: create`
+repositoryは下表のSP/FN呼び出しと戻り値のDTO写像だけを行い、`project_members` や `tasks` への直接CRUDは行わない。所属の事実判定は `fn_is_project_member` を正とし、404/403への変換はAPI層で行う。
+
+| repository契約 | DB呼び出し | 戻り値・エラー |
+|----------------|------------|----------------|
+| `create` | `CALL sp_add_project_member(:project_id, :user_id, :invited_by)` | `P0003 ALREADY_MEMBER`。作成時owner登録は `sp_create_project` 内 |
+| `exists` | `SELECT fn_is_project_member(:project_id, :user_id)` | booleanを返す |
+| `list_by_project` | `SELECT fn_list_project_members(:project_id)` | メンバー一覧DTOへ写像 |
+| `delete` | `CALL sp_remove_project_member(:project_id, :user_id)` | owner削除は `P0004 OWNER_CANNOT_BE_REMOVED` |
+| `clear_assignee_by_project_and_user` | `sp_remove_project_member` 内部に統合 | membership削除と同一トランザクション |
+
+### 8.1 SQL実装参考（SP/FN内部）
+
+以下の既存小節に記載するSQLはSP/FN本体の実装参考であり、repositoryから直接発行しない。実装時の正は[08_db_functions.md](./08_db_functions.md) §2のシグネチャである。
+
+### 8.2 `repository/project_member_repository.py :: create`
 
 | 項目 | 内容 |
 |------|------|
@@ -146,7 +160,7 @@ flowchart LR
 | 送出例外 | `ConflictError`（PK違反 `unique_violation` を捕捉して変換） |
 | 処理内容 | 1. INSERT実行<br/>2. `IntegrityError`（`23505`）捕捉時は `ConflictError("ALREADY_MEMBER")` へ変換してサービス層へ送出 |
 
-### 8.2 `repository/project_member_repository.py :: exists`
+### 8.3 `repository/project_member_repository.py :: exists`
 
 | 項目 | 内容 |
 |------|------|
@@ -157,7 +171,7 @@ flowchart LR
 | 送出例外 | なし |
 | 処理内容 | 1. `deps.require_project_member` での所属チェック、および `db/functions/fn_is_project_member.sql` によるDB側二重防御と対になるアプリ層チェックに使用 |
 
-### 8.3 `repository/project_member_repository.py :: list_by_project`
+### 8.4 `repository/project_member_repository.py :: list_by_project`
 
 | 項目 | 内容 |
 |------|------|
@@ -168,7 +182,7 @@ flowchart LR
 | 送出例外 | なし |
 | 処理内容 | 1. `GET /projects/{id}/members` のレスポンス生成に使用 |
 
-### 8.4 `repository/project_member_repository.py :: delete`
+### 8.5 `repository/project_member_repository.py :: delete`
 
 | 項目 | 内容 |
 |------|------|
@@ -179,7 +193,7 @@ flowchart LR
 | 送出例外 | なし（対象0件でもエラーとしない。存在確認はサービス層で事前実施） |
 | 処理内容 | 1. `task_service`（または `project_service.remove_member` 内）が同一トランザクションで先に `task_repository.clear_assignee_by_project_and_user()` を呼び担当タスクをNULL化<br/>2. 本関数でメンバー行を削除 |
 
-### 8.5 `repository/task_repository.py :: clear_assignee_by_project_and_user`
+### 8.6 `repository/task_repository.py :: clear_assignee_by_project_and_user`
 
 | 項目 | 内容 |
 |------|------|

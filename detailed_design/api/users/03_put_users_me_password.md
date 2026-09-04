@@ -100,7 +100,7 @@ sequenceDiagram
     else 検証OK
         R->>S: change_password(current_user, payload)
         S->>URP: get_by_id(user_id)
-        URP->>PG: SELECT * FROM users WHERE id=?
+        URP->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
         PG-->>URP: user行（password_hash含む）
         alt has_password=true かつ current_password不一致
             S-->>R: InvalidCredentialsError
@@ -111,7 +111,7 @@ sequenceDiagram
         else 検証通過
             S->>S: argon2でnew_passwordをハッシュ化
             S->>URP: update_password(db, user_id, new_hash)
-            URP->>PG: UPDATE users SET password_hash=? WHERE id=?
+            URP->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
             PG-->>URP: 更新後のuser行
             S->>RS: delete_all_sessions(user_id)
             RS->>RD: SMEMBERS user_sessions:{uid} → 各session/csrf DEL → DEL user_sessions:{uid}
@@ -182,10 +182,10 @@ flowchart TB
 | 引数 | `current_user`、`payload`、`db`、`redis_store` |
 | 戻り値 | `None` |
 | 送出例外 | `InvalidCredentialsError`(401)、`ValidationError`(422) |
-| 処理内容 | 1. `user_repository.get_by_id`で現在の`password_hash`を取得 2. 現在パスワードを検証 3. `new_password`をargon2idでハッシュ化 4. `redis_store.delete_all_sessions(user_id)` 5. `redis_store.revoke_all_refresh_tokens(user_id)` 6. Redis成功後に`user_repository.update_password(db, user_id, new_hash)`。Redis失敗時はDBを更新せず503 |
+| 処理内容 | 1. `fn_get_user(user_id)` で現在のhashを取得 2. 現在パスワードを検証 3. `new_password`をargon2idでハッシュ化 4. Redisセッション/refreshを失効 5. Redis成功後に `CALL sp_update_user_password(user_id, new_hash)`。Redis失敗時はDBを更新せず503 |
 | 副作用 | DB更新（`password_hash`）、Redis全失効（`session:*` / `csrf:*` / `user_sessions:{uid}` / `refresh:*` / `user_refresh:{uid}`） |
 
-### 6.4 `repository/user_repository.py :: update_password`
+### 6.4 `repository/user_repository.py :: sp_update_user_password`
 
 | 項目 | 内容 |
 |------|------|
@@ -193,7 +193,7 @@ flowchart TB
 | 引数 | `user_id`、`password_hash`（ハッシュ化済み） |
 | 戻り値 | 更新後の`User` |
 | 送出例外 | なし |
-| 処理内容 | `UPDATE users SET password_hash = :password_hash WHERE id = :user_id RETURNING *`（`updated_at`はトリガで自動更新） |
+| 処理内容 | `CALL sp_update_user_password(:user_id, :password_hash)`。`updated_at`更新はSP内部のトリガに委譲 |
 | 副作用 | DB更新1件 |
 
 ### 6.5 `repository/redis_store.py :: delete_all_sessions` / `revoke_all_refresh_tokens`
@@ -206,8 +206,8 @@ flowchart TB
 flowchart LR
     R["users_router.change_my_password"] --> DEP["deps.get_current_user / verify_csrf"]
     R --> S["user_service.change_password"]
-    S --> URP1["user_repository.get_by_id"]
-    S --> URP2["user_repository.update_password"]
+    S --> URP1["user_repository.fn_get_user"]
+    S --> URP2["user_repository.sp_update_user_password"]
     S --> RS1["redis_store.delete_all_sessions"]
     S --> RS2["redis_store.revoke_all_refresh_tokens"]
     URP1 --> PG[("PostgreSQL: users")]
@@ -296,3 +296,13 @@ sessionモードの認証解決・CSRF検証自体の`GET`/`EXPIRE`は本APIの�
 |------|------|------|
 | 要検討 | 基本設計（`03_auth.md`末尾）は「`has_password=false`のユーザーでは`current_password`を省略可」とのみ記載し、「送信した場合にエラーとすべきか無視すべきか」までは明記していない。本書では不整合な入力として`VALIDATION_ERROR`にする方針としたが、無視して処理を継続する設計も選択肢としてあり得る |
 | 確定 | Redis全失効をDB更新に先行させ、Redis失敗時はDBを更新せず503とする。再試行は冪等な全失効処理として扱う |
+
+## DBアクセス契約
+
+本APIのDBアクセスは、下記のFN/SP呼び出しをrepositoryの薄いラッパーから実行する。テーブルへの直接CRUD、認証業務の判定、履歴のINSERTはrepositoryに実装しない。healthの `SELECT 1` だけは本契約の対象外である。
+
+| 正式な呼び出し | 契約 |
+|----------------|------|
+| fn_get_user(p_user_id), sp_update_user_password(p_user_id, p_password_hash) | `detailed_design/database/08_db_functions.md` のシグネチャに従う |
+
+SQLSTATE P0xxxは同文書 §4 の対応表でAPIエラーへ変換し、Redis・メール・JWTの処理はAPI/service層に残す。

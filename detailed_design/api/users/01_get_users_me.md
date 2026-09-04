@@ -114,10 +114,10 @@ sequenceDiagram
     DEP-->>R: CurrentUser
     R->>S: get_profile(current_user)
     S->>URP: get_by_id(user_id)
-    URP->>PG: SELECT * FROM users WHERE id=?
+    URP->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
     PG-->>URP: user行
     S->>OARP: list_providers(user_id)
-    OARP->>PG: SELECT provider FROM oauth_accounts WHERE user_id=?
+    OARP->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
     PG-->>OARP: providers
     S->>S: profile_completed算出、UserProfileResponse組み立て
     S-->>R: UserProfileResponse
@@ -158,15 +158,15 @@ flowchart TB
 | シグネチャ | `async def get_profile(current_user: CurrentUser, db: AsyncSession) -> UserProfileResponse` |
 | 引数 | `current_user`、`db` |
 | 戻り値 | `UserProfileResponse` |
-| 送出例外 | `NotFoundError`（`user_repository.get_by_id`が`None`を返した場合。認証済み後の取得のため通常発生しない） |
-| 処理内容 | 1. `user_repository.get_by_id(db, current_user.id)` 2. `oauth_account_repository.list_providers(db, current_user.id)` 3. 5項目（`last_name`/`first_name`/`last_name_kana`/`first_name_kana`/`birth_date`）の非NULL判定で`profile_completed`を算出 4. `UserProfileResponse`を構築して返す |
+| 送出例外 | `NotFoundError`（`user_repository.fn_get_user`が`None`を返した場合。認証済み後の取得のため通常発生しない） |
+| 処理内容 | 1. `user_repository.fn_get_user(db, current_user.id)` 2. `oauth_account_repository.fn_list_user_oauth_accounts(db, current_user.id)` 3. 5項目（`last_name`/`first_name`/`last_name_kana`/`first_name_kana`/`birth_date`）の非NULL判定で`profile_completed`を算出 4. `UserProfileResponse`を構築して返す |
 | 副作用 | なし |
 
-### 6.3 `repository/user_repository.py :: get_by_id`
+### 6.3 `repository/user_repository.py :: fn_get_user`
 
 `../../database/01_table_users.md` §8.1 を参照（担当外だが再利用する既存関数）。
 
-### 6.4 `repository/oauth_account_repository.py :: list_providers`
+### 6.4 `repository/oauth_account_repository.py :: fn_list_user_oauth_accounts`
 
 `../auth/04_get_auth_me.md` §6.5 を参照（担当外だが再利用する既存関数）。
 
@@ -176,8 +176,8 @@ flowchart TB
 flowchart LR
     R["users_router.get_my_profile"] --> DEP["deps.get_current_user"]
     R --> S["user_service.get_profile"]
-    S --> URP["user_repository.get_by_id"]
-    S --> OARP["oauth_account_repository.list_providers"]
+    S --> URP["user_repository.fn_get_user"]
+    S --> OARP["oauth_account_repository.fn_list_user_oauth_accounts"]
     URP --> PG[("PostgreSQL: users")]
     OARP --> PG2[("PostgreSQL: oauth_accounts")]
 ```
@@ -246,3 +246,13 @@ sessionモードの認証解決（`GET session:{sid}` → `EXPIRE`）以外の�
 |------|------|------|
 | 要検討 | 基本設計（`04_api.md` §2.2）は `GET /users/me` の存在のみを定め、レスポンス項目を明記していない。本書では `GET /auth/me` から `auth_mode` を除いた項目を採用したが、この設計判断が正しいかは要確認 |
 | 要検討 | `GET /auth/me` とレスポンス項目がほぼ重複しており、将来的に一方へ統合すべきかは基本設計レベルでの再検討事項とする |
+
+## DBアクセス契約
+
+本APIのDBアクセスは、下記のFN/SP呼び出しをrepositoryの薄いラッパーから実行する。テーブルへの直接CRUD、認証業務の判定、履歴のINSERTはrepositoryに実装しない。healthの `SELECT 1` だけは本契約の対象外である。
+
+| 正式な呼び出し | 契約 |
+|----------------|------|
+| fn_get_user(p_user_id) | `detailed_design/database/08_db_functions.md` のシグネチャに従う |
+
+SQLSTATE P0xxxは同文書 §4 の対応表でAPIエラーへ変換し、Redis・メール・JWTの処理はAPI/service層に残す。

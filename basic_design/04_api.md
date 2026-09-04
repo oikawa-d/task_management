@@ -436,6 +436,7 @@ status 別にグルーピングして返すことで、フロント側のカン�
 | 409 | `SELF_MODIFICATION_NOT_ALLOWED` | 管理者が自分自身を降格・無効化しようとした |
 | 409 | `LAST_ADMIN_REQUIRED` | 最後の有効adminを降格・無効化しようとした |
 | 409 | `ASSIGNEE_INACTIVE` | 無効化されたユーザーを担当者に指定した |
+| 400 | `INVALID_STATE` | DBのSPが期間・status・保持日数などの業務状態不正を `P0009` で返した |
 | 422 | `VALIDATION_ERROR` | pydantic バリデーション失敗 |
 | 429 | `TOO_MANY_ATTEMPTS` | ログインその他のRate Limit上限超過。`Retry-After`を付与 |
 | 500 | `INTERNAL_ERROR` | 未捕捉例外（詳細はレスポンスに含めずログのみ） |
@@ -448,7 +449,7 @@ flowchart TB
     A["ルーター処理"] --> B{"例外発生?"}
     B -->|"AppError（業務例外）"| C["app_error_handler<br/>code / status / message を整形"]
     B -->|"RequestValidationError"| D["validation_handler<br/>422 + details"]
-    B -->|"IntegrityError"| E["db_error_handler<br/>409 に変換"]
+    B -->|"DBError（SQLSTATE P0xxx）"| E["db_error_handler<br/>08_db_functions.mdの対応表でAppErrorへ変換"]
     B -->|"RedisError / OperationalError"| F["infra_error_handler<br/>503"]
     B -->|"その他Exception"| G["unhandled_handler<br/>500（詳細は隠蔽しログ出力）"]
     B -->|なし| H["正常レスポンス"]
@@ -458,6 +459,8 @@ flowchart TB
     F --> I
     G --> I
 ```
+
+DBの業務エラーはSPの `RAISE EXCEPTION ... USING ERRCODE = 'P0xxx'` で返す。`detailed_design/database/08_db_functions.md` §4のSQLSTATE→API code→HTTP status対応表を唯一のマッピングとして使用し、未定義のSQLSTATEは `500 INTERNAL_ERROR`、接続障害は `503 SERVICE_UNAVAILABLE` とする。存在・所属の事実判定はFNの空集合/falseを受け、`deps.py` が404/403へ変換する。
 
 ## 5. 認可マトリクス
 
@@ -497,20 +500,19 @@ sequenceDiagram
     D-->>R: Project
     R->>S: create_task(project, payload, current_user)
     S->>S: assignee_id がメンバーか検証
-    S->>TR: next_position(pid, status)
-    TR->>PG: SELECT fn_next_task_position(...)
-    PG-->>TR: position
-    S->>TR: insert(task)
-    TR->>PG: INSERT tasks
-    PG-->>TR: task行
+    S->>TR: CALL sp_create_task(...)
+    TR->>PG: CALL sp_create_task(...)
+    PG->>PG: advisory lock → position採番 → task INSERT<br/>→ 当日期限なら通知INSERT（dedupe_key + ON CONFLICT DO NOTHING）
+    PG-->>TR: 成否（P0005/P0006等を含む）
+    TR-->>S: 成功
+    S->>TR: SELECT fn_get_task(:task_id)
+    TR->>PG: SELECT fn_get_task(:task_id)
+    PG-->>TR: Task行
     TR-->>S: Task
     alt assignee_id あり かつ due_at が APP_TIMEZONE の当日
-        S->>NS: create_due_today_notification(task, 'due_today_created')
-        NS->>PG: INSERT notifications ... ON CONFLICT DO NOTHING
-        PG-->>NS: 作成件数（0 or 1）
-        NS-->>S: bool
+        S->>TR: 通知INSERTはsp_create_task内部で実行済み
     end
-    S->>PG: COMMIT（タスクと通知を同一トランザクションで確定）
+    S->>TR: SP完了後にトランザクションを確定
     S-->>R: TaskResponse
     R-->>FE: 201 {task}
 ```
@@ -529,16 +531,16 @@ sequenceDiagram
     FE->>R: POST /api/projects/{pid}/members {user_id}
     R->>R: require_project_owner
     R->>S: add_member(project, user_id, invited_by)
-    S->>UR: get(user_id)
+    S->>UR: SELECT fn_get_user(user_id)（ユーザー取得FN）
     alt ユーザーが存在しない
         S-->>R: NotFoundError
         R-->>FE: 404 NOT_FOUND
     else 既にメンバー
-        S->>PR: exists(pid, user_id)
+        S->>PR: SELECT fn_is_project_member(pid, user_id)
         S-->>R: ConflictError
         R-->>FE: 409 ALREADY_MEMBER
     else 追加可能
-        S->>PR: insert project_members
+        S->>PR: CALL sp_add_project_member(pid, user_id, invited_by)
         S-->>R: MemberResponse
         R-->>FE: 201 {member}
     end
@@ -566,10 +568,10 @@ sequenceDiagram
     else ロック取得成功
         RD-->>J: OK
         J->>J: threshold = 翌日10:00（APP_TIMEZONE）→ UTC
-        J->>PG: SELECT tasks WHERE status<>'done'<br/>AND assignee_id IS NOT NULL<br/>AND due_at IS NOT NULL AND due_at <= threshold
+        J->>PG: SELECT fn_list_due_notification_tasks(threshold)
         PG-->>J: 対象タスク（担当者付き）
         loop チャンク単位（NOTIFY_DUE_BATCH_CHUNK_SIZE 件ずつ）
-            J->>PG: INSERT notifications (type='due_soon_batch',<br/>dedupe_key='batch:{当日}:{slot}:{task_id}')<br/>ON CONFLICT DO NOTHING
+            J->>PG: batchの通知作成契約でINSERT<br/>dedupe_key='batch:{当日}:{slot}:{task_id}'<br/>ON CONFLICT DO NOTHING
             PG-->>J: 作成件数
         end
         J->>PG: CALL sp_purge_notifications(NOTIFICATION_RETENTION_DAYS)
@@ -586,54 +588,54 @@ sequenceDiagram
 
 | 関数 | 引数 | 戻り値 | 処理概要 |
 |------|------|--------|----------|
-| `register` | `payload: RegisterRequest`, `background: BackgroundTasks` | `User` | 重複チェック → パスワードハッシュ化 → `users` INSERT（`email_verified_at=NULL`）→ 認証トークン発行 → 確認メール送信予約。**Strategy.login は呼ばない** |
-| `verify_email` | `token: str` | `None` | Redis のトークンをワンタイム消費 → `email_verified_at` を更新。無効なら 400 |
+| `register` | `payload: RegisterRequest`, `background: BackgroundTasks` | `User` | 重複チェックと `CALL sp_register_user` → パスワードハッシュ化 → 認証トークン発行 → 確認メール送信予約。**Strategy.login は呼ばない** |
+| `verify_email` | `token: str` | `None` | Redis のトークンをワンタイム消費 → `CALL sp_verify_user_email`。無効なら 400 |
 | `resend_verification` | `email: str`, `background: BackgroundTasks` | `None` | 未認証ユーザーかつ再送間隔外の場合のみ再送。該当しなくても例外を出さない |
-| `login` | `identifier: str`, `password: str`, `request`, `response` | `LoginResult` | レート制限確認 → ユーザー取得 → パスワード検証 → `is_active` / `email_verified_at` 確認 → Strategy.login → `login_history` 記録 |
+| `login` | `identifier: str`, `password: str`, `request`, `response` | `LoginResult` | レート制限確認 → `SELECT fn_find_user_by_identifier` → パスワード検証 → `is_active` / `email_verified_at` 確認 → Strategy.login → `CALL sp_record_login_history` |
 | `logout` | `request`, `response`, `user: CurrentUser \| None` | `None` | sessionはsession Cookie、jwtはrefresh Cookieを使ってStrategy.logout。jwtはaccess tokenなしでも実行可能 |
 | `refresh` | `request`, `response` | `LoginResult` | Strategy.refresh（session モードでは `NotSupportedError`） |
 | `oauth_start` | `redirect_to: str \| None` | `str`（認可URL） | state/PKCE 生成 → Redis保存 → 認可URL組み立て |
-| `oauth_callback` | `code: str`, `state: str`, `request`, `response` | `OAuthCallbackResult` | state Cookie/Redis消費 → code交換 → id_token（nonce含む）検証 → ユーザー解決/作成。sessionはここでloginしてredirect_toを返し、jwtはhandoff codeだけ発行 |
-| `oauth_exchange` | `code: str`, `request`, `response` | `OAuthExchangeResult` | jwtのみ。handoff codeをGETDELで消費 → user_idから現在の有効ユーザーを再取得 → JwtStrategy.login → 履歴記録。正規化済みredirect_toも返す |
+| `oauth_callback` | `code: str`, `state: str`, `request`, `response` | `OAuthCallbackResult` | state Cookie/Redis消費 → code交換 → id_token検証 → `fn_find_oauth_account` / `fn_find_user_by_email` → `CALL sp_upsert_oauth_account`。sessionはここでlogin、jwtはhandoff codeを発行 |
+| `oauth_exchange` | `code: str`, `request`, `response` | `OAuthExchangeResult` | jwtのみ。handoff codeをGETDELで消費 → `SELECT fn_get_user` → JwtStrategy.login → `CALL sp_record_login_history` |
 | `request_password_reset` | `email: str` | `None` | ユーザー検索 → トークン生成 → Redis保存 → メール送信（存在しなくても例外を出さない） |
-| `reset_password` | `token: str`, `new_password: str` | `None` | トークン消費 → パスワード更新 → 全セッション/トークン失効 |
+| `reset_password` | `token: str`, `new_password: str` | `None` | トークン消費 → `CALL sp_update_user_password` → 全セッション/トークン失効 |
 
 ### 7.2 `service/project_service.py` / `task_service.py`
 
 | 関数 | 引数 | 戻り値 | 備考 |
 |------|------|--------|------|
-| `list_projects` | `user`, `page`, `per_page`, `include_inactive` | `Page[ProjectSummary]` | admin は全件、member は所属分のみ。既定は`is_active=true`のみ |
-| `create_project` | `user`, `payload` | `Project` | projects と project_members を同一トランザクションで作成。`start_at`/`end_at`を任意で受け取る |
-| `update_project` | `project`, `payload` | `Project` | オーナー or admin 前提（認可はdeps側）。`is_active`/`start_at`/`end_at`の部分更新も担う |
-| `deactivate_project` | `project` | `None` | `is_active=false`へのUPDATEのみ。`project_members`/`tasks`/`task_comments`は変更しない（物理削除は行わない） |
-| `add_member` / `remove_member` | `project`, `user_id`, `invited_by` | `Member` / `None` | オーナーは削除不可（409）。削除対象者が担当中のタスクは同一トランザクションで `assignee_id=NULL` にしてからmembershipを削除 |
-| `get_board` | `project`, `include_inactive` | `BoardResponse` | status別にグルーピングして返す。各タスクに`project_is_active`を付与 |
-| `list_tasks` | `user`, `project_id`, `page`, `per_page`, `include_inactive` | `Page[TaskSummary]` | `GET /tasks`用。`project_id`省略時は所属プロジェクト全部＋自分の未所属タスク、`project_id=null`指定時は未所属タスクのみ |
-| `create_task` | `project \| None`, `payload`, `user` | `Task` | assignee のメンバー検証、position 採番。`project`が`None`の場合はプロジェクト未所属タスクとして作成し、advisory lockは固定プレースホルダキーで直列化 |
-| `update_task` | `task`, `payload`, `user` | `Task` | `version`一致を確認してから更新。status変更時は移動先列の末尾へ、`position` 指定時は列をロックして間の行を再採番。`is_active`の変更は作成者本人/プロジェクトオーナー/adminのみ許可 |
-| `deactivate_task` | `task` | `None` | `is_active=false`へのUPDATEのみ。position詰め（compaction）は行わない |
-| `add_comment` / `update_comment` / `delete_comment` | `task` / `comment`, `payload`, `user` | `Comment` / `None` | 編集・削除は投稿者本人または admin |
+| `list_projects` | `user`, `page`, `per_page`, `include_inactive` | `Page[ProjectSummary]` | `fn_list_projects`。admin は全件、member は所属分のみ |
+| `create_project` | `user`, `payload` | `Project` | `CALL sp_create_project`。projects と project_members を同一SPで作成し、`fn_get_project`で応答を取得 |
+| `update_project` | `project`, `payload` | `Project` | `CALL sp_update_project`。期間整合性はSP内で判定 |
+| `deactivate_project` | `project` | `None` | `CALL sp_deactivate_project(project_id, false)`。関連行は変更しない |
+| `add_member` / `remove_member` | `project`, `user_id`, `invited_by` | `Member` / `None` | `CALL sp_add_project_member` / `CALL sp_remove_project_member`。担当解除も後者のSP内で実施 |
+| `get_board` | `project`, `include_inactive` | `BoardResponse` | `SELECT fn_get_project_board`。status/position順の結果をグルーピング |
+| `list_tasks` | `user`, `project_id`, `page`, `per_page`, `include_inactive` | `Page[TaskSummary]` | `SELECT fn_list_tasks`。権限スコープはFN内で判定 |
+| `create_task` | `project \| None`, `payload`, `user` | `Task` | `CALL sp_create_task`。assignee検証、advisory lock、position採番、通知まで一体実行 |
+| `update_task` | `task`, `payload`, `user` | `Task` | `CALL sp_update_task`。version・列移動・再採番・通知をSP内で実行 |
+| `deactivate_task` | `task` | `None` | `CALL sp_deactivate_task`。position詰めは行わない |
+| `add_comment` / `update_comment` / `delete_comment` | `task` / `comment`, `payload`, `user` | `Comment` / `None` | `CALL sp_add/update/delete_task_comment`。本人比較は取得済みデータでAPI層が行う |
 
 ### 7.3 `service/notification_service.py`
 
 | 関数 | 引数 | 戻り値 | 備考 |
 |------|------|--------|------|
-| `list_notifications` | `user`, `page`, `per_page`, `unread_only` | `Page[NotificationItem]` | 自分宛てのみ。`unread_count` を併せて返す |
-| `count_unread` | `user` | `int` | 未読件数のみ |
-| `mark_read` | `user`, `notification_id` | `NotificationItem` | 他人の通知は `404`。既読済みは `read_at` を上書きしない |
-| `mark_all_read` | `user` | `int`（更新件数） | `WHERE user_id AND read_at IS NULL` に限定 |
-| `create_due_today_notification` | `task`, `type`, `session` | `bool`（作成したか） | タスク作成・更新の**呼び出し元トランザクションを引き継ぐ**。`ON CONFLICT DO NOTHING` により冪等 |
-| `is_due_today` | `due_at` | `bool` | `APP_TIMEZONE` における当日 00:00〜翌日00:00 の範囲判定 |
+| `list_notifications` | `user`, `page`, `per_page`, `unread_only` | `Page[NotificationItem]` | `SELECT fn_list_notifications`。自分宛てのみ |
+| `count_unread` | `user` | `int` | `SELECT fn_count_unread_notifications` |
+| `mark_read` | `user`, `notification_id` | `NotificationItem` | `CALL sp_mark_notification_read`。他人の通知は404、既読は不変 |
+| `mark_all_read` | `user` | `int`（更新件数） | `CALL sp_mark_all_notifications_read`。未読だけ更新 |
+| `create_due_today_notification` | `task`, `type` | `bool`（作成したか） | 独立DB呼び出しは持たず、`sp_create_task`/`sp_update_task`内部のdedupe INSERTへ統合 |
+| `is_due_today` | `due_at` | `bool` | 独立サービス関数としては撤廃し、期限判定はtask SP内へ統合 |
 
 ## 8. テスト方針
 
 | 区分 | 内容 |
 |------|------|
-| 単体 | サービス層をリポジトリのモックで検証（認可分岐・採番ロジック・エラー変換） |
-| 結合 | `httpx.AsyncClient` + 実 PostgreSQL / Redis。主要エンドポイントを正常系・異常系（401/403/404/409/422）で検証 |
+| 単体 | Redis・メール・JWTなどDB外の処理と、取得済みデータ同士の比較をモックで検証 |
+| 結合 | `pytest-postgresql` + 実SP/FN + `httpx.AsyncClient`。主要エンドポイントを正常系・異常系（401/403/404/409/422）で検証 |
 | パラメータ化 | 認証必須APIは `AUTH_MODE=session` / `jwt` の両方で実行するフィクスチャを用意 |
-| 競合・認可 | task version不一致が409、非所属の候補検索が404、メンバー削除時に担当タスクがNULL化されること、最後のadmin保護を検証 |
+| 競合・認可 | 実DB上でtask version不一致が409、非所属の候補検索が404、メンバー削除時に担当タスクがNULL化されること、最後のadmin保護を検証 |
 | 論理削除 | `DELETE /projects/{id}`・`DELETE /tasks/{id}`が`is_active=false`のみを更新し関連行を消さないこと、`PATCH`による再有効化、無効化後もタスクが一覧に残り`project_is_active`が伝播すること、`GET /tasks`で`project_id=null`指定時に未所属タスクのみ返ることを検証 |
 | 通知 | 当日期限のタスク作成・終了時刻変更で通知が1件だけ作成されること、同一 `dedupe_key` の再実行で増えないこと、他人の通知への既読操作が404になること、`APP_TIMEZONE` の日付境界（当日23:59 / 翌日00:00）で判定が切り替わることを検証 |
-| カバレッジ | `pytest --cov=app`。`omit` には自動生成物（`alembic/versions`）のみを指定し、実装コードは除外しない |
+| カバレッジ | `pytest --cov=app`。SQLは`08_db_functions.md` §5の結合テストを正とし、PL/pgSQL分岐カバレッジは別途要検討。`omit`には自動生成物のみ指定 |
 | 網羅できない範囲 | 外部（Google）の実通信、実SMTP送信はモックで代替し、実通信は手動確認とする |

@@ -132,7 +132,7 @@ sequenceDiagram
         end
     end
     DEP->>URP: get_by_id(user_id)
-    URP->>PG: SELECT * FROM users WHERE id=?
+    URP->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
     PG-->>URP: user行
     alt is_active=false
         DEP-->>R: UserInactiveError
@@ -140,7 +140,7 @@ sequenceDiagram
     else 有効
         DEP-->>R: CurrentUser
         R->>OARP: list_providers(user_id)
-        OARP->>PG: SELECT provider FROM oauth_accounts WHERE user_id=?
+        OARP->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
         PG-->>OARP: providers
         R->>R: profile_completed算出、MeResponse組み立て
         R-->>FE: 200 {MeResponse}
@@ -181,7 +181,7 @@ flowchart TB
 | 引数 | `current_user`（DI経由で解決済み）、`db`、`settings` |
 | 戻り値 | `MeResponse`（200） |
 | 送出例外 | `get_current_user`から伝播する401/403系 |
-| 処理内容 | 1. `current_user`をそのまま利用（既にDB取得済み） 2. `oauth_account_repository.list_providers`でproviders取得 3. `profile_completed`を5項目の非NULL判定で算出 4. `settings.auth_mode`を付与して`MeResponse`を返す |
+| 処理内容 | 1. `current_user`をそのまま利用（既にDB取得済み） 2. `oauth_account_repository.fn_list_user_oauth_accounts`でproviders取得 3. `profile_completed`を5項目の非NULL判定で算出 4. `settings.auth_mode`を付与して`MeResponse`を返す |
 | 副作用 | なし（参照のみ。sessionモードのTTL延長は`get_current_user`内のStrategy.authenticateで発生） |
 
 ### 6.2 `core/deps.py :: get_current_user`
@@ -192,7 +192,7 @@ flowchart TB
 | 引数 | `request`、`strategy`、`db` |
 | 戻り値 | `CurrentUser`（`id`, `role`, `username`, `is_active`等をPostgreSQLの現在値で保持） |
 | 送出例外 | `UnauthenticatedError`(401)、`SessionExpiredError`(401)、`TokenExpiredError`/`TokenInvalidError`(401)、`UserInactiveError`(403) |
-| 処理内容 | 1. `strategy.authenticate(request)`を呼び`AuthContext | None`取得 2. `None`なら`UnauthenticatedError` 3. `AuthContext.user_id`から`user_repository.get_by_id`でDB行取得 4. 行が無ければ`UnauthenticatedError`（アカウント削除済み想定。本設計では物理削除APIなしのため通常発生しない） 5. `is_active=false`なら`UserInactiveError` 6. role/username/profileはDBの現在値を採用し`CurrentUser`を構築 |
+| 処理内容 | 1. `strategy.authenticate(request)`を呼び`AuthContext | None`取得 2. `None`なら`UnauthenticatedError` 3. `AuthContext.user_id`から`user_repository.fn_get_user`でDB行取得 4. 行が無ければ`UnauthenticatedError`（アカウント削除済み想定。本設計では物理削除APIなしのため通常発生しない） 5. `is_active=false`なら`UserInactiveError` 6. role/username/profileはDBの現在値を採用し`CurrentUser`を構築 |
 | 副作用 | Strategy経由でsessionモードのみRedis `EXPIRE`（TTL延長） |
 
 ### 6.3 `auth/session_auth.py :: SessionAuthStrategy.authenticate`
@@ -217,7 +217,7 @@ flowchart TB
 | 処理内容 | 1. `Authorization`ヘッダから`Bearer `を除去してトークン取得。無ければ`None` 2. `_decode_access_token(token)`で署名・`exp`検証 3. `typ != 'access'`なら`TokenInvalidError` 4. `AuthContext(user_id=payload['sub'])`を返す（**Redisアクセスなし**） |
 | 副作用 | なし |
 
-### 6.5 `repository/oauth_account_repository.py :: list_providers`
+### 6.5 `repository/oauth_account_repository.py :: fn_list_user_oauth_accounts`
 
 | 項目 | 内容 |
 |------|------|
@@ -225,7 +225,7 @@ flowchart TB
 | 引数 | `db`、`user_id` |
 | 戻り値 | provider名の配列（例：`["google"]`） |
 | 送出例外 | なし |
-| 処理内容 | `SELECT provider FROM oauth_accounts WHERE user_id=?` |
+| 処理内容 | `SELECT fn_list_user_oauth_accounts(:user_id)` |
 | 副作用 | なし |
 
 ## 7. 関数相関図
@@ -237,8 +237,8 @@ flowchart LR
     FACT --> SESS["SessionAuthStrategy.authenticate"]
     FACT --> JWTS["JwtAuthStrategy.authenticate"]
     SESS --> RS["redis_store.get_session / touch_session"]
-    DEP --> URP["user_repository.get_by_id"]
-    R --> OARP["oauth_account_repository.list_providers"]
+    DEP --> URP["user_repository.fn_get_user"]
+    R --> OARP["oauth_account_repository.fn_list_user_oauth_accounts"]
     RS --> RD[("Redis")]
     URP --> PG[("PostgreSQL: users")]
     OARP --> PG2[("PostgreSQL: oauth_accounts")]
@@ -251,8 +251,8 @@ flowchart LR
 ```mermaid
 flowchart LR
     subgraph 参照範囲
-        U["users（id指定のSELECT）"]
-        O["oauth_accounts（user_id指定のSELECT）"]
+        U["SELECT fn_get_user(:user_id)"]
+        O["SELECT fn_list_user_oauth_accounts(:user_id)"]
         S["session:{sid}（sessionモードのみ GET + EXPIRE）"]
     end
 ```
@@ -263,8 +263,8 @@ flowchart LR
 
 | テーブル | 操作 | 条件・TTL | 備考 |
 |----------|------|-----------|------|
-| users | SELECT | `id = :user_id` | |
-| oauth_accounts | SELECT | `user_id = :user_id` | providers一覧 |
+| `fn_get_user` | FN | `p_user_id = :user_id` | ユーザー取得 |
+| `fn_list_user_oauth_accounts` | FN | `p_user_id = :user_id` | providers一覧 |
 
 **Redis**
 
@@ -317,3 +317,13 @@ jwtモードではRedisアクセスなし。
 | 区分 | 内容 | 影響 |
 |------|------|------|
 | なし | | |
+
+## DBアクセス契約
+
+本APIのDBアクセスは、下記のFN/SP呼び出しをrepositoryの薄いラッパーから実行する。テーブルへの直接CRUD、認証業務の判定、履歴のINSERTはrepositoryに実装しない。healthの `SELECT 1` だけは本契約の対象外である。
+
+| 正式な呼び出し | 契約 |
+|----------------|------|
+| fn_get_user(p_user_id) | `detailed_design/database/08_db_functions.md` のシグネチャに従う |
+
+SQLSTATE P0xxxは同文書 §4 の対応表でAPIエラーへ変換し、Redis・メール・JWTの処理はAPI/service層に残す。

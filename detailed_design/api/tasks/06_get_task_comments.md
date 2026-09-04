@@ -114,7 +114,7 @@ sequenceDiagram
     FE->>R: "GET /api/tasks/{task_id}/comments"
     R->>D: "get_current_user + get_task_for_member(task_id)"
     D->>TR: "get_task(task_id)"
-    TR->>PG: "SELECT * FROM tasks WHERE id = :task_id"
+    TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>TR: "task行 または 0件"
     alt "タスクが存在しない"
         TR-->>D: "None"
@@ -127,10 +127,10 @@ sequenceDiagram
     else "所属メンバーまたはadmin"
         D-->>R: "Task"
         R->>S: "list_comments(task)"
-        S->>TR: "list_comments_by_task(task_id)"
-        TR->>PG: "SELECT * FROM task_comments<br/>WHERE task_id = :task_id<br/>ORDER BY created_at ASC"
+        S->>TR: "fn_list_task_comments(task_id)"
+        TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>TR: "comments行"
-        TR->>PG: "selectinload(Comment.author) の追加SELECT<br/>WHERE users.id IN (author_ids)"
+        TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>TR: "users行"
         TR-->>S: "list[Comment]（authorをロード済み）"
         S-->>R: "list[CommentResponse]"
@@ -178,7 +178,7 @@ flowchart TB
 | 引数 | `task_id`：パスパラメータ／`user`：現在ユーザー／`db`：DBセッション |
 | 戻り値 | 所属確認済みの `Task`（`project_id` を含む） |
 | 送出例外 | `NotFoundError`（タスク不存在・非所属いずれも404） |
-| 処理内容 | 1. `task_repository.get_task(task_id)` でタスク取得 2. 存在しなければ `NotFoundError` 3. `user.role == 'admin'` なら通過 4. それ以外は `project_repository.is_member(task.project_id, user.id)` を確認し、Falseなら `NotFoundError` |
+| 処理内容 | 1. `task_repository.fn_get_task(task_id)` でタスク取得 2. 存在しなければ `NotFoundError` 3. `user.role == 'admin'` なら通過 4. それ以外は `project_repository.fn_is_project_member(task.project_id, user.id)` を確認し、Falseなら `NotFoundError` |
 | 副作用 | なし |
 
 ### 6.3 `service/task_service.py :: list_comments`
@@ -189,18 +189,18 @@ flowchart TB
 | 引数 | `task`：対象タスク／`db`：DBセッション |
 | 戻り値 | `Comment`（ORMモデル、`author` をロード済み）のリスト |
 | 送出例外 | なし |
-| 処理内容 | 1. `task_repository.list_comments_by_task(task.id)` を呼び出しそのまま返す |
+| 処理内容 | 1. `task_repository.fn_list_task_comments(task.id)` を呼び出しそのまま返す |
 | 副作用 | なし |
 
-### 6.4 `repository/task_repository.py :: list_comments_by_task`
+### 6.4 `repository/task_repository.py :: fn_list_task_comments`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def list_comments_by_task(task_id: UUID, db: AsyncSession) -> list[Comment]` |
+| シグネチャ | `async def fn_list_task_comments(task_id: UUID, db: AsyncSession) -> list[Comment]` |
 | 引数 | `task_id`：対象タスクID／`db`：DBセッション |
-| 戻り値 | `task_comments` 行のORMモデルリスト（`selectinload(Comment.author)` 適用） |
+| 戻り値 | `task_comments` 行のORMモデルリスト（`FN結果の一括マッピング(Comment.author)` 適用） |
 | 送出例外 | なし |
-| 処理内容 | 1. `SELECT * FROM task_comments WHERE task_id = :task_id ORDER BY created_at ASC` を1回実行 2. `selectinload(Comment.author)` の追加SELECTを1回実行してauthorをまとめて取得する（インデックス `ix_task_comments_task_created` 使用） |
+| 処理内容 | `SELECT fn_list_task_comments(:task_id)` を1回実行する。コメントと表示用author情報の結合・順序はFN内部で行い、repositoryで追加SELECTを発行しない |
 | 副作用 | なし |
 
 ## 7. 関数相関図
@@ -208,10 +208,10 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["comments_router.list_task_comments"] --> D["deps.get_task_for_member"]
-    D --> TR1["task_repository.get_task"]
-    D --> PR["project_repository.is_member"]
+    D --> TR1["task_repository.fn_get_task"]
+    D --> PR["project_repository.fn_is_project_member"]
     R --> S["task_service.list_comments"]
-    S --> TR2["task_repository.list_comments_by_task"]
+    S --> TR2["task_repository.fn_list_task_comments"]
     TR1 --> M1["models.Task"]
     TR2 --> M2["models.Comment"]
     PR --> M3["models.ProjectMember"]
@@ -234,7 +234,17 @@ flowchart LR
     T5 --> T4
 ```
 
-## 9. データアクセス一覧
+## 9. SP/FNデータアクセス一覧
+
+### 9.1 正式なDBアクセス契約
+
+本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+
+| 種別 | 契約 | 説明 |
+|------|------|------|
+| fn_list_task_comments | `fn_list_task_comments(p_task_id)` | fn_list_task_commentsを呼び出し、結果をレスポンスへ写像する |
+
+repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
 **PostgreSQL**
 
@@ -243,7 +253,7 @@ flowchart LR
 | tasks | SELECT | `id = :task_id` | 存在確認・project_id取得 |
 | project_members | SELECT | `project_id = :pid AND user_id = :uid` | admin以外の所属確認 |
 | task_comments | SELECT | `task_id = :task_id ORDER BY created_at ASC` | `ix_task_comments_task_created` を使用 |
-| users | SELECT（`selectinload`の追加SELECT） | `id IN (author_ids)` | 投稿者表示名の取得。task_commentsの主クエリとは別ラウンドトリップ |
+| users | SELECT（`FN結果の一括マッピング`の追加SELECT） | `id IN (author_ids)` | 投稿者表示名の取得。task_commentsの主クエリとは別ラウンドトリップ |
 
 **Redis**：なし（本APIはRedisへアクセスしない）
 
@@ -261,7 +271,7 @@ flowchart LR
 |------|------|
 | ログ出力 | INFO：`task_id`, `user_id`, `request_id`。コメント本文はログに出さない |
 | 情報漏洩対策 | タスク不存在／非所属を区別せず404で統一（`basic_design/03_auth.md` §9.2） |
-| N+1対策・クエリ回数 | 認可のtask取得1回 + 所属確認1回（adminは省略） + コメント主クエリ1回 + authorの`selectinload`追加SELECT 1回。author取得は別ラウンドトリップだが、コメント件数に比例する追加クエリは発行しない |
+| N+1対策・クエリ回数 | 認可のtask取得1回 + 所属確認1回（adminは省略） + コメント主クエリ1回 + authorの`FN結果の一括マッピング`追加SELECT 1回。author取得は別ラウンドトリップだが、コメント件数に比例する追加クエリは発行しない |
 | レート制限 | 対象外（参照系） |
 | fail-close | PostgreSQL接続不能時は `503 SERVICE_UNAVAILABLE` |
 
@@ -269,7 +279,7 @@ flowchart LR
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 単体 | サービス層がリポジトリを1回だけ呼ぶ | `task_repository` をモック | `list_comments_by_task` が1回呼ばれる | `test_list_comments_calls_repository_once` |
+| 1 | 単体 | サービス層がリポジトリを1回だけ呼ぶ | `task_repository` をモック | `fn_list_task_comments` が1回呼ばれる | `test_list_comments_calls_repository_once` |
 | 2 | 結合 | コメントが投稿者情報付きで作成順に返る | 実DB、2件のコメントを事前作成 | `items` が `created_at` 昇順、`author.display_name` が正しい | `test_get_task_comments_returns_ordered_with_author` |
 | 3 | 結合 | 非所属メンバーがアクセス | 実DB、他プロジェクトのメンバーでリクエスト | `404 NOT_FOUND` | `test_get_task_comments_non_member_returns_404` |
 | 4 | 結合 | 存在しないtask_id | 実DB | `404 NOT_FOUND` | `test_get_task_comments_missing_task_returns_404` |

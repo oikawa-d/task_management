@@ -126,7 +126,7 @@ sequenceDiagram
     DEP-->>R: CurrentUser
     R->>S: get_login_history(current_user)
     S->>LRP: list_by_user_id(db, user_id, limit=LOGIN_HISTORY_LIST_LIMIT)
-    LRP->>PG: "SELECT * FROM login_history WHERE user_id=? ORDER BY created_at DESC LIMIT ?"
+    LRP->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
     PG-->>LRP: 行一覧（0〜limit件）
     LRP-->>S: list[LoginHistory]
     S->>S: LoginHistoryListResponse組み立て
@@ -141,7 +141,7 @@ flowchart TB
     A["リクエスト受信"] --> B["get_current_user で認証解決"]
     B --> C{"認証成功?"}
     C -->|"No"| E1["401系 / 403 USER_INACTIVE"]
-    C -->|"Yes"| D["login_history_repository.list_by_user_id<br/>WHERE user_id=自分 ORDER BY created_at DESC LIMIT N"]
+    C -->|"Yes"| D["login_history_repository.fn_list_user_login_history<br/>WHERE user_id=自分 ORDER BY created_at DESC LIMIT N"]
     D --> E["LoginHistoryListResponse組み立て"]
     E --> F["200 {items, meta}"]
 ```
@@ -167,10 +167,10 @@ flowchart TB
 | 引数 | `current_user`、`db`、`limit`（環境変数由来） |
 | 戻り値 | `LoginHistoryListResponse` |
 | 送出例外 | なし |
-| 処理内容 | 1. `login_history_repository.list_by_user_id(db, current_user.id, limit=limit, offset=0)` 2. 取得した行を`LoginHistoryItem`へマッピング（`login_identifier`は含めない） 3. `meta.limit=limit`、`meta.count=len(items)`を設定し`LoginHistoryListResponse`を返す |
+| 処理内容 | 1. `login_history_repository.fn_list_user_login_history(db, current_user.id, limit=limit, offset=0)` 2. 取得した行を`LoginHistoryItem`へマッピング（`login_identifier`は含めない） 3. `meta.limit=limit`、`meta.count=len(items)`を設定し`LoginHistoryListResponse`を返す |
 | 副作用 | なし |
 
-### 6.3 `repository/login_history_repository.py :: list_by_user_id`
+### 6.3 `repository/login_history_repository.py :: fn_list_user_login_history`
 
 `../../database/03_table_login_history.md`§8.2を参照（担当外だが再利用する既存関数）。本APIでは`offset=0`固定・`limit=LOGIN_HISTORY_LIST_LIMIT`（既定50）で呼び出す。
 
@@ -180,7 +180,7 @@ flowchart TB
 flowchart LR
     R["users_router.get_my_login_history"] --> DEP["deps.get_current_user"]
     R --> S["user_service.get_login_history"]
-    S --> LRP["login_history_repository.list_by_user_id"]
+    S --> LRP["login_history_repository.fn_list_user_login_history"]
     LRP --> PG[("PostgreSQL: login_history")]
 ```
 
@@ -220,7 +220,7 @@ sessionモードの認証解決（`GET session:{sid}` → `EXPIRE`）以外の�
 | 監査ログ | 記録しない（参照APIのため。閲覧行為自体は監査ログ対象としない） |
 | ユーザー列挙対策 | 自分自身の履歴のみを返すため対象外 |
 | 件数上限の環境変数化 | 上限件数はコードにハードコードせず`LOGIN_HISTORY_LIST_LIMIT`（既定50。`basic_design/04_api.md`§2.2の「直近50件」に対応）として`core/config.py`の`Settings`に定義する。ページングは提供せず常に最新N件のみを返す |
-| 自分の履歴のみ | `login_history_repository.list_by_user_id`が`user_id=current_user.id`を必ず条件に含むため、他ユーザーの履歴を混入させる経路がない。管理者であっても本APIでは自分の履歴のみが返る（全ユーザー分は`GET /admin/login-history`が別途提供） |
+| 自分の履歴のみ | `login_history_repository.fn_list_user_login_history`が`user_id=current_user.id`を必ず条件に含むため、他ユーザーの履歴を混入させる経路がない。管理者であっても本APIでは自分の履歴のみが返る（全ユーザー分は`GET /admin/login-history`が別途提供） |
 | fail-close方針 | Redis（session時）/PostgreSQL接続不能時は503 |
 | 個人情報の露出範囲 | `login_identifier`（入力されたID文字列）はレスポンスに含めない。IPアドレス・UAは自分自身の履歴表示のため許容する |
 
@@ -245,3 +245,13 @@ sessionモードの認証解決（`GET session:{sid}` → `EXPIRE`）以外の�
 | 区分 | 内容 | 影響 |
 |------|------|------|
 | 要検討 | 「件数上限の環境変数化」に対応する具体的な環境変数名（`LOGIN_HISTORY_LIST_LIMIT`）は基本設計（`06_infra_cicd.md`§4.2）の環境変数一覧に未掲載であり、本書で新規に提案した。既存の`LOGIN_HISTORY_RETENTION_DAYS`（保持"日数"）とは別の設定項目（一覧の"件数"）であるため、`.env.example`・`config.py`への追記が必要 |
+
+## DBアクセス契約
+
+本APIのDBアクセスは、下記のFN/SP呼び出しをrepositoryの薄いラッパーから実行する。テーブルへの直接CRUD、認証業務の判定、履歴のINSERTはrepositoryに実装しない。healthの `SELECT 1` だけは本契約の対象外である。
+
+| 正式な呼び出し | 契約 |
+|----------------|------|
+| fn_list_user_login_history(p_user_id, p_limit, p_offset) | `detailed_design/database/08_db_functions.md` のシグネチャに従う |
+
+SQLSTATE P0xxxは同文書 §4 の対応表でAPIエラーへ変換し、Redis・メール・JWTの処理はAPI/service層に残す。

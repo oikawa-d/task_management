@@ -119,13 +119,13 @@ sequenceDiagram
 
     FE->>R: GET /api/projects/{project_id}
     R->>D: 認証 + 所属チェック(project_id)
-    D->>PG: "SELECT * FROM projects WHERE id = :pid"
+    D->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>D: project行 または 0件
     alt project不存在
         D-->>R: NotFoundError
         R-->>FE: 404 NOT_FOUND
     else user.role != admin
-        D->>PG: "SELECT 1 FROM project_members WHERE project_id=:pid AND user_id=:uid"
+        D->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>D: 0件 または 1件
         alt 非所属
             D-->>R: NotFoundError
@@ -135,11 +135,11 @@ sequenceDiagram
     D-->>R: Project
     R->>S: get_project_detail(project)
     S->>RP: get_with_members(project.id)
-    RP->>PG: "SELECT project_members.*, users.* FROM project_members JOIN users ON ... WHERE project_id=:pid ORDER BY joined_at"
+    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>RP: メンバー行一覧
     RP-->>S: Member一覧
     S->>RP: aggregate_task_counts([project.id])
-    RP->>PG: "SELECT status, COUNT(*) FROM tasks WHERE project_id=:pid GROUP BY status"
+    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>RP: {status: count}
     S-->>R: ProjectDetail
     R-->>FE: 200 {project, members}
@@ -175,7 +175,7 @@ flowchart TB
 | 引数 | `project_id`: パスパラメータ / `user`: 認証済みユーザー / `db`: DBセッション |
 | 戻り値 | `Project`（存在・所属確認済み） |
 | 送出例外 | `NotFoundError`（プロジェクト不存在、または非所属member）→404 |
-| 処理内容 | 1. `project_repository.get_by_id(db, project_id)` を取得。存在しなければ `NotFoundError` 2. `user.role == 'admin'` なら無条件で `Project` を返す 3. それ以外は `project_member_repository.exists(db, project_id, user.id)` を確認し、`False` なら `NotFoundError` |
+| 処理内容 | 1. `project_repository.fn_get_project(db, project_id)` を取得。存在しなければ `NotFoundError` 2. `user.role == 'admin'` なら無条件で `Project` を返す 3. それ以外は `project_repository.fn_is_project_member(db, project_id, user.id)` を確認し、`False` なら `NotFoundError` |
 | 副作用 | なし |
 
 ### 6.2 `api/routers/projects_router.py :: get_project`
@@ -197,18 +197,18 @@ flowchart TB
 | 引数 | `project`: 対象プロジェクト / `user`: 現在ユーザー |
 | 戻り値 | `ProjectDetail`（`members`一覧、`task_counts`、`is_owner`を含む） |
 | 送出例外 | `ServiceUnavailableError`（DB接続不能）→503 |
-| 処理内容 | 1. `project_repository.list_members_with_user(db, project.id)` でメンバー一覧をJOIN済みで取得（1クエリ） 2. `project_repository.aggregate_task_counts(db, [project.id])` でstatus別件数を取得（1クエリ） 3. `is_owner = project.owner_id == user.id` を算出 4. `ProjectDetail` を組み立てる |
+| 処理内容 | `SELECT fn_get_project(:project_id)` を1回呼び出し、メンバー一覧・タスク件数・所有者情報を含むFN結果を`ProjectDetail`へ写像する |
 | 副作用 | なし |
 
-### 6.4 `repository/project_repository.py :: list_members_with_user`
+### 6.4 `repository/project_repository.py :: fn_get_project`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def list_members_with_user(db: AsyncSession, project_id: UUID) -> list[MemberRow]` |
+| シグネチャ | `async def fn_get_project(db: AsyncSession, project_id: UUID) -> ProjectDetailRow | None` |
 | 引数 | `project_id`: 対象プロジェクト |
-| 戻り値 | `MemberRow`（`user_id`, `username`, `display_name`, `is_owner`, `joined_at`）のリスト |
+| 戻り値 | `fn_get_project`の結果（存在しなければ`None`） |
 | 送出例外 | `OperationalError` |
-| 処理内容 | `SELECT project_members.user_id, users.username, users.last_name, users.first_name, project_members.joined_at, (project_members.user_id = projects.owner_id) AS is_owner FROM project_members JOIN users ON users.id = project_members.user_id JOIN projects ON projects.id = project_members.project_id WHERE project_members.project_id = :pid ORDER BY project_members.joined_at` を1クエリで実行しN+1を回避する |
+| 処理内容 | `SELECT fn_get_project(:project_id)` のみを発行する。メンバー・集計・所有者情報の結合はFN内部で処理する |
 | 副作用 | なし |
 
 ## 7. 関数相関図
@@ -216,11 +216,11 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["projects_router.get_project"] --> D["deps.require_project_member"]
-    D --> RP1["project_repository.get_by_id"]
-    D --> RP2["project_member_repository.exists"]
+    D --> RP1["project_repository.fn_get_project"]
+    D --> RP2["project_repository.fn_is_project_member"]
     R --> S["project_service.get_project_detail"]
-    S --> RP3["project_repository.list_members_with_user"]
-    S --> RP4["project_repository.aggregate_task_counts"]
+    S --> RP3["project_repository.fn_get_project"]
+    S --> RP4["project_repository.fn_get_project"]
     RP1 --> M1["models.Project"]
     RP2 --> M2["models.ProjectMember"]
     RP3 --> M2
@@ -247,7 +247,17 @@ flowchart LR
     S -->|"SELECT GROUP BY"| T4
 ```
 
-## 9. データアクセス一覧
+## 9. SP/FNデータアクセス一覧
+
+### 9.1 正式なDBアクセス契約
+
+本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+
+| 種別 | 契約 | 説明 |
+|------|------|------|
+| fn_get_project | `fn_get_project(p_project_id)` | fn_get_projectを呼び出し、結果をレスポンスへ写像する |
+
+repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
 **PostgreSQL**
 

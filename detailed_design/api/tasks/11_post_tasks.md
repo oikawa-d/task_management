@@ -131,22 +131,22 @@ sequenceDiagram
     R->>S: "create_task_flat(payload, current_user)"
     alt "project_idが非NULL"
         S->>PR: "is_member(project_id, user.id)"
-        PR->>PG: "SELECT project_members WHERE project_id AND user_id"
+        PR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         alt "非所属 かつ 非admin"
             S-->>R: "NotFoundError"
             R-->>FE: "404 NOT_FOUND"
         else "所属 または admin"
             S->>S: "assignee_id検証（02と共通ロジック）"
             S->>TR: "create(project_id, payload, created_by)<br/>（02_post_project_tasksと共通のリポジトリ関数）"
-            TR->>PG: "advisory lock (project_id, status) → fn_next_task_position → INSERT"
+            TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         end
     else "project_idがNULL"
         alt "assignee_id指定あり"
             S-->>R: "ValidationError"
             R-->>FE: "422 VALIDATION_ERROR"
         else "assignee_idなし"
-            S->>TR: "create_unassigned(payload, created_by)"
-            TR->>PG: "advisory lock (固定プレースホルダキー) → 末尾position算出 → INSERT (project_id=NULL)"
+            S->>TR: "sp_create_task(payload, created_by)"
+            TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         end
     end
     PG-->>TR: "task行"
@@ -206,18 +206,18 @@ flowchart TB
 | 引数 | payload：`project_id`を含む作成内容／user：作成者 |
 | 戻り値 | `Task` |
 | 送出例外 | `NotFoundError`（`project_id`指定時の非所属）、`ValidationError`（未所属タスクへの`assignee_id`指定、または`project_id`指定時の非メンバーassignee）、`ConflictError`（`ASSIGNEE_INACTIVE`） |
-| 処理内容 | 1. `payload.project_id` が非NULLの場合：`user.role != 'admin'` なら `project_repository.is_member(project_id, user.id)` で所属確認（非所属は`NotFoundError`）。以降は`create_task`（[02_post_project_tasks.md](./02_post_project_tasks.md) §6.2）と同一のassignee検証・`task_repository.create`呼び出しに委譲し、position採番・advisory lockロジックを完全に共通化する<br/>2. `payload.project_id` が `None` の場合：`payload.assignee_id` が指定されていれば`ValidationError`（未所属タスクは担当者設定不可）。検証OKなら `task_repository.create_unassigned(payload, created_by=user.id)` を呼び出す<br/>3. いずれの経路でも作成後の `Task.project_id` が非NULLなら`Project.is_active`をeager loadして`project_is_active`に設定し、`NULL`なら`project_is_active=None`とする |
-| 副作用 | DB更新（tasks INSERT） |
+| 処理内容 | 1. `payload.project_id` が非NULLの場合：`user.role != 'admin'` なら `fn_is_project_member(project_id, user.id)` で所属確認（非所属は`NotFoundError`）。以降は`create_task`（[02_post_project_tasks.md](./02_post_project_tasks.md) §6.2）と同一のassignee検証・`sp_create_task`呼び出しに委譲し、position採番・advisory lockロジックを完全に共通化する<br/>2. `payload.project_id` が `None` の場合：`payload.assignee_id` が指定されていれば`ValidationError`（未所属タスクは担当者設定不可）。API側で`task_id`を生成し、検証OKなら `CALL sp_create_task(task_id, NULL, user.id, NULL, ...)` を呼び出す<br/>3. いずれの経路でも作成後は`SELECT fn_get_task(task_id)`で取得し、`project_id`が非NULLなら`project_is_active`を設定し、`NULL`なら`None`とする |
+| 副作用 | `sp_create_task`によるDB更新 |
 
-### 6.3 `repository/task_repository.py :: create_unassigned`
+### 6.3 `repository/task_repository.py :: sp_create_task`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def create_unassigned(db: AsyncSession, payload: TaskCreateFlatRequest, created_by: UUID) -> Task` |
+| シグネチャ | `async def sp_create_task(db: AsyncSession, payload: TaskCreateFlatRequest, created_by: UUID) -> Task` |
 | 引数 | db：DBセッション／payload：作成内容（`project_id=None`、`assignee_id=None`確定済み）／created_by：作成者ID |
 | 戻り値 | 作成された `Task`（`project_id=None`） |
 | 送出例外 | `IntegrityError`（`uq_tasks_project_status_position`違反等。`db_error_handler`が409へ変換） |
-| 処理内容 | 1. **advisory lockキーの生成**：`project_id`が`NULL`のため、[../../database/06_table_tasks.md](../../database/06_table_tasks.md)の不明点・要検討事項に記載の方針に従い、固定プレースホルダ文字列 `'00000000-0000-0000-0000-000000000000'` を`project_id`の代わりに用いて `SELECT pg_advisory_xact_lock(hashtext('00000000-0000-0000-0000-000000000000' \|\| status))` を実行する。これにより「未所属タスク全体」を1つの仮想グループとしてアプリ層で直列化し、`(project_id=NULL, status, position)`の実質的な重複を防ぐ<br/>2. `status`省略時は既定値`'todo'`<br/>3. 末尾positionを`SELECT COALESCE(MAX(position), -1) + 1 FROM tasks WHERE project_id IS NULL AND status = :status`で算出する（`fn_next_task_position`はDB関数で`project_id`が非NULL前提のシグネチャの可能性があるため、`project_id IS NULL`分は本関数内でSQLを直接組み立てる。DB関数側の対応状況は[../../database/06_table_tasks.md](../../database/06_table_tasks.md)を参照し実装時に確定させる。§13）<br/>4. `INSERT INTO tasks(project_id, title, description, status, assignee_id, created_by, position, version, due_at) VALUES (NULL, ..., NULL, :created_by, :position, 1, :due_at)` を実行<br/>5. 採番からINSERTまでを同一トランザクション（同一advisory lock保持区間）で行う。DB制約（`UNIQUE (project_id, status, position) DEFERRABLE`）自体は`project_id IS NULL`同士の一意性を保証しないため、本関数のadvisory lockによる直列化が実質的な唯一の防御線となる |
+| 処理内容 | `project_id=NULL` も `CALL sp_create_task(:task_id, NULL, :created_by, NULL, :title, :body, :status, :due_at, :position)` に統一する。未所属用の固定advisory lockキー、position採番、NULL同士の重複防止、task INSERTはSP内部で実行し、API/service層にSQLを持たせない |
 | 副作用 | DB更新（tasks INSERT） |
 
 ## 7. 関数相関図
@@ -225,9 +225,9 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["tasks_router.create_task_flat"] --> S["task_service.create_task_flat"]
-    S --> PR["project_repository.is_member"]
-    S --> TC["task_repository.create<br/>（02_post_project_tasksと共通）"]
-    S --> TU["task_repository.create_unassigned"]
+    S --> PR["project_repository.fn_is_project_member"]
+    S --> TC["sp_create_task<br/>（02_post_project_tasksと共通）"]
+    S --> TU["sp_create_task"]
     TC --> FN["fn_next_task_position"]
     TC --> DB[("PostgreSQL<br/>tasks（project_id非NULL）")]
     TU --> DBU[("PostgreSQL<br/>tasks（project_id=NULL）")]
@@ -253,7 +253,17 @@ stateDiagram-v2
     Rejected --> [*]
 ```
 
-## 9. データアクセス一覧
+## 9. SP/FNデータアクセス一覧
+
+### 9.1 正式なDBアクセス契約
+
+本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+
+| 種別 | 契約 | 説明 |
+|------|------|------|
+| create_task | `sp_create_task(p_task_id, p_project_id, p_created_by, p_assignee_id, p_title, p_body, p_status, p_due_at, p_position)` | API生成IDでsp_create_taskを呼び出し、`fn_get_task`の結果をレスポンスへ写像する |
+
+repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
 **PostgreSQL**
 
@@ -293,10 +303,10 @@ stateDiagram-v2
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 単体（モック） | project_id指定・正常系 | リポジトリをモック、所属メンバー | `task_repository.create`（02と共通）が呼ばれる | `test_create_task_flat_with_project_id` |
-| 2 | 単体（モック） | project_id指定・非所属 | `is_member=False`、非admin | `NotFoundError` | `test_create_task_flat_project_forbidden` |
-| 3 | 単体（モック） | project_id省略・正常系 | リポジトリをモック | `task_repository.create_unassigned`が呼ばれる | `test_create_task_flat_without_project_id` |
-| 4 | 単体（モック） | project_id省略・assignee_id指定 | payloadに`assignee_id`あり | `ValidationError` | `test_create_task_flat_unassigned_rejects_assignee` |
+| 1 | 結合（実DB・実SP） | project_id指定・正常系 | リポジトリをモック、所属メンバー | `sp_create_task`（02と共通）が呼ばれる | `test_create_task_flat_with_project_id` |
+| 2 | 結合（実DB・実SP） | project_id指定・非所属 | `is_member=False`、非admin | `NotFoundError` | `test_create_task_flat_project_forbidden` |
+| 3 | 結合（実DB・実SP） | project_id省略・正常系 | リポジトリをモック | `sp_create_task`が呼ばれる | `test_create_task_flat_without_project_id` |
+| 4 | 結合（実DB・実SP） | project_id省略・assignee_id指定 | payloadに`assignee_id`あり | `ValidationError` | `test_create_task_flat_unassigned_rejects_assignee` |
 | 5 | 結合 | project_id指定で作成（member） | 実DB、所属プロジェクト | 201、`project_id`が一致、`position`は[02](./02_post_project_tasks.md)と同じ採番規則 | `test_post_tasks_with_project_id_success` |
 | 6 | 結合 | project_id省略で未所属タスク作成 | 実DB | 201、`project_id:null`, `project_is_active:null`, `is_active:true` | `test_post_tasks_unassigned_success` |
 | 7 | 結合 | project_id="null"相当（bodyで明示的に`null`送信）と省略が同じ結果になる | 実DB、`{"project_id": null, ...}` | 201、`project_id:null` | `test_post_tasks_explicit_null_project_id` |
@@ -310,6 +320,6 @@ stateDiagram-v2
 | 区分 | 内容 | 影響 |
 |------|------|------|
 | 不明 | 未所属タスク（`project_id=NULL`）に`assignee_id`を設定できないという制約は、issue #10のブリーフに明示的な記載がなく、本設計で「プロジェクトメンバーという概念がないため検証不能」という理由から導出した判断である。将来的に自分自身を担当者に設定できるようにする等の拡張余地はある | 未所属タスクの機能範囲 |
-| 要検討 | `create_unassigned`のposition採番に`fn_next_task_position`（DB関数）を流用できるかは、当該関数が`project_id`パラメータをNULL許容で実装されるか次第。DB関数側がNULL非対応のままなら、本設計のようにリポジトリ層でSQLを直接組み立てる対応が必要になる。DB関数のシグネチャ確定は database担当ドキュメント（[../../database/06_table_tasks.md](../../database/06_table_tasks.md)）側の対応を待つ | 実装方式・DB関数の仕様変更要否 |
+| 要検討 | `sp_create_task`のposition採番に`fn_next_task_position`（DB関数）を流用できるかは、当該関数が`project_id`パラメータをNULL許容で実装されるか次第。DB関数側がNULL非対応のままなら、本設計のようにリポジトリ層でSQLを直接組み立てる対応が必要になる。DB関数のシグネチャ確定は database担当ドキュメント（[../../database/06_table_tasks.md](../../database/06_table_tasks.md)）側の対応を待つ | 実装方式・DB関数の仕様変更要否 |
 | 要検討 | 固定プレースホルダキーによる未所属タスク全体の直列化は、`(project_id, status)`単位のロックと比べて粒度が粗く、ユーザー数が増えた場合のロック競合増加が懸念される。学習用途では許容するが、本番運用を想定する場合は`created_by`も含めたロックキー（例：`hashtext('unassigned:' || created_by || ':' || status)`）へ見直す余地がある | 将来のスケーラビリティ |
 | 要検討 | `project_id`を省略した場合にログイン済みユーザー全員が作成可能である点（プロジェクト作成者・メンバー権限を問わない）が意図通りかはissue #10のユーザー合意でも粒度の確認が取れていない | 認可方針の最終確認 |

@@ -272,3 +272,13 @@ PostgreSQLへの書き込みは発生しない。Redisに `oauth_state:{state}` 
 | 確定 | 本APIはIP単位10回/900秒のレート制限を適用する | 超過時429 `TOO_MANY_ATTEMPTS`（`Retry-After`付き）、Redis障害時503 |
 | 要検討 | `redirect_to` の最大長（`OAUTH_REDIRECT_TO_MAX_LENGTH`）は基本設計に定義がなく、本ファイルで既定値2048として仮置きした | 実装時に環境変数の既定値として確定させる必要がある |
 | 不明 | `prompt=select_account` は基本設計に明記がなく、UX観点で妥当と判断し追加した仮の設計 | Googleアカウントを複数持つユーザーの体験に影響。要件との整合を確認したい |
+
+## DBアクセス契約
+
+本APIのDBアクセスは、下記のFN/SP呼び出しをrepositoryの薄いラッパーから実行する。テーブルへの直接CRUD、認証業務の判定、履歴のINSERTはrepositoryに実装しない。healthの `SELECT 1` だけは本契約の対象外である。
+
+| 正式な呼び出し | 契約 |
+|----------------|------|
+| DBアクセスなし（Redis/OAuth providerのみ） | `detailed_design/database/08_db_functions.md` のシグネチャに従う |
+
+SQLSTATE P0xxxは同文書 §4 の対応表でAPIエラーへ変換し、Redis・メール・JWTの処理はAPI/service層に残す。

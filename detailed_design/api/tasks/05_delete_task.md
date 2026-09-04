@@ -19,7 +19,7 @@
 | 項目 | 内容 |
 |------|------|
 | エンドポイント | `DELETE /api/tasks/{task_id}` |
-| 目的 | タスクを1件**論理削除**する（`UPDATE tasks SET is_active = false`）。物理的な行削除・`task_comments` のCASCADE削除は発生しない |
+| 目的 | タスクを1件**論理削除**する（`CALL sp_deactivate_task`）。物理的な行削除・`task_comments` のCASCADE削除は発生しない |
 | 認証 | session モード：`cerberus_sid` Cookie ／ jwt モード：`Authorization: Bearer {access_token}` |
 | 認可 | プロジェクトメンバー（`task_id` からプロジェクトを特定し所属確認。admin は無条件許可。基本設計 §2.4 では担当者・作成者に限定する記載はなく、所属メンバー全員が削除可）。`project_id` が `NULL`（未所属タスク）の場合は作成者本人のみ削除可 |
 | CSRF検証 | 必要（session モードの更新系） |
@@ -27,7 +27,7 @@
 | AUTH_MODE差異 | CSRF検証の要否のみ異なる |
 | 冪等性 | あり（`is_active=false` へのUPDATEは同一結果を繰り返し得るため、2回目以降も204。物理削除と異なり「既に無効化済み」を404にする必要がない） |
 | レート制限 | 対象外 |
-| トランザクション境界 | `SELECT ... FOR UPDATE` から `UPDATE tasks SET is_active=false` までを1トランザクションとする。**advisory lockの取得・positionの再採番（詰め）は行わない** |
+| トランザクション境界 | `CALL sp_deactivate_task` 1回。対象行のロックと更新はSP内部で同一トランザクションとして行い、**advisory lockの取得・positionの再採番（詰め）は行わない** |
 
 ## 2. 入出力仕様（全体の出入力）
 
@@ -83,8 +83,8 @@ sequenceDiagram
         S-->>R: "NotFoundError"
         R-->>FE: "404 NOT_FOUND"
     else "存在・所属OK・is_active=true"
-        S->>TR: "soft_delete(task)"
-        TR->>PG: "UPDATE tasks SET is_active=false,<br/>updated_at=now() WHERE id = task_id"
+        S->>TR: "sp_deactivate_task(task)"
+        TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>TR: "OK"
         TR-->>S: "None"
         S-->>R: "None"
@@ -134,18 +134,18 @@ flowchart TB
 | 引数 | task_id：対象タスクID／user：現在ユーザー |
 | 戻り値 | なし |
 | 送出例外 | `NotFoundError`（タスク不存在、非所属、または既に `is_active=false`） |
-| 処理内容 | 1. `task_repository.get_for_update(task_id)` で行ロック付き取得<br/>2. `None` の場合、または `project_id` が非NULLで非所属（かつ非admin）の場合、または `project_id` が `NULL` で作成者本人でない（かつ非admin）場合、または取得できた行が既に `is_active=false` の場合、いずれも `NotFoundError`<br/>3. 上記いずれにも該当しなければ `task_repository.soft_delete(task)` を呼び出す |
+| 処理内容 | 1. `fn_get_task(task_id)` と所属FNで対象の事実を取得し、空集合/falseまたは既に無効なら404 2. `CALL sp_deactivate_task(task_id, false)` を1回呼び、無効化をSP内で実行 3. 成功後に204を返す |
 | 副作用 | DB更新 |
 
-### 6.3 `repository/task_repository.py :: soft_delete`
+### 6.3 `repository/task_repository.py :: sp_deactivate_task`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def soft_delete(db: AsyncSession, task: Task) -> None` |
+| シグネチャ | `async def sp_deactivate_task(db: AsyncSession, task: Task) -> None` |
 | 引数 | db：DBセッション／task：`get_for_update` で取得済みの行（ロック中、`is_active=true` であることは呼び出し元で確認済み） |
 | 戻り値 | なし |
 | 送出例外 | `OperationalError`（503へ変換） |
-| 処理内容 | 1. `UPDATE tasks SET is_active = false, updated_at = now() WHERE id = :task_id` を実行するのみ<br/>2. `position` の再採番・後続行の詰め（compaction）は**行わない**。`is_active=false` の行は一覧・カンバン（`is_active=true` 既定フィルタ）から除外されるだけで、`position` の値自体は変更しない（他の有効タスクの `position` にギャップが生じても並び順は崩れないため許容する。詳細は[../../database/06_table_tasks.md](../../database/06_table_tasks.md)参照）<br/>3. advisory lock（`pg_advisory_xact_lock`）の取得も行わない。`position` を変更しないため、同一 `(project_id, status)` 列への同時作成・並べ替えと競合しない<br/>4. `task_comments` に対する操作は一切行わない（物理削除ではないためCASCADEも発火しない） |
+| 処理内容 | 1. `CALL sp_deactivate_task(:task_id, false)` を実行する 2. `position` の再採番・後続行の詰め（compaction）は**行わない**。`is_active=false` の行は一覧・カンバン（`is_active=true` 既定フィルタ）から除外されるだけで、`position` の値自体は変更しない（詳細は[../../database/06_table_tasks.md](../../database/06_table_tasks.md)参照） 3. `task_comments` に対する操作は一切行わない（物理削除ではないためCASCADEも発火しない） |
 | 副作用 | DB更新（対象タスク行の `is_active` / `updated_at` のみ） |
 
 ## 7. 関数相関図
@@ -154,8 +154,8 @@ flowchart TB
 flowchart LR
     R["tasks_router.delete_task"] --> DEP["deps.verify_csrf"]
     R --> S["task_service.delete_task"]
-    S --> G["task_repository.get_for_update"]
-    S --> SD["task_repository.soft_delete"]
+    S --> G["repository.fn_get_task"]
+    S --> SD["task_repository.sp_deactivate_task"]
     SD --> DBT[("PostgreSQL<br/>tasks（is_active=false）")]
 ```
 
@@ -163,23 +163,33 @@ flowchart LR
 
 ```mermaid
 stateDiagram-v2
-    [*] --> RowLocked: "SELECT ... FOR UPDATE"
+    [*] --> RowLocked: "sp_deactivate_task内部で対象行をロック"
     RowLocked --> Authorized: "所属確認OK かつ is_active=true"
     RowLocked --> [*]: "不存在/非所属/既に無効化済み → ROLLBACK / 404"
-    Authorized --> SoftDeleted: "UPDATE tasks SET is_active=false"
+    Authorized --> SoftDeleted: "CALL sp_deactivate_task(task_id, false)"
     SoftDeleted --> Committed: "COMMIT（position・他行は無変更）"
     Committed --> [*]
 ```
 
-## 9. データアクセス一覧
+## 9. SP/FNデータアクセス一覧
+
+### 9.1 正式なDBアクセス契約
+
+本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+
+| 種別 | 契約 | 説明 |
+|------|------|------|
+| deactivate_task | `sp_deactivate_task(p_task_id, p_is_active=false)` | sp_deactivate_taskを呼び出し、結果をレスポンスへ写像する |
+
+repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
 **PostgreSQL**
 
 | テーブル | 操作 | 条件・TTL | 備考 |
 |----------|------|-----------|------|
-| tasks | SELECT FOR UPDATE | `id = task_id` | 対象タスクの行ロック・所属確認・`is_active`確認用 |
-| project_members | SELECT | `project_id`, `user_id`（`project_id`が非NULLの場合のみ） | 所属確認（非adminのみ） |
-| tasks | UPDATE | `id = task_id`、`SET is_active=false, updated_at=now()` | 論理削除本体。`position`・`status`・他行は一切変更しない |
+| `fn_get_task` | FN | `p_task_id = task_id` | 対象タスクの事実取得 |
+| `fn_is_project_member` | FN | `p_project_id` / `p_user_id` | 所属の事実判定（非adminのみ） |
+| `sp_deactivate_task` | SP | `p_task_id = task_id` | 論理削除本体。`position`・`status`・他行は一切変更しない |
 
 **Redis**：使用なし。
 
@@ -207,11 +217,11 @@ stateDiagram-v2
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 単体（モック） | 正常系 | リポジトリをモック | `soft_delete` が1回呼ばれる | `test_delete_task_success` |
-| 2 | 単体（モック） | タスク不存在 | `get_for_update` が `None` | `NotFoundError` 送出 | `test_delete_task_not_found` |
-| 3 | 単体（モック） | 非所属member | 所属確認が失敗 | `NotFoundError` 送出 | `test_delete_task_forbidden_as_not_found` |
-| 4 | 単体（モック） | 既に無効化済み | モックタスクの`is_active=False` | `NotFoundError` 送出 | `test_delete_task_already_inactive_as_not_found` |
-| 5 | 結合 | 正常系削除（member） | 実DB、列内3件中の中央を削除 | 204、`is_active=false`になる。他2件の`position`は不変（詰めない） | `test_delete_task_soft_deletes_without_position_compaction` |
+| 1 | 結合（実DB・実SP） | 正常系 | リポジトリをモック | `sp_deactivate_task` が1回呼ばれる | `test_delete_task_success` |
+| 2 | 結合（実DB・実SP） | タスク不存在 | `get_for_update` が `None` | `NotFoundError` 送出 | `test_delete_task_not_found` |
+| 3 | 結合（実DB・実SP） | 非所属member | 所属確認が失敗 | `NotFoundError` 送出 | `test_delete_task_forbidden_as_not_found` |
+| 4 | 結合（実DB・実SP） | 既に無効化済み | モックタスクの`is_active=False` | `NotFoundError` 送出 | `test_delete_task_already_inactive_as_not_found` |
+| 5 | 結合 | 正常系削除（member） | 実DB、列内3件中の中央を削除 | 204、`is_active=false`になる。他2件の`position`は不変（詰めない） | `test_delete_task_sp_deactivate_tasks_without_position_compaction` |
 | 6 | 結合 | コメント付きタスクの削除 | 実DB、対象タスクにコメント2件 | 204、`task_comments` は削除されず残る（物理CASCADEなし） | `test_delete_task_does_not_cascade_comments` |
 | 7 | 結合 | 存在しないtask_id | 実DB、ランダムUUID | 404 `NOT_FOUND` | `test_delete_task_not_found_404` |
 | 8 | 結合 | 非所属member | 実DB、他プロジェクトのタスク | 404 `NOT_FOUND` | `test_delete_task_forbidden_as_404` |

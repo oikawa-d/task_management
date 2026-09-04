@@ -89,20 +89,20 @@ sequenceDiagram
         R-->>FE: "409 OWNER_CANNOT_BE_REMOVED"
     else 対象がメンバーでない
         S->>PR: exists(project.id, user_id)
-        PR->>PG: "SELECT 1 FROM project_members WHERE project_id=? AND user_id=?"
+        PR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>PR: 0件
         PR-->>S: false
         S-->>R: NotFoundError
         R-->>FE: "404 NOT_FOUND"
     else 削除可能
         S->>PG: BEGIN
-        S->>TR: unassign_tasks(project.id, user_id)
-        TR->>PG: "UPDATE tasks SET assignee_id = NULL\nWHERE project_id=? AND assignee_id=?"
+        S->>TR: sp_remove_project_member(project.id, user_id)
+        TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>TR: 更新件数
-        S->>PR: delete_member(project.id, user_id)
-        PR->>PG: "DELETE FROM project_members WHERE project_id=? AND user_id=?"
+        S->>PR: sp_remove_project_member(project.id, user_id)
+        PR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>PR: 削除件数=1
-        S->>PG: COMMIT
+        S->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         S-->>R: None
         R-->>FE: "204 No Content"
     end
@@ -158,29 +158,29 @@ flowchart TB
 | 引数 | project、user_id |
 | 戻り値 | なし |
 | 送出例外 | `ConflictError("OWNER_CANNOT_BE_REMOVED")`（→409）、`NotFoundError`（→404） |
-| 処理内容 | 1. `user_id == project.owner_id` なら `ConflictError` 2. `project_repository.exists(project.id, user_id)` が `false` なら `NotFoundError` 3. DBトランザクション開始 4. `task_repository.unassign_tasks(project.id, user_id)` で担当タスクの `assignee_id` を `NULL` 化 5. `project_repository.delete_member(project.id, user_id)` で `project_members` を削除 6. コミット |
+| 処理内容 | 1. `user_id == project.owner_id` なら `ConflictError` 2. `SELECT fn_is_project_member(project.id, user_id)` が `false` なら `NotFoundError` 3. `CALL sp_remove_project_member(project.id, user_id)` を1回呼び、担当解除と所属削除を同一トランザクションで完了する |
 | 副作用 | DB更新（`tasks.assignee_id` のNULL化、`project_members` のDELETE）。両方とも同一トランザクション内で実行し、一方が失敗すれば全体をロールバックする |
 
-### 6.3 `repository/task_repository.py :: unassign_tasks`
+### 6.3 `repository/project_repository.py :: sp_remove_project_member`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def unassign_tasks(db: AsyncSession, project_id: UUID, user_id: UUID) -> int` |
+| シグネチャ | `async def sp_remove_project_member(db: AsyncSession, project_id: UUID, user_id: UUID) -> int` |
 | 引数 | db、project_id、user_id |
 | 戻り値 | 更新された行数 |
 | 送出例外 | なし（DB例外は上位のトランザクション制御でロールバック） |
-| 処理内容 | `UPDATE tasks SET assignee_id = NULL WHERE project_id = :pid AND assignee_id = :uid` |
+| 処理内容 | `sp_remove_project_member` 内部で担当タスクをNULL化する |
 | 副作用 | DB更新 |
 
-### 6.4 `repository/project_repository.py :: delete_member`
+### 6.4 `repository/project_repository.py :: sp_remove_project_member`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def delete_member(db: AsyncSession, project_id: UUID, user_id: UUID) -> None` |
+| シグネチャ | `async def sp_remove_project_member(db: AsyncSession, project_id: UUID, user_id: UUID) -> None` |
 | 引数 | db、project_id、user_id |
 | 戻り値 | なし |
 | 送出例外 | なし |
-| 処理内容 | `DELETE FROM project_members WHERE project_id = :pid AND user_id = :uid` |
+| 処理内容 | `CALL sp_remove_project_member(:project_id, :user_id)` |
 | 副作用 | DB更新 |
 
 ## 7. 関数相関図
@@ -190,9 +190,9 @@ flowchart LR
     R["projects_router.remove_project_member"] --> D["deps.require_project_owner"]
     R --> CSRF["deps.verify_csrf"]
     R --> S["project_service.remove_member"]
-    S --> RP1["project_repository.exists"]
-    S --> TR["task_repository.unassign_tasks"]
-    S --> RP2["project_repository.delete_member"]
+    S --> RP1["project_repository.fn_is_project_member"]
+    S --> TR["task_repository.sp_remove_project_member"]
+    S --> RP2["sp_remove_project_member"]
     TR --> PG[("PostgreSQL<br/>tasks")]
     RP1 --> PG
     RP2 --> PG2[("PostgreSQL<br/>project_members")]
@@ -209,19 +209,29 @@ stateDiagram-v2
 
     [*] --> Member
     Member --> Tasks: "BEGIN"
-    Tasks --> Unassigned: "UPDATE tasks SET assignee_id=NULL\nWHERE project_id AND assignee_id=user_id"
-    Unassigned --> Removed: "DELETE FROM project_members\nWHERE project_id AND user_id"
+    Tasks --> Unassigned: "sp_remove_project_member内部でassignee_id=NULL"
+    Unassigned --> Removed: "CALL sp_remove_project_member"
     Removed --> [*]: "COMMIT（204）"
     Member --> Member: "user_id == owner_id（409、状態変化なし）"
     Member --> Member: "user_idが非メンバー（404、状態変化なし）"
 ```
 
-## 9. データアクセス一覧
+## 9. SP/FNデータアクセス一覧
+
+### 9.1 正式なDBアクセス契約
+
+本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+
+| 種別 | 契約 | 説明 |
+|------|------|------|
+| remove_project_member | `sp_remove_project_member(p_project_id, p_user_id)` | sp_remove_project_memberを呼び出し、結果をレスポンスへ写像する |
+
+repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
 | ストア | テーブル／キー | 操作 | 条件・TTL | 備考 |
 |--------|----------------|------|-----------|------|
 | PostgreSQL | `project_members` | SELECT | `WHERE project_id=:pid AND user_id=:uid`（存在確認） | `exists` |
-| PostgreSQL | `tasks` | UPDATE | `SET assignee_id=NULL WHERE project_id=:pid AND assignee_id=:uid` | `ix_tasks_assignee_id` を使用。`project_members` のDELETEより先に実行する（FK制約上は `assignee_id` に `ON DELETE SET NULL` があるため必須ではないが、`ON DELETE` はメンバー行削除ではなく `users` 行削除時のみ発火するため、明示的なUPDATEが必要） |
+| PostgreSQL | `sp_remove_project_member` | SP内部更新 | 対象メンバーの担当解除後に所属を削除 | 担当解除と所属削除を同一トランザクションで実行する |
 | PostgreSQL | `project_members` | DELETE | `WHERE project_id=:pid AND user_id=:uid` | 複合主キーでの削除 |
 | Redis | ー | ー | ー | 本APIはRedisを使用しない |
 
@@ -258,8 +268,8 @@ stateDiagram-v2
 | T6 | 結合 | 所属memberだがオーナーでない | 一般memberが実行 | 403 FORBIDDEN | `test_remove_member_forbidden_403` |
 | T7 | 結合 | 非所属memberが実行 | project_membersに未登録（実行者側） | 404 NOT_FOUND | `test_remove_member_non_member_403_or_404` |
 | T8 | 結合 | sessionモードでCSRFトークン欠落 | X-CSRF-Tokenなし | 403 CSRF_INVALID | `test_remove_member_csrf_missing_403` |
-| T9 | 単体 | サービス層のトランザクション制御検証 | task_repository/project_repositoryをモック | unassign_tasksがdelete_memberより先に呼ばれる | `test_service_remove_member_order` |
-| T10 | 結合 | 担当解除とメンバー削除の原子性 | unassign_tasks実行後にdelete_memberでエラーを注入 | ロールバックされtasksのassignee_idが元に戻る | `test_remove_member_transaction_rollback` |
+| T9 | 結合（実DB・実SP） | サービス層のトランザクション制御検証 | task_repository/project_実DB・実SPで検証 | sp_remove_project_memberがsp_remove_project_memberより先に呼ばれる | `test_service_remove_member_order` |
+| T10 | 結合 | 担当解除とメンバー削除の原子性 | sp_remove_project_member実行後にsp_remove_project_memberでエラーを注入 | ロールバックされtasksのassignee_idが元に戻る | `test_remove_member_transaction_rollback` |
 | T11 | 結合 | AUTH_MODE=session/jwt両方 | 各モードでログイン | いずれも204 | `test_remove_member_both_auth_modes` |
 
 T10は意図的な例外注入によるロールバック検証であり、実DBコンテナを用いた結合テストとして実施する（`basic_design/04_api.md` §8 の方針に準拠）。

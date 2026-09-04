@@ -7,7 +7,7 @@
 | [../../../basic_design/04_api.md](../../../basic_design/04_api.md) | §2.5 管理者API一覧（自己変更・最後のadmin保護の記述）、§4.2 エラーコード体系 |
 | [../../../basic_design/01_database.md](../../../basic_design/01_database.md) | §3.1 users |
 | [../../../basic_design/03_auth.md](../../../basic_design/03_auth.md) | §9.2 `core/deps.py`（`require_admin`）。role/usernameは常にPostgreSQLの現在値を正とする方針 |
-| [../../database/01_table_users.md](../../database/01_table_users.md) | users テーブル定義（`ck_users_role`、`update_role_and_status`） |
+| [../../database/01_table_users.md](../../database/01_table_users.md) | users テーブル定義（`ck_users_role`、`sp_admin_update_user_role`） |
 | [./01_get_admin_users.md](./01_get_admin_users.md) | ロール変更後に反映される一覧API |
 | [./03_patch_admin_user_status.md](./03_patch_admin_user_status.md) | 同じ「自己変更禁止・最後のadmin保護」の判定順序を共有する有効化/無効化API |
 
@@ -106,7 +106,7 @@ sequenceDiagram
     CSRF-->>R: OK
     R->>S: change_role(actor=CurrentUser, target_id, new_role)
     S->>RP: get_by_id(target_id) FOR UPDATE
-    RP->>PG: "SELECT * FROM users WHERE id=:target_id FOR UPDATE"
+    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     alt 対象が存在しない
         PG-->>RP: 0件
         RP-->>S: None
@@ -120,12 +120,12 @@ sequenceDiagram
             S-->>R: SelfModificationError
             R-->>FE: 409 SELF_MODIFICATION_NOT_ALLOWED
         else 他ユーザー
-            S->>PG: "SELECT pg_advisory_xact_lock(hashtext('admin_role_change'))"
+            S->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
             Note over S,PG: 同時実行される複数の降格リクエストを<br/>直列化するための順序ロック
             S->>S: 降格（admin→member）かつ現在is_active=trueか判定
             alt 降格に該当
-                S->>RP: count_active_admins_excluding(target_id)
-                RP->>PG: "SELECT COUNT(*) FROM users WHERE role='admin' AND is_active=true AND id<>:target_id"
+                S->>RP: sp_admin_update_user_role(target_id)
+                RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
                 PG-->>RP: 残る有効admin数
                 alt 残る有効admin数が0
                     RP-->>S: 0
@@ -133,8 +133,8 @@ sequenceDiagram
                     R-->>FE: 409 LAST_ADMIN_REQUIRED
                 end
             end
-            S->>RP: update_role_and_status(target_id, role=new_role, is_active=None)
-            RP->>PG: "UPDATE users SET role=:new_role WHERE id=:target_id RETURNING *"
+            S->>RP: sp_admin_update_user_role(target_id, role=new_role, is_active=None)
+            RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
             PG-->>RP: 更新後の行
             RP-->>S: User
             S-->>R: UserDetail
@@ -159,7 +159,7 @@ flowchart TB
     E -->|"存在する"| F{"target_id == actor.id?"}
     F -->|"Yes"| F1["409 SELF_MODIFICATION_NOT_ALLOWED"]
     F -->|"No"| G{"降格（admin→member）かつ<br/>現在is_active=true?"}
-    G -->|"No（昇格・現状維持・既に無効）"| I["UPDATE users SET role"]
+    G -->|"No（昇格・現状維持・既に無効）"| I["CALL sp_admin_update_user_role"]
     G -->|"Yes"| H["advisory lock取得 →<br/>残る有効admin数をCOUNT"]
     H -->|"0"| H1["409 LAST_ADMIN_REQUIRED"]
     H -->|"1以上"| I
@@ -190,39 +190,38 @@ flowchart TB
 | 引数 | `actor`: 実行者（admin） / `target_id`: 対象ユーザーID / `new_role`: 変更後ロール / `db`: DBセッション |
 | 戻り値 | 更新後の `User` |
 | 送出例外 | `NotFoundError`（404）/ `SelfModificationError`（409）/ `LastAdminRequiredError`（409） |
-| 処理内容 | 1. `user_repository.get_for_update(target_id)` で対象行をロック付き取得。存在しなければ `NotFoundError` 2. `target_id == actor.id` なら `SelfModificationError` 3. 「現在 `role=admin` かつ `is_active=true` かつ `new_role=='member'`」の場合のみ降格とみなす 4. 降格時は `acquire_admin_role_change_lock()` でアドバイザリロックを取得後、`user_repository.count_active_admins_excluding(target_id)` が0なら `LastAdminRequiredError` 5. 上記いずれにも該当しなければ `user_repository.update_role_and_status(target_id, role=new_role, is_active=None)` を実行 |
-| 副作用 | DB更新（`users.role`）。Redis更新なし（本APIはロール変更のみで、既存セッション/トークンの失効は行わない。次回以降のリクエストで `deps.get_current_user` がPostgreSQLの現在roleを再取得するため、認可判定には反映される） |
+| 処理内容 | `CALL sp_admin_update_user_role(actor.id, target_id, new_role)` を1回呼ぶ。対象不存在はFN結果から404、自己変更禁止・最後のadmin保護・advisory lock・role更新はSP内部で一体実行する。成功後は `fn_get_user(target_id)` で応答を取得 |
+| 副作用 | SP内で `users.role` を更新。Redisは変更せず、次回リクエストのDB再取得で認可へ反映 |
 
-### 6.3 `repository/user_repository.py :: get_for_update`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def get_for_update(db: AsyncSession, user_id: UUID) -> User \| None` |
-| 引数 / 戻り値 | `user_id`：対象ユーザーID / 該当行（行ロック取得済み）または `None` |
-| 発行SQL | `SELECT * FROM users WHERE id = :user_id FOR UPDATE` |
-| 送出例外 | なし（`None` を返す） |
-| 処理内容 | 1. 対象行をロック付きで取得し、同一トランザクション内の後続 `UPDATE` までロックを保持する |
-| 副作用 | 行ロック（トランザクション終了まで） |
-
-### 6.4 `repository/user_repository.py :: count_active_admins_excluding`
+### 6.3 `repository/user_repository.py :: sp_admin_update_user_role`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def count_active_admins_excluding(db: AsyncSession, exclude_user_id: UUID) -> int` |
-| 引数 / 戻り値 | `exclude_user_id`：対象ユーザー自身を除外するID / 対象ユーザー以外の有効admin数 |
-| 発行SQL | `SELECT COUNT(*) FROM users WHERE role='admin' AND is_active=true AND id <> :exclude_user_id` |
-| 使用インデックス | `ix_users_role`（実件数が少ないためSeq Scanに落ちる可能性はある） |
-| 送出例外 | `OperationalError` |
-| 処理内容 | 1. アドバイザリロック取得後に呼び出すことで、同時に発行される複数の降格リクエストがいずれもロック解放を待ってから直列にCOUNTする 2. 結果が0なら呼び出し元が `LastAdminRequiredError` を送出する |
+| シグネチャ | `async def sp_admin_update_user_role(db: AsyncSession, actor_id: UUID, target_id: UUID, new_role: str) -> None` |
+| 引数 / 戻り値 | actor・target・新role / なし |
+| SP/FN呼び出し（内部SQLはSP側） | `CALL sp_admin_update_user_role(:actor_id, :target_id, :new_role)` |
+| 送出例外 | `P0007 SELF_MODIFICATION_NOT_ALLOWED` / `P0008 LAST_ADMIN_REQUIRED` |
+| 処理内容 | SP内部で対象の存在・自己変更・最後のadminを判定し、必要なadvisory lockとrole更新を一体で行う |
+| 副作用 | SP内のusers更新 |
+
+### 6.4 `repository/user_repository.py :: sp_admin_update_user_role`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `async def get_admin_role_result(db: AsyncSession, target_id: UUID) -> User \| None` |
+| 引数 / 戻り値 | 対象ID / `SELECT fn_get_user(:target_id)` の結果 |
+| SP/FN呼び出し（内部SQLはSP側） | `SELECT fn_get_user(:target_id)` |
+| 送出例外 | なし。空集合は404へ変換 |
+| 処理内容 | 更新後の応答DTOを取得する。最後のadmin件数のSELECTや判定はSP内部へ置く |
 | 副作用 | なし |
 
-### 6.5 `service/admin_user_service.py :: acquire_admin_role_change_lock`
+### 6.5 `service/admin_user_service.py :: sp_admin_update_user_role`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def acquire_admin_role_change_lock(db: AsyncSession) -> None` |
+| シグネチャ | `async def sp_admin_update_user_role(db: AsyncSession) -> None` |
 | 引数 / 戻り値 | `db`: DBセッション / なし |
-| 発行SQL | `SELECT pg_advisory_xact_lock(hashtext('admin_role_change'))` |
+| SP/FN呼び出し（内部SQLはSP側） | `SELECT pg_advisory_xact_lock(hashtext('admin_role_change'))` |
 | 送出例外 | なし（取得できるまでブロックする。トランザクションコミット/ロールバックで自動解放） |
 | 処理内容 | 1. 固定キー `'admin_role_change'` に対するトランザクションスコープのアドバイザリロックを取得し、同時に発生する降格判定を直列化する |
 | 副作用 | アドバイザリロック取得（トランザクション終了まで） |
@@ -232,10 +231,10 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["admin_router.patch_admin_user_role"] --> S["admin_user_service.change_role"]
-    S --> RP1["user_repository.get_for_update"]
-    S --> L["admin_user_service.acquire_admin_role_change_lock"]
-    S --> RP2["user_repository.count_active_admins_excluding"]
-    S --> RP3["user_repository.update_role_and_status"]
+    S --> RP1["user_repository.sp_admin_update_user_role"]
+    S --> L["admin_user_service.sp_admin_update_user_role"]
+    S --> RP2["user_repository.sp_admin_update_user_role"]
+    S --> RP3["user_repository.sp_admin_update_user_role"]
     RP1 --> M["models.User"]
     RP2 --> M
     RP3 --> M
@@ -248,7 +247,7 @@ stateDiagram-v2
     [*] --> role_current: 対象ユーザーの現在role/is_active
     role_current --> self_rejected: target_id == actor.id<br/>109 SELF_MODIFICATION_NOT_ALLOWED
     role_current --> last_admin_rejected: 降格 かつ 残る有効admin=0<br/>409 LAST_ADMIN_REQUIRED
-    role_current --> role_updated: UPDATE users SET role<br/>advisory lock はコミットで解放
+    role_current --> role_updated: CALL sp_admin_update_user_role<br/>advisory lock はコミットで解放
     self_rejected --> [*]
     last_admin_rejected --> [*]
     role_updated --> [*]
@@ -256,7 +255,17 @@ stateDiagram-v2
 
 Redisのキー状態は変化しない（本APIはPostgreSQLの `users.role` のみを更新する）。
 
-## 9. データアクセス一覧
+## 9. SP/FNデータアクセス一覧
+
+### 9.1 正式なDBアクセス契約
+
+本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+
+| 種別 | 契約 | 説明 |
+|------|------|------|
+| admin_update_user_role | `sp_admin_update_user_role(p_actor_id, p_target_id, p_new_role)` | sp_admin_update_user_roleを呼び出し、結果をレスポンスへ写像する |
+
+repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
 **PostgreSQL**
 
@@ -296,10 +305,10 @@ Redisのキー状態は変化しない（本APIはPostgreSQLの `users.role` の
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 単体 | 自己変更は最後のadmin判定より先に拒否される | `target_id == actor.id`、かつ実質的に最後のadminでもある状況 | `409 SELF_MODIFICATION_NOT_ALLOWED`、`count_active_admins_excluding`未呼び出し | `test_change_role_self_modification_checked_before_last_admin` |
+| 1 | 単体 | 自己変更は最後のadmin判定より先に拒否される | `target_id == actor.id`、かつ実質的に最後のadminでもある状況 | `409 SELF_MODIFICATION_NOT_ALLOWED`、`sp_admin_update_user_role`未呼び出し | `test_change_role_self_modification_checked_before_last_admin` |
 | 2 | 単体 | 最後の有効adminの降格は拒否される | 有効admin1名のみが存在し、それを対象に`member`へ変更 | `409 LAST_ADMIN_REQUIRED` | `test_change_role_last_admin_required` |
-| 3 | 単体 | 無効化済みadminは降格対象カウントに含めない | 対象以外に `role=admin, is_active=false` のユーザーが存在 | `count_active_admins_excluding` が0を返し `409 LAST_ADMIN_REQUIRED` | `test_change_role_inactive_admin_not_counted` |
-| 4 | 単体 | 昇格（member→admin）は最後のadmin判定を経由しない | 対象が `role=member` | `count_active_admins_excluding` 未呼び出しで200相当の更新処理へ | `test_change_role_promotion_skips_last_admin_check` |
+| 3 | 単体 | 無効化済みadminは降格対象カウントに含めない | 対象以外に `role=admin, is_active=false` のユーザーが存在 | `sp_admin_update_user_role` が0を返し `409 LAST_ADMIN_REQUIRED` | `test_change_role_inactive_admin_not_counted` |
+| 4 | 単体 | 昇格（member→admin）は最後のadmin判定を経由しない | 対象が `role=member` | `sp_admin_update_user_role` 未呼び出しで200相当の更新処理へ | `test_change_role_promotion_skips_last_admin_check` |
 | 5 | 結合 | 対象ユーザーが存在しない場合は404 | 存在しないUUID | `404 NOT_FOUND` | `test_change_role_target_not_found` |
 | 6 | 結合 | 通常の降格（他に有効adminがいる）は成功する | 有効admin2名のうち1名を対象に`member`へ変更 | `200`、`users.role='member'` | `test_change_role_demote_success_with_other_admin` |
 | 7 | 結合 | 同時に2件の降格リクエストが飛んだ場合、片方のみ成功する | 有効admin2名に対し同時に相互を`member`へ降格するリクエストを発行 | 1件は`200`、もう1件は`409 LAST_ADMIN_REQUIRED`（advisory lockによる直列化） | `test_change_role_concurrent_demotion_serialized` |

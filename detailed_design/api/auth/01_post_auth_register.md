@@ -107,7 +107,7 @@ sequenceDiagram
         R->>R: RegisterRequestで入力検証(422はFastAPIが自動応答)
         R->>S: register(payload, background)
         S->>RP: exists_by_username_or_email(username, email)
-        RP->>PG: SELECT 1 FROM users WHERE lower(username)=? OR lower(email)=?
+        RP->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
         PG-->>RP: 行 or なし
         alt 重複あり
             RP-->>S: DuplicateError(field)
@@ -116,7 +116,7 @@ sequenceDiagram
         else 重複なし
             S->>S: hash_password(password)（argon2id）
             S->>RP: insert(user, email_verified_at=None)
-            RP->>PG: INSERT INTO users(...)
+            RP->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
             PG-->>RP: user行
             RP-->>S: User
             S->>S: token = secrets.token_urlsafe(32)
@@ -172,10 +172,10 @@ flowchart TB
 | 引数 | `payload: RegisterRequest`、`background: BackgroundTasks`、`db: AsyncSession` |
 | 戻り値 | 作成された `User`（ORMモデル） |
 | 送出例外 | `DuplicateUsernameError` / `DuplicateEmailError`（409） |
-| 処理内容 | 1. `user_repository.exists_by_username_or_email` で重複確認 2. `core/security.hash_password` でargon2idハッシュ生成 3. `user_repository.insert` で `email_verified_at=NULL` として作成 4. `token_urlsafe(32)` を生成 5. `redis_store.replace_email_verify_token` でRedis登録（TTL=`EMAIL_VERIFY_TTL_SECONDS`） 6. `redis_store.mark_email_verify_sent` で送信済みマーカー設定 7. `background.add_task(mail_service.send_email_verification_mail, ...)` を登録 8. **`AuthStrategy.login` は呼ばない** |
+| 処理内容 | 1. `core/security.hash_password` でargon2idハッシュ生成 2. API側で`user_id`を生成し、`CALL sp_register_user(user_id, username, email, password_hash)` を呼ぶ 3. `token_urlsafe(32)` を生成 4. `redis_store.replace_email_verify_token` でRedis登録（TTL=`EMAIL_VERIFY_TTL_SECONDS`） 5. `redis_store.mark_email_verify_sent` で送信済みマーカー設定 6. `background.add_task(mail_service.send_email_verification_mail, ...)` を登録 7. `SELECT fn_get_user(user_id)` で応答を取得 8. **`AuthStrategy.login` は呼ばない** |
 | 副作用 | DB: `users` INSERT。Redis: `emailverify:{hash}` / `emailverify_current:{uid}` / `emailverify_sent:{uid}` 作成。メール送信（非同期） |
 
-### 6.3 `repository/user_repository.py :: exists_by_username_or_email`
+### 6.3 `repository/user_repository.py :: fn_find_user_by_identifier`
 
 | 項目 | 内容 |
 |------|------|
@@ -183,10 +183,10 @@ flowchart TB
 | 引数 | `db`、`username`、`email` |
 | 戻り値 | 重複がなければ `None`。重複があれば `"username"` または `"email"` を示す列挙値 |
 | 送出例外 | なし（DB接続不能時は上位で`RedisError`同様に`OperationalError`が伝播し503へ変換） |
-| 処理内容 | 1. `SELECT username, email FROM users WHERE lower(username)=lower(:u) OR lower(email)=lower(:e)` を実行 2. 一致列を判定して返す |
+| 処理内容 | `fn_find_user_by_identifier` 相当のFNで重複候補を取得する。登録本体の一意性保証は `sp_register_user` がP0001/P0002で行う |
 | 副作用 | なし（参照のみ） |
 
-### 6.4 `repository/user_repository.py :: insert`
+### 6.4 `repository/user_repository.py :: sp_record_login_history`
 
 | 項目 | 内容 |
 |------|------|
@@ -194,7 +194,7 @@ flowchart TB
 | 引数 | `db`、`payload`、`password_hash` |
 | 戻り値 | 作成済み `User` |
 | 送出例外 | `IntegrityError`（一意制約違反時。事前チェックとの競合時のみ発生し、上位で409へ変換） |
-| 処理内容 | 1. `User(username=..., email=..., password_hash=..., role='member', is_active=True, email_verified_at=None, ...)` を構築 2. `db.add` → `db.flush` → `db.commit`（またはUnit of Work層でcommit） |
+| 処理内容 | `CALL sp_register_user(:user_id, :username, :email, :password_hash)` のみを発行する。ユーザー行の作成と一意性検証はSP内部 |
 | 副作用 | DB: `users` へ1行追加 |
 
 ### 6.5 `repository/redis_store.py :: replace_email_verify_token`
@@ -214,8 +214,8 @@ flowchart TB
 flowchart LR
     R["auth_router.register"] --> S["auth_service.register"]
     S --> SEC["core/security.hash_password"]
-    S --> RP1["user_repository.exists_by_username_or_email"]
-    S --> RP2["user_repository.insert"]
+    S --> RP1["user_repository.fn_find_user_by_identifier"]
+    S --> RP2["user_repository.sp_register_user"]
     S --> RS["redis_store.replace_email_verify_token"]
     S --> RS2["redis_store.mark_email_verify_sent"]
     S --> MS["mail_service.send_email_verification_mail"]
@@ -302,3 +302,13 @@ stateDiagram-v2
 |------|------|------|
 | 確定 | 会員登録APIはIP単位5回/900秒のレート制限を適用する | 429時は`Retry-After`を表示し、Redis障害時は503で安全側に停止する |
 | 要検討 | `409 DUPLICATE_EMAIL`を明示返却する設計はユーザー列挙を許容する（`basic_design/04_api.md`の記載どおり）。パスワードリセット等の他APIは列挙対策として202固定にしている非対称性がある | 一貫性の観点で要確認（基本設計の意図的な設計判断の可能性が高いため、変更はしない） |
+
+## DBアクセス契約
+
+本APIのDBアクセスは、下記のFN/SP呼び出しをrepositoryの薄いラッパーから実行する。テーブルへの直接CRUD、認証業務の判定、履歴のINSERTはrepositoryに実装しない。healthの `SELECT 1` だけは本契約の対象外である。
+
+| 正式な呼び出し | 契約 |
+|----------------|------|
+| sp_register_user(p_user_id, p_username, p_email, p_password_hash) | `detailed_design/database/08_db_functions.md` のシグネチャに従う |
+
+SQLSTATE P0xxxは同文書 §4 の対応表でAPIエラーへ変換し、Redis・メール・JWTの処理はAPI/service層に残す。

@@ -114,9 +114,9 @@ sequenceDiagram
     D-->>R: "CurrentUser"
     R->>S: "get_task_detail(task_id, current_user)"
     S->>TR: "get_with_project(task_id)"
-    TR->>PG: "SELECT tasks WHERE tasks.id = task_id"
+    TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>TR: "task行 + project_id"
-    TR->>PG: "selectinload(assignee) / selectinload(created_by) の追加SELECT"
+    TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>TR: "users行"
     alt "タスクが存在しない"
         TR-->>S: "None"
@@ -134,7 +134,7 @@ sequenceDiagram
             R-->>FE: "404 NOT_FOUND"
         else "所属 または 作成者本人 または admin"
             S->>TR: "count_comments(task_id)"
-            TR->>PG: "SELECT COUNT(*) FROM task_comments WHERE task_id"
+            TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
             PG-->>TR: "comment_count"
             TR-->>S: "comment_count"
             S-->>R: "TaskDetailResponse"
@@ -163,11 +163,11 @@ flowchart TB
 
 ## 6. 関数詳細
 
-### 6.1 `api/routers/tasks.py :: get_task`
+### 6.1 `api/routers/tasks.py :: fn_get_task`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def get_task(task_id: UUID, current_user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> TaskDetailResponse` |
+| シグネチャ | `async def fn_get_task(task_id: UUID, current_user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> TaskDetailResponse` |
 | 引数 | task_id: 対象タスクID／current_user: 現在ユーザー／db: DBセッション |
 | 戻り値 | `TaskDetailResponse`（200） |
 | 送出例外 | `NotFoundError`（404） |
@@ -182,10 +182,10 @@ flowchart TB
 | 引数 | task_id: 対象タスクID／user: 現在ユーザー |
 | 戻り値 | `TaskDetailResponse` |
 | 送出例外 | `NotFoundError`（タスク不存在、または非所属） |
-| 処理内容 | 1. `task_repository.get_with_project(task_id)` でタスクと `project_id` を取得。`None` なら `NotFoundError`<br/>2. `user.role == 'admin'` の場合は認可チェックをスキップ<br/>3. `project_id` が非NULLの場合、`project_repository.is_member(project_id, user.id)` で所属確認。非所属なら `NotFoundError`<br/>4. `project_id` が `NULL`（未所属タスク）の場合、`task.created_by == user.id` を確認。一致しなければ `NotFoundError`（作成者以外には存在を秘匿）<br/>5. `task_repository.count_comments(task_id)` で `comment_count` を取得し、レスポンスDTOに合成。`project_is_active` は `project_id` が `NULL` なら `None`、非NULLなら取得した `Project.is_active` を設定 |
+| 処理内容 | `SELECT fn_get_task(:task_id)` を1回呼び出す。タスクの存在、admin/所属/未所属作成者の認可、コメント件数、プロジェクト有効状態はFN結果またはFN内部で処理し、空集合はAPIで404へ変換する |
 | 副作用 | なし |
 
-### 6.3 `repository/task_repository.py :: get_with_project`
+### 6.3 `repository/task_repository.py :: fn_get_task`
 
 | 項目 | 内容 |
 |------|------|
@@ -193,17 +193,17 @@ flowchart TB
 | 引数 | db: DBセッション／task_id: 対象タスクID |
 | 戻り値 | `TaskWithProject`（`Task` に `assignee` / `created_by` をEager Loadしたもの）または `None` |
 | 送出例外 | `OperationalError`（503へ変換） |
-| 処理内容 | 1. `tasks` を `id = task_id` で1回取得 2. `assignee` / `created_by` の各 `selectinload` に加え、`project_id` が非NULLの場合のみ `project`（`is_active` 参照用）を `selectinload` で追加SELECT（最大4クエリ。対象行がない場合は主クエリのみ、`project_id=NULL`なら`project`分のSELECTは発行しない）<br/>3. 存在しない場合は `None` を返す（例外は投げない。所属確認前の存在チェックはサービス層で行う） |
+| 処理内容 | 1. `tasks` を `id = task_id` で1回取得 2. `assignee` / `created_by` の各 `FN結果の一括マッピング` に加え、`project_id` が非NULLの場合のみ `project`（`is_active` 参照用）を `FN結果の一括マッピング` で追加SELECT（最大4クエリ。対象行がない場合は主クエリのみ、`project_id=NULL`なら`project`分のSELECTは発行しない）<br/>3. 存在しない場合は `None` を返す（例外は投げない。所属確認前の存在チェックはサービス層で行う） |
 | 副作用 | なし |
 
 ## 7. 関数相関図
 
 ```mermaid
 flowchart LR
-    R["tasks_router.get_task"] --> S["task_service.get_task_detail"]
-    S --> TR["task_repository.get_with_project"]
-    S --> PR["project_repository.is_member"]
-    S --> CC["task_repository.count_comments"]
+    R["tasks_router.fn_get_task"] --> S["task_service.get_task_detail"]
+    S --> TR["task_repository.fn_get_task"]
+    S --> PR["project_repository.fn_is_project_member"]
+    S --> CC["task_repository.fn_get_task"]
     TR --> DB[("PostgreSQL<br/>tasks / users / projects")]
     PR --> DBM[("PostgreSQL<br/>project_members")]
     CC --> DBC[("PostgreSQL<br/>task_comments")]
@@ -217,8 +217,8 @@ flowchart LR
 flowchart LR
     subgraph read["参照範囲（PostgreSQL）"]
         T["tasks<br/>WHERE id = :task_id"]
-        U["users<br/>assignee / created_by（selectinload追加SELECT）"]
-        P["projects<br/>is_active取得（project_id非NULL時のみselectinload）"]
+        U["users<br/>assignee / created_by（FN結果の一括マッピング追加SELECT）"]
+        P["projects<br/>is_active取得（project_id非NULL時のみFN結果の一括マッピング）"]
         PM["project_members<br/>所属確認（project_id非NULL・非adminのみ）"]
         C["task_comments<br/>COUNT（別クエリ）"]
     end
@@ -228,15 +228,25 @@ flowchart LR
     T -->|"id"| C
 ```
 
-## 9. データアクセス一覧
+## 9. SP/FNデータアクセス一覧
+
+### 9.1 正式なDBアクセス契約
+
+本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+
+| 種別 | 契約 | 説明 |
+|------|------|------|
+| fn_get_task | `fn_get_task(p_task_id)` | fn_get_taskを呼び出し、結果をレスポンスへ写像する |
+
+repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
 **PostgreSQL**
 
 | テーブル | 操作 | 条件・TTL | 備考 |
 |----------|------|-----------|------|
 | tasks | SELECT | `id = task_id` | `project_id`（NULL可）から認可判定を行う起点 |
-| users | SELECT（`selectinload`の追加SELECT各1回） | `assignee_id` / `created_by` | 表示用情報のEager Load。主クエリとは別ラウンドトリップ |
-| projects | SELECT（`selectinload`の追加SELECT） | `id = tasks.project_id`（`project_id`が非NULLの場合のみ実行） | `project_is_active` 算出用 |
+| users | SELECT（`FN結果の一括マッピング`の追加SELECT各1回） | `assignee_id` / `created_by` | 表示用情報のEager Load。主クエリとは別ラウンドトリップ |
+| projects | SELECT（`FN結果の一括マッピング`の追加SELECT） | `id = tasks.project_id`（`project_id`が非NULLの場合のみ実行） | `project_is_active` 算出用 |
 | project_members | SELECT | `project_id`, `user_id`（`project_id`が非NULLの場合のみ） | admin以外の所属確認 |
 | task_comments | SELECT（COUNT） | `task_id = :task_id` | `comment_count` 算出。一覧取得（[01](./01_get_project_tasks.md)）とは別クエリでN+1にならない（対象が1件のため） |
 
@@ -262,17 +272,17 @@ flowchart LR
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 単体（モック） | 正常系 | リポジトリが `TaskWithProject` を返す | `TaskDetailResponse` に整形される | `test_get_task_detail_success` |
-| 2 | 単体（モック） | タスク不存在 | リポジトリが `None` を返す | `NotFoundError` 送出 | `test_get_task_detail_not_found` |
-| 3 | 単体（モック） | 非所属member | `is_member` が `False` | `NotFoundError` 送出 | `test_get_task_detail_forbidden_as_not_found` |
-| 4 | 結合 | 正常系取得（所属member） | 実DB、対象タスクにコメント2件 | 200、`comment_count=2` | `test_get_task_success` |
-| 5 | 結合 | 存在しないtask_id | 実DB、ランダムUUID | 404 `NOT_FOUND` | `test_get_task_not_found` |
-| 6 | 結合 | 非所属member | 実DB、他プロジェクトのタスク | 404 `NOT_FOUND` | `test_get_task_forbidden_as_404` |
-| 7 | 結合 | admin | 実DB、非所属プロジェクトのタスクでも200 | 200 | `test_get_task_admin_bypass` |
+| 1 | 結合（実DB・実SP） | 正常系 | リポジトリが `TaskWithProject` を返す | `TaskDetailResponse` に整形される | `test_get_task_detail_success` |
+| 2 | 結合（実DB・実SP） | タスク不存在 | リポジトリが `None` を返す | `NotFoundError` 送出 | `test_get_task_detail_not_found` |
+| 3 | 結合（実DB・実SP） | 非所属member | `is_member` が `False` | `NotFoundError` 送出 | `test_get_task_detail_forbidden_as_not_found` |
+| 4 | 結合 | 正常系取得（所属member） | 実DB、対象タスクにコメント2件 | 200、`comment_count=2` | `test_fn_get_task_success` |
+| 5 | 結合 | 存在しないtask_id | 実DB、ランダムUUID | 404 `NOT_FOUND` | `test_fn_get_task_not_found` |
+| 6 | 結合 | 非所属member | 実DB、他プロジェクトのタスク | 404 `NOT_FOUND` | `test_fn_get_task_forbidden_as_404` |
+| 7 | 結合 | admin | 実DB、非所属プロジェクトのタスクでも200 | 200 | `test_fn_get_task_admin_bypass` |
 | 8 | パラメータ化 | AUTH_MODE両対応 | `AUTH_MODE=session` / `jwt` | 4〜7を両モードで実行 | フィクスチャ `auth_mode` |
-| 9 | 結合 | 未所属タスク・作成者本人 | 実DB、`project_id=NULL`のタスクを自分で作成 | 200、`project_id:null`, `project_is_active:null` | `test_get_task_unassigned_project_owner_success` |
-| 10 | 結合 | 未所属タスク・第三者 | 実DB、`project_id=NULL`のタスクを別ユーザーが参照 | 404 `NOT_FOUND` | `test_get_task_unassigned_project_forbidden_as_404` |
-| 11 | 結合 | 論理削除済みプロジェクトのタスク | 実DB、所属プロジェクトが`is_active=false` | 200、`project_is_active:false`（タスク自体は通常どおり取得可能） | `test_get_task_reflects_inactive_project` |
+| 9 | 結合 | 未所属タスク・作成者本人 | 実DB、`project_id=NULL`のタスクを自分で作成 | 200、`project_id:null`, `project_is_active:null` | `test_fn_get_task_unassigned_project_owner_success` |
+| 10 | 結合 | 未所属タスク・第三者 | 実DB、`project_id=NULL`のタスクを別ユーザーが参照 | 404 `NOT_FOUND` | `test_fn_get_task_unassigned_project_forbidden_as_404` |
+| 11 | 結合 | 論理削除済みプロジェクトのタスク | 実DB、所属プロジェクトが`is_active=false` | 200、`project_is_active:false`（タスク自体は通常どおり取得可能） | `test_fn_get_task_reflects_inactive_project` |
 
 ## 13. 不明点・要検討事項
 

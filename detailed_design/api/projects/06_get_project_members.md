@@ -105,20 +105,20 @@ sequenceDiagram
     alt admin
         D-->>R: Project（無条件通過）
     else member かつ project_members に存在
-        D->>PG: "SELECT 1 FROM project_members WHERE project_id=? AND user_id=?"
+        D->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>D: 行あり
         D-->>R: Project
     else 非所属 or プロジェクト不存在
-        D->>PG: "SELECT projects WHERE id=?"
+        D->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>D: 0件 or 所属なし
         D-->>R: NotFoundError
         R-->>FE: "404 NOT_FOUND"
     end
-    R->>S: list_members(project)
-    S->>RP: list_members(project_id)
-    RP->>PG: "SELECT project_members WHERE project_id = ? ORDER BY joined_at"
+    R->>S: fn_list_project_members(project)
+    S->>RP: fn_list_project_members(project_id)
+    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>RP: project_members行
-    RP->>PG: "selectinload(user) の追加SELECT WHERE users.id IN (user_ids)"
+    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>RP: users行
     RP-->>S: list[Member]
     S-->>R: MemberListResponse
@@ -136,8 +136,8 @@ flowchart TB
     C -->|is_active=false| E3["403 USER_INACTIVE"]
     C -->|Yes| D{"require_project_member<br/>admin または所属あり"}
     D -->|No（非所属 or 不存在）| E4["404 NOT_FOUND"]
-    D -->|Yes| F["project_service.list_members呼び出し"]
-    F --> G["project_repository.list_members<br/>selectinloadでusersを一括取得"]
+    D -->|Yes| F["project_service.fn_list_project_members呼び出し"]
+    F --> G["fn_list_project_members<br/>FN結果の一括マッピングでusersを一括取得"]
     G --> H["MemberListResponseへ変換"]
     H --> I["200 レスポンス返却"]
 ```
@@ -152,33 +152,33 @@ flowchart TB
 | 引数 | project：`require_project_member` が解決したプロジェクト（表の説明は下記） |
 | 戻り値 | `MemberListResponse`（`items`, `meta`） |
 | 送出例外 | なし（例外は `deps` / `service` 側で送出され `AppError` ハンドラが処理） |
-| 処理内容 | 1. `require_project_member` の解決結果を受け取る 2. `project_service.list_members(project)` を呼び出す 3. 結果をそのままレスポンスとして返す |
+| 処理内容 | 1. `require_project_member` の解決結果を受け取る 2. `project_service.fn_list_project_members(project)` を呼び出す 3. 結果をそのままレスポンスとして返す |
 | 副作用 | なし |
 
 | 引数名 | 型 | 説明 |
 |--------|----|------|
 | project | `Project` | `require_project_member` が検証済みの対象プロジェクト（ORMモデル） |
 
-### 6.2 `service/project_service.py :: list_members`
+### 6.2 `service/project_service.py :: fn_list_project_members`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def list_members(project: Project) -> MemberListResponse` |
+| シグネチャ | `async def fn_list_project_members(project: Project) -> MemberListResponse` |
 | 引数 | project：`Project`（検証済み） |
 | 戻り値 | `MemberListResponse` |
 | 送出例外 | なし |
-| 処理内容 | 1. `project_repository.list_members(project.id)` を呼び出す 2. 各行を `MemberSummary` スキーマへ変換（`display_name` は `last_name`/`first_name` のいずれかが `null` の場合は `None`） 3. `is_owner` を `project.owner_id` との比較で算出 |
+| 処理内容 | 1. `fn_list_project_members(project.id)` を呼び出す 2. 各行を `MemberSummary` スキーマへ変換（`display_name` は `last_name`/`first_name` のいずれかが `null` の場合は `None`） 3. `is_owner` を `project.owner_id` との比較で算出 |
 | 副作用 | なし（参照のみ） |
 
-### 6.3 `repository/project_repository.py :: list_members`
+### 6.3 `repository/project_repository.py :: fn_list_project_members`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def list_members(db: AsyncSession, project_id: UUID) -> list[ProjectMemberRow]` |
+| シグネチャ | `async def fn_list_project_members(db: AsyncSession, project_id: UUID) -> list[ProjectMemberRow]` |
 | 引数 | db：`AsyncSession`、project_id：対象プロジェクトID |
 | 戻り値 | `project_members` と `users` を JOIN した行のリスト（`joined_at` 昇順） |
 | 送出例外 | なし（DB例外は `db_error_handler` / `infra_error_handler` に委譲） |
-| 処理内容 | 1. `project_members`の主クエリを1回実行 2. `selectinload`の追加SELECTを1回実行してusersをまとめて取得しN+1を回避 3. `ORDER BY project_members.joined_at ASC` |
+| 処理内容 | 1. `project_members`の主クエリを1回実行 2. `FN結果の一括マッピング`の追加SELECTを1回実行してusersをまとめて取得しN+1を回避 3. `ORDER BY project_members.joined_at ASC` |
 | 副作用 | なし |
 
 ## 7. 関数相関図
@@ -186,10 +186,10 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["projects_router.list_project_members"] --> D["deps.require_project_member"]
-    R --> S["project_service.list_members"]
-    D --> RP1["project_repository.exists"]
+    R --> S["project_service.fn_list_project_members"]
+    D --> RP1["project_repository.fn_is_project_member"]
     D --> URP["user_repository.get"]
-    S --> RP2["project_repository.list_members"]
+    S --> RP2["fn_list_project_members"]
     RP2 --> PG[("PostgreSQL<br/>project_members + users（追加SELECT）")]
     RP1 --> PG
 ```
@@ -202,7 +202,7 @@ flowchart LR
 flowchart LR
     subgraph PG["PostgreSQL"]
         PM["project_members<br/>WHERE project_id=:pid"]
-        U["users<br/>selectinloadの追加SELECT"]
+        U["users<br/>FN結果の一括マッピングの追加SELECT"]
         P["projects<br/>所属チェック用に1行参照"]
     end
     API["GET /members"] -->|"SELECT"| PM
@@ -210,12 +210,22 @@ flowchart LR
     API -->|"SELECT"| P
 ```
 
-## 9. データアクセス一覧
+## 9. SP/FNデータアクセス一覧
+
+### 9.1 正式なDBアクセス契約
+
+本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+
+| 種別 | 契約 | 説明 |
+|------|------|------|
+| fn_list_project_members | `fn_list_project_members(p_project_id)` | fn_list_project_membersを呼び出し、結果をレスポンスへ写像する |
+
+repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
 | ストア | テーブル／キー | 操作 | 条件・TTL | 備考 |
 |--------|----------------|------|-----------|------|
 | PostgreSQL | `project_members` | SELECT | `WHERE project_id = :pid ORDER BY joined_at` | `ix_project_members_user_id` は使用しない（本クエリは project_id 主軸のため `PK` を使用） |
-| PostgreSQL | `users` | SELECT（`selectinload`の追加SELECT） | `id IN (user_ids)` | `display_name` / `role` / `is_active` 取得用。主クエリとは別ラウンドトリップ |
+| PostgreSQL | `users` | SELECT（`FN結果の一括マッピング`の追加SELECT） | `id IN (user_ids)` | `display_name` / `role` / `is_active` 取得用。主クエリとは別ラウンドトリップ |
 | PostgreSQL | `projects` | SELECT | `require_project_member` 内での存在・所属確認用に1行 | |
 | Redis | ー | ー | ー | 本APIはRedisを使用しない |
 
@@ -242,15 +252,15 @@ flowchart LR
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|----------------|
-| T1 | 結合 | 所属memberが一覧取得 | project_membersに2件 | 200、items.length=2、joined_at昇順 | `test_list_members_as_member_returns_200` |
-| T2 | 結合 | オーナーが一覧取得 | 自分がowner | 200、is_owner=trueの行が1件 | `test_list_members_owner_flag` |
-| T3 | 結合 | adminが非所属プロジェクトを取得 | adminかつproject_membersに未登録 | 200（無条件通過） | `test_list_members_admin_bypass` |
-| T4 | 結合 | 非所属memberが取得 | project_membersに未登録 | 404 NOT_FOUND | `test_list_members_non_member_404` |
-| T5 | 結合 | 存在しないproject_id | UUIDだが未存在 | 404 NOT_FOUND | `test_list_members_project_not_found_404` |
-| T6 | 結合 | 未認証アクセス | Cookie/Bearerなし | 401 UNAUTHENTICATED | `test_list_members_unauthenticated_401` |
-| T7 | 単体 | project_repository.list_membersのモック検証 | repositoryをモック | serviceが正しい引数で呼び出す | `test_service_list_members_calls_repository` |
-| T8 | 結合 | AUTH_MODE=session/jwt両方 | 各モードでログイン | いずれも200 | `test_list_members_both_auth_modes` |
-| T9 | 結合 | プロフィール未設定メンバーを含む | last_nameがnullなmemberが存在 | display_name=null | `test_list_members_null_display_name` |
+| T1 | 結合 | 所属memberが一覧取得 | project_membersに2件 | 200、items.length=2、joined_at昇順 | `test_fn_list_project_members_as_member_returns_200` |
+| T2 | 結合 | オーナーが一覧取得 | 自分がowner | 200、is_owner=trueの行が1件 | `test_fn_list_project_members_owner_flag` |
+| T3 | 結合 | adminが非所属プロジェクトを取得 | adminかつproject_membersに未登録 | 200（無条件通過） | `test_fn_list_project_members_admin_bypass` |
+| T4 | 結合 | 非所属memberが取得 | project_membersに未登録 | 404 NOT_FOUND | `test_fn_list_project_members_non_member_404` |
+| T5 | 結合 | 存在しないproject_id | UUIDだが未存在 | 404 NOT_FOUND | `test_fn_list_project_members_project_not_found_404` |
+| T6 | 結合 | 未認証アクセス | Cookie/Bearerなし | 401 UNAUTHENTICATED | `test_fn_list_project_members_unauthenticated_401` |
+| T7 | 結合（実DB・実SP） | fn_list_project_membersのモック検証 | 実DB・実SPで検証 | serviceが正しい引数で呼び出す | `test_service_fn_list_project_members_calls_repository` |
+| T8 | 結合 | AUTH_MODE=session/jwt両方 | 各モードでログイン | いずれも200 | `test_fn_list_project_members_both_auth_modes` |
+| T9 | 結合 | プロフィール未設定メンバーを含む | last_nameがnullなmemberが存在 | display_name=null | `test_fn_list_project_members_null_display_name` |
 
 参照系APIのため副作用検証（DB更新）は対象外。カバレッジは `pytest --cov=app` に含める。
 

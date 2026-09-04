@@ -180,9 +180,24 @@ stateDiagram-v2
 
 既読は不可逆であり、未読へ戻す操作は提供しない。全既読（`mark_all_read`）は `WHERE user_id=:me AND read_at IS NULL` に限定して更新するため、既に既読の通知の `read_at` は変化しない（冪等）。保持期間超過による削除は `read_at` の有無を問わず対象になる（§9）。
 
-## 8. リポジトリ関数詳細
+## 8. SP/FNリポジトリ契約
 
-### 8.1 `repository/notification_repository.py :: list_by_user`
+repositoryは下表のSP/FN呼び出しとDTO写像だけを行い、`notifications` への直接CRUDは行わない。通知作成は `sp_create_task` / `sp_update_task` 内の条件付きINSERTに統合し、独立した作成SPは設けない。
+
+| repository契約 | DB呼び出し | 戻り値・エラー |
+|----------------|------------|----------------|
+| `list_by_user` / `count_by_user` | `SELECT fn_list_notifications(:user_id, :unread_only, :limit, :offset)` | 本人宛てのみ。件数はFN結果を利用 |
+| `count_unread` | `SELECT fn_count_unread_notifications(:user_id)` | 未読件数 |
+| `mark_read` | `CALL sp_mark_notification_read(:notification_id, :user_id)` | 他人/不存在は空結果相当として404。既読済みは上書きしない |
+| `mark_all_read` | `CALL sp_mark_all_notifications_read(:user_id)` | `read_at IS NULL` の行だけ更新 |
+| `create_if_absent` / `bulk_create_if_absent` | `sp_create_task` / `sp_update_task` / batch内部のdedupe INSERT | `(user_id, dedupe_key)`競合は `ON CONFLICT DO NOTHING` |
+| `purge_expired` | `CALL sp_purge_notifications(:retention_days)` | 未読・既読を問わず期限超過を削除 |
+
+### 8.1 SQL実装参考（SP/FN内部）
+
+以下の既存小節に記載するSQLはSP/FN本体の実装参考であり、repositoryから直接発行しない。実装時の正は[08_db_functions.md](./08_db_functions.md) §2のシグネチャである。
+
+### 8.2 `repository/notification_repository.py :: list_by_user`
 
 | 項目 | 内容 |
 |------|------|
@@ -193,7 +208,7 @@ stateDiagram-v2
 | 送出例外 | なし |
 | 処理内容 | `LEFT JOIN` によりタスクが削除済み（`task_id IS NULL`）の行も欠落させず取得し、`task` 欄を `null` としてレスポンスに反映する（`04_api.md` §3.3） |
 
-### 8.2 `repository/notification_repository.py :: count_by_user`
+### 8.3 `repository/notification_repository.py :: count_by_user`
 
 | 項目 | 内容 |
 |------|------|
@@ -204,7 +219,7 @@ stateDiagram-v2
 | 送出例外 | なし |
 | 処理内容 | 一覧レスポンスの `meta.total`（`unread_only=true` 時は未読総数）に使用。`list_by_user` とは別クエリで発行し、`COUNT(*) OVER()` は使わない（`04_table_projects.md` 系のページング方針に合わせる） |
 
-### 8.3 `repository/notification_repository.py :: count_unread`
+### 8.4 `repository/notification_repository.py :: count_unread`
 
 | 項目 | 内容 |
 |------|------|
@@ -215,7 +230,7 @@ stateDiagram-v2
 | 送出例外 | なし |
 | 処理内容 | `GET /notifications/unread-count`（ポーリングで最高頻度）専用の軽量クエリ。通知本体を返さず件数のみ集計するため `ix_notifications_user_unread` のみで応答できる |
 
-### 8.4 `repository/notification_repository.py :: mark_read`
+### 8.5 `repository/notification_repository.py :: mark_read`
 
 | 項目 | 内容 |
 |------|------|
@@ -226,7 +241,7 @@ stateDiagram-v2
 | 送出例外 | なし（呼び出し元の `service/notification_service.py :: mark_read` が `RETURNING` 0行を「他人の通知 or 不存在」として `404 NOT_FOUND` に変換。存在を隠すため他人の通知と不存在を区別しない） |
 | 処理内容 | `COALESCE(read_at, now())` により既読済みでも `read_at` を上書きしない（冪等。2回目以降の `PATCH` も `200` を返す） |
 
-### 8.5 `repository/notification_repository.py :: mark_all_read`
+### 8.6 `repository/notification_repository.py :: mark_all_read`
 
 | 項目 | 内容 |
 |------|------|
@@ -237,7 +252,7 @@ stateDiagram-v2
 | 送出例外 | なし |
 | 処理内容 | `WHERE read_at IS NULL` に限定するため既存の既読行の `read_at` は変化しない。未読が0件でも `0` を返し `200`（`04_api.md` §3.3） |
 
-### 8.6 `repository/notification_repository.py :: create_if_absent`
+### 8.7 `repository/notification_repository.py :: create_if_absent`
 
 | 項目 | 内容 |
 |------|------|
@@ -248,7 +263,7 @@ stateDiagram-v2
 | 送出例外 | なし（一意制約違反は `ON CONFLICT` で吸収するため `IntegrityError` は発生しない） |
 | 処理内容 | 1. `service/notification_service.py :: create_due_today_notification` から、タスク作成/更新の**呼び出し元トランザクションを引き継いで**呼ばれる（`04_api.md` §7.3）<br/>2. `RETURNING` の行数（0 or 1）から作成の成否を判定して呼び出し元へ返す |
 
-### 8.7 `repository/notification_repository.py :: bulk_create_if_absent`
+### 8.8 `repository/notification_repository.py :: bulk_create_if_absent`
 
 | 項目 | 内容 |
 |------|------|
@@ -259,7 +274,7 @@ stateDiagram-v2
 | 送出例外 | なし |
 | 処理内容 | 1. `batch/jobs/due_notification_job.py` から `NOTIFY_DUE_BATCH_CHUNK_SIZE`（既定500）件単位で呼ばれ、1トランザクションが長時間化しないようにする<br/>2. `unnest` による複数行一括 `INSERT` で、行ごとの往復（N回の `INSERT`）を避ける<br/>3. `len(RETURNING)` を作成件数としてINFOログに出す（`04_api.md` §6.3） |
 
-### 8.8 `repository/notification_repository.py :: purge_expired`
+### 8.9 `repository/notification_repository.py :: purge_expired`
 
 | 項目 | 内容 |
 |------|------|

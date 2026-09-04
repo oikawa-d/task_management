@@ -89,7 +89,7 @@ sequenceDiagram
     FE->>R: "POST /api/auth/verify-email/resend {email}"
     R->>S: "resend_verification(email, background)"
     S->>UR: "get_by_email(email)"
-    UR->>PG: "SELECT users WHERE lower(email) = ?"
+    UR->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
     PG-->>UR: "User or None"
     alt ユーザーが存在しない
         UR-->>S: "None"
@@ -159,10 +159,10 @@ flowchart TB
 | 引数 | `email: str`、`background: BackgroundTasks` |
 | 戻り値 | `None`（例外を送出せず、常に正常終了） |
 | 送出例外 | なし。ユーザー不存在・認証済み・再送間隔内はいずれも早期 `return` で処理を終える |
-| 処理内容 | 1. `user_repository.get_by_email(email)` でユーザー取得。`None` なら終了 2. `user.email_verified_at IS NOT NULL` なら終了 3. `redis_store.mark_email_verify_sent(user.id, interval)` が `False`（間隔内）なら終了 4. `token = secrets.token_urlsafe(32)` を生成 5. `redis_store.replace_email_verify_token(token, user.id, ttl)` で旧token失効＋新token登録 6. `background.add_task(mail_service.send_email_verification_mail, user.email, token, expires_hours)` を登録 |
+| 処理内容 | 1. `user_repository.fn_find_user_by_email(email)` でユーザー取得。`None` なら終了 2. `user.email_verified_at IS NOT NULL` なら終了 3. `redis_store.mark_email_verify_sent(user.id, interval)` が `False`（間隔内）なら終了 4. `token = secrets.token_urlsafe(32)` を生成 5. `redis_store.replace_email_verify_token(token, user.id, ttl)` で旧token失効＋新token登録 6. `background.add_task(mail_service.send_email_verification_mail, user.email, token, expires_hours)` を登録 |
 | 副作用 | Redis：`emailverify_sent:{uid}` 新規作成、`emailverify:{old_hash}` 削除、`emailverify:{new_hash}` 作成、`emailverify_current:{uid}` 更新。メール：`BackgroundTasks` 経由で非同期送信（失敗してもレスポンスには影響しない） |
 
-### 6.3 `repository/user_repository.py :: get_by_email`
+### 6.3 `repository/user_repository.py :: fn_find_user_by_email`
 
 | 項目 | 内容 |
 |------|------|
@@ -170,7 +170,7 @@ flowchart TB
 | 引数 | `email: str` |
 | 戻り値 | `User` または `None` |
 | 送出例外 | なし |
-| 処理内容 | 1. `SELECT * FROM users WHERE lower(email) = lower(:email)` を実行 2. 行があれば `User` へマッピング、なければ `None` |
+| 処理内容 | `SELECT fn_find_user_by_email(:email)` を実行する。結果をメール再送判定へ渡し、空集合でも例外を返さない |
 | 副作用 | なし（参照のみ） |
 
 ### 6.4 `repository/redis_store.py :: mark_email_verify_sent`
@@ -211,7 +211,7 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["auth_router.resend_verify_email"] --> S["auth_service.resend_verification"]
-    S --> UR["user_repository.get_by_email"]
+    S --> UR["user_repository.fn_find_user_by_email"]
     S --> RD1["redis_store.mark_email_verify_sent"]
     S --> RD2["redis_store.replace_email_verify_token"]
     S -.->|"BackgroundTasks"| MS["mail_service.send_email_verification_mail"]
@@ -281,3 +281,13 @@ stateDiagram-v2
 |------|------|------|
 | 確定 | IP単位5回/900秒の追加レート制限を適用する | 多数のメールアドレスへの一括送信を抑止し、超過時は429を返す |
 | 要検討 | 内部分岐（存在しない/認証済み/間隔内/新規送信）による応答時間差を用いたユーザー列挙の可能性への追加対策（一律遅延の挿入等）の要否 | 低〜中（`basic_design/03_auth.md` はレスポンスコード・本文の統一のみを対策としており、タイミング差への言及なし） |
+
+## DBアクセス契約
+
+本APIのDBアクセスは、下記のFN/SP呼び出しをrepositoryの薄いラッパーから実行する。テーブルへの直接CRUD、認証業務の判定、履歴のINSERTはrepositoryに実装しない。healthの `SELECT 1` だけは本契約の対象外である。
+
+| 正式な呼び出し | 契約 |
+|----------------|------|
+| fn_find_user_by_email(p_email) | `detailed_design/database/08_db_functions.md` のシグネチャに従う |
+
+SQLSTATE P0xxxは同文書 §4 の対応表でAPIエラーへ変換し、Redis・メール・JWTの処理はAPI/service層に残す。

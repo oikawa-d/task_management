@@ -75,8 +75,8 @@ sequenceDiagram
     R->>CSRF: Origin/CSRF検証（sessionモードのみCSRF必須）
     CSRF-->>R: OK
     R->>S: force_logout(actor=CurrentUser, target_id)
-    S->>RP: get_by_id(target_id)
-    RP->>PG: "SELECT * FROM users WHERE id=:target_id"
+    S->>RP: fn_get_user(target_id)
+    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     alt 対象が存在しない
         PG-->>RP: 0件
         RP-->>S: None
@@ -134,7 +134,7 @@ flowchart TB
 | 引数 | `actor`: 実行者（admin） / `target_id`: 対象ユーザーID / `db`: DBセッション |
 | 戻り値 | なし |
 | 送出例外 | `NotFoundError`（404） |
-| 処理内容 | 1. `user_repository.get_by_id(target_id)` で存在確認のみ行う（行ロックは不要。DB更新を行わないため） 2. 存在しなければ `NotFoundError` 3. `redis_store.delete_all_sessions(target_id)` を実行 4. 続けて `redis_store.revoke_all_refresh_tokens(target_id)` を実行 5. `users.role`/`is_active` は一切変更しない |
+| 処理内容 | 1. `fn_get_user(target_id)` で存在確認のみ行う（行ロックは不要。DB更新を行わないため） 2. 存在しなければ `NotFoundError` 3. `redis_store.delete_all_sessions(target_id)` を実行 4. 続けて `redis_store.revoke_all_refresh_tokens(target_id)` を実行 5. `users.role`/`is_active` は一切変更しない |
 | 副作用 | Redisの `session:{sid}` / `csrf:{sid}` / `user_sessions:{uid}` / `refresh:{hash}` / `user_refresh:{uid}` を全削除。PostgreSQLへの書き込みなし |
 
 ### 6.3 `repository/redis_store.py :: delete_all_sessions` / `revoke_all_refresh_tokens`
@@ -146,7 +146,7 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["admin_router.post_admin_user_force_logout"] --> S["admin_user_service.force_logout"]
-    S --> RP["user_repository.get_by_id"]
+    S --> RP["fn_get_user"]
     S --> RS1["redis_store.delete_all_sessions"]
     S --> RS2["redis_store.revoke_all_refresh_tokens"]
     RP --> M["models.User"]
@@ -168,7 +168,17 @@ stateDiagram-v2
 
 PostgreSQLの `users` 行は本APIの前後で一切変化しない（読み取りのみ）。
 
-## 9. データアクセス一覧
+## 9. SP/FNデータアクセス一覧
+
+### 9.1 正式なDBアクセス契約
+
+本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+
+| 種別 | 契約 | 説明 |
+|------|------|------|
+| fn_get_user | `fn_get_user(p_user_id)` | fn_get_userを呼び出し、結果をレスポンスへ写像する |
+
+repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
 **PostgreSQL**
 
@@ -211,7 +221,7 @@ PostgreSQLの `users` 行は本APIの前後で一切変化しない（読み取�
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 単体 | 存在確認のみでDB更新を行わない | repositoryをモック | `get_by_id`呼び出し、`update_role_and_status`系は未呼び出し | `test_force_logout_does_not_update_db` |
+| 1 | 結合（実DB・実SP） | 存在確認のみでDB更新を行わない | `fn_get_user`の実DB結果を使用 | `SELECT fn_get_user`後にDB更新SPを呼ばず、Redis失効だけ行う | `test_force_logout_does_not_update_db` |
 | 2 | 単体 | Redis失効2関数が順に呼ばれる | redis_storeをモック | `delete_all_sessions`→`revoke_all_refresh_tokens`の順で呼び出し | `test_force_logout_calls_redis_revocation_functions` |
 | 3 | 結合 | 対象ユーザーが存在しない場合は404 | 存在しないUUID | `404 NOT_FOUND` | `test_force_logout_target_not_found` |
 | 4 | 結合(session) | 実行後にsession Cookieでのリクエストが401になる | 対象ユーザーでログイン中に実行 | `204`、以後`401 SESSION_EXPIRED` | `test_force_logout_session_invalidated` |

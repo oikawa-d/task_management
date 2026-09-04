@@ -25,7 +25,7 @@
 | AUTH_MODE差異 | 差異なし |
 | 冪等性 | あり（GET） |
 | レート制限 | user_id + 解決済みIP単位で120回/60秒。超過時は429 `TOO_MANY_ATTEMPTS`（`Retry-After`付き）、Redis障害時は503 |
-| トランザクション境界 | 単一の読み取り（`SELECT COUNT(*)` 1文のみ） |
+| トランザクション境界 | `SELECT fn_count_unread_notifications(:user_id)` 1回のみ |
 
 ## 2. 入出力仕様
 
@@ -75,9 +75,9 @@ sequenceDiagram
         FE->>R: "GET /api/notifications/unread-count"
         R->>D: "認証（Cookie or Bearer）"
         D-->>R: "CurrentUser"
-        R->>S: "count_unread(user)"
-        S->>NR: "count_unread(user.id)"
-        NR->>PG: "SELECT COUNT(*) FROM notifications<br/>WHERE user_id=:me AND read_at IS NULL<br/>(ix_notifications_user_unread 使用)"
+        R->>S: "fn_count_unread_notifications(user)"
+        S->>NR: "fn_count_unread_notifications(user.id)"
+        NR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>NR: "件数"
         NR-->>S: "unread_count"
         S-->>R: "unread_count"
@@ -112,39 +112,39 @@ flowchart TB
 | 引数 | `user`: 認証済みユーザー / `db`: DBセッション |
 | 戻り値 | `UnreadCountResponse`（`unread_count: int`） |
 | 送出例外 | なし（サービス層の例外を `AppError` としてそのまま伝播） |
-| 処理内容 | 1. `notification_service.count_unread(user, db)` を呼び出す 2. 戻り値をそのまま `{"unread_count": n}` として返す |
+| 処理内容 | 1. `notification_service.fn_count_unread_notifications(user, db)` を呼び出す 2. 戻り値をそのまま `{"unread_count": n}` として返す |
 | 副作用 | なし |
 
-### 6.2 `service/notification_service.py :: count_unread`
+### 6.2 `service/notification_service.py :: fn_count_unread_notifications`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def count_unread(user: CurrentUser, db: AsyncSession) -> int` |
+| シグネチャ | `async def fn_count_unread_notifications(user: CurrentUser, db: AsyncSession) -> int` |
 | 引数 | `user`: 現在ユーザー / `db`: DBセッション |
 | 戻り値 | 未読件数（`int`） |
 | 送出例外 | `ServiceUnavailableError`（PostgreSQL接続不能時）→503 |
-| 処理内容 | `notification_repository.count_unread(db, user.id)` を呼び出してそのまま返す（サービス層での加工は行わない） |
+| 処理内容 | `notification_repository.fn_count_unread_notifications(db, user.id)` を呼び出してそのまま返す（サービス層での加工は行わない） |
 | 副作用 | なし |
 
-### 6.3 `repository/notification_repository.py :: count_unread`
+### 6.3 `repository/notification_repository.py :: fn_count_unread_notifications`
 
 [./01_get_notifications.md](./01_get_notifications.md) §6.4 と同一関数を共有する（一覧取得APIの `unread_count` 同梱ロジックと本APIは同じリポジトリ関数を呼ぶ）。
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def count_unread(db: AsyncSession, user_id: UUID) -> int` |
+| シグネチャ | `async def fn_count_unread_notifications(db: AsyncSession, user_id: UUID) -> int` |
 | 引数 | `user_id`: 対象ユーザー |
 | 戻り値 | 未読件数 |
 | 送出例外 | `OperationalError` |
-| 処理内容 | `SELECT COUNT(*) FROM notifications WHERE user_id = :user_id AND read_at IS NULL` を実行する |
+| 処理内容 | `SELECT fn_count_unread_notifications(:user_id)` を実行する |
 | 副作用 | なし |
 
 ## 7. 関数相関図
 
 ```mermaid
 flowchart LR
-    R["notifications_router.get_unread_count"] --> S["notification_service.count_unread"]
-    S --> NR["notification_repository.count_unread"]
+    R["notifications_router.get_unread_count"] --> S["notification_service.fn_count_unread_notifications"]
+    S --> NR["notification_repository.fn_count_unread_notifications"]
     NR --> M["models.Notification"]
 ```
 
@@ -157,16 +157,26 @@ flowchart LR
     subgraph PG["PostgreSQL（参照範囲）"]
         T1["notifications<br/>(user_id, read_at)のみ参照"]
     end
-    S["notification_service.count_unread"] -->|"SELECT COUNT(*)"| T1
+    S["notification_service.fn_count_unread_notifications"] -->|"SELECT fn_count_unread_notifications"| T1
 ```
 
-## 9. データアクセス一覧
+## 9. SP/FNデータアクセス一覧
+
+### 9.1 正式なDBアクセス契約
+
+本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+
+| 種別 | 契約 | 説明 |
+|------|------|------|
+| fn_count_unread_notifications | `fn_count_unread_notifications(p_user_id)` | fn_count_unread_notificationsを呼び出し、結果をレスポンスへ写像する |
+
+repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
 **PostgreSQL**
 
 | テーブル | 操作 | 条件 | 使用インデックス | 備考 |
 |----------|------|------|-------------------|------|
-| notifications | SELECT COUNT | `user_id = :me AND read_at IS NULL` | `ix_notifications_user_unread (user_id) WHERE read_at IS NULL` | 部分インデックス。既読行を索引に含めないためインデックスサイズが未読件数に比例し小さく保たれる |
+| `fn_count_unread_notifications` | FN | `user_id = :me AND read_at IS NULL` | `ix_notifications_user_unread` | 集計条件はFN内部。repositoryはFNを1回呼ぶ |
 
 **Redis**
 
@@ -200,14 +210,14 @@ flowchart LR
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 単体 | 未読件数をそのまま返す | repositoryをモックし `count_unread` が3を返す | レスポンス `{"unread_count": 3}` | `test_get_unread_count_returns_repository_value` |
-| 2 | 単体 | 通知本体を取得するクエリを発行しない | repositoryをモック | `list_by_user` 等の一覧取得関数が呼ばれていないことを検証 | `test_get_unread_count_does_not_fetch_items` |
+| 1 | 結合（実DB・実SP） | 未読件数をそのまま返す | 実DB・実SPで検証し `fn_count_unread_notifications` が3を返す | レスポンス `{"unread_count": 3}` | `test_get_unread_count_returns_repository_value` |
+| 2 | 結合（実DB・実SP） | 通知本体を取得するクエリを発行しない | 実DB・実SPで検証 | `fn_list_notifications` 等の一覧取得関数が呼ばれていないことを検証 | `test_get_unread_count_does_not_fetch_items` |
 | 3 | 結合 | 未読0件で200を返す | 通知なし、または全件既読 | `{"unread_count": 0}` | `test_get_unread_count_zero` |
 | 4 | 結合 | 既読化後にカウントが減る | 未読3件のうち1件を既読化 | `{"unread_count": 2}` | `test_get_unread_count_decreases_after_read` |
 | 5 | 結合 | 他人の未読件数が混入しない | ユーザーA/Bにそれぞれ未読通知を作成 | Aの `unread_count` にBの件数を含まない | `test_get_unread_count_isolated_by_user` |
 | 6 | 結合 | 未認証は401 | Cookie/Bearerなし | `401 UNAUTHENTICATED` | `test_get_unread_count_unauthenticated` |
 | 7 | 結合 | 無効化ユーザーは403 | `is_active=false` | `403 USER_INACTIVE` | `test_get_unread_count_inactive_user` |
-| 8 | 性能・回帰 | クエリ発行数が1回で完結する | SQLAlchemyのクエリカウンタで検証 | 発行SQLが `SELECT COUNT(*) ...` 1文のみ | `test_get_unread_count_single_query` |
+| 8 | 性能・回帰 | DB呼び出しが1回で完結する | 実DBでFN呼び出し回数を検証 | `SELECT fn_count_unread_notifications(:user_id)` 1回のみ | `test_get_unread_count_single_fn_call` |
 
 `AUTH_MODE=session` / `jwt` の両方で No.6（401判定経路の違い：`SESSION_EXPIRED` と `TOKEN_EXPIRED`）をパラメータ化して実施する。実行計画が実際に `ix_notifications_user_unread` を使用しているか（`EXPLAIN` 確認）は自動テストでは網羅できない。理由：実行計画の選択はPostgreSQLのオプティマイザとテーブル統計情報に依存し、CI環境の小規模データでは異なる計画が選ばれ得るため、単体・結合テストでの厳密な検証対象からは外し、目視での `EXPLAIN ANALYZE` 確認を運用上の補完手段とする（要検討）。
 

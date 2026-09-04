@@ -143,18 +143,18 @@ sequenceDiagram
         R-->>FE: "422 VALIDATION_ERROR"
     else "検証OK"
         S->>TR: "next_position(project_id, status)"
-        TR->>PG: "SELECT pg_advisory_xact_lock(...)"
-        TR->>PG: "SELECT fn_next_task_position(project_id, status)"
+        TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
+        TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>TR: "position"
         S->>TR: "insert(task)"
-        TR->>PG: "INSERT tasks(..., position, version=1)"
+        TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>TR: "task行"
         TR-->>S: "Task"
         alt "assigneeあり かつ due_atがAPP_TIMEZONEの当日"
             S->>NS: "create_due_today_notification(task, 'due_today_created')"
-            NS->>PG: "INSERT notifications ... ON CONFLICT DO NOTHING"
+            NS->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         end
-        S->>PG: "COMMIT（tasksと通知を同一トランザクション）"
+        S->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         S-->>R: "TaskResponse"
         R-->>FE: "201 {task}"
     end
@@ -208,10 +208,10 @@ flowchart TB
 | 引数 | project: 認可済みProject／payload: 作成内容／user: 作成者（`created_by` に記録） |
 | 戻り値 | `Task`（ORMモデルまたはDTO） |
 | 送出例外 | `ValidationError`（`assignee_id` が非メンバー）、`ConflictError`（`assignee_id` が `is_active=false`） |
-| 処理内容 | 1. `payload.assignee_id` が `None` でない場合、`project_repository.is_member(project.id, assignee_id)` で所属確認。非所属なら `ValidationError`<br/>2. 所属確認と同時に取得した対象ユーザーの `is_active` を確認。`false` なら `ConflictError(ASSIGNEE_INACTIVE)`<br/>3. `task_repository.create(project.id, payload, created_by=user.id)` を呼び出す（内部でトランザクション・advisory lock・`fn_next_task_position` を実行）<br/>4. `assignee_id` があり、`due_at`を`APP_TIMEZONE`へ変換した日付が当日なら`notification_service.create_due_today_notification`を同じDBセッションで呼ぶ。通知の競合は`DO NOTHING`とし、タスク作成を失敗させない |
+| 処理内容 | 1. `payload.assignee_id` が `None` でない場合、`project_repository.fn_is_project_member(project.id, assignee_id)` で所属確認。非所属なら `ValidationError` 2. 所属確認と同時に取得した対象ユーザーの `is_active` を確認。`false` なら `ConflictError(ASSIGNEE_INACTIVE)` 3. API側で`task_id`を生成し、`CALL sp_create_task(task_id, project.id, payload, created_by=user.id)` を呼び出す。position採番・advisory lock・期限通知・dedupeはSP内部で一体実行する 4. 成功後に`SELECT fn_get_task(task_id)`で応答を取得 |
 | 副作用 | DB更新（tasks INSERT） |
 
-### 6.3 `repository/task_repository.py :: create`
+### 6.3 `repository/task_repository.py :: sp_create_task`
 
 | 項目 | 内容 |
 |------|------|
@@ -219,7 +219,7 @@ flowchart TB
 | 引数 | db: DBセッション／project_id／payload／created_by: 作成者ID |
 | 戻り値 | 作成された `Task` |
 | 送出例外 | `IntegrityError`（`uq_tasks_project_status_position` 違反等。`db_error_handler` が409へ変換） |
-| 処理内容 | 1. `SELECT pg_advisory_xact_lock(hashtext(project_id::text \|\| status))` でトランザクション内advisory lockを取得（同一 `(project_id, status)` への同時作成を直列化）<br/>2. `SELECT fn_next_task_position(project_id, status)` で採番<br/>3. `status` 省略時は既定値 `'todo'` を用いる<br/>4. `INSERT INTO tasks(project_id, title, description, status, assignee_id, created_by, position, version, due_at) VALUES (..., 1, :due_at)` を実行。`is_active` はカラムのDB既定値 `true` に任せ、INSERT文では明示指定しない<br/>5. 採番からINSERTまでを同一トランザクション（同一advisory lock保持区間）で行う |
+| 処理内容 | API側で`task_id`を生成し、`CALL sp_create_task(:task_id, :project_id, :created_by, :assignee_id, :title, :body, :status, :due_at, :position)` を1回呼ぶ。advisory lock、`fn_next_task_position`、task INSERT、当日期限通知のdedupe INSERTはSP内部で同一トランザクションとして実行する |
 | 副作用 | DB更新（tasks INSERT） |
 
 ### 6.4 `service/notification_service.py :: create_due_today_notification`
@@ -236,8 +236,8 @@ flowchart TB
 flowchart LR
     R["tasks_router.create_task"] --> DEP["deps.require_project_member /<br/>verify_csrf"]
     R --> S["task_service.create_task"]
-    S --> PR["project_repository.is_member"]
-    S --> TR["task_repository.create"]
+    S --> PR["project_repository.fn_is_project_member"]
+    S --> TR["sp_create_task"]
     TR --> FN["fn_next_task_position"]
     TR --> DB[("PostgreSQL<br/>tasks")]
     PR --> DBM[("PostgreSQL<br/>project_members / users")]
@@ -257,7 +257,17 @@ stateDiagram-v2
     Rejected --> [*]
 ```
 
-## 9. データアクセス一覧
+## 9. SP/FNデータアクセス一覧
+
+### 9.1 正式なDBアクセス契約
+
+本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+
+| 種別 | 契約 | 説明 |
+|------|------|------|
+| create_task | `sp_create_task(p_task_id, p_project_id, p_created_by, p_assignee_id, p_title, p_body, p_status, p_due_at, p_position)` | API生成IDでsp_create_taskを呼び出し、`fn_get_task`の結果をレスポンスへ写像する |
+
+repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
 **PostgreSQL**
 
@@ -295,9 +305,9 @@ stateDiagram-v2
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 単体（モック） | 正常系（assignee未指定） | リポジトリをモック | `position` 採番結果をそのまま返す | `test_create_task_without_assignee` |
-| 2 | 単体（モック） | assigneeが非メンバー | `project_repository.is_member` が `False` | `ValidationError` 送出 | `test_create_task_assignee_not_member` |
-| 3 | 単体（モック） | assigneeが無効化ユーザー | `is_active=False` を返すモック | `ConflictError(ASSIGNEE_INACTIVE)` 送出 | `test_create_task_assignee_inactive` |
+| 1 | 結合（実DB・実SP） | 正常系（assignee未指定） | リポジトリをモック | `position` 採番結果をそのまま返す | `test_create_task_without_assignee` |
+| 2 | 結合（実DB・実SP） | assigneeが非メンバー | `project_repository.fn_is_project_member` が `False` | `ValidationError` 送出 | `test_create_task_assignee_not_member` |
+| 3 | 結合（実DB・実SP） | assigneeが無効化ユーザー | `is_active=False` を返すモック | `ConflictError(ASSIGNEE_INACTIVE)` 送出 | `test_create_task_assignee_inactive` |
 | 4 | 結合 | 正常系作成（member） | 実DB、所属プロジェクト | 201、`position=0`（列が空の場合） | `test_post_project_tasks_success` |
 | 5 | 結合 | 同一列への同時作成 | 実DB、同一 `(project_id, status)` へ並行2リクエスト | `position` が重複せず連番になる | `test_post_project_tasks_concurrent_same_status` |
 | 6 | 結合 | position指定リクエスト | ボディに `position` を含める | 422 `VALIDATION_ERROR` | `test_post_project_tasks_rejects_position_field` |

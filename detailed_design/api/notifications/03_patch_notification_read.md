@@ -7,7 +7,7 @@
 | [../../../basic_design/04_api.md](../../../basic_design/04_api.md) | §3.3 通知スキーマ、§4.2 エラーコード、§5 認可マトリクス |
 | [../../../basic_design/01_database.md](../../../basic_design/01_database.md) | §3.8 notifications、§4.1.1 通知状態遷移 |
 | [../../auth/03_csrf.md](../../auth/03_csrf.md) | session方式の更新系CSRF検証 |
-| [../../database/10_table_notifications.md](../../database/10_table_notifications.md) | `mark_read` の更新条件と排他 |
+| [../../database/10_table_notifications.md](../../database/10_table_notifications.md) | `sp_mark_notification_read` の更新条件と排他 |
 | [./01_get_notifications.md](./01_get_notifications.md) | 通知一覧・レスポンススキーマ |
 
 ## 1. 概要
@@ -76,16 +76,16 @@ sequenceDiagram
     FE->>R: PATCH /api/notifications/{id}/read
     R->>D: 認証 + session方式のみCSRF検証
     D-->>R: CurrentUser
-    R->>S: mark_read(notification_id, user.id)
-    S->>NR: mark_read(db, notification_id, user.id)
-    NR->>PG: UPDATE ... WHERE id=:id AND user_id=:me AND read_at IS NULL
+    R->>S: sp_mark_notification_read(notification_id, user.id)
+    S->>NR: sp_mark_notification_read(db, notification_id, user.id)
+    NR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     alt 対象なし
-        NR->>PG: SELECT read_at WHERE id=:id AND user_id=:me
+        NR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>NR: 行なし
         NR-->>S: NotFoundError
         S-->>R: 404 NOT_FOUND
     else 未読または既読
-        NR->>PG: SELECT COUNT(*) WHERE user_id=:me AND read_at IS NULL
+        NR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>NR: read_at + unread_count
         NR-->>S: ReadNotification
         S-->>R: ReadNotificationResponse
@@ -100,19 +100,19 @@ sequenceDiagram
 | 項目 | 内容 |
 |------|------|
 | シグネチャ | `async def mark_notification_read(notification_id: UUID, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> NotificationReadResponse` |
-| 処理 | session方式では依存性でCSRF検証後、`notification_service.mark_read`を呼び出す |
+| 処理 | session方式では依存性でCSRF検証後、`notification_service.sp_mark_notification_read`を呼び出す |
 | 送出例外 | `NotFoundError`（404）、認証・CSRF・DB接続系の共通例外 |
 | 副作用 | 本人の通知1行の`read_at`更新 |
 
-### 5.2 `service/notification_service.py :: mark_read`
+### 5.2 `service/notification_service.py :: sp_mark_notification_read`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def mark_read(db: AsyncSession, notification_id: UUID, user_id: UUID) -> NotificationReadResult` |
+| シグネチャ | `async def sp_mark_notification_read(db: AsyncSession, notification_id: UUID, user_id: UUID) -> NotificationReadResult` |
 | 処理 | repositoryへ`user_id`を必ず渡し、対象行がなければ404。既読済みは値を保持したまま未読件数だけ再計算する |
 | 副作用 | 既読化と未読件数取得 |
 
-### 5.3 `repository/notification_repository.py :: mark_read`
+### 5.3 `repository/notification_repository.py :: sp_mark_notification_read`
 
 ```sql
 UPDATE notifications
@@ -132,7 +132,7 @@ flowchart TB
     B -->|No| E1["422 VALIDATION_ERROR"]
     B -->|Yes| C["認証・session方式のみCSRF検証"]
     C -->|認証/CSRF失敗| E2["401/403"]
-    C -->|OK| D["本人の通知をUPDATE ... RETURNING"]
+    C -->|OK| D["CALL sp_mark_notification_read"]
     D -->|対象なし| E3["404 NOT_FOUND"]
     D -->|対象あり| F["本人の未読件数をCOUNT"]
     F --> G["200 id/read_at/unread_count"]
@@ -145,39 +145,50 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    R["notifications_router.mark_notification_read"] --> S["notification_service.mark_read"]
-    S --> NR["notification_repository.mark_read"]
-    NR --> N[("notifications")]
-    NR -->|"COUNT"| N
+    R["notifications_router.mark_notification_read"] --> S["notification_service.sp_mark_notification_read"]
+    S --> NR["notification_repository.sp_mark_notification_read"]
+    NR --> N[("notifications（SP内部）")]
+    NR -->|"SELECT fn_count_unread_notifications"| N
 ```
 
 ## 8. データ遷移図
 
 ```mermaid
 flowchart LR
-    A["本人の未読通知"] -->|"UPDATE read_at（同一トランザクション）"| B["本人の既読通知"]
+    A["本人の未読通知"] -->|"CALL sp_mark_notification_read（同一トランザクション）"| B["本人の既読通知"]
     B --> C["本人の未読件数を再計算"]
     C --> D["ReadNotificationResponse"]
     E["他人/不存在"] --> F["状態変更なし・404"]
 ```
 
-## 9. クエリ・トランザクション
+## 9. SP/FNデータアクセス一覧
+
+### 9.1 正式なDBアクセス契約
+
+本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+
+| 種別 | 契約 | 説明 |
+|------|------|------|
+| sp_mark_notification_read | `sp_mark_notification_read(p_notification_id, p_user_id)` | sp_mark_notification_readを呼び出し、結果をレスポンスへ写像する |
+
+repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。既読更新の条件と冪等性はSP層の責務であり、他人の通知・不存在の判定結果はAPI層で404へ変換する。
+
 
 | 分岐 | 発行クエリ | トランザクション |
 |------|------------|------------------|
-| 本人の通知（未読・既読） | `UPDATE ... RETURNING` 1回 + 未読件数 `COUNT` 1回 | 2クエリを1トランザクションでcommit |
-| 他人・不存在 | `UPDATE` 1回 + 本人条件の存在確認 `SELECT` 1回 | 2クエリをrollbackまたはread-only終了 |
+| 本人の通知（未読・既読） | `CALL sp_mark_notification_read` 1回 + `SELECT fn_count_unread_notifications` 1回 | 2呼び出しを1トランザクションでcommit |
+| 他人・不存在 | `sp_mark_notification_read` の対象事実をAPIで確認 | SP結果を404へ変換 |
 | UUID不正・認証/CSRF失敗 | 0回 | DB処理なし |
 
 ## 10. テスト設計
 
 | No | 区分 | ケース | 期待結果 | テスト名案 |
 |----|------|--------|----------|------------|
-| 1 | 結合 | 未読の本人通知を既読化 | 200、`read_at`設定、未読件数が1減る | `test_mark_read_own_unread_notification` |
-| 2 | 結合 | 既読済み通知を再度指定 | 200、元の`read_at`を保持 | `test_mark_read_is_idempotent` |
-| 3 | 結合 | 他人の通知IDを指定 | 404、通知は変更されない | `test_mark_read_other_users_notification_returns_404` |
-| 4 | 結合 | session方式でCSRF不正 | 403 `CSRF_INVALID`、DB更新なし | `test_mark_read_rejects_invalid_csrf` |
-| 5 | 単体 | notification_idが不正 | 422 `VALIDATION_ERROR` | `test_mark_read_rejects_invalid_id` |
+| 1 | 結合 | 未読の本人通知を既読化 | 200、`read_at`設定、未読件数が1減る | `test_sp_mark_notification_read_own_unread_notification` |
+| 2 | 結合 | 既読済み通知を再度指定 | 200、元の`read_at`を保持 | `test_sp_mark_notification_read_is_idempotent` |
+| 3 | 結合 | 他人の通知IDを指定 | 404、通知は変更されない | `test_sp_mark_notification_read_other_users_notification_returns_404` |
+| 4 | 結合 | session方式でCSRF不正 | 403 `CSRF_INVALID`、DB更新なし | `test_sp_mark_notification_read_rejects_invalid_csrf` |
+| 5 | 単体 | notification_idが不正 | 422 `VALIDATION_ERROR` | `test_sp_mark_notification_read_rejects_invalid_id` |
 
 ## 11. 不明点・要検討事項
 

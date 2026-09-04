@@ -36,7 +36,7 @@
 | `is_owner` | あり（自分がオーナーかどうかをダッシュボードで表示するため） | なし（管理者視点の一覧であり「自分のプロジェクトか」は無関係） |
 | 検索 (`q`) | なし | あり（プロジェクト名の部分一致） |
 | 削除操作との連携 | なし（削除は `DELETE /projects/{id}` でオーナー/admin向け） | あり（`DELETE /admin/projects/{project_id}` と対になる管理者専用の削除導線） |
-| 内部実装 | `project_repository.count_all` / `list_all`（`q=None`固定で呼び出し） | 同じ `count_all` / `list_all` を `q` 付きで呼び出す（クエリ実装を共有し重複実装しない） |
+| 内部実装 | `project_repository.fn_admin_list_projects`（`query=None`で呼び出し） | 同じFNを`query`付きで呼び出す（クエリ実装を共有し重複実装しない） |
 
 ## 2. 入出力仕様
 
@@ -120,19 +120,19 @@ sequenceDiagram
     R->>D: 認証 + admin確認
     D-->>R: CurrentUser(role=admin)
     R->>S: list_projects(query, page, per_page)
-    S->>RP: count_all(q)
-    RP->>PG: "SELECT COUNT(*) FROM projects WHERE lower(name) LIKE lower(:q)||'%'"
+    S->>RP: fn_admin_list_projects(q)
+    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>RP: total
-    S->>RP: list_all(q, page, per_page)
-    RP->>PG: "SELECT projects.* FROM projects WHERE ... ORDER BY created_at DESC LIMIT/OFFSET"
+    S->>RP: fn_admin_list_projects(q, page, per_page)
+    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>RP: project行
-    RP->>PG: "selectinload(Project.owner) の追加SELECT（owner_id IN (...)）"
+    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>RP: owner行
     RP-->>S: Project一覧
-    S->>RP: aggregate_member_counts(project_ids)
-    RP->>PG: "SELECT project_id, COUNT(*) FROM project_members WHERE project_id = ANY(:ids) GROUP BY project_id"
-    S->>RP: aggregate_task_counts(project_ids)
-    RP->>PG: "SELECT project_id, status, COUNT(*) FROM tasks WHERE project_id = ANY(:ids) GROUP BY project_id, status"
+    S->>RP: fn_admin_list_projects(project_ids)
+    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
+    S->>RP: fn_admin_list_projects(project_ids)
+    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     S->>S: 集計結果をAdminProjectSummaryへマージ
     S-->>R: Page[AdminProjectSummary]
     R-->>FE: 200 {items, meta}
@@ -154,8 +154,8 @@ flowchart TB
     C -->|"is_active=false"| C2["403 USER_INACTIVE"]
     C -->|"OK"| E["deps.require_admin"]
     E -->|"role != admin"| E1["403 FORBIDDEN"]
-    E -->|"OK"| F["project_repository.count_all(q)"]
-    F --> G["project_repository.list_all(q)"]
+    E -->|"OK"| F["SELECT fn_admin_list_projects(query)"]
+    F --> G["FN結果をDTOへ写像"]
     G --> H["project_idsで member_count / task_counts をバッチ集計"]
     H --> I["AdminProjectSummaryへマージ"]
     I --> J["200 {items, meta}"]
@@ -183,21 +183,21 @@ flowchart TB
 | 引数 | `query`: 検索・ページング条件 / `db`: DBセッション |
 | 戻り値 | `Page[AdminProjectSummary]`（`items: list[AdminProjectSummary]`, `total: int`） |
 | 送出例外 | `ServiceUnavailableError`（PostgreSQL接続不能時）→503 |
-| 処理内容 | 1. `project_repository.count_all(q)` で総件数取得 2. `project_repository.list_all(q, page, per_page)` で該当ページの行を取得（owner は `selectinload`） 3. 取得した `project_ids` で `aggregate_member_counts` / `aggregate_task_counts` をそれぞれ1回ずつ呼び出す 4. Python側で `member_count` / `task_counts`（0補完）をマージし `AdminProjectSummary` を組み立てる（`is_owner` は算出しない） |
+| 処理内容 | `SELECT fn_admin_list_projects(:query, :is_active, :limit, :offset)` を1回呼び出し、関連集計・件数・ページングを含むFN結果を`AdminProjectSummary`へ写像する |
 | 副作用 | なし（読み取りのみ） |
 
-### 6.3 `repository/project_repository.py :: count_all` / `list_all`（`q` 引数を追加）
+### 6.3 `repository/project_repository.py :: fn_admin_list_projects`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def count_all(db: AsyncSession, q: str \| None = None) -> int` ／ `async def list_all(db: AsyncSession, q: str \| None = None, page: int = 1, per_page: int = 20) -> list[Project]` |
+| シグネチャ | `async def fn_admin_list_projects(db: AsyncSession, q: str \| None = None) -> int` ／ `async def fn_admin_list_projects(db: AsyncSession, q: str \| None = None, page: int = 1, per_page: int = 20) -> list[Project]` |
 | 引数 | `q`: プロジェクト名の部分一致条件（`None` なら全件対象） / `page`, `per_page`: ページング |
 | 戻り値 | 件数 ／ `owner` を eager load 済みの `Project` エンティティのリスト |
 | 送出例外 | `OperationalError`（DB不通） |
-| 処理内容 | 1. [01_get_projects.md §6.3](../projects/01_get_projects.md) で定義済みの `list_all`（admin向け全件取得）に `q` 引数を追加する形で拡張し、`GET /projects` のadmin分岐と本APIで実装を共有する 2. `q` 指定時は `lower(name) LIKE lower(:q)||'%'`（前方一致）を `WHERE` に追加 3. `ORDER BY created_at DESC` 4. `OFFSET (page-1)*per_page LIMIT per_page`（`count_all` はページングなし） |
+| 処理内容 | 1. [01_get_projects.md §6.3](../projects/01_get_projects.md) で定義済みの `fn_admin_list_projects`（admin向け全件取得）に `q` 引数を追加する形で拡張し、`GET /projects` のadmin分岐と本APIで実装を共有する 2. `q` 指定時は `lower(name) LIKE lower(:q)||'%'`（前方一致）を `WHERE` に追加 3. `ORDER BY created_at DESC` 4. `OFFSET (page-1)*per_page LIMIT per_page`（`fn_admin_list_projects` はページングなし） |
 | 副作用 | なし |
 
-### 6.4 `repository/project_repository.py :: aggregate_member_counts` / `aggregate_task_counts`
+### 6.4 service層のDTO写像
 
 [01_get_projects.md §6.4](../projects/01_get_projects.md) と同一の既存関数をそのまま再利用する（実装の重複を避ける）。
 
@@ -206,10 +206,10 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["admin_router.list_admin_projects"] --> S["admin_project_service.list_projects"]
-    S --> RP1["project_repository.count_all"]
-    S --> RP2["project_repository.list_all"]
-    S --> RP3["project_repository.aggregate_member_counts"]
-    S --> RP4["project_repository.aggregate_task_counts"]
+    S --> RP1["project_repository.fn_admin_list_projects"]
+    S --> RP2["project_repository.fn_admin_list_projects"]
+    S --> RP3["project_repository.fn_admin_list_projects"]
+    S --> RP4["project_repository.fn_admin_list_projects"]
     RP1 --> M["models.Project"]
     RP2 --> M
     RP2 --> MO["models.User(owner)"]
@@ -235,7 +235,17 @@ flowchart LR
     S -->|"SELECT（owner表示名）"| T4
 ```
 
-## 9. データアクセス一覧
+## 9. SP/FNデータアクセス一覧
+
+### 9.1 正式なDBアクセス契約
+
+本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+
+| 種別 | 契約 | 説明 |
+|------|------|------|
+| fn_admin_list_projects | `fn_admin_list_projects(p_query, p_is_active, p_limit, p_offset)` | fn_admin_list_projectsを呼び出し、結果をレスポンスへ写像する |
+
+repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
 **PostgreSQL**
 
@@ -270,21 +280,21 @@ flowchart LR
 | タイミング攻撃対策 | 該当なし |
 | レート制限 | なし |
 | fail-close方針 | PostgreSQL接続不能時は `503 SERVICE_UNAVAILABLE` |
-| N+1対策・クエリ回数 | 非空ページでは `count` 1回 + 一覧主クエリ1回 + ownerの`selectinload`追加SELECT 1回 + member/task集計各1回の計5回。owner取得は同一ラウンドトリップではないが、プロジェクト件数に比例しない。空ページでは集計と関連追加SELECTを発行せず、計2回を基本とする（[01_get_projects.md](../projects/01_get_projects.md) と同じ方針） |
+| N+1対策・クエリ回数 | 非空ページでは `count` 1回 + 一覧主クエリ1回 + ownerの`FN結果の一括マッピング`追加SELECT 1回 + member/task集計各1回の計5回。owner取得は同一ラウンドトリップではないが、プロジェクト件数に比例しない。空ページでは集計と関連追加SELECTを発行せず、計2回を基本とする（[01_get_projects.md](../projects/01_get_projects.md) と同じ方針） |
 
 ## 12. テスト設計
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
 | 1 | 単体 | 一般ユーザーはアクセス不可 | `role=member` のCurrentUser | `403 FORBIDDEN`、リポジトリ未呼び出し | `test_list_admin_projects_forbidden_for_member` |
-| 2 | 単体 | q指定時に名称部分一致条件が組み立てられる | repositoryをモック | 発行されたSQL条件に `name` のLIKE条件が含まれる | `test_list_admin_projects_query_builds_name_like` |
+| 2 | 結合（実DB・実SP） | q指定時に名称部分一致条件が組み立てられる | 実DB・実SPで検証 | 発行されたSQL条件に `name` のLIKE条件が含まれる | `test_list_admin_projects_query_builds_name_like` |
 | 3 | 単体 | is_ownerフィールドが出力に含まれない | サービス層の戻り値スキーマを検証 | `AdminProjectSummary` に `is_owner` キーが存在しない | `test_list_admin_projects_response_has_no_is_owner` |
 | 4 | 結合 | 検索条件なしで全プロジェクトが返る（他ユーザー所有分も含む） | 3ユーザーがそれぞれ所有するプロジェクトを作成 | `total=3` で全件返る | `test_list_admin_projects_returns_all_owners_projects` |
 | 5 | 結合 | qによるプロジェクト名検索が機能する | `name="Cerberus開発"` を含む複数プロジェクト | `q=Cerberus` で該当プロジェクトのみ返る | `test_list_admin_projects_search_by_name` |
 | 6 | 結合 | ページングが正しく機能する | プロジェクト25件を作成 | 1ページ目20件、`total=25`、`total_pages=2` | `test_list_admin_projects_pagination` |
 | 7 | 結合 | member（オーナー含む）はアクセス不可 | 一般メンバー・オーナーのCurrentUserでGET | `403 FORBIDDEN` | `test_list_admin_projects_forbidden_for_owner_non_admin` |
 | 8 | 結合 | 未認証は401 | Cookie/Bearerなし | `401 UNAUTHENTICATED` | `test_list_admin_projects_unauthenticated` |
-| 9 | 結合 | N+1が発生しないことの確認 | プロジェクト10件、SQLAlchemyのクエリカウンタで検証 | 発行クエリ数が定数（プロジェクト件数に比例しない） | `test_list_admin_projects_query_count_constant` |
+| 9 | 結合 | N+1が発生しないことの確認 | プロジェクト10件、SQLAlchemyの実DBの呼び出し回数を検証 | 発行クエリ数が定数（プロジェクト件数に比例しない） | `test_list_admin_projects_query_count_constant` |
 
 `AUTH_MODE=session` / `jwt` の両方で No.8（401判定経路の違い：`SESSION_EXPIRED` と `TOKEN_EXPIRED`）をパラメータ化して実施する。
 
@@ -293,5 +303,5 @@ flowchart LR
 | 区分 | 内容 | 影響 |
 |------|------|------|
 | 要検討 | `q` によるプロジェクト名検索は基本設計に明記がなく、`GET /admin/users` の `q` 検索との一貫性を意図した本書での提案。基本設計側での明文化が望ましい |
-| 要検討 | `project_repository.count_all` / `list_all` に `q` 引数を追加する変更は、既存の `GET /projects`（[01_get_projects.md](../projects/01_get_projects.md)）が呼び出す箇所にも影響するため、実装時は後方互換（`q=None` 既定）を厳守する必要がある |
+| 要検討 | `fn_admin_list_projects`の検索引数と一般プロジェクト一覧の共有範囲は、DB実装時にシグネチャを正として確定する |
 | 対応済み | issue #10により`is_active`/`start_at`/`end_at`をレスポンスへ追加。管理者一覧は無効化済みプロジェクトを隠す必要がないため`is_active`によるフィルタは行わず常に全件返す（`GET /projects`の`include_inactive`とは異なる設計判断） | - |

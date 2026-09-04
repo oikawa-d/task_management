@@ -138,9 +138,24 @@ flowchart LR
 
 `status` のような状態カラムを持たないため、状態遷移図（`stateDiagram-v2`）は作成せず、CRUDイベントを `flowchart` で示す。
 
-## 8. リポジトリ関数詳細
+## 8. SP/FNリポジトリ契約
 
-### 8.1 `repository/task_comment_repository.py :: create`
+repositoryは下表のSP/FN呼び出しとDTO写像だけを行い、`task_comments` への直接CRUDは行わない。コメントの存在・所属に必要な事実はFNで取得し、投稿者本人かどうかとHTTP 403への変換はAPI層で行う。
+
+| repository契約 | DB呼び出し | 戻り値・エラー |
+|----------------|------------|----------------|
+| `create` | `CALL sp_add_task_comment(:task_id, :user_id, :body)` | `fn_get_comment_with_task`で作成結果を取得 |
+| `list_by_task` | `SELECT fn_list_task_comments(:task_id)` | コメント一覧 |
+| `count_by_task_ids` | `fn_list_task_comments`の結果または専用FN集約 | N+1を発生させない |
+| `get_by_id` | `SELECT fn_get_comment_with_task(:comment_id)` | 空集合は404へ変換 |
+| `update` | `CALL sp_update_task_comment(:comment_id, :user_id, :body)` | 更新後をFNで取得 |
+| `delete` | `CALL sp_delete_task_comment(:comment_id, :user_id)` | 投稿者事実は事前FN、APIで403変換 |
+
+### 8.1 SQL実装参考（SP/FN内部）
+
+以下の既存小節に記載するSQLはSP/FN本体の実装参考であり、repositoryから直接発行しない。実装時の正は[08_db_functions.md](./08_db_functions.md) §2のシグネチャである。
+
+### 8.2 `repository/task_comment_repository.py :: create`
 
 | 項目 | 内容 |
 |------|------|
@@ -151,7 +166,7 @@ flowchart LR
 | 送出例外 | なし（`body` の文字数検証はpydanticスキーマ層で完了済みの前提） |
 | 処理内容 | 1. `session.add()` して `flush()`<br/>2. 呼び出し元 `task_service.add_comment` が事前にプロジェクト所属チェック済み |
 
-### 8.2 `repository/task_comment_repository.py :: list_by_task`
+### 8.3 `repository/task_comment_repository.py :: list_by_task`
 
 | 項目 | 内容 |
 |------|------|
@@ -162,7 +177,7 @@ flowchart LR
 | 送出例外 | なし |
 | 処理内容 | 1. `GET /tasks/{id}/comments` のレスポンス生成に使用<br/>2. タスク詳細取得（Q-4）とは別クエリとして発行しN+1を回避 |
 
-### 8.3 `repository/task_comment_repository.py :: count_by_task_ids`
+### 8.4 `repository/task_comment_repository.py :: count_by_task_ids`
 
 | 項目 | 内容 |
 |------|------|
@@ -173,7 +188,7 @@ flowchart LR
 | 送出例外 | なし |
 | 処理内容 | 1. カンバン一覧（`GET /projects/{id}/tasks`）の各カードに表示する `comment_count` をタスク一覧と別クエリでまとめて取得し、N+1を回避 |
 
-### 8.4 `repository/task_comment_repository.py :: get_by_id`
+### 8.5 `repository/task_comment_repository.py :: get_by_id`
 
 | 項目 | 内容 |
 |------|------|
@@ -184,7 +199,7 @@ flowchart LR
 | 送出例外 | なし（`None` を返し、サービス層で `NotFoundError` に変換） |
 | 処理内容 | 1. `PATCH`/`DELETE /comments/{id}` の対象特定と、投稿者本人チェック（`comment.user_id == current_user.id`）の材料取得に使用 |
 
-### 8.5 `repository/task_comment_repository.py :: update`
+### 8.6 `repository/task_comment_repository.py :: update`
 
 | 項目 | 内容 |
 |------|------|
@@ -195,7 +210,7 @@ flowchart LR
 | 送出例外 | なし（認可はサービス層で事前判定：投稿者本人 or admin） |
 | 処理内容 | 1. ORMエンティティの `body` を更新し `flush()`（`trg_set_updated_at` が `updated_at` を更新） |
 
-### 8.6 `repository/task_comment_repository.py :: delete`
+### 8.7 `repository/task_comment_repository.py :: delete`
 
 | 項目 | 内容 |
 |------|------|

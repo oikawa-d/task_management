@@ -110,15 +110,15 @@ sequenceDiagram
     else "検証OK"
         R->>R: "pydanticでbody長を検証"
         R->>D: "get_task_for_member(task_id)"
-        D->>PG: "SELECT tasks / project_members"
+        D->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         alt "タスク不存在 or 非所属"
             D-->>R: "NotFoundError"
             R-->>FE: "404 NOT_FOUND"
         else "所属メンバーまたはadmin"
             D-->>R: "Task"
             R->>S: "add_comment(task, payload, current_user)"
-            S->>TR: "insert_comment(task_id, user_id, body)"
-            TR->>PG: "INSERT INTO task_comments (...)"
+            S->>TR: "sp_add_task_comment(task_id, user_id, body)"
+            TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
             PG-->>TR: "comment行"
             TR-->>S: "Comment"
             S-->>R: "CommentResponse"
@@ -179,14 +179,14 @@ flowchart TB
 | 引数 | `task`：対象タスク／`payload`：検証済み入力／`user`：投稿者／`db`：DBセッション |
 | 戻り値 | 作成された `Comment`（`author` は `user` から構築、追加SELECTなし） |
 | 送出例外 | なし（バリデーションはルーター層のpydanticで完了済み） |
-| 処理内容 | 1. `task_repository.insert_comment(task.id, user.id, payload.body, db)` を呼ぶ 2. 返却されたORM行に `author=user` をセットして返す |
+| 処理内容 | 1. API側で`comment_id`を生成し、`CALL sp_add_task_comment(comment_id, task.id, user.id, payload.body)` を呼ぶ 2. `SELECT fn_list_task_comments(task.id)` の結果から作成行を写像して返す |
 | 副作用 | `task_comments` への1行INSERT |
 
-### 6.4 `repository/task_repository.py :: insert_comment`
+### 6.4 `repository/task_repository.py :: sp_add_task_comment`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def insert_comment(task_id: UUID, user_id: UUID, body: str, db: AsyncSession) -> Comment` |
+| シグネチャ | `async def sp_add_task_comment(comment_id: UUID, task_id: UUID, user_id: UUID, body: str, db: AsyncSession) -> None` |
 | 引数 | `task_id` / `user_id` / `body`：保存する値／`db`：DBセッション |
 | 戻り値 | INSERT後の `Comment`（`id`, `created_at`, `updated_at` がDB既定値で採番済み） |
 | 送出例外 | `IntegrityError`（FK違反時。通常は上位で存在確認済みのため発生しない想定） |
@@ -200,7 +200,7 @@ flowchart LR
     R["comments_router.create_task_comment"] --> Sch["schemas.CommentCreateRequest"]
     R --> D["deps.get_task_for_member"]
     R --> S["task_service.add_comment"]
-    S --> TR["task_repository.insert_comment"]
+    S --> TR["sp_add_task_comment"]
     TR --> M["models.Comment"]
     R --> V["deps.verify_origin / verify_csrf"]
 ```
@@ -214,7 +214,17 @@ flowchart LR
 
 Redisの状態遷移はない（本APIはRedisへアクセスしない）。
 
-## 9. データアクセス一覧
+## 9. SP/FNデータアクセス一覧
+
+### 9.1 正式なDBアクセス契約
+
+本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+
+| 種別 | 契約 | 説明 |
+|------|------|------|
+| add_task_comment | `sp_add_task_comment(p_comment_id, p_task_id, p_user_id, p_body)` | sp_add_task_commentを呼び出し、結果をレスポンスへ写像する |
+
+repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
 **PostgreSQL**
 
@@ -248,7 +258,7 @@ Redisの状態遷移はない（本APIはRedisへアクセスしない）。
 |----|------|--------|------|----------|-----------------|
 | 1 | 単体 | trim後に空文字になる入力 | `body="   "` | `422 VALIDATION_ERROR` | `test_comment_create_rejects_whitespace_only` |
 | 2 | 単体 | 2001文字の入力 | `body` を2001文字で構成 | `422 VALIDATION_ERROR` | `test_comment_create_rejects_over_max_length` |
-| 3 | 単体 | サービス層がリポジトリに渡す値 | リポジトリをモック | `insert_comment` にtrim後の`body`が渡る | `test_add_comment_passes_trimmed_body` |
+| 3 | 単体 | サービス層がリポジトリに渡す値 | リポジトリをモック | `sp_add_task_comment` にtrim後の`body`が渡る | `test_add_comment_passes_trimmed_body` |
 | 4 | 結合 | 正常投稿 | 実DB、プロジェクトメンバーでリクエスト | `201`、`task_comments` に1行追加、`author` が現在ユーザー | `test_post_task_comments_creates_comment` |
 | 5 | 結合 | 非所属メンバーが投稿 | 実DB | `404 NOT_FOUND` | `test_post_task_comments_non_member_returns_404` |
 | 6 | 結合 | CSRFトークン欠落（sessionモード） | 実DB、`X-CSRF-Token` 未送信 | `403 CSRF_INVALID` | `test_post_task_comments_missing_csrf_session_mode` |

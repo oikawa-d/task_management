@@ -132,17 +132,17 @@ sequenceDiagram
 
     FE->>R: "GET /api/projects/{project_id}/tasks?include_inactive"
     R->>D: "認証 + 所属チェック"
-    D->>PG: "SELECT project_members WHERE project_id AND user_id"
+    D->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     alt "非所属かつadminでない"
         D-->>R: "NotFoundError"
         R-->>FE: "404 NOT_FOUND"
     else "所属 または admin"
         D-->>R: "Project"
         R->>S: "get_board(project, include_inactive)"
-        S->>TR: "list_board(project_id, include_inactive)"
-        TR->>PG: "SELECT tasks<br/>WHERE project_id AND (include_inactive OR is_active=true)<br/>+ 相関サブクエリ COUNT(task_comments)<br/>ORDER BY status, position"
+        S->>TR: "fn_get_project_board(project_id, include_inactive)"
+        TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>TR: "tasks行 + comment_count"
-        TR->>PG: "selectinload(assignee) の追加SELECT<br/>WHERE users.id IN (assignee_ids)"
+        TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>TR: "assignee行"
         TR-->>S: "list[TaskWithCommentCount]"
         S->>S: "status別にグルーピング（todo/in_progress/done）"
@@ -163,7 +163,7 @@ flowchart TB
     D -->|"No"| E403["403 USER_INACTIVE"]
     D -->|"Yes"| F{"admin または<br/>project_membersに存在?"}
     F -->|"No"| E404["404 NOT_FOUND"]
-    F -->|"Yes"| G["task_repository.list_board 実行<br/>（include_inactive=falseならis_active=trueのみ）"]
+    F -->|"Yes"| G["fn_get_project_board 実行<br/>（include_inactive=falseならis_active=trueのみ）"]
     G --> H["status別にグルーピング"]
     H --> I["200 レスポンス生成<br/>（project_is_active, is_active含む）"]
 ```
@@ -189,18 +189,18 @@ flowchart TB
 | 引数 | project: 認可済みの `Project` エンティティ／include_inactive: 論理削除済みタスクを含めるか |
 | 戻り値 | `BoardResponse`（`project_id`, `project_is_active=project.is_active`, `todo` / `in_progress` / `done` の3キーを持つ `columns`） |
 | 送出例外 | なし（リポジトリ例外はそのまま上位へ伝播） |
-| 処理内容 | 1. `task_repository.list_board(project.id, include_inactive)` を呼び出す<br/>2. 取得した `TaskWithCommentCount` のリストを `status` ごとに分配し、各列内は `position` 昇順のまま整形する<br/>3. 該当行がない `status` は空配列とする<br/>4. `project.is_active` をレスポンスの `project_is_active` にそのまま設定する |
+| 処理内容 | 1. `fn_get_project_board(project.id, include_inactive)` を呼び出す<br/>2. 取得した `TaskWithCommentCount` のリストを `status` ごとに分配し、各列内は `position` 昇順のまま整形する<br/>3. 該当行がない `status` は空配列とする<br/>4. `project.is_active` をレスポンスの `project_is_active` にそのまま設定する |
 | 副作用 | なし |
 
-### 6.3 `repository/task_repository.py :: list_board`
+### 6.3 `repository/task_repository.py :: fn_get_project_board`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def list_board(db: AsyncSession, project_id: UUID, include_inactive: bool) -> list[TaskWithCommentCount]` |
+| シグネチャ | `async def fn_get_project_board(db: AsyncSession, project_id: UUID, include_inactive: bool) -> list[TaskWithCommentCount]` |
 | 引数 | db: DBセッション／project_id: 対象プロジェクトID／include_inactive: `False` の場合 `is_active=true` のみ返す |
 | 戻り値 | `TaskWithCommentCount`（`Task` に `comment_count: int` を付加したDTO）のリスト |
 | 送出例外 | `OperationalError`（DB接続不能。`infra_error_handler` が503へ変換） |
-| 処理内容 | 1. `tasks` を `project_id` で絞り込み、`include_inactive=False` の場合はさらに `is_active=true` を条件に追加。担当者（`users`）を `selectinload` でEager Load<br/>2. `comment_count` は `task_comments` への相関サブクエリ `SELECT COUNT(*) FROM task_comments WHERE task_id = tasks.id` をSELECT列に追加し、N+1を回避する<br/>3. `ORDER BY status, position ASC`（`uq_tasks_project_status_position` を利用。`is_active` は絞り込み条件のみでソートキーには使わない） |
+| 処理内容 | `SELECT fn_get_project_board(:project_id, :include_inactive)` を1回実行する。担当者・コメント件数の集約、inactive条件、status/position順はFN内部で処理し、repositoryで追加SELECTを発行しない |
 | 副作用 | なし |
 
 ## 7. 関数相関図
@@ -209,7 +209,7 @@ flowchart TB
 flowchart LR
     R["tasks_router.list_project_tasks"] --> DEP["deps.require_project_member"]
     R --> S["task_service.get_board"]
-    S --> TR["task_repository.list_board"]
+    S --> TR["fn_get_project_board"]
     TR --> DB[("PostgreSQL<br/>tasks / users / task_comments")]
     DEP --> DBM[("PostgreSQL<br/>project_members")]
 ```
@@ -230,7 +230,17 @@ flowchart LR
     T -->|"task_id"| C
 ```
 
-## 9. データアクセス一覧
+## 9. SP/FNデータアクセス一覧
+
+### 9.1 正式なDBアクセス契約
+
+本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+
+| 種別 | 契約 | 説明 |
+|------|------|------|
+| fn_get_project_board | `fn_get_project_board(p_project_id, p_include_inactive)` | fn_get_project_boardを呼び出し、結果をレスポンスへ写像する |
+
+repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
 **PostgreSQL**
 
@@ -238,7 +248,7 @@ flowchart LR
 |----------|------|-----------|------|
 | project_members | SELECT | `project_id`, `user_id` | `require_project_member` による認可（admin時は省略） |
 | tasks | SELECT | `project_id` 一致（+ `include_inactive=false`時は`is_active=true`）、`ORDER BY status, position` | 主クエリ。`uq_tasks_project_status_position` を使用 |
-| users | SELECT（`selectinload`の追加SELECT） | `tasks.assignee_id = users.id` | assignee 情報のEager Load。tasks主クエリとは別ラウンドトリップ |
+| users | SELECT（`FN結果の一括マッピング`の追加SELECT） | `tasks.assignee_id = users.id` | assignee 情報のEager Load。tasks主クエリとは別ラウンドトリップ |
 | task_comments | SELECT（相関サブクエリ COUNT） | `task_id = tasks.id` | `comment_count` 算出。`ix_task_comments_task_created` を使用 |
 
 **Redis**：使用なし。
@@ -261,14 +271,14 @@ flowchart LR
 | タイミング攻撃対策 | 本APIは認証情報の真偽比較を含まないため対象外 |
 | レート制限 | なし |
 | fail-close方針 | DB接続不能時は503を返し、部分的なデータでの200応答は行わない |
-| N+1対策・クエリ回数 | 認可の所属確認1回（adminは省略）に加え、tasks主クエリ1回とassigneeの`selectinload`追加SELECT 1回を実行する。`comment_count`は主クエリ内の相関サブクエリであり、タスクごとの追加クエリは発行しない。関連取得は同一ラウンドトリップではないが、タスク件数に比例してクエリ数は増えない |
+| N+1対策・クエリ回数 | 認可の所属確認1回（adminは省略）に加え、tasks主クエリ1回とassigneeの`FN結果の一括マッピング`追加SELECT 1回を実行する。`comment_count`は主クエリ内の相関サブクエリであり、タスクごとの追加クエリは発行しない。関連取得は同一ラウンドトリップではないが、タスク件数に比例してクエリ数は増えない |
 
 ## 12. テスト設計
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 単体（モック） | 正常系グルーピング | `task_repository.list_board` が3status混在のリストを返す | `columns.todo/in_progress/done` に正しく振り分けられる | `test_get_board_groups_by_status` |
-| 2 | 単体（モック） | タスク0件 | リポジトリが空リストを返す | 3列すべて空配列 | `test_get_board_empty_project` |
+| 1 | 結合（実DB・実SP） | 正常系グルーピング | `fn_get_project_board` が3status混在のリストを返す | `columns.todo/in_progress/done` に正しく振り分けられる | `test_get_board_groups_by_status` |
+| 2 | 結合（実DB・実SP） | タスク0件 | リポジトリが空リストを返す | 3列すべて空配列 | `test_get_board_empty_project` |
 | 3 | 結合 | 正常系取得（member） | 実DB、所属プロジェクト・タスク3件・コメント2件 | 200、`comment_count` が一致 | `test_list_project_tasks_success` |
 | 4 | 結合 | 非所属member | 実DB、他プロジェクトの`project_id`を指定 | 404 `NOT_FOUND` | `test_list_project_tasks_forbidden_as_404` |
 | 5 | 結合 | admin | 実DB、非所属プロジェクトIDでもadminは200 | 200 | `test_list_project_tasks_admin_bypass` |

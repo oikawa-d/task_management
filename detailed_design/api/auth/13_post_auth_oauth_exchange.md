@@ -133,7 +133,7 @@ sequenceDiagram
                 RD-->>RS: {user_id, redirect_to}
                 RS-->>S: OAuthHandoffData
                 S->>UR: get_active_user(user_id)
-                UR->>PG: SELECT users WHERE id=? AND is_active
+                UR->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
                 alt ユーザーが無効/不存在
                     PG-->>UR: None
                     UR-->>S: None
@@ -146,7 +146,7 @@ sequenceDiagram
                     JWTS->>RS: store_refresh_token(token, user_id, family_id, ttl)
                     RS->>RD: SETEX refresh:{hash} / SADD user_refresh:{uid}
                     JWTS-->>S: LoginResult(access_token, expires_in)
-                    S->>PG: INSERT login_history(method='oauth_google', success=true)
+                    S->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
                     S-->>R: OAuthExchangeResult(access_token, expires_in, redirect_to)
                     R-->>FE: 200 {access_token, redirect_to}<br/>Set-Cookie(cerberus_rt, cerberus_csrf)
                 end
@@ -198,10 +198,10 @@ flowchart TB
 | 引数 | `code`：一時ハンドオフコード。`request`/`response`：Strategy.loginへ引き渡す |
 | 戻り値 | `OAuthExchangeResult`（`access_token`, `expires_in`, `redirect_to`） |
 | 送出例外 | `OAuthHandoffInvalidError`、`UserInactiveError`、`ServiceUnavailableError` |
-| 処理内容 | 1. `redis_store.consume_oauth_handoff(code)`を呼び`None`なら`OAuthHandoffInvalidError` 2. `user_repository.get_active_user(data.user_id)`で現在の有効ユーザーを取得（Redisに保存されたuser_idのみを信頼し、role等は再取得しない） 3. 取得できなければ`UserInactiveError` 4. `jwt_strategy.login(user, request, response)`を呼び`LoginResult`を得る 5. `login_history_repository.record(user.id, method='oauth_google', success=True)`を呼ぶ 6. `data.redirect_to`（正規化済み）とともに結果を返す |
+| 処理内容 | 1. `redis_store.consume_oauth_handoff(code)`を呼び`None`なら`OAuthHandoffInvalidError` 2. `user_repository.fn_get_user(data.user_id)`で現在の有効ユーザーを取得（Redisに保存されたuser_idのみを信頼し、role等は再取得しない） 3. 取得できなければ`UserInactiveError` 4. `jwt_strategy.login(user, request, response)`を呼び`LoginResult`を得る 5. `login_history_repository.sp_record_login_history(user.id, method='oauth_google', success=True)`を呼ぶ 6. `data.redirect_to`（正規化済み）とともに結果を返す |
 | 副作用 | PostgreSQL：`login_history`INSERT。Redis：`refresh:{hash}`/`user_refresh:{uid}`新規作成（`JwtAuthStrategy.login`内）。Cookie：`cerberus_rt`/`cerberus_csrf`発行 |
 
-### 6.3 `repository/user_repository.py :: get_active_user`
+### 6.3 `repository/user_repository.py :: fn_get_user`
 
 | 項目 | 内容 |
 |------|------|
@@ -209,7 +209,7 @@ flowchart TB
 | 引数 | `user_id`：Redisの`oauth_handoff`に保存されていたUUID |
 | 戻り値 | `User`。該当なし・`is_active=false`の場合は`None` |
 | 送出例外 | なし |
-| 処理内容 | `SELECT * FROM users WHERE id = :user_id AND is_active = true` |
+| 処理内容 | `SELECT fn_get_user(:user_id)` を実行し、`is_active` は取得済みユーザーデータで判定する |
 | 副作用 | なし（読み取りのみ） |
 
 ### 6.4 `auth/jwt_auth.py :: JwtAuthStrategy.login`
@@ -223,7 +223,7 @@ flowchart TB
 | 処理内容 | 1. `family_id = uuid4()`を生成 2. アクセストークン（JWT、`sub=user.id`, `exp`, `jti`, `typ='access'`）を署名生成 3. リフレッシュトークン（`token_urlsafe(48)`）を生成 4. `redis_store.store_refresh_token(refresh_token, user.id, family_id, REFRESH_TTL_SECONDS)`を呼ぶ 5. CSRFトークン（`token_urlsafe(32)`）を生成 6. `response`に`cerberus_rt`（HttpOnly）・`cerberus_csrf`（非HttpOnly）をSet-Cookie |
 | 副作用 | Redis：`refresh:{hash}`/`user_refresh:{uid}`新規作成。Cookie：2件発行 |
 
-### 6.5 `repository/login_history_repository.py :: record`
+### 6.5 `repository/login_history_repository.py :: sp_record_login_history`
 
 | 項目 | 内容 |
 |------|------|
@@ -231,7 +231,7 @@ flowchart TB
 | 引数 | 表の通り |
 | 戻り値 | なし |
 | 送出例外 | なし（DB例外は共通ハンドラに委譲） |
-| 処理内容 | `INSERT INTO login_history (user_id, login_method, ip_address, success, created_at) VALUES (...)` |
+| 処理内容 | `CALL sp_record_login_history(:user_id, :login_method, :ip_address, :success)` |
 | 副作用 | PostgreSQL：`login_history`INSERT |
 
 ## 7. 関数相関図
@@ -241,9 +241,9 @@ flowchart LR
     R["auth_router.oauth_exchange"] --> D["deps.verify_origin"]
     R --> S["auth_service.oauth_exchange"]
     S --> RS1["redis_store.consume_oauth_handoff"]
-    S --> URP["user_repository.get_active_user"]
+    S --> URP["user_repository.fn_get_user"]
     S --> JWTS["JwtAuthStrategy.login"]
-    S --> LRP["login_history_repository.record"]
+    S --> LRP["login_history_repository.sp_record_login_history"]
     JWTS --> RS2["redis_store.store_refresh_token"]
     RS1 --> RD[("Redis")]
     RS2 --> RD
@@ -300,7 +300,7 @@ PostgreSQLの`users`/`oauth_accounts`は本APIでは更新しない（12番フ�
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 単体 | `oauth_exchange`：正常系 | モック`redis_store`/`user_repository`/`JwtAuthStrategy` | `LoginResult`相当の値が返り、`login_history_repository.record`が1回呼ばれる | `test_oauth_exchange_success_calls_login_and_records_history` |
+| 1 | 単体 | `oauth_exchange`：正常系 | モック`redis_store`/`user_repository`/`JwtAuthStrategy` | `LoginResult`相当の値が返り、`login_history_repository.sp_record_login_history`が1回呼ばれる | `test_oauth_exchange_success_calls_login_and_records_history` |
 | 2 | 単体 | `oauth_exchange`：handoff無効 | `consume_oauth_handoff`が`None`を返す | `OAuthHandoffInvalidError`送出 | `test_oauth_exchange_raises_on_invalid_handoff` |
 | 3 | 単体 | `oauth_exchange`：ユーザー無効化済み | `get_active_user`が`None`を返す | `UserInactiveError`送出 | `test_oauth_exchange_raises_on_inactive_user` |
 | 4 | 結合 | `AUTH_MODE=session`で呼び出し | - | 405 `NOT_SUPPORTED_IN_MODE` | `test_oauth_exchange_returns_405_in_session_mode` |
@@ -322,3 +322,13 @@ PostgreSQLの`users`/`oauth_accounts`は本APIでは更新しない（12番フ�
 | 確定 | `login_history` INSERTが失敗した場合は認証情報を返さず503とし、発行済みRedis状態を補償削除する。取得後のユーザー再検証と監査記録は同一処理の完了条件として扱う | 監査記録のないOAuthログインを成立させない |
 | 要検討 | フロントの二重送信（ボタン多重クリック等）に対する具体的な排他制御方針が基本設計・本ファイルいずれにも未定義 | 2回目呼び出しは仕様上400になるが、UX上のリトライ導線をフロント側でどう設計するかは要検討 |
 | なし | 上記以外の不明点はなし | - |
+
+## DBアクセス契約
+
+本APIのDBアクセスは、下記のFN/SP呼び出しをrepositoryの薄いラッパーから実行する。テーブルへの直接CRUD、認証業務の判定、履歴のINSERTはrepositoryに実装しない。healthの `SELECT 1` だけは本契約の対象外である。
+
+| 正式な呼び出し | 契約 |
+|----------------|------|
+| fn_get_user(p_user_id), sp_record_login_history(p_user_id, p_login_method, p_ip_address, p_success) | `detailed_design/database/08_db_functions.md` のシグネチャに従う |
+
+SQLSTATE P0xxxは同文書 §4 の対応表でAPIエラーへ変換し、Redis・メール・JWTの処理はAPI/service層に残す。

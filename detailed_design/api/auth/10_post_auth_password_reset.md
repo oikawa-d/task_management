@@ -107,7 +107,7 @@ sequenceDiagram
         RD-->>S: "user_id"
         S->>S: "password_hash = argon2.hash(new_password)"
         S->>UR: "update_password(user_id, password_hash)"
-        UR->>PG: "UPDATE users SET password_hash = :hash WHERE id = :user_id"
+        UR->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
         PG-->>UR: "更新後の行"
         UR-->>S: "User"
         S->>RD: "delete_all_sessions(user_id)"
@@ -129,7 +129,7 @@ flowchart TB
     C --> D{"値が存在したか?"}
     D -->|"No"| E2["400 INVALID_RESET_TOKEN"]
     D -->|"Yes（user_id取得）"| F["argon2でnew_passwordをハッシュ化"]
-    F --> G["UPDATE users SET password_hash"]
+    F --> G["CALL sp_update_user_password"]
     G --> H["delete_all_sessions(user_id)"]
     H --> I["revoke_all_refresh_tokens(user_id)"]
     I --> J["204 No Content"]
@@ -158,10 +158,10 @@ flowchart TB
 | 引数 | `token: str`（メールリンクのトークン）、`new_password: str`（バリデーション済み平文） |
 | 戻り値 | `None` |
 | 送出例外 | `InvalidResetTokenError`（HTTP 400） |
-| 処理内容 | 1. `redis_store.consume_password_reset_token(token)` を呼び user_id を取得 2. `None` の場合は `InvalidResetTokenError` を送出 3. `core/security.py` の `hash_password(new_password)` で argon2 ハッシュを生成 4. `user_repository.update_password(user_id, password_hash)` を呼ぶ 5. `redis_store.delete_all_sessions(user_id)` を呼ぶ 6. `redis_store.revoke_all_refresh_tokens(user_id)` を呼ぶ |
+| 処理内容 | 1. `redis_store.consume_password_reset_token(token)` を呼び user_id を取得 2. `None` の場合は `InvalidResetTokenError` を送出 3. `core/security.py` の `hash_password(new_password)` で argon2 ハッシュを生成 4. `user_repository.sp_update_user_password(user_id, password_hash)` を呼ぶ 5. `redis_store.delete_all_sessions(user_id)` を呼ぶ 6. `redis_store.revoke_all_refresh_tokens(user_id)` を呼ぶ |
 | 副作用 | Redis：`pwreset:{hash}` 削除、`session:*` / `csrf:*` / `user_sessions:{uid}` 全削除、`refresh:*` / `user_refresh:{uid}` 全削除。PostgreSQL：`users.password_hash` 更新 |
 
-### 6.3 `repository/user_repository.py :: update_password`
+### 6.3 `repository/user_repository.py :: sp_update_user_password`
 
 | 項目 | 内容 |
 |------|------|
@@ -169,7 +169,7 @@ flowchart TB
 | 引数 | `user_id: UUID`、`password_hash: str`（argon2ハッシュ済み） |
 | 戻り値 | 更新後の `User` |
 | 送出例外 | `NotFoundError`（対象ユーザーが存在しない場合。理論上はトークン発行時に存在確認済みのため発生しないが防御的に扱う） |
-| 処理内容 | 1. `UPDATE users SET password_hash = :hash WHERE id = :user_id RETURNING *` を実行 2. 行が取得できなければ `NotFoundError` |
+| 処理内容 | `CALL sp_update_user_password(:user_id, :password_hash)` を実行する。対象なしはAPI層で404へ変換する |
 | 副作用 | PostgreSQL：`users` テーブル1行の更新 |
 
 ### 6.4 `repository/redis_store.py :: consume_password_reset_token`
@@ -223,7 +223,7 @@ flowchart LR
     R["auth_router.password_reset"] --> S["auth_service.reset_password"]
     S --> RD1["redis_store.consume_password_reset_token"]
     S --> SEC["core/security.hash_password"]
-    S --> UR["user_repository.update_password"]
+    S --> UR["user_repository.sp_update_user_password"]
     S --> RD2["redis_store.delete_all_sessions"]
     S --> RD3["redis_store.revoke_all_refresh_tokens"]
     RD1 --> REDIS1[("Redis<br/>pwreset:*")]
@@ -296,3 +296,13 @@ stateDiagram-v2
 |------|------|------|
 | 要検討 | `AUTH_MODE` に関わらず `delete_all_sessions` と `revoke_all_refresh_tokens` の両方を常に呼ぶ設計としたが、基本設計書には「session/refresh」を包括して「全セッション/リフレッシュトークンを失効」と記載されるのみで、現在の `AUTH_MODE` 以外の方式のキーも含めて失効すべきかの明記がない。過去に `AUTH_MODE` を切り替えた運用がある場合に備え、両方を失効させる実装としたが、要件との整合を確認したい | 低（両方失効させても副作用はなく、安全側の実装であるため機能上の問題はない） |
 | 採用 | current一致を確認したトークンだけを原子的に消費するため、旧トークンは `400 INVALID_RESET_TOKEN` となる | 最新メールのみ有効 |
+
+## DBアクセス契約
+
+本APIのDBアクセスは、下記のFN/SP呼び出しをrepositoryの薄いラッパーから実行する。テーブルへの直接CRUD、認証業務の判定、履歴のINSERTはrepositoryに実装しない。healthの `SELECT 1` だけは本契約の対象外である。
+
+| 正式な呼び出し | 契約 |
+|----------------|------|
+| sp_update_user_password(p_user_id, p_password_hash) | `detailed_design/database/08_db_functions.md` のシグネチャに従う |
+
+SQLSTATE P0xxxは同文書 §4 の対応表でAPIエラーへ変換し、Redis・メール・JWTの処理はAPI/service層に残す。

@@ -114,7 +114,7 @@ sequenceDiagram
         R->>R: "pydanticでbody長を検証"
         R->>D: "get_comment_for_member(comment_id)"
         D->>TR: "get_comment_with_task(comment_id)"
-        TR->>PG: "SELECT task_comments JOIN tasks ON task_id"
+        TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         alt "コメント不存在"
             D-->>R: "NotFoundError"
             R-->>FE: "404 NOT_FOUND"
@@ -130,8 +130,8 @@ sequenceDiagram
                 S-->>R: "ForbiddenError"
                 R-->>FE: "403 FORBIDDEN"
             else "権限あり"
-                S->>TR: "update_comment_body(comment_id, body)"
-                TR->>PG: "UPDATE task_comments SET body=..., updated_at=now()"
+                S->>TR: "sp_update_task_comment(comment_id, body)"
+                TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
                 PG-->>TR: "更新後の行"
                 TR-->>S: "Comment"
                 S-->>R: "CommentResponse"
@@ -182,7 +182,7 @@ flowchart TB
 | 引数 | `comment_id`：パスパラメータ／`user`：現在ユーザー／`db`：DBセッション |
 | 戻り値 | `task.project_id` を判定済みの `Comment`（投稿者本人/admin判定はまだ行わない） |
 | 送出例外 | `NotFoundError`（コメント不存在・プロジェクト非所属いずれも404） |
-| 処理内容 | 1. `task_repository.get_comment_with_task(comment_id)` でコメント＋所属タスクを取得 2. 存在しなければ `NotFoundError` 3. `user.role == 'admin'` なら通過 4. それ以外は `project_repository.is_member(comment.task.project_id, user.id)` を確認し、Falseなら `NotFoundError` |
+| 処理内容 | 1. `task_repository.fn_get_comment_with_task(comment_id)` でコメント＋所属タスクを取得 2. 存在しなければ `NotFoundError` 3. `user.role == 'admin'` なら通過 4. それ以外は `project_repository.fn_is_project_member(comment.task.project_id, user.id)` を確認し、Falseなら `NotFoundError` |
 | 副作用 | なし |
 
 ### 6.3 `service/task_service.py :: update_comment`
@@ -193,10 +193,10 @@ flowchart TB
 | 引数 | `comment`：所属確認済みコメント／`payload`：更新内容／`user`：操作者／`db`：DBセッション |
 | 戻り値 | 更新後の `Comment` |
 | 送出例外 | `ForbiddenError`（投稿者本人でもadminでもない場合、403） |
-| 処理内容 | 1. `user.id == comment.user_id or user.role == 'admin'` を判定し、Falseなら `ForbiddenError` 2. `task_repository.update_comment_body(comment.id, payload.body, db)` を呼ぶ 3. 結果に `author` をセットして返す |
+| 処理内容 | 1. `user.id == comment.user_id or user.role == 'admin'` を判定し、Falseなら `ForbiddenError` 2. `sp_update_task_comment(comment.id, payload.body, db)` を呼ぶ 3. 結果に `author` をセットして返す |
 | 副作用 | `task_comments` の1行UPDATE |
 
-### 6.4 `repository/task_repository.py :: get_comment_with_task`
+### 6.4 `repository/task_repository.py :: fn_get_comment_with_task`
 
 | 項目 | 内容 |
 |------|------|
@@ -204,14 +204,14 @@ flowchart TB
 | 引数 | `comment_id`：対象コメントID／`db`：DBセッション |
 | 戻り値 | `task`（`project_id` を含む）と `author` をロード済みの `Comment`、存在しなければ `None` |
 | 送出例外 | なし |
-| 処理内容 | 1. `task_comments`を主クエリで1回取得 2. `selectinload(Comment.task)` と `selectinload(Comment.author)` の追加SELECTを各1回実行（最大3クエリ） |
+| 処理内容 | 1. `task_comments`を主クエリで1回取得 2. `FN結果の一括マッピング(Comment.task)` と `FN結果の一括マッピング(Comment.author)` の追加SELECTを各1回実行（最大3クエリ） |
 | 副作用 | なし |
 
-### 6.5 `repository/task_repository.py :: update_comment_body`
+### 6.5 `repository/task_repository.py :: sp_update_task_comment`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def update_comment_body(comment_id: UUID, body: str, db: AsyncSession) -> Comment` |
+| シグネチャ | `async def sp_update_task_comment(comment_id: UUID, body: str, db: AsyncSession) -> Comment` |
 | 引数 | `comment_id` / `body`：更新後の本文／`db`：DBセッション |
 | 戻り値 | 更新後の `Comment` |
 | 送出例外 | なし（呼び出し時点で存在確認済み） |
@@ -225,9 +225,9 @@ flowchart LR
     R["comments_router.update_comment"] --> Sch["schemas.CommentUpdateRequest"]
     R --> D["deps.get_comment_for_member"]
     R --> S["task_service.update_comment"]
-    D --> TR1["task_repository.get_comment_with_task"]
-    D --> PR["project_repository.is_member"]
-    S --> TR2["task_repository.update_comment_body"]
+    D --> TR1["task_repository.fn_get_comment_with_task"]
+    D --> PR["project_repository.fn_is_project_member"]
+    S --> TR2["sp_update_task_comment"]
     TR1 --> M["models.Comment"]
     TR2 --> M
     R --> V["deps.verify_origin / verify_csrf"]
@@ -247,13 +247,23 @@ stateDiagram-v2
     更新 --> [*]: "body更新, updated_at=now()"
 ```
 
-## 9. データアクセス一覧
+## 9. SP/FNデータアクセス一覧
+
+### 9.1 正式なDBアクセス契約
+
+本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+
+| 種別 | 契約 | 説明 |
+|------|------|------|
+| update_task_comment | `sp_update_task_comment(p_comment_id, p_user_id, p_body)` | sp_update_task_commentを呼び出し、結果をレスポンスへ写像する |
+
+repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
 **PostgreSQL**
 
 | テーブル | 操作 | 条件・TTL | 備考 |
 |----------|------|-----------|------|
-| task_comments | SELECT | `id = :comment_id` | 存在確認・project_id特定。`tasks`取得は`selectinload`の追加SELECT |
+| task_comments | SELECT | `id = :comment_id` | 存在確認・project_id特定。`tasks`取得は`FN結果の一括マッピング`の追加SELECT |
 | project_members | SELECT | `project_id = :pid AND user_id = :uid` | admin以外の所属確認 |
 | task_comments | UPDATE | `id = :comment_id` | `body` を更新、`updated_at` はトリガで自動更新 |
 

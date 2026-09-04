@@ -108,11 +108,11 @@ sequenceDiagram
     R->>D: 認証 + admin確認
     D-->>R: CurrentUser(role=admin)
     R->>S: list_users(query, page, per_page)
-    S->>RP: count_by_filter(q, role, is_active)
-    RP->>PG: "SELECT COUNT(*) FROM users WHERE ..."
+    S->>RP: fn_admin_list_users(q, role, is_active)
+    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>RP: total
-    S->>RP: list_by_filter(q, role, is_active, page, per_page)
-    RP->>PG: "SELECT * FROM users WHERE ... ORDER BY created_at DESC LIMIT/OFFSET"
+    S->>RP: fn_admin_list_users(q, role, is_active, page, per_page)
+    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>RP: user行の一覧（単一クエリ、追加のJOINなし）
     RP-->>S: User一覧
     S->>S: display_name を算出しUserSummaryへ変換
@@ -136,8 +136,8 @@ flowchart TB
     C -->|"is_active=false"| C2["403 USER_INACTIVE"]
     C -->|"OK"| E["deps.require_admin"]
     E -->|"role != admin"| E1["403 FORBIDDEN"]
-    E -->|"OK"| F["user_repository.count_by_filter"]
-    F --> G["user_repository.list_by_filter"]
+    E -->|"OK"| F["user_repository.fn_admin_list_users"]
+    F --> G["user_repository.fn_admin_list_users"]
     G --> H["display_name算出・UserSummaryへ変換"]
     H --> I["200 {items, meta}"]
     F -.->|"DB接続不能"| J["503 SERVICE_UNAVAILABLE"]
@@ -164,29 +164,29 @@ flowchart TB
 | 引数 | `query`: 検索・ページング条件 / `db`: DBセッション |
 | 戻り値 | `Page[UserSummary]`（`items: list[UserSummary]`, `total: int`） |
 | 送出例外 | `ServiceUnavailableError`（PostgreSQL接続不能時）→503 |
-| 処理内容 | 1. `user_repository.count_by_filter` で総件数取得 2. `user_repository.list_by_filter` で該当ページの行を取得 3. 各行の `display_name` を `last_name`/`first_name` から算出し（両方NULLなら `username`）、`UserSummary` へ詰め替える |
+| 処理内容 | 1. `user_repository.fn_admin_list_users` で総件数取得 2. `user_repository.fn_admin_list_users` で該当ページの行を取得 3. 各行の `display_name` を `last_name`/`first_name` から算出し（両方NULLなら `username`）、`UserSummary` へ詰め替える |
 | 副作用 | なし（読み取りのみ） |
 
-### 6.3 `repository/user_repository.py :: list_by_filter`
+### 6.3 `repository/user_repository.py :: fn_admin_list_users`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def list_by_filter(db: AsyncSession, q: str \| None, role: str \| None, is_active: bool \| None, page: int, per_page: int) -> list[User]` |
+| シグネチャ | `async def fn_admin_list_users(db: AsyncSession, q: str \| None, role: str \| None, is_active: bool \| None, page: int, per_page: int) -> list[User]` |
 | 引数 | `q`: username/email部分一致 / `role`, `is_active`: 絞り込み条件 / `page`, `per_page`: ページング |
 | 戻り値 | `User` エンティティのリスト |
 | 送出例外 | `OperationalError`（DB不通） |
 | 処理内容 | 1. `q` が指定されていれば `lower(username) LIKE lower(:q)\|\|'%'` または `lower(email) LIKE lower(:q)\|\|'%'`（前方一致、`uq_users_username`/`uq_users_email` の式インデックスを活用可能な範囲に限定） 2. `role`/`is_active` はそれぞれ等価条件として `AND` 追加 3. `ORDER BY created_at DESC` 4. `OFFSET (page-1)*per_page LIMIT per_page` 5. `oauth_accounts`/`login_history` へのJOINは行わずN+1を発生させない（一覧に表示しないため） |
 | 副作用 | なし |
 
-### 6.4 `repository/user_repository.py :: count_by_filter`
+### 6.4 `repository/user_repository.py :: fn_admin_list_users`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def count_by_filter(db: AsyncSession, q: str \| None, role: str \| None, is_active: bool \| None) -> int` |
-| 引数 | `list_by_filter` と同じ絞り込み条件（ページング除く） |
+| シグネチャ | `async def fn_admin_list_users(db: AsyncSession, q: str \| None, role: str \| None, is_active: bool \| None) -> int` |
+| 引数 | `fn_admin_list_users` と同じ絞り込み条件（ページング除く） |
 | 戻り値 | 該当件数 |
 | 送出例外 | `OperationalError` |
-| 処理内容 | 1. `list_by_filter` と同一の `WHERE` 句で `SELECT COUNT(*)` を実行 2. ページングとは独立した1クエリで完結させる |
+| 処理内容 | `SELECT fn_admin_list_users(:query, :role, :is_active, :limit, :offset)` を実行し、FN結果の件数をmetaへ写像する。絞り込みとページングはFN内部 |
 | 副作用 | なし |
 
 ## 7. 関数相関図
@@ -194,8 +194,8 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["admin_router.list_admin_users"] --> S["admin_user_service.list_users"]
-    S --> RP1["user_repository.count_by_filter"]
-    S --> RP2["user_repository.list_by_filter"]
+    S --> RP1["user_repository.fn_admin_list_users"]
+    S --> RP2["user_repository.fn_admin_list_users"]
     RP1 --> M["models.User"]
     RP2 --> M
 ```
@@ -209,17 +209,26 @@ flowchart LR
     subgraph PG["PostgreSQL（参照範囲）"]
         T1["users"]
     end
-    S["admin_user_service.list_users"] -->|"SELECT / COUNT"| T1
+    S["admin_user_service.list_users"] -->|"SELECT fn_admin_list_users"| T1
 ```
 
-## 9. データアクセス一覧
+## 9. SP/FNデータアクセス一覧
+
+### 9.1 正式なDBアクセス契約
+
+本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+
+| 種別 | 契約 | 説明 |
+|------|------|------|
+| fn_admin_list_users | `fn_admin_list_users(p_query, p_role, p_is_active, p_limit, p_offset)` | fn_admin_list_usersを呼び出し、結果をレスポンスへ写像する |
+
+repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
 **PostgreSQL**
 
 | テーブル | 操作 | 条件 | 備考 |
 |----------|------|------|------|
-| users | SELECT | `q`/`role`/`is_active` の任意組み合わせ | `ORDER BY created_at DESC LIMIT/OFFSET`。`ix_users_created_at`・`ix_users_role` を利用 |
-| users | SELECT COUNT | 同上 | `meta.total` 算出用。件数取得のみでJOINなし |
+| `fn_admin_list_users` | FN | `query`/`role`/`is_active`/page | 絞り込み・並び順・件数をFN内部で処理 |
 
 **Redis**
 
@@ -253,13 +262,13 @@ flowchart LR
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
 | 1 | 単体 | 一般ユーザーはアクセス不可 | `role=member` のCurrentUser | `403 FORBIDDEN`、リポジトリ未呼び出し | `test_list_admin_users_forbidden_for_member` |
-| 2 | 単体 | q指定時にusername/emailの両方に対しLIKE条件が組み立てられる | repositoryをモック | 発行されたSQL条件にusername/emailの両方が含まれる | `test_list_admin_users_query_builds_username_email_like` |
+| 2 | 結合（実DB・実SP） | q指定時にusername/emailの両方に対しLIKE条件が組み立てられる | 実DB・実SPで検証 | 発行されたSQL条件にusername/emailの両方が含まれる | `test_list_admin_users_query_builds_username_email_like` |
 | 3 | 単体 | display_nameのフォールバック | 氏名未設定ユーザーを含む一覧 | `display_name` が `username` になる | `test_list_admin_users_display_name_fallback` |
 | 4 | 結合 | 検索条件なしで全件が返る | ユーザー25件を作成 | 1ページ目20件、`total=25`、`total_pages=2` | `test_list_admin_users_pagination` |
 | 5 | 結合 | q部分一致検索が機能する | `username=taro123` を含む複数ユーザー | `taro` で検索した結果に該当ユーザーのみ含まれる | `test_list_admin_users_search_by_username` |
 | 6 | 結合 | role/is_active絞り込みが機能する | `role=admin` と `is_active=false` のユーザーを作成 | それぞれの条件で該当ユーザーのみ返る | `test_list_admin_users_filter_by_role_and_is_active` |
 | 7 | 結合 | 未認証は401 | Cookie/Bearerなし | `401 UNAUTHENTICATED` | `test_list_admin_users_unauthenticated` |
-| 8 | 結合 | N+1が発生しないことの確認 | ユーザー20件、SQLAlchemyのクエリカウンタで検証 | 発行クエリ数がCOUNT+一覧取得の定数2件 | `test_list_admin_users_query_count_constant` |
+| 8 | 結合 | N+1が発生しないことの確認 | ユーザー20件、SQLAlchemyの実DBの呼び出し回数を検証 | 発行クエリ数がCOUNT+一覧取得の定数2件 | `test_list_admin_users_query_count_constant` |
 
 `AUTH_MODE=session` / `jwt` の両方で No.7（401判定経路の違い：`SESSION_EXPIRED` と `TOKEN_EXPIRED`）をパラメータ化して実施する。
 

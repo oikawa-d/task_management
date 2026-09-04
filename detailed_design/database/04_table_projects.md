@@ -174,9 +174,23 @@ flowchart LR
 
 削除時は `UPDATE projects SET is_active=false` のみを発行する論理削除であり、`projects` 行そのものは物理削除されない。そのため `project_members` / `tasks`（さらに `task_comments`）への `ON DELETE CASCADE` は、通常運用では発火しない。本設計にユーザー物理削除APIが存在しない場合と同様、DB制約としては維持しつつ「実運用では到達しない防御的制約」という位置づけに変わる（§11参照）。無効化されたプロジェクトの `tasks` は削除されず、タスク自体は有効なまま一覧・カンバンに残り続ける（`tasks.project_is_active` 相当の情報でフロントにバッジ表示する。[`06_table_tasks.md`](./06_table_tasks.md) §1・§8.10参照）。
 
-## 8. リポジトリ関数詳細
+## 8. SP/FNリポジトリ契約
 
-### 8.1 `repository/project_repository.py :: create`
+repositoryは下表の呼び出しと戻り値のDTO写像だけを行う。テーブルへ直接SQLを発行せず、下記SP/FN内部で整合性制御・条件分岐を行う。更新SPは値を返さないため、必要なレスポンスはコミット後に対応するFNで再取得する。
+
+| repository契約 | DB呼び出し | 戻り値・エラー |
+|----------------|------------|----------------|
+| `create` | `CALL sp_create_project(:owner_id, :name, :description, :start_at, :end_at)` | `fn_get_project(:project_id)`。owner membershipも同一SPで作成 |
+| `get_by_id` | `SELECT fn_get_project(:project_id)` | 空集合は404へ変換 |
+| `list_for_user` | `SELECT fn_list_projects(:user_id, :include_inactive, :limit, :offset)` | FN結果をページDTOへ写像 |
+| `update` | `CALL sp_update_project(:project_id, :name, :description, :start_at, :end_at)` | `P0009 INVALID_STATE`等をAppErrorへ伝播 |
+| `delete` | `CALL sp_deactivate_project(:project_id, false)` | project_members/tasksは変更しない |
+
+### 8.1 SQL実装参考（SP/FN内部）
+
+以下の既存小節に記載するSQLはSP/FN本体の実装参考であり、repositoryから直接発行しない。実装時の正は[08_db_functions.md](./08_db_functions.md) §2のシグネチャである。
+
+### 8.2 `repository/project_repository.py :: create`
 
 | 項目 | 内容 |
 |------|------|
@@ -187,7 +201,7 @@ flowchart LR
 | 送出例外 | なし（FK違反は呼び出し元 `owner_id` が現在ユーザーのため通常発生しない） |
 | 処理内容 | 1. `Project` エンティティを構築<br/>2. `session.add()` して `flush()`<br/>3. サービス層が同一トランザクションで `project_member_repository.create()` を呼び、オーナーをメンバー登録する |
 
-### 8.2 `repository/project_repository.py :: get_by_id`
+### 8.3 `repository/project_repository.py :: get_by_id`
 
 | 項目 | 内容 |
 |------|------|
@@ -198,7 +212,7 @@ flowchart LR
 | 送出例外 | なし（`None` を返し、サービス層で `NotFoundError` に変換） |
 | 処理内容 | 1. PKで単一行取得<br/>2. 呼び出し元（`deps.require_project_member` 等）が所属確認に利用 |
 
-### 8.3 `repository/project_repository.py :: list_for_user`
+### 8.4 `repository/project_repository.py :: list_for_user`
 
 | 項目 | 内容 |
 |------|------|
@@ -209,7 +223,7 @@ flowchart LR
 | 送出例外 | なし |
 | 処理内容 | 1. `is_admin` により全件/所属分岐<br/>2. 件数取得は `COUNT(*)` を同条件で別途発行<br/>3. `per_page` は環境変数 `PAGINATION_DEFAULT_PER_PAGE`（既定20）/ `PAGINATION_MAX_PER_PAGE`（上限100）で検証し、上限超過は `422 VALIDATION_ERROR` とする |
 
-### 8.4 `repository/project_repository.py :: update`
+### 8.5 `repository/project_repository.py :: update`
 
 | 項目 | 内容 |
 |------|------|
@@ -220,7 +234,7 @@ flowchart LR
 | 送出例外 | `ConstraintViolationError`（`ck_projects_period` 違反時。アプリ層でも事前バリデーションする） |
 | 処理内容 | 1. ORMエンティティの属性を更新し `flush()`（`trg_set_updated_at` が `updated_at` を更新）<br/>2. `description`/`start_at`/`end_at` を明示的に `null` にするケースは pydantic の `exclude_unset` で区別する<br/>3. `is_active=true` を指定する呼び出しが再有効化（reactivate）に相当し、認可はルータ側 `deps.require_project_owner_or_admin` で事前判定する |
 
-### 8.5 `repository/project_repository.py :: delete`（論理削除）
+### 8.6 `repository/project_repository.py :: delete`（論理削除）
 
 | 項目 | 内容 |
 |------|------|

@@ -15,7 +15,7 @@
 | 項目 | 内容 |
 |------|------|
 | エンドポイント | `DELETE /api/projects/{project_id}` |
-| 目的 | プロジェクトを**論理削除**する（`UPDATE projects SET is_active = false`）。物理削除（`DELETE FROM projects`）は行わない |
+| 目的 | プロジェクトを**論理削除**する（`CALL sp_deactivate_project`）。物理削除は行わない |
 | 認証 | 必要 |
 | 認可 | オーナー／admin（所属memberであっても非オーナーは不可） |
 | CSRF検証 | 必要（session モードの更新系） |
@@ -23,9 +23,9 @@
 | AUTH_MODE差異 | session: `X-CSRF-Token` 検証あり／jwt: ヘッダ方式のためCSRF検証なし |
 | 冪等性 | あり（既に`is_active=false`の対象への再実行も`UPDATE`が0件更新になるだけで200/204として扱い、副作用なく完了する。プロジェクト自体が存在しない場合のみ404） |
 | レート制限 | 対象外 |
-| トランザクション境界 | `UPDATE projects SET is_active = false WHERE id=:project_id` 一文。`project_members` / `tasks` / `task_comments` は**変更しない**（配下タスクは無効化されず有効なまま残る） |
+| トランザクション境界 | `CALL sp_deactivate_project(:project_id, false)` 1回。`project_members` / `tasks` / `task_comments` は変更しない |
 
-**本APIの意味変更（issue #10）**：従来は物理削除（`DELETE FROM projects`、CASCADEで配下も削除）としていたが、`projects.is_active` 論理削除フラグの導入に伴い、本APIは論理削除（`is_active=false`への更新）に意味を変更する。物理DELETEを実行する経路はアプリケーションAPIとしては提供しない（DBの`ON DELETE CASCADE`はusersの物理削除APIが存在しない場合と同様、通常運用では発火しない防御的制約という位置づけになる）。
+**本APIの意味変更（issue #10）**：従来の物理削除仕様を、`projects.is_active` による論理削除へ変更した。物理削除を実行する経路はアプリケーションAPIとして提供しない。
 
 ## 2. 入出力仕様
 
@@ -76,8 +76,8 @@ sequenceDiagram
     R->>D: 認証 + 所属チェック + オーナー判定（04_patch_project.mdと同一処理）
     D-->>R: Project（NotFoundError/ForbiddenErrorは404/403として応答）
     R->>S: deactivate_project(project)
-    S->>RP: deactivate(project.id)
-    RP->>PG: "UPDATE projects SET is_active = false WHERE id = :project_id RETURNING *"
+    S->>RP: sp_deactivate_project.id)
+    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>RP: 更新後の行（トリガでupdated_at更新。project_members/tasks/task_commentsは無変更）
     RP-->>S: OK
     S-->>R: None
@@ -104,7 +104,7 @@ flowchart TB
     G -->|"所属"| I{"owner_id == user.id?"}
     I -->|"No"| I1["403 FORBIDDEN"]
     I -->|"Yes"| H
-    H["UPDATE projects SET is_active=false<br/>（project_members/tasks/task_commentsは無変更）"] --> J["204 No Content"]
+    H["CALL sp_deactivate_project<br/>（project_members/tasks/task_commentsは無変更）"] --> J["204 No Content"]
 ```
 
 ## 6. 関数詳細
@@ -128,10 +128,10 @@ flowchart TB
 | 引数 | `project`: 論理削除対象（`require_project_owner` 済み） |
 | 戻り値 | なし |
 | 送出例外 | `ServiceUnavailableError`（DB接続不能）→503 |
-| 処理内容 | 1. `project_repository.deactivate(db, project.id)` を呼び出す 2. `commit` する |
-| 副作用 | `projects.is_active` を `false` に更新するUPDATEのみ。`project_members` / `tasks` / `task_comments` へは一切のDML（DELETE/UPDATE）を発行しない（配下タスクは有効なまま維持される） |
+| 処理内容 | 1. `sp_deactivate_project(db, project.id)` を呼び出す 2. `commit` する |
+| 副作用 | `sp_deactivate_project` による `projects.is_active` 更新のみ。`project_members` / `tasks` / `task_comments` は変更しない（配下タスクは有効なまま維持される） |
 
-### 6.3 `repository/project_repository.py :: deactivate`
+### 6.3 `repository/project_repository.py :: sp_deactivate_project`
 
 | 項目 | 内容 |
 |------|------|
@@ -139,7 +139,7 @@ flowchart TB
 | 引数 | `project_id`: 論理削除対象 |
 | 戻り値 | なし |
 | 送出例外 | `OperationalError` |
-| 処理内容 | `UPDATE projects SET is_active = false WHERE id = :project_id` を実行する（`updated_at` はトリガが自動更新）。既に `is_active=false` の行に対しても同一SQLを冪等に実行できる（0件更新または1件更新のいずれでもエラーにしない）。存在確認は呼び出し前の `require_project_owner` で完了しているため再チェックしない |
+| 処理内容 | `CALL sp_deactivate_project(:project_id, false)` を実行する。SP内で `is_active=false` とトリガ更新を行い、既に無効でも冪等に完了する |
 | 副作用 | `projects` のUPDATE（物理DELETEは行わない） |
 
 ## 7. 関数相関図
@@ -147,10 +147,10 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["projects_router.delete_project"] --> D["deps.require_project_owner"]
-    D --> RP1["project_repository.get_by_id"]
-    D --> RP2["project_member_repository.exists"]
+    D --> RP1["project_repository.fn_get_project"]
+    D --> RP2["project_repository.fn_is_project_member"]
     R --> S["project_service.deactivate_project"]
-    S --> RP3["project_repository.deactivate"]
+    S --> RP3["sp_deactivate_project"]
     RP3 --> M1["models.Project"]
     M1 -.->|"変更なし（is_activeのみ更新）"| M2["models.ProjectMember"]
     M1 -.->|"変更なし（配下タスクは有効のまま）"| M3["models.Task"]
@@ -162,7 +162,7 @@ flowchart LR
 ```mermaid
 stateDiagram-v2
     [*] --> Active: "projects.is_active = true"
-    Active --> Inactive: "DELETE /api/projects/{project_id}\nUPDATE projects SET is_active=false"
+    Active --> Inactive: "DELETE /api/projects/{project_id}\nCALL sp_deactivate_project"
     Inactive --> Active: "PATCH /api/projects/{project_id} {is_active:true}\n（04_patch_project.md参照）再有効化"
     Inactive --> [*]
     Active --> [*]
@@ -175,15 +175,25 @@ stateDiagram-v2
     end note
 ```
 
-## 9. データアクセス一覧
+## 9. SP/FNデータアクセス一覧
+
+### 9.1 正式なDBアクセス契約
+
+本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+
+| 種別 | 契約 | 説明 |
+|------|------|------|
+| deactivate_project | `sp_deactivate_project(p_project_id, p_is_active=false)` | sp_deactivate_projectを呼び出し、結果をレスポンスへ写像する |
+
+repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
 **PostgreSQL**
 
 | テーブル | 操作 | 条件 | 備考 |
 |----------|------|------|------|
-| projects | SELECT | `id=:project_id` | `require_project_owner` による存在・所属確認 |
-| project_members | SELECT (EXISTS) | `project_id=:pid AND user_id=:uid` | admin以外の所属確認 |
-| projects | UPDATE | `id=:project_id` | `is_active = false` に更新するのみ。`updated_at` はトリガ更新 |
+| `fn_get_project` | FN | `p_project_id=:project_id` | `require_project_owner` 用の存在・所有者事実 |
+| `fn_is_project_member` | FN | `p_project_id=:pid` / `p_user_id=:uid` | admin以外の所属事実 |
+| `sp_deactivate_project` | SP | `p_project_id=:project_id` | `is_active=false` 更新のみ。`updated_at` はトリガ更新 |
 
 変更範囲外（本APIでは一切のDML操作を行わない）：`project_members`（所属関係は維持）、`tasks`（`is_active`はそのまま、`project_id`もそのまま。物理削除ではなくなったため`ON DELETE CASCADE`は発火しない）、`task_comments`（同上）。`projects.owner_id`に対する`users`側のFK（`ON DELETE RESTRICT`）は本APIと無関係。
 
@@ -214,7 +224,7 @@ stateDiagram-v2
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 単体 | serviceがrepository.deactivateを1回呼び出す | repositoryをモック | `deactivate(project.id)` 呼び出しを検証 | `test_deactivate_project_calls_repository` |
+| 1 | 結合（実DB・実SP） | serviceがrepository.deactivateを1回呼び出す | 実DB・実SPで検証 | `sp_deactivate_project.id)` 呼び出しを検証 | `test_deactivate_project_calls_repository` |
 | 2 | 結合 | オーナーが204で無効化できる | 実PostgreSQLにタスク・コメントを含むプロジェクトを用意 | `204`、`projects.is_active=false`に更新、`project_members`/`tasks`/`task_comments`は行数・内容とも変化なし | `test_delete_project_deactivates_without_deleting_related_rows` |
 | 3 | 結合 | 無効化後も配下タスクは有効なまま一覧に表示される | 無効化したプロジェクトの配下タスクをタスク一覧APIで取得 | タスクの`is_active=true`が維持され、`project_is_active=false`が返る | `test_delete_project_tasks_remain_active_with_project_is_active_false` |
 | 4 | 結合 | 所属memberだが非オーナーは403 | 一般メンバーでDELETE | `403 FORBIDDEN`、`is_active`は変化しない | `test_delete_project_forbidden_as_non_owner_member` |
