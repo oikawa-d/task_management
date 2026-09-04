@@ -58,7 +58,7 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| 役割 | 定期実行ジョブの常駐スケジューラ。要件書§3.4 N-1（毎日10時・17時の期限通知） |
+| 役割 | 定期実行ジョブの常駐スケジューラ。現在は要件書§3.4 N-1（毎日10時・17時の期限通知）を実行し、将来のメール通知等の定期ジョブ追加にも使用する |
 | スケジューラ | APScheduler（`AsyncIOScheduler` + `CronTrigger`）。タイムゾーンは `APP_TIMEZONE` |
 | ジョブ | `due_notification_job_10` と `due_notification_job_17` の2つを登録し、`NOTIFY_DUE_RUN_HOURS` と `NOTIFY_DUE_CRON_MINUTE` に従って実行する。ジョブ末尾で `sp_purge_notifications` を呼び保持期間超過分を削除する |
 | 二重実行防止 | Redis の `lock:notify_due:{YYYY-MM-DD}:{slot}`（`SET NX EX`）。詳細は [02_redis.md §4.4](./02_redis.md#44-期限通知バッチの実行ロック) |

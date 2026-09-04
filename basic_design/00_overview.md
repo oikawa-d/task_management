@@ -13,7 +13,7 @@
 | セッションストア | Redis 8（永続化なし） |
 | ORM / マイグレーション | SQLAlchemy 2.x + Alembic |
 | 認証方式 | session（Cookie + Redis） / JWT（Access + Refresh） / Google OAuth2 |
-| 定期実行 | `batch` コンテナ（常駐スケジューラ。毎日10時・17時のタスク期限通知） |
+| 定期実行 | `batch` コンテナ（常駐スケジューラ。現在は毎日10時・17時のタスク期限通知。将来の定期ジョブ追加基盤） |
 | 基準タイムゾーン | `APP_TIMEZONE`（既定 `Asia/Tokyo`）。DBはUTC保存、日次境界・「10時・17時」の判定はこのTZで行う |
 | CI/CD | GitHub Actions（CI: Lint・型チェック・テスト、CD: GHCR + self-hosted runner） |
 
