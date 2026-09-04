@@ -5,13 +5,13 @@
 - `../../basic_design/01_database.md`（正。本書はこれを詳細化したものであり、内容が矛盾する場合は基本設計側が正）
 - `../../basic_design/00_overview.md`
 - `../../requirements/task_management_requirements.md`
-- `./01_table_users.md` / `./02_table_oauth_accounts.md` / `./03_table_login_history.md`（本書の方針に従うテーブル詳細）
+- `./01_table_users.md` / `./02_table_oauth_accounts.md` / `./03_table_login_history.md` / `./11_table_api_history.md` / `./12_table_batch_history.md`（本書の方針に従うテーブル詳細）
 
 ## 1. 本書の位置づけ
 
 `basic_design/01_database.md` の設計方針・命名規約・型方針・共通カラム・列挙表現・削除方針・ER図を、実装（DDL・SQLAlchemyモデル・マイグレーション）に落とし込めるレベルまで詳細化する。テーブル個別の定義（カラム定義・DDL・インデックス・リポジトリ関数）は `01_table_*.md` 以降で扱い、本書では全テーブルに共通する方針のみを扱う。
 
-`users` / `oauth_accounts` / `login_history` の3テーブルの詳細は本書とあわせて `01_table_users.md` 〜 `03_table_login_history.md` を参照。`projects` 以降のテーブルおよび DB関数・マイグレーション運用は別担当ファイル（`04_table_projects.md` 〜 `10_table_notifications.md`、`file_index.md` 参照）で扱うため本書では扱わない。
+`users` / `oauth_accounts` / `login_history` / `api_history` / `batch_history` の詳細は本書とあわせて各テーブル設計書を参照する。`projects` 以降のテーブルおよび DB関数・マイグレーション運用は別担当ファイル（`04_table_projects.md` 〜 `12_table_batch_history.md`）で扱うため本書では個別定義を繰り返さない。
 
 ## 2. 基本方針（`basic_design/01_database.md` §1 の再掲・詳細化）
 
@@ -66,9 +66,9 @@
 
 | パターン | 対象カラム | 適用テーブル |
 |----------|-----------|--------------|
-| 主キー | `id UUID PK DEFAULT gen_random_uuid()` | `users` / `oauth_accounts` / `projects` / `tasks` / `task_comments` / `login_history`（`project_members` のみ複合PKで対象外） |
-| 作成日時 | `created_at TIMESTAMPTZ NOT NULL DEFAULT now()` | 全テーブル |
-| 更新日時 | `updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`（トリガで自動更新） | `users` / `projects` / `tasks` / `task_comments`（更新契機を持つテーブルのみ。`oauth_accounts` / `login_history` / `project_members` は追記のみで更新されないため `updated_at` を持たない） |
+| 主キー | `id UUID PK DEFAULT gen_random_uuid()` | `users` / `oauth_accounts` / `projects` / `tasks` / `task_comments` / `login_history` / `api_history` / `batch_history`（`project_members` のみ複合PKで対象外） |
+| 作成日時 | `created_at TIMESTAMPTZ NOT NULL DEFAULT now()` | 通常の永続テーブルと`api_history`。`batch_history`は起動時刻を`started_at`として保持 |
+| 更新日時 | `updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`（トリガで自動更新） | `users` / `projects` / `tasks` / `task_comments` / `batch_history`（状態更新を持つテーブル）。`oauth_accounts` / `login_history` / `api_history` / `project_members`は追記専用 |
 
 `updated_at` の自動更新は `db/functions/trg_set_updated_at.sql`（トリガ関数）を対象テーブルの `BEFORE UPDATE` に適用する（詳細は `04_table_projects.md` 以降および `08_db_functions.md` を参照。`users` テーブルへの適用は `01_table_users.md` §3・§4 に記載）。
 
@@ -89,6 +89,9 @@
 | `oauth_accounts` | `provider` | `google` | `ck_oauth_accounts_provider` |
 | `tasks` | `status` | `todo` / `in_progress` / `done` | `ck_tasks_status` |
 | `login_history` | `login_method` | `session` / `jwt` / `oauth_google` | `ck_login_history_login_method` |
+| `api_history` | `status` | `success` / `error` | `ck_api_history_status` |
+| `batch_history` | `trigger_type` | `scheduled` / `manual` | `ck_batch_history_trigger_type` |
+| `batch_history` | `status` | `inprogress` / `complete` / `error` | `ck_batch_history_status` |
 
 CHECK制約の記述形式：`CHECK (<column> IN ('value1', 'value2', ...))`。値の追加はAlembicのマイグレーションで `CHECK` 制約を `DROP` → `ADD` し直す（値の削除を伴わない追加であれば新しいリビジョンで制約定義を更新する）。
 
@@ -99,7 +102,7 @@ CHECK制約の記述形式：`CHECK (<column> IN ('value1', 'value2', ...))`。�
 - 全テーブルで論理削除フラグ（`deleted_at` 等）は持たない。削除はSQLの `DELETE` による物理削除を基本とする。
 - 例外は `users` のみで、`is_active`（管理者による無効化）を用いて「利用停止」を表現する。`users` に対する削除API自体は基本設計で提供されない（`01_table_users.md` §7 参照）。
 - 親テーブル削除時の子テーブル挙動は外部キーの `ON DELETE` 句に従う（`CASCADE` / `RESTRICT` / `SET NULL`）。各テーブルの詳細は `01_table_users.md` 〜 `03_table_login_history.md` の「制約・インデックス」節、および `projects` 以降は担当ファイルを参照。
-- `login_history` のみ、保持期間超過分を `sp_purge_login_history` プロシージャによる一括物理削除の対象とする（`03_table_login_history.md` §11 参照）。
+- `login_history` / `api_history` / `batch_history` は保持期間超過分をそれぞれの `sp_purge_*_history` プロシージャによる物理削除の対象とする（保持期間はそれぞれ90日 / 30日 / 30日）。
 
 ## 9. 全体ER図
 
@@ -109,6 +112,7 @@ CHECK制約の記述形式：`CHECK (<column> IN ('value1', 'value2', ...))`。�
 erDiagram
     users ||--o{ oauth_accounts : "外部ID紐付け"
     users |o--o{ login_history : "ログイン試行（未登録メール時はuser_id NULL）"
+    users |o--o{ api_history : "API利用者（未認証時はuser_id NULL）"
     users ||--o{ projects : "owner"
     users ||--o{ project_members : "所属"
     users |o--o{ tasks : "assignee"
@@ -135,6 +139,26 @@ erDiagram
         uuid user_id FK "NULL可"
         varchar_20 login_method
         boolean success
+    }
+    api_history {
+        uuid id PK
+        uuid request_id UK
+        varchar_10 method
+        varchar_255 path
+        varchar_20 status
+        smallint status_code
+        uuid user_id FK
+        integer duration_ms
+        timestamptz created_at
+    }
+    batch_history {
+        uuid id PK
+        uuid run_id UK
+        varchar_100 batch_name
+        varchar_20 status
+        timestamptz started_at
+        timestamptz ended_at
+        timestamptz updated_at
     }
     projects {
         uuid id PK

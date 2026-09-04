@@ -6,7 +6,7 @@
 - **画面は1画面につき1ファイル**（全11画面）
 - DB・認証・インフラは対象単位（テーブル／認証方式／コンテナ・ワークフロー）で分割
 
-全90ファイル。各ファイルは「関連ドキュメント／概要／全体の出入力／シーケンス図／処理フロー／関数詳細／関数相関図／データ遷移図／テスト設計／不明点・要検討事項」を共通の章立てで持つ。図はすべて Mermaid 記法。
+全93ファイル。各ファイルは「関連ドキュメント／概要／全体の出入力／シーケンス図／処理フロー／関数詳細／関数相関図／データ遷移図／テスト設計／不明点・要検討事項」を共通の章立てで持つ。図はすべて Mermaid 記法。
 
 ## 読む順番
 
@@ -22,6 +22,8 @@ flowchart LR
     N --> G
     B --> H["infra/04_env_config"]
     H --> I["infra/01〜08 / batch/*"]
+    B --> L["log/00_history"]
+    L --> I
 ```
 
 ## 1. API（47エンドポイント）
@@ -128,6 +130,8 @@ flowchart LR
 | [08_db_functions.md](./database/08_db_functions.md) | DB関数・ストアドプロシージャ |
 | [09_migration.md](./database/09_migration.md) | Alembicマイグレーション運用・シードデータ |
 | [10_table_notifications.md](./database/10_table_notifications.md) | notifications（通知・重複防止・既読） |
+| [11_table_api_history.md](./database/11_table_api_history.md) | api_history（APIリクエスト履歴） |
+| [12_table_batch_history.md](./database/12_table_batch_history.md) | batch_history（batch実行履歴） |
 
 ## 4. batch `batch/`
 
@@ -137,7 +141,13 @@ flowchart LR
 | [01_scheduler.md](./batch/01_scheduler.md) | APScheduler常駐プロセス |
 | [02_due_notification_job.md](./batch/02_due_notification_job.md) | 毎日10時・17時の期限通知・保持期間パージ |
 
-## 5. 認証・認可 `auth/`
+## 5. ログ・履歴 `log/`
+
+| ファイル | 対象 |
+|----------|------|
+| [00_history.md](./log/00_history.md) | API・batch・ログイン履歴の記録契機、マスキング、保持期間 |
+
+## 6. 認証・認可 `auth/`
 
 | ファイル | 対象 |
 |----------|------|
@@ -151,7 +161,7 @@ flowchart LR
 | [07_password_security.md](./auth/07_password_security.md) | argon2idハッシュ・ログイン失敗レート制限 |
 | [08_redis_store.md](./auth/08_redis_store.md) | Redisキー操作層とTTL設計（全キー網羅） |
 
-## 6. インフラ・CI/CD `infra/`
+## 7. インフラ・CI/CD `infra/`
 
 | ファイル | 対象 |
 |----------|------|
@@ -164,7 +174,7 @@ flowchart LR
 | [07_operation.md](./infra/07_operation.md) | 運用（監視・ログ・バックアップ・障害切り分け） |
 | [08_dockerfile_batch.md](./infra/08_dockerfile_batch.md) | batch Dockerfile（常駐スケジューラ） |
 
-## 7. 基本設計へのフィードバック（実装着手前に確定が必要な事項）
+## 8. 基本設計へのフィードバック（実装着手前に確定が必要な事項）
 
 各詳細設計書の「不明点・要検討事項」節から、**基本設計側の修正・追記が必要**なものを抜粋する。詳細は各リンク先を参照。
 
@@ -182,7 +192,7 @@ flowchart LR
 | 仕様差 | `task_comments` に楽観ロック用 `version` 列がなく、コメントの同時編集は後勝ちになる（`tasks` との仕様差） | [api/tasks/08](./api/tasks/08_patch_comment.md) |
 | 運用制約 | jwtモードのaccess tokenは即時失効できず、強制ログアウト後も最大 `ACCESS_TOKEN_TTL_SECONDS`（15分）有効なまま残る。無効化（status変更）はDBの `is_active` 再確認により即時遮断される | [api/admin/04](./api/admin/04_post_admin_user_force_logout.md), [auth/02](./auth/02_jwt_auth.md) |
 
-## 8. 記述上の取り決め
+## 9. 記述上の取り決め
 
 | 項目 | 内容 |
 |------|------|

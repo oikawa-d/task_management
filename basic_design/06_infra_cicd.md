@@ -125,8 +125,12 @@ flowchart TB
 | `REDIS_URL` | `redis://redis:6379/0` | アプリ用 |
 | `REDIS_KEY_PREFIX` | 空 | 環境を共有する場合のRedisキー名前空間 |
 | `REDIS_TEST_DB` | `1` | テスト用DB番号 |
-| `LOGIN_HISTORY_RETENTION_DAYS` | `365` | `sp_purge_login_history` に渡す保持日数 |
+| `LOGIN_HISTORY_RETENTION_DAYS` | `90` | `sp_purge_login_history` に渡すログイン履歴の保持日数 |
 | `NOTIFICATION_RETENTION_DAYS` | `90` | `sp_purge_notifications` に渡す通知の保持日数 |
+| `API_HISTORY_RETENTION_DAYS` | `30` | `sp_purge_api_history` に渡すAPI履歴の保持日数 |
+| `BATCH_HISTORY_RETENTION_DAYS` | `30` | `sp_purge_batch_history` に渡すbatch履歴の保持日数 |
+| `API_HISTORY_BODY_MAX_BYTES` | `65536` | `api_history.body`へ保存するJSON bodyの最大サイズ |
+| `API_HISTORY_ERROR_DETAIL_MAX_LENGTH` | `4000` | `api_history.error_detail`の最大文字数 |
 | `PAGINATION_DEFAULT_PER_PAGE` / `PAGINATION_MAX_PER_PAGE` | `20` / `100` | ページング対象APIの既定件数・上限。上限超過は422 |
 
 ### 4.3 認証
@@ -339,8 +343,9 @@ sequenceDiagram
 |------|------|
 | バックアップ | `pgdata` volume の `pg_dump` 手動取得のみ（自動化はスコープ外） |
 | 監視 | `/health` の手動確認のみ。監視・アラートはスコープ外（要件書§11） |
-| ログ | コンテナ標準出力（`docker compose logs`）。集約はスコープ外 |
+| ログ | 構造化標準出力に加え、APIは`api_history`、batchは`batch_history`へ保存。API・batchは30日、ログイン履歴は90日。集約基盤はスコープ外 |
 | 定期通知の確認 | `docker compose logs batch` で10時・17時の実行ログ（対象件数・作成件数）を確認する。実行されていない場合は `BATCH_ENABLED` と `APP_TIMEZONE`、Redisの `lock:notify_due:{日付}:{slot}` の残存を確認し、必要なら `docker compose run --rm batch python -m app.main --run-once due_notification --slot 10` で手動実行する |
 | 通知の肥大化 | `notifications` は `sp_purge_notifications`（`NOTIFICATION_RETENTION_DAYS`、既定90日）で日次ジョブ内から削除される。保持日数を延ばす場合は行数の増加に注意する |
+| 履歴の肥大化 | `api_history` / `batch_history` は `sp_purge_api_history` / `sp_purge_batch_history`（各既定30日）で日次削除する。`login_history`は`sp_purge_login_history`（既定90日）で削除する |
 | シークレットローテーション | `JWT_SECRET_KEY` を変更すると全アクセストークンが無効になる（リフレッシュはRedis管理のため生存）。挙動を理解した上で実施すること |
 | マイグレーション失敗時 | backend コンテナは起動失敗とし、DBバックアップとログを確認して原因を修正する。アプリイメージだけを直前タグへ戻し、**適用済みmigrationを自動downgradeしない**。旧アプリが新しいスキーマと後方互換であることを前提にし、不可逆変更はexpand/contract方式で段階適用する |

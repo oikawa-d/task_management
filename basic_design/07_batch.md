@@ -3,8 +3,9 @@
 ## 0. 関連ドキュメント
 
 - 要件定義：[../requirements/task_management_requirements.md](../requirements/task_management_requirements.md) §3.4 N-1、§4、§9
-- 基本設計：[00_overview.md](./00_overview.md) §1/§2/§3/§7、[01_database.md](./01_database.md) §3.5/§3.8/§5.5、[02_redis.md](./02_redis.md) §4.4、[06_infra_cicd.md](./06_infra_cicd.md) §2/§2.1/§4.5/§5
+- 基本設計：[00_overview.md](./00_overview.md) §1/§2/§3/§7、[01_database.md](./01_database.md) §3.5/§3.8/§3.10/§5.5、[02_redis.md](./02_redis.md) §4.4、[06_infra_cicd.md](./06_infra_cicd.md) §2/§2.1/§4.5/§5
 - 詳細設計：[../detailed_design/batch/00_overview.md](../detailed_design/batch/00_overview.md)、[../detailed_design/batch/01_scheduler.md](../detailed_design/batch/01_scheduler.md)、[../detailed_design/batch/02_due_notification_job.md](../detailed_design/batch/02_due_notification_job.md)
+- 履歴設計：[../detailed_design/log/00_history.md](../detailed_design/log/00_history.md)、[../detailed_design/database/12_table_batch_history.md](../detailed_design/database/12_table_batch_history.md)
 - 関連インフラ詳細：[../detailed_design/infra/01_docker_compose.md](../detailed_design/infra/01_docker_compose.md)、[../detailed_design/infra/04_env_config.md](../detailed_design/infra/04_env_config.md)、[../detailed_design/infra/07_operation.md](../detailed_design/infra/07_operation.md)
 
 > 構成図：[diagrams/05_batch_architecture.drawio](./diagrams/05_batch_architecture.drawio)（編集用） / [05_batch_architecture.svg](./diagrams/05_batch_architecture.svg)（表示用）
@@ -106,8 +107,8 @@ flowchart LR
 | 区分 | 内容 |
 |------|------|
 | 入力 | 環境変数、現在時刻、コマンドライン引数（手動実行時）、PostgreSQLのタスク、Redisの実行ロック状態 |
-| 出力 | `notifications` の通知行、通知保持期間超過行の削除、構造化ログ、ジョブ結果（対象件数・作成件数） |
-| 副作用 | Redisロックの作成・解放、PostgreSQLへのチャンク単位のINSERT、`sp_purge_notifications`の実行 |
+| 出力 | `notifications` の通知行、`batch_history`の開始・完了・失敗行、通知・履歴の保持期間超過行の削除、構造化ログ、ジョブ結果（対象件数・作成件数） |
+| 副作用 | Redisロックの作成・解放、PostgreSQLへのチャンク単位のINSERT、`batch_history`の状態更新、各保持期間プロシージャの実行 |
 | HTTP通信 | なし。認証・認可・APIの入出力DTOは使用しない |
 
 ## 4. スケジュールと対象抽出
@@ -252,6 +253,8 @@ flowchart LR
 | `NOTIFY_DUE_LOCK_TTL_SECONDS` | `82800` | RedisロックTTL |
 | `NOTIFY_DUE_BATCH_CHUNK_SIZE` | `500` | 1トランザクションの処理件数 |
 | `NOTIFICATION_RETENTION_DAYS` | `90` | 通知パージの保持期間 |
+| `API_HISTORY_RETENTION_DAYS` | `30` | API履歴パージの保持期間 |
+| `BATCH_HISTORY_RETENTION_DAYS` | `30` | batch履歴パージの保持期間 |
 | `BATCH_ENABLED` | `true` | 定期ジョブ登録の有効/無効 |
 | `LOG_LEVEL` | `INFO` | 構造化ログの出力レベル |
 
@@ -300,6 +303,8 @@ Redis接続不能時は二重実行を避けるため通知を作成しない。
 | 結合 | 枠別通知 | 10時枠と17時枠で同じタスクへ各1件を作成する |
 | 結合 | 障害 | Redisロック取得失敗時に通知を作成しない |
 | 結合 | 保持期間 | `sp_purge_notifications` が期間超過行だけを削除する |
+| 結合 | 実行履歴 | 開始時に`batch_history.inprogress`、正常時に`complete`、失敗時に`error`が保存される |
+| 結合 | 履歴保持期間 | `sp_purge_api_history` / `sp_purge_batch_history` が各30日を超えた行だけを削除する |
 | CI | `batch-test` | ruff、mypy、pytest、カバレッジを実行する。Docker buildでもbatchイメージを検証する |
 
 実時刻に依存するcronの発火タイミングは、時計やコンテナ起動時刻に依存するため自動テストで網羅できない。時刻固定による単体テストと、実環境での手動確認を組み合わせる。将来の自動E2E化は要検討とする。

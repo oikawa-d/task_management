@@ -3,7 +3,7 @@
 ## 0. 関連ドキュメント
 
 - 基本設計：[../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md)（§4）、[../../basic_design/03_auth.md](../../basic_design/03_auth.md)、[../../basic_design/00_overview.md](../../basic_design/00_overview.md)
-- 詳細設計：[01_docker_compose.md](./01_docker_compose.md)、[02_dockerfile_api.md](./02_dockerfile_api.md)、[03_dockerfile_frontend.md](./03_dockerfile_frontend.md)、[../auth/00_strategy_base.md](../auth/00_strategy_base.md)、[../auth/04_google_oauth.md](../auth/04_google_oauth.md)、[../api/auth/02_post_auth_login.md](../api/auth/02_post_auth_login.md)
+- 詳細設計：[01_docker_compose.md](./01_docker_compose.md)、[02_dockerfile_api.md](./02_dockerfile_api.md)、[03_dockerfile_frontend.md](./03_dockerfile_frontend.md)、[../log/00_history.md](../log/00_history.md)、[../auth/00_strategy_base.md](../auth/00_strategy_base.md)、[../auth/04_google_oauth.md](../auth/04_google_oauth.md)、[../api/auth/02_post_auth_login.md](../api/auth/02_post_auth_login.md)
 
 ## 1. 概要
 
@@ -13,7 +13,7 @@
 | 責務 | 全環境変数を型付きで一元管理し、起動時に検証する。値のハードコーディングを排除する唯一の入口とする |
 | 適用条件 | backendプロセス起動時（`import app.core.config` の初回評価） |
 | 依存先 | `pydantic-settings`（`BaseSettings`） |
-| 実装ファイル | `api/app/core/config.py` |
+| 実装ファイル | `api/app/core/config.py`、`api/app/core/history_middleware.py` |
 
 ## 2. 構成要素
 
@@ -56,7 +56,11 @@
 | `REDIS_URL` | str | `redis://redis:6379/0` | redis-py接続文字列 | 平文可 |
 | `REDIS_KEY_PREFIX` | str | 空文字 | Redisキー名前空間（環境共有時の衝突回避） | 平文可 |
 | `REDIS_TEST_DB` | int | `1` | テスト実行時のRedis DB番号 | 平文可 |
-| `LOGIN_HISTORY_RETENTION_DAYS` | int | `365` | `sp_purge_login_history` の保持日数 | 平文可 |
+| `LOGIN_HISTORY_RETENTION_DAYS` | int | `90` | `sp_purge_login_history` の保持日数 | 平文可 |
+| `API_HISTORY_RETENTION_DAYS` | int | `30` | `sp_purge_api_history` の保持日数 | 平文可 |
+| `BATCH_HISTORY_RETENTION_DAYS` | int | `30` | `sp_purge_batch_history` の保持日数 | 平文可 |
+| `API_HISTORY_BODY_MAX_BYTES` | int | `65536` | `api_history.body`へ保存するJSON bodyの最大サイズ | 平文可 |
+| `API_HISTORY_ERROR_DETAIL_MAX_LENGTH` | int | `4000` | `api_history.error_detail`の最大文字数 | 平文可 |
 
 ### 3.3 認証共通・session方式
 
@@ -244,6 +248,7 @@ flowchart LR
     GETSETTINGS --> REDISCLIENT["redis_client.py"]
     GETSETTINGS --> MAILSVC["service/mail_service.py"]
     GETSETTINGS --> LOGGER["core/logger.py"]
+    GETSETTINGS --> HISTORY["core/history_middleware.py"]
 ```
 
 ## 10. セキュリティ・非機能考慮

@@ -18,7 +18,7 @@
 | テーブル名 / 論理名 | `login_history` / ログイン試行履歴（監査ログ） |
 | 役割 | ログイン試行（成功・失敗いずれも）の監査ログ。Redis側のセッション/リフレッシュトークンのTTL失効とは独立して「誰が・いつ・どの方式で・成功したか」を永続的に記録する |
 | 想定件数・増加傾向 | **INSERTのみで単調増加**。ログイン試行（成功・失敗問わず）のたびに1行追加されるため、他テーブルより増加速度が速い。学習用途では小規模だが、設計としては「件数が最も速く増えるテーブル」として扱う |
-| ライフサイクル | 作成契機：`POST /api/auth/login` の成否確定時、OAuthコールバック成功時（`login_method='oauth_google'`）。更新契機：**なし**（追記専用、`updated_at` を持たない）。削除契機：保持期間（既定365日、環境変数 `LOGIN_HISTORY_RETENTION_DAYS`）超過分を `sp_purge_login_history` プロシージャで一括物理削除（運用者が月次で手動実行。アプリ内cronは設けない） |
+| ライフサイクル | 作成契機：`POST /api/auth/login` の成否確定時、OAuthコールバック成功時（`login_method='oauth_google'`）。更新契機：**なし**（追記専用、`updated_at` を持たない）。削除契機：保持期間（既定90日、環境変数 `LOGIN_HISTORY_RETENTION_DAYS`）超過分を `sp_purge_login_history` プロシージャで一括物理削除（運用者が月次で手動実行。アプリ内cronは設けない） |
 | 関連ORMモデル | `models/login_history.py :: LoginHistory` |
 
 ## 2. カラム定義
@@ -228,7 +228,7 @@ flowchart LR
 | 楽観ロック | なし（UPDATEが発生しないテーブルのため不要） |
 | advisory lock | 使用しない（`purge_expired` は運用者が手動実行するバッチ処理であり、通常のリクエスト処理と競合する頻度が低いため見送り。同時実行を厳密に防ぐ必要が生じた場合は要検討） |
 | トランザクション境界 | `create` はログイン処理（Redisへのセッション/トークン登録）と同一の論理トランザクションの一部として扱うが、PostgreSQLのトランザクションはRedis操作を含められないため、`login_history` へのINSERT失敗時はログイン処理全体を失敗として扱う運用とする（§8.1参照、要検討） |
-| 保持期間管理 | `LOGIN_HISTORY_RETENTION_DAYS`（既定365）を超えた行は `sp_purge_login_history` で削除。削除はバッチ処理であり、通常のAPIリクエスト経路からは呼び出さない |
+| 保持期間管理 | `LOGIN_HISTORY_RETENTION_DAYS`（既定90）を超えた行は `sp_purge_login_history` で削除。削除はバッチ処理であり、通常のAPIリクエスト経路からは呼び出さない |
 
 ## 12. テスト設計
 

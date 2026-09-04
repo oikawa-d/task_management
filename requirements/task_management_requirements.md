@@ -115,6 +115,9 @@
 - 環境変数（DB接続情報、JWT署名鍵、OAuthクライアントシークレット等）はGitHub Secretsおよび`.env`で管理し、リポジトリに直接コミットしない
 - Redisはインメモリストアのため、永続化設定（RDB/AOF）をしない場合、サーバー再起動時に全ログインユーザーがログアウト状態になる。学習用途では許容範囲だが、挙動として認識しておく
 - ログインの成否履歴はRedisのTTL失効とは独立してPostgreSQLに記録し、監査目的で参照できるようにする
+- `/api`配下の全APIリクエストは、成功・エラーを問わず`api_history`へ記録する。保持期間は既定30日とする
+- `batch`ジョブは開始時・完了時・失敗時の状態を`batch_history`へ記録する。保持期間は既定30日とする
+- `login_history`はセキュリティ監査用として既定90日保持する。API・batch履歴のbodyやエラー内容にはパスワード、token、Cookie等の秘匿情報を保存しない
 
 ---
 
@@ -134,6 +137,8 @@
 | task_comments | id, task_id, user_id, body, created_at | |
 | notifications | id, user_id, task_id, type, title, read_at, dedupe_key, created_at | アプリ内通知。`type`は`due_soon_batch`/`due_today_created`/`due_today_updated`。`dedupe_key`で重複作成を防ぐ |
 | login_history | id, user_id, login_method, ip_address, success, created_at | ログイン試行の監査ログ。login_methodは`session`/`jwt`/`oauth_google`。Redis側の失効状況とは独立して保持し続ける |
+| api_history | id, request_id, method, path, status, status_code, error_code, error_detail, body, user_id, duration_ms, created_at | `/api`配下の全APIリクエスト履歴。bodyはマスキング済み。既定30日保持 |
+| batch_history | id, run_id, batch_name, trigger_type, slot, status, started_at, ended_at, error_code, error_detail, target_count, success_count, skipped_count, updated_at | batchの開始・完了・失敗履歴。既定30日保持 |
 
 ### 5.2 Redis（ログイン状態の管理）
 

@@ -3,7 +3,7 @@
 ## 0. 関連ドキュメント
 
 - 基本設計：[../../basic_design/00_overview.md](../../basic_design/00_overview.md)（§7/§8）、[../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md)（§2.1）、[../../basic_design/02_redis.md](../../basic_design/02_redis.md)（§4.4）
-- 詳細設計：[00_overview.md](./00_overview.md)、[02_due_notification_job.md](./02_due_notification_job.md)、[../infra/01_docker_compose.md](../infra/01_docker_compose.md)、[../infra/04_env_config.md](../infra/04_env_config.md)、[../infra/07_operation.md](../infra/07_operation.md)
+- 詳細設計：[00_overview.md](./00_overview.md)、[02_due_notification_job.md](./02_due_notification_job.md)、[../log/00_history.md](../log/00_history.md)、[../database/12_table_batch_history.md](../database/12_table_batch_history.md)、[../infra/01_docker_compose.md](../infra/01_docker_compose.md)、[../infra/04_env_config.md](../infra/04_env_config.md)、[../infra/07_operation.md](../infra/07_operation.md)
 
 ## 1. 概要
 
@@ -20,8 +20,8 @@
 | 区分 | 内容 |
 |------|------|
 | 入力 | 起動時コマンドライン引数（`--run-once <job名>` の有無）、環境変数（`core/config.py` 経由） |
-| 出力 | プロセスの標準出力への構造化ログ。常駐時は終了しない（プロセスとして稼働し続ける） |
-| 副作用 | DBコネクションプール・Redis接続プールの生成、ジョブ実行時の `notifications` へのINSERTと `sp_purge_notifications` 実行（[02_due_notification_job.md](./02_due_notification_job.md)） |
+| 出力 | プロセスの標準出力への構造化ログ、`batch_history`の開始・完了・失敗履歴。常駐時は終了しない（プロセスとして稼働し続ける） |
+| 副作用 | DBコネクションプール・Redis接続プールの生成、`batch_history`の状態更新、ジョブ実行時の`notifications`へのINSERTと保持期間パージ |
 
 ## 3. 起動シーケンス
 

@@ -14,6 +14,8 @@
 | バリデーション | pydantic v2。失敗時は 422 |
 | ページング | 一覧系は原則 `?page=1&per_page=20`（既定20・最大100）とし、レスポンスに `meta` を含める。ただし、カンバン用タスク一覧・プロジェクトメンバー一覧・タスクコメント一覧はページングなし、自分のログイン履歴は直近50件固定とする |
 | リクエストID | 全レスポンスに `X-Request-ID` を付与（ログ相関用） |
+| API履歴 | `/api`配下の全リクエストを`api_history`へ1リクエスト1行で保存。2xx/3xxは`success`、4xx/5xxは`error`とし、エラーコード・処理時間・マスキング済みbodyを記録する。保持期間は既定30日 |
+| 履歴保存失敗 | `api_history`への保存失敗はAPI本体の応答を変更せず、構造化標準出力へERRORを記録する |
 | Origin検証 | Cookieを発行・利用する更新系API（ログイン、sessionの更新系、jwtの `/auth/refresh`・`/auth/logout`）とOAuth交換は許可Originを検証する。ログインはCSRF CookieがまだないためOriginのみ、その他は各方式のCSRF検証も行う。`allow_credentials=true` と `*` の併用は禁止 |
 
 ## 2. エンドポイント一覧

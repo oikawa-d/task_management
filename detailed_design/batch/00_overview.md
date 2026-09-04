@@ -3,7 +3,7 @@
 ## 0. 関連ドキュメント
 
 - 基本設計：[../../basic_design/00_overview.md](../../basic_design/00_overview.md)（§1/§2/§3/§6/§7/§8）、[../../basic_design/01_database.md](../../basic_design/01_database.md)（§3.5 tasks、§3.8 notifications、§5.5 `sp_purge_notifications`）、[../../basic_design/02_redis.md](../../basic_design/02_redis.md)（§4.4）、[../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md)（§2/§2.1/§3.3/§4.5）
-- 詳細設計：[01_scheduler.md](./01_scheduler.md)、[02_due_notification_job.md](./02_due_notification_job.md)、[../infra/01_docker_compose.md](../infra/01_docker_compose.md)、[../infra/08_dockerfile_batch.md](../infra/08_dockerfile_batch.md)、[../infra/04_env_config.md](../infra/04_env_config.md)、[../database/06_table_tasks.md](../database/06_table_tasks.md)、[../database/08_db_functions.md](../database/08_db_functions.md)
+- 詳細設計：[01_scheduler.md](./01_scheduler.md)、[02_due_notification_job.md](./02_due_notification_job.md)、[../log/00_history.md](../log/00_history.md)、[../database/12_table_batch_history.md](../database/12_table_batch_history.md)、[../infra/01_docker_compose.md](../infra/01_docker_compose.md)、[../infra/08_dockerfile_batch.md](../infra/08_dockerfile_batch.md)、[../infra/04_env_config.md](../infra/04_env_config.md)、[../database/06_table_tasks.md](../database/06_table_tasks.md)、[../database/08_db_functions.md](../database/08_db_functions.md)
 
 ## 1. 概要
 
@@ -91,8 +91,9 @@ flowchart LR
 |------|------|
 | 形式 | 構造化ログ（`core/logger.py`、`LOG_LEVEL` で制御）。`backend` と同一方針 |
 | 出力内容 | ジョブ開始・終了、実行ロックの取得成否、抽出件数・作成件数、`sp_purge_notifications` の呼び出し結果 |
-| リクエストID | 存在しない（HTTPリクエストを持たないため）。ジョブ実行ごとに一意な `run_id`（例：実行開始時刻 + UUID）をログへ付与し、1回の実行のログを相関できるようにする |
+| リクエストID | 存在しない（HTTPリクエストを持たないため）。ジョブ実行ごとに一意な `run_id`をログと`batch_history`へ付与し、1回の実行を相関できるようにする |
 | 秘匿情報 | `DATABASE_URL`/`REDIS_URL` の資格情報部分をログへ出力しない |
+| DB履歴 | ジョブ開始時に`inprogress`をINSERTし、正常時は`complete`、失敗時は`error`へUPDATEする。履歴操作失敗はジョブ結果を隠さず標準出力へ記録する |
 
 ## 8. `--run-once` による手動実行
 

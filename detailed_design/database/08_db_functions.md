@@ -10,7 +10,7 @@
 
 ## 1. 概要
 
-本ファイルは `basic_design/01_database.md` §5 に列挙された5つのDBオブジェクト（トリガ関数1・通常関数2・プロシージャ2）について、SQL本体・呼び出し元・排他制御・テスト方法を具体化する。
+本ファイルは `basic_design/01_database.md` §5 に列挙された7つのDBオブジェクト（トリガ関数1・通常関数2・プロシージャ4）について、SQL本体・呼び出し元・排他制御・テスト方法を具体化する。
 
 | 項目 | 内容 |
 |------|------|
@@ -28,6 +28,8 @@
 | 3 | 関数 | `fn_next_task_position` | `p_project_id UUID`, `p_status VARCHAR` | `INTEGER` | タスクの列内次position採番 |
 | 4 | プロシージャ | `sp_purge_login_history` | `p_retention_days INTEGER` | なし | ログイン履歴の保持期間管理 |
 | 5 | プロシージャ | `sp_purge_notifications` | `p_retention_days INTEGER` | なし | 通知の保持期間管理（batchから日次実行） |
+| 6 | プロシージャ | `sp_purge_api_history` | `p_retention_days INTEGER` | なし | API履歴の保持期間管理（batchから日次実行） |
+| 7 | プロシージャ | `sp_purge_batch_history` | `p_retention_days INTEGER` | なし | batch履歴の保持期間管理（batchから日次実行） |
 
 ## 3. 関数詳細
 
@@ -37,7 +39,7 @@
 |------|------|
 | シグネチャ | `trg_set_updated_at() RETURNS TRIGGER` |
 | 引数 / 戻り値 | 引数なし。`NEW` レコード（`updated_at` を書き換えたもの）を返す |
-| 適用対象 | `users` / `projects` / `tasks` / `task_comments` の `BEFORE UPDATE FOR EACH ROW` |
+| 適用対象 | `users` / `projects` / `tasks` / `task_comments` / `batch_history` の `BEFORE UPDATE FOR EACH ROW` |
 | 呼び出し元 | アプリからは直接呼ばない。`UPDATE` 文実行時にPostgreSQLが自動起動する |
 | 排他制御 | 対象行のロックは通常の `UPDATE` 行ロックに従う。関数自体に追加のロック取得はない |
 
@@ -160,7 +162,7 @@ VALUES (gen_random_uuid(), :project_id, :title, :status, :next_position, ...);
 | 項目 | 内容 |
 |------|------|
 | シグネチャ | `sp_purge_login_history(p_retention_days INTEGER)` |
-| 引数 | `p_retention_days`：保持日数。環境変数 `LOGIN_HISTORY_RETENTION_DAYS`（既定365）をアプリ側から渡す |
+| 引数 | `p_retention_days`：保持日数。環境変数 `LOGIN_HISTORY_RETENTION_DAYS`（既定90）をアプリ側から渡す |
 | 戻り値 | なし（`PROCEDURE`。副作用として `login_history` の行を削除） |
 | 呼び出し元 | アプリ内cronは設けない（学習範囲外、`basic_design/01_database.md` §5.4）。運用者が `psql` から月次で手動実行する |
 | 排他制御 | `DELETE` 対象行に対する通常の行ロックのみ。大量削除時のロック長時間化を避けるため、運用手順として `LIMIT` によるバッチ削除を推奨する（下記「運用時の注意」参照） |
@@ -181,7 +183,7 @@ $$;
 **呼び出し方法（運用者が手動実行）**：
 
 ```sql
-CALL sp_purge_login_history(365);
+CALL sp_purge_login_history(<LOGIN_HISTORY_RETENTION_DAYS>);
 ```
 
 `LOGIN_HISTORY_RETENTION_DAYS` はハードコードせず、実行時に `psql -v retention_days=${LOGIN_HISTORY_RETENTION_DAYS}` のように環境変数値を明示的に渡す運用とする（[../infra/04_env_config.md](../infra/04_env_config.md) 参照）。
@@ -223,6 +225,54 @@ $$;
 
 テストでは保持期間境界、未読・既読双方の削除、空テーブル、0以下の拒否を確認する。
 
+### 3.6 `db/procedures/sp_purge_api_history.sql`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `sp_purge_api_history(p_retention_days INTEGER)` |
+| 呼び出し元 | batchのジョブ終了処理（運用者向けAPIは提供しない） |
+| 処理 | `api_history.created_at`が保持期限より前の行をDELETE |
+| 入力検証 | `p_retention_days > 0` でない場合は例外 |
+| 保持設定 | `API_HISTORY_RETENTION_DAYS`（既定30） |
+
+```sql
+CREATE OR REPLACE PROCEDURE sp_purge_api_history(p_retention_days INTEGER)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF p_retention_days <= 0 THEN
+        RAISE EXCEPTION 'p_retention_days must be positive';
+    END IF;
+    DELETE FROM api_history
+     WHERE created_at < now() - (p_retention_days || ' days')::interval;
+END;
+$$;
+```
+
+### 3.7 `db/procedures/sp_purge_batch_history.sql`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `sp_purge_batch_history(p_retention_days INTEGER)` |
+| 呼び出し元 | batchのジョブ終了処理（運用者向けAPIは提供しない） |
+| 処理 | `batch_history.started_at`が保持期限より前の行をDELETE |
+| 入力検証 | `p_retention_days > 0` でない場合は例外 |
+| 保持設定 | `BATCH_HISTORY_RETENTION_DAYS`（既定30） |
+
+```sql
+CREATE OR REPLACE PROCEDURE sp_purge_batch_history(p_retention_days INTEGER)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF p_retention_days <= 0 THEN
+        RAISE EXCEPTION 'p_retention_days must be positive';
+    END IF;
+    DELETE FROM batch_history
+     WHERE started_at < now() - (p_retention_days || ' days')::interval;
+END;
+$$;
+```
+
 ## 4. 関数相関図
 
 ```mermaid
@@ -244,6 +294,10 @@ flowchart LR
         SP --> LH[("login_history")]
         JOB["batch due_notification_job"] --> SNP["sp_purge_notifications"]
         SNP --> NOTIF[("notifications")]
+        JOB --> SAP["sp_purge_api_history"]
+        SAP --> APIH[("api_history")]
+        JOB --> SBH["sp_purge_batch_history"]
+        SBH --> BATH[("batch_history")]
     end
 
     subgraph unused["SQLレベル検証用（アプリからは未使用）"]
@@ -269,6 +323,10 @@ flowchart LR
 | 10 | 異常系 | `sp_purge_login_history`：空テーブルに対して実行 | エラーなく正常終了 | `test_sp_purge_login_history_empty_table_noop` |
 | 11 | 正常系 | `sp_purge_notifications`：保持期間超過行あり | 未読・既読を問わず対象行が削除される | `test_sp_purge_notifications_deletes_expired` |
 | 12 | 異常系 | `sp_purge_notifications`：保持日数0以下 | 明示的なエラーで終了 | `test_sp_purge_notifications_rejects_non_positive_days` |
+| 13 | 正常系 | `sp_purge_api_history`：保持期間超過行あり | 対象行が削除される | `test_sp_purge_api_history_deletes_expired` |
+| 14 | 異常系 | `sp_purge_api_history`：保持日数0以下 | 明示的なエラーで終了 | `test_sp_purge_api_history_rejects_non_positive_days` |
+| 15 | 正常系 | `sp_purge_batch_history`：保持期間超過行あり | 対象行が削除される | `test_sp_purge_batch_history_deletes_expired` |
+| 16 | 異常系 | `sp_purge_batch_history`：保持日数0以下 | 明示的なエラーで終了 | `test_sp_purge_batch_history_rejects_non_positive_days` |
 
 ## 6. 不明点・要検討事項
 

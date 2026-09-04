@@ -11,6 +11,8 @@
 | [./01_scheduler.md](./01_scheduler.md) | APSchedulerからの起動 |
 | [../database/10_table_notifications.md](../database/10_table_notifications.md) | 通知DDL・`dedupe_key` |
 | [../database/08_db_functions.md](../database/08_db_functions.md) | `sp_purge_notifications` |
+| [../log/00_history.md](../log/00_history.md) | `batch_history`の開始・完了・失敗記録 |
+| [../database/12_table_batch_history.md](../database/12_table_batch_history.md) | `batch_history`のカラム・状態制約 |
 
 ## 1. 概要
 
@@ -22,7 +24,7 @@
 | 下限 | 設けない。期限切れタスクも当日のリマインド対象とする |
 | 作成通知 | 担当者へ `type='due_soon_batch'` を作成 |
 | 重複防止 | Redisの日付・実行枠別ロックと `UNIQUE (user_id, dedupe_key)` の二重防御 |
-| 保持期間 | ジョブ末尾で `sp_purge_notifications(NOTIFICATION_RETENTION_DAYS)` を実行 |
+| 保持期間 | ジョブ末尾で通知と`api_history`/`batch_history`の保持期間プロシージャを実行 |
 
 「翌日10時まで」は境界値を含む（`due_at <= threshold`）。10時・17時の両枠で同じ境界を使う。DBにはUTCで保存し、`threshold`は実行日の`APP_TIMEZONE`翌日 `NOTIFY_DUE_TARGET_HOUR`（既定10時）をUTCへ変換する。
 
@@ -31,8 +33,8 @@
 | 区分 | 内容 |
 |------|------|
 | 入力 | `Settings`、現在時刻、PostgreSQL、Redis |
-| 出力 | 作成件数、スキップ件数、ログ。通知行と期限超過通知の削除 |
-| 副作用 | Redisロック取得、notifications INSERT、`sp_purge_notifications`実行 |
+| 出力 | 作成件数、スキップ件数、`batch_history`の完了・失敗行、ログ。通知・履歴の期限超過行の削除 |
+| 副作用 | Redisロック取得、notifications INSERT、`batch_history`状態更新、各保持期間プロシージャ実行 |
 
 ## 3. 処理シーケンス
 
@@ -43,8 +45,10 @@ sequenceDiagram
     participant JOB as due_notification_job
     participant RD as Redis
     participant PG as PostgreSQL
+    participant HIS as batch_history
 
     SCH->>JOB: 実行日のdatetimeとslot（10/17）を渡して起動
+    JOB->>HIS: run_idを採番しinprogressをINSERT
     JOB->>RD: SET lock:notify_due:{local_date}:{slot} runner_id NX EX
     alt ロック取得失敗
         RD-->>JOB: nil（別プロセスが実行済み/実行中）
@@ -56,8 +60,14 @@ sequenceDiagram
             JOB->>PG: INSERT notifications ... ON CONFLICT (user_id,dedupe_key) DO NOTHING
         end
         JOB->>PG: CALL sp_purge_notifications(NOTIFICATION_RETENTION_DAYS)
+        JOB->>PG: CALL sp_purge_api_history(API_HISTORY_RETENTION_DAYS)
+        JOB->>PG: CALL sp_purge_batch_history(BATCH_HISTORY_RETENTION_DAYS)
+        JOB->>HIS: complete・終了時刻・件数をUPDATE
         JOB->>RD: ロック所有者を確認してDEL
-        JOB-->>SCH: 作成件数をログ出力
+        JOB-->>SCH: 作成件数をrun_id付きでログ出力
+    else ジョブ本体またはパージで失敗
+        JOB->>HIS: error・終了時刻・error内容をUPDATE
+        JOB-->>SCH: エラーをrun_id付きでログ出力しプロセス継続
     end
 ```
 
@@ -101,6 +111,8 @@ SELECT id, project_id, title, assignee_id, due_at
 | パージ失敗 | 通知作成済みデータは維持し、ジョブを失敗扱い。次回にパージを再試行 |
 | 1タスクの不正データ | エラーを記録し、他タスクの処理を継続できる単位で分離 |
 
+いずれの結果でも、開始時に作成した`batch_history`を可能な限り`complete`または`error`へ更新する。履歴更新自体が失敗した場合はジョブ結果を上書きせず、`run_id`を含むERRORログだけを残す。プロセスが強制終了した場合は`inprogress`が残る。
+
 ロック取得後の失敗でもロックはTTLで自然解放される。成功時のみ所有者確認後に解放する。
 
 ## 7. 関数詳細
@@ -111,6 +123,9 @@ SELECT id, project_id, title, assignee_id, due_at
 | `iter_due_tasks` | `AsyncIterator[DueTask]` | `due_at <= threshold`のタスクをチャンク取得 |
 | `bulk_create_due_notifications` | `async def ...(tasks, run_date, notification_slot) -> int` | `ON CONFLICT DO NOTHING`で一括INSERT |
 | `purge_notifications` | `async def purge_notifications(retention_days: int) -> int` | `CALL sp_purge_notifications(...)` |
+| `start_batch_history` | `async def start_batch_history(batch_name: str, trigger_type: str, slot: str | None) -> UUID` | `batch_history`へ`inprogress`をINSERT |
+| `finish_batch_history` | `async def finish_batch_history(run_id: UUID, result: JobResult) -> None` | 成否・終了時刻・件数をUPDATE |
+| `purge_histories` | `async def purge_histories(settings: Settings) -> None` | API・batch・通知の各保持期間プロシージャを実行。ログイン履歴は運用者が手動実行 |
 
 batchのrepositoryはAPIのrouter/serviceをimportしない。接続・ORMモデル・通知INSERTをbatch内で完結させる。
 
@@ -125,3 +140,6 @@ batchのrepositoryはAPIのrouter/serviceをimportしない。接続・ORMモデ
 | 5 | 結合 | 10時枠と17時枠を実行 | 同じタスクに各枠1件ずつ通知を作成する | `test_due_job_creates_one_notification_per_slot` |
 | 6 | 結合 | 2プロセスが同じ実行枠で同時実行 | Redisロック取得者だけが抽出する | `test_due_job_uses_slot_scoped_redis_lock` |
 | 7 | 結合 | 通知保持期間を超過した行がある | パージされ、期間内の行は残る | `test_due_job_purges_expired_notifications` |
+| 8 | 結合 | ジョブが正常終了する | `batch_history`が`complete`になり、件数と終了時刻が保存される | `test_due_job_completes_batch_history` |
+| 9 | 結合 | ジョブ本体またはパージが失敗する | `batch_history`が`error`になり、error_code/detailが保存される | `test_due_job_records_batch_failure` |
+| 10 | 結合 | API・batch履歴が30日を超過する | 両テーブルの期限超過行だけが削除される | `test_due_job_purges_api_and_batch_history` |
