@@ -31,7 +31,7 @@ frontend/
 │   │   │   ├── sessionAdapter.ts
 │   │   │   ├── jwtAdapter.ts
 │   │   │   └── index.ts            # /auth/config のauth_modeで選択
-│   │   ├── endpoints/              # auth.ts / projects.ts / tasks.ts / admin.ts
+│   │   ├── endpoints/              # auth.ts / projects.ts / tasks.ts / admin.ts / notifications.ts
 │   │   └── errors.ts               # ApiError 型とエラーコード変換
 │   ├── auth/
 │   │   ├── authStore.ts            # Zustand（user / status）
@@ -46,6 +46,7 @@ frontend/
 │   │   ├── projects/               # ダッシュボード・プロジェクト
 │   │   ├── board/                  # カンバン・タスク詳細
 │   │   ├── settings/               # アカウント設定
+│   │   ├── notifications/          # 通知ベル・通知パネル
 │   │   └── admin/                  # ユーザー管理
 │   ├── stores/uiStore.ts           # 文字サイズ・サイドバー開閉（localStorage永続）
 │   └── types/                      # APIレスポンスの型定義
@@ -132,7 +133,7 @@ flowchart TB
 
 ```
 ┌────────────────────────────────────────────────────────┐
-│ ≡ │                    Cerberus                       │  ← ヘッダー
+│ ≡ │              Cerberus              │ 🔔(3) │       │  ← ヘッダー
 ├───┴────────────────────────────────────────────────────┤
 │ ┌──────────┐                                           │
 │ │ home     │   ┌─── メインコンテンツ ─────────────┐    │
@@ -152,6 +153,46 @@ flowchart TB
 | 管理 | `/admin/users` へ遷移。`role !== 'admin'` の場合は**要素自体を描画しない** |
 | 設定 | `/settings` へ遷移 |
 | ログアウト | `POST /auth/logout` → authStore クリア → `/login` へ |
+| `🔔`（通知ベル） | ヘッダー右端。クリックで `NotificationPanel` を開閉する。未読が1件以上あるときだけバッジを重ねて表示する（詳細は§3.1） |
+
+### 3.1 通知ベルと通知パネル
+
+認証後の全画面（`AppLayout` 配下）で共通に表示する。要件書§3.4 N-2〜N-5 に対応する。
+
+```
+              ┌──────────────────────────────┐
+   🔔(3) ───▶ │ 通知            [すべて既読] │  ← ヘッダー右端のベルから開く
+              ├──────────────────────────────┤
+              │ ● 設計書をレビューする        │  ← ● は未読マーク
+              │   期限 09/05 10:00           │
+              ├──────────────────────────────┤
+              │   CIを直す                   │  ← 既読（マークなし・淡色）
+              │   期限 09/04 18:00           │
+              ├──────────────────────────────┤
+              │ 通知はありません（0件時）     │
+              └──────────────────────────────┘
+```
+
+| 要素 | 挙動 |
+|------|------|
+| ベルアイコン | `aria-label="通知"`、`aria-expanded` でパネルの開閉状態を伝える |
+| 未読バッジ | `unread_count >= 1` のときだけ描画。100件以上は `99+` と表示。`aria-label="未読 {n} 件"` |
+| パネル | ベルの下にポップオーバー表示。`Escape` キーと外側クリックで閉じ、閉じたらベルへフォーカスを戻す |
+| 通知行 | クリックで `/projects/{project_id}` へ遷移し、対象タスクの詳細モーダルを開く。遷移と同時に `PATCH /notifications/{id}/read` を実行する。`task` が `null`（タスク削除済み）の行は遷移せず、既読化のみ行う |
+| すべて既読ボタン | `POST /notifications/read-all`。`unread_count === 0` のときは非活性 |
+| 空状態 | 通知0件のとき「通知はありません」を表示する |
+
+**未読件数の取得（ポーリング）**
+
+| 項目 | 内容 |
+|------|------|
+| 取得元 | `GET /notifications/unread-count`（React Query の `refetchInterval`） |
+| 間隔 | `VITE_NOTIFICATION_POLL_INTERVAL_MS`（既定 60000 = 60秒）。値はハードコードせず環境変数から取得する |
+| 停止条件 | 未認証（`authStore.status !== 'authenticated'`）のときはクエリ自体を `enabled: false` にする。またタブが非アクティブの間は `refetchIntervalInBackground: false` により停止する |
+| 一覧との整合 | パネルを開いたときに `GET /notifications` を取得し、そのレスポンスの `unread_count` で未読件数のキャッシュを更新する（追加リクエストを発生させない） |
+| 既読操作後 | `PATCH .../read` / `POST .../read-all` のレスポンスに含まれる `unread_count` でキャッシュを更新し、一覧クエリを `invalidateQueries` する |
+
+リアルタイム配信（SSE / WebSocket）は採用しない。したがってバッジの反映は最大でポーリング間隔ぶん遅れる。
 
 ## 4. コンポーネント構成
 
@@ -176,6 +217,11 @@ flowchart TB
     APL --> SB["Sidebar"]
     APL --> HD["Header"]
     APL --> OUT["Outlet"]
+
+    HD --> NB["NotificationBell<br/>未読件数ポーリング"]
+    NB --> NP["NotificationPanel"]
+    NP --> NI["NotificationItem x n"]
+    NP --> RAB["MarkAllReadButton"]
 
     OUT --> DP["DashboardPage"]
     OUT --> BP["BoardPage"]
@@ -203,6 +249,7 @@ flowchart TB
 |--------|----------|--------|------|
 | `authStore`（Zustand） | `user`, `status`（`loading` / `authenticated` / `unauthenticated`）, `accessToken`（jwtモードのみ）, `authAdapter` | **しない**（メモリのみ） | アクセストークンを localStorage に置かない（XSS対策）。adapterは起動時のbackend設定から選択 |
 | `uiStore`（Zustand + persist） | `fontScale`, `sidebarOpen` | localStorage | 文字サイズ・サイドバー開閉はクライアント側のみで保持 |
+| 通知（React Query） | `['notifications','unread-count']` / `['notifications', page, unreadOnly]` | しない | 未読件数はポーリング、一覧はパネルを開いたときに取得。パネルの開閉状態のみコンポーネントのローカルstateで持つ |
 | TanStack Query | プロジェクト一覧・ボード・コメント・ユーザー一覧 | しない | `queryKey` は `['projects']` / `['board', projectId]` / `['comments', taskId]` |
 
 ### 5.1 認証状態の遷移
@@ -316,6 +363,7 @@ flowchart TB
 | 変数 | 例 | 用途 |
 |------|-----|------|
 | `VITE_API_BASE_URL` | `/api` | APIのベースURL（同一オリジンを既定） |
+| `VITE_NOTIFICATION_POLL_INTERVAL_MS` | `60000` | 未読通知件数のポーリング間隔（ミリ秒） |
 
 認証モード、Googleログインの有効/無効、CSRF Cookie名は `GET /auth/config` から実行時に取得する。`VITE_AUTH_MODE` / `VITE_GOOGLE_LOGIN_ENABLED` / `VITE_CSRF_COOKIE_NAME` は定義しない。これによりfrontendイメージとbackendの設定がずれても、起動時にbackendの設定へ追従できる。
 
@@ -367,6 +415,7 @@ flowchart TB
 - 所属プロジェクトをカード表示（プロジェクト名・メンバー数・タスク件数バッジ）
 - 「新規プロジェクトの作成」ボタン → モーダル
 - プロジェクト0件時は空状態メッセージと作成導線を表示
+- ヘッダーの通知ベル（§3.1）から通知一覧を開ける。ベル自体は `AppLayout` の共通要素であり、ダッシュボード固有の実装は持たない
 
 ### 7.5 カンバンボード
 
@@ -390,6 +439,12 @@ flowchart TB
 - ユーザー一覧（検索・ページング）、ロール変更セレクト、有効/無効トグル、強制ログアウトボタン
 - 自分自身の権限降格・無効化は UI 上で禁止（誤操作防止。サーバー側でも 409 とする）
 - プロジェクト一覧タブ（`GET /admin/projects`）と削除操作
+
+### 7.8 通知
+
+- ベルアイコン・未読バッジ・通知パネル・「すべて既読」ボタン（仕様は§3.1）
+- 通知行から対象タスクへ遷移し、遷移と同時に既読化する
+- ポーリング間隔は `VITE_NOTIFICATION_POLL_INTERVAL_MS` から取得し、コンポーネントに直書きしない
 
 ## 8. アクセシビリティ設定（文字サイズ）
 
@@ -421,6 +476,9 @@ flowchart LR
 | コンポーネント | LoginForm / RegisterForm | 入力検証・エラー表示・送信内容 |
 | コンポーネント | KanbanBoard | D&D後の楽観的更新とロールバック（MSWで失敗レスポンスを返す） |
 | コンポーネント | Sidebar | `role` による「管理」タブの表示/非表示 |
+| コンポーネント | NotificationBell | `unread_count` 0件でバッジ非表示、1件以上で表示、100件以上で `99+` |
+| コンポーネント | NotificationPanel | 一覧描画・空状態・「すべて既読」押下で未読が0になること・`task` が `null` の行が遷移しないこと |
+| 単体 | 未読件数ポーリング | 未認証時に `enabled: false` となること、間隔が `VITE_NOTIFICATION_POLL_INTERVAL_MS` を参照すること（fake timers で検証） |
 | 結合 | ルートリダイレクト | 未認証・認証済みのいずれでも `/` にアクセス → `/login`（認証済みはさらに `/login` のガードで `/dashboard`） |
 | 結合 | ルーティングガード | 未認証で `/dashboard` にアクセス → `/login`、member で `/admin/users` → `/dashboard` |
 | 網羅できない範囲 | 実ブラウザでのD&Dのピクセル単位挙動、Google認可画面 | `@dnd-kit` のイベントはユーティリティでシミュレートし、実操作は手動確認とする |

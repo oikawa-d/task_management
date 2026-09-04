@@ -22,6 +22,7 @@ flowchart TB
     subgraph net["cerberus_net (bridge)"]
         FE["frontend<br/>node:26 / nginx"]
         BE["backend<br/>python:3.14"]
+        BA["batch<br/>python:3.14<br/>常駐スケジューラ"]
         PG[("postgres:17<br/>volume: pgdata")]
         RD[("redis:8<br/>永続化なし")]
         MP["mailpit"]
@@ -32,6 +33,8 @@ flowchart TB
     BE --> PG
     BE --> RD
     BE --> MP
+    BA --> PG
+    BA --> RD
 ```
 
 | サービス | イメージ | 依存 | ヘルスチェック | 備考 |
@@ -39,6 +42,7 @@ flowchart TB
 | `postgres` | `postgres:17-alpine` | - | `pg_isready` | volume `pgdata` で永続化。ホストポートは公開しない |
 | `redis` | `redis:8-alpine` | - | `redis-cli ping` | `--save "" --appendonly no --maxmemory-policy noeviction`。**volumeなし**。ホストポートは公開しない |
 | `backend` | 自ビルド（`api/Dockerfile`） | postgres, redis（`service_healthy`） | `GET /health` | 起動時に `alembic upgrade head` |
+| `batch` | 自ビルド（`batch/Dockerfile`） | postgres, redis（`service_healthy`） | プロセス生存監視（`pgrep -f app.main`） | 常駐スケジューラ。ポートは公開しない。マイグレーションは実行しない（backend の責務） |
 | `frontend` | 自ビルド（`frontend/Dockerfile`） | backend | `GET /` | 本番相当はビルド成果物を nginx で配信 |
 | `mailpit` | `axllent/mailpit` | - | - | SMTP `1025` / Web UI `8025`。`dev` profile専用。UI/SMTPはloopback公開のみ |
 
@@ -47,6 +51,19 @@ flowchart TB
 - 開発時はソースをバインドマウントしてホットリロード（`uvicorn --reload` / `vite dev`）、CD時はイメージ内の成果物を使う構成を `docker-compose.override.yml` で切り替える
 - 基本Composeは `frontend` の `/api` proxyを経由する。`backend` / `postgres` / `redis` は `ports` を持たず、開発者が直接接続する場合だけ `compose.dev.yml` で `127.0.0.1:${...}` を追加する
 - `mailpit` は `profiles: [dev]` とし、production/CDでは起動しない。productionの `SMTP_HOST` は外部SMTPを指定する
+- `batch` は `backend` に依存させない（HTTP APIを呼ばずDB/Redisへ直接アクセスするため）。ただしスキーマは backend 起動時の `alembic upgrade head` に依存するため、`restart: unless-stopped` とし、テーブル未作成で起動に失敗した場合は再起動で回復させる
+- `batch` を1レプリカに限定する（`deploy.replicas` を指定しない）。複数起動しても Redis の実行ロックと `UNIQUE (user_id, dedupe_key)` により通知は重複しないが、無駄なDB走査を避けるため
+
+### 2.1 batch コンテナの構成
+
+| 項目 | 内容 |
+|------|------|
+| 役割 | 定期実行ジョブの常駐スケジューラ。要件書§3.4 N-1（毎朝10時の期限通知） |
+| スケジューラ | APScheduler（`AsyncIOScheduler` + `CronTrigger`）。タイムゾーンは `APP_TIMEZONE` |
+| ジョブ | `due_notification_job`（`NOTIFY_DUE_CRON_HOUR`:`NOTIFY_DUE_CRON_MINUTE` に実行）。ジョブ末尾で `sp_purge_notifications` を呼び保持期間超過分を削除する |
+| 二重実行防止 | Redis の `lock:notify_due:{YYYY-MM-DD}`（`SET NX EX`）。詳細は [02_redis.md §4.4](./02_redis.md#44-期限通知バッチの実行ロック) |
+| 依存の方向 | `jobs → repository → models`。`api/app` のコードは import せず、共有が必要なORMモデルは `batch` 側に同等の定義を置く（コンテナ間でソースを共有しないため） |
+| 手動実行 | `docker compose run --rm batch python -m app.main --run-once due_notification`（障害時のリカバリ用） |
 
 ## 3. Dockerfile 方針
 
@@ -69,6 +86,16 @@ flowchart TB
 | nginx設定 | SPA用に `try_files $uri /index.html`、`/api` を backend へ `proxy_pass` |
 | ビルド時変数 | `VITE_*` は `ARG` で受け取る（ビルド時に埋め込まれるため、秘匿情報は渡さない） |
 
+### 3.3 batch（`batch/Dockerfile`）
+
+| 項目 | 内容 |
+|------|------|
+| ベース | `python:3.14-slim` |
+| 構成 | マルチステージ（builder で `pip install --prefix`、runtime へコピー）。backend と同じ方針 |
+| 実行ユーザー | 非root（`appuser`） |
+| エントリポイント | `python -m app.main`（常駐。`alembic upgrade head` は実行しない） |
+| キャッシュ | `requirements.txt` のみを先にコピーして `pip install` する |
+
 ## 4. 環境変数一覧（`.env.example`）
 
 `.env` はリポジトリにコミットせず、`.env.example` を雛形として配布する。CI/CD では GitHub Secrets から供給する。
@@ -80,6 +107,7 @@ flowchart TB
 | `COMPOSE_PROJECT_NAME` | `cerberus` | Compose プロジェクト名 |
 | `APP_ENV` | `local` | `local` / `ci` / `production` |
 | `LOG_LEVEL` | `INFO` | ログレベル |
+| `APP_TIMEZONE` | `Asia/Tokyo` | 業務上の日次境界（「当日」「朝10時」）の判定に使うタイムゾーン。DBはUTC保存のまま。backend / batch の両方に渡す |
 | `FRONTEND_PORT` | `5173` | フロントの外部公開ポート |
 | `BACKEND_PORT` | `8000` | 開発時にbackendへ接続する場合だけ `127.0.0.1` に公開。通常のCompose/CDでは未公開 |
 | `POSTGRES_PORT` | `5432` | 開発用DB接続が必要な場合だけ `127.0.0.1` に公開 |
@@ -98,6 +126,7 @@ flowchart TB
 | `REDIS_KEY_PREFIX` | 空 | 環境を共有する場合のRedisキー名前空間 |
 | `REDIS_TEST_DB` | `1` | テスト用DB番号 |
 | `LOGIN_HISTORY_RETENTION_DAYS` | `365` | `sp_purge_login_history` に渡す保持日数 |
+| `NOTIFICATION_RETENTION_DAYS` | `90` | `sp_purge_notifications` に渡す通知の保持日数 |
 | `PAGINATION_DEFAULT_PER_PAGE` / `PAGINATION_MAX_PER_PAGE` | `20` / `100` | ページング対象APIの既定件数・上限。上限超過は422 |
 
 ### 4.3 認証
@@ -144,14 +173,28 @@ flowchart TB
 | `EMAIL_VERIFY_TTL_SECONDS` | `86400` | メール認証トークンTTL（24時間） |
 | `EMAIL_VERIFY_RESEND_INTERVAL_SECONDS` | `60` | 認証メール再送の最小間隔 |
 
-### 4.5 初期データ / フロント
+### 4.5 通知 / 定期実行（batch）
+
+| 変数 | 例 | 説明 |
+|------|-----|------|
+| `NOTIFY_DUE_CRON_HOUR` | `10` | 期限通知バッチの実行時（`APP_TIMEZONE` 基準） |
+| `NOTIFY_DUE_CRON_MINUTE` | `0` | 期限通知バッチの実行分 |
+| `NOTIFY_DUE_LOOKAHEAD_HOURS` | `24` | 実行時刻から何時間先までの期限を対象にするか。既定24（＝翌日10時まで） |
+| `NOTIFY_DUE_LOCK_TTL_SECONDS` | `82800` | 実行ロック `lock:notify_due:{日付}` のTTL（23時間） |
+| `NOTIFY_DUE_BATCH_CHUNK_SIZE` | `500` | 通知INSERTを分割する件数。1回のトランザクションを短く保つ |
+| `BATCH_ENABLED` | `true` | `false` にするとスケジューラを登録せず常駐のみ（CI・検証用） |
+
+`NOTIFY_DUE_CRON_HOUR` / `NOTIFY_DUE_CRON_MINUTE` / `NOTIFY_DUE_LOOKAHEAD_HOURS` をコードに直書きせず環境変数化することで、「毎朝10時／翌日10時まで」という業務ルールを設定変更だけで調整できるようにする。
+
+### 4.6 初期データ / フロント
 
 | 変数 | 例 | 説明 |
 |------|-----|------|
 | `INITIAL_ADMIN_EMAIL` / `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD` | *** | seed 用管理者（**Secret**）。ハードコードしない。seed 時点で `email_verified_at` を設定し、確認メールなしでログインできるようにする |
 | `VITE_API_BASE_URL` | `/api` | フロントのAPIベースURL（ビルド時埋め込み）。認証モード等は `/auth/config` で実行時取得 |
+| `VITE_NOTIFICATION_POLL_INTERVAL_MS` | `60000` | 未読通知件数のポーリング間隔（ミリ秒。ビルド時埋め込み） |
 
-**pydantic-settings による定義**：`api/app/core/config.py` に `Settings(BaseSettings)` を定義し、上記を型付きで受け取る。既定値はコード側に持たせるが、URL・ポート・秘密情報は必ず環境変数から取得する（ハードコード禁止）。
+**pydantic-settings による定義**：`api/app/core/config.py` および `batch/app/core/config.py` に `Settings(BaseSettings)` を定義し、上記を型付きで受け取る。既定値はコード側に持たせるが、URL・ポート・秘密情報は必ず環境変数から取得する（ハードコード禁止）。
 
 ## 5. CI設計（`.github/workflows/ci.yml`）
 
@@ -172,12 +215,14 @@ flowchart LR
     subgraph ci["ci.yml"]
         BL["backend-lint<br/>ruff + mypy"]
         BT["backend-test<br/>pytest（services: postgres/redis）"]
+        BAT["batch-test<br/>ruff + mypy + pytest"]
         FL["frontend-lint<br/>eslint + tsc --noEmit"]
         FT["frontend-test<br/>vitest"]
         DB["docker-build<br/>buildのみ / pushなし"]
     end
     BL --> DB
     BT --> DB
+    BAT --> DB
     FL --> DB
     FT --> DB
 ```
@@ -188,7 +233,8 @@ flowchart LR
 | `backend-test` | `services` で `postgres:17` / `redis:8` を起動 → `alembic upgrade head` → `pytest --cov=app --cov-report=xml` | 同上 |
 | `frontend-lint` | `npm ci` → `eslint .` → `tsc --noEmit` | `actions/setup-node` の `cache: npm` |
 | `frontend-test` | `npm ci` → `vitest run --coverage` | 同上 |
-| `docker-build` | `docker/build-push-action`（`push: false`）で backend / frontend をビルド | GHA cache（`type=gha`） |
+| `batch-test` | `ruff check` / `mypy app` → `services` の `postgres:17` / `redis:8` に接続して `pytest --cov=app` | `actions/setup-python` の `cache: pip` |
+| `docker-build` | `docker/build-push-action`（`push: false`）で backend / frontend / batch をビルド | GHA cache（`type=gha`） |
 
 ### 5.3 backend-test の環境変数
 
@@ -233,7 +279,7 @@ sequenceDiagram
 
     DEV->>GH: main へマージ
     GH->>RUN: build-and-push ジョブ開始
-    RUN->>RUN: docker build（backend / frontend）
+    RUN->>RUN: docker build（backend / frontend / batch）
     RUN->>GHCR: docker push<br/>tag: latest, sha-{短縮SHA}
     RUN-->>GH: 成功
     GH->>SELF: deploy ジョブ開始（needs: build-and-push）
@@ -256,7 +302,7 @@ sequenceDiagram
 | 項目 | 内容 |
 |------|------|
 | トリガ | `on: push: branches: [main]` および `workflow_dispatch`（手動再実行） |
-| イメージ名 | `ghcr.io/{owner}/cerberus-backend`、`ghcr.io/{owner}/cerberus-frontend` |
+| イメージ名 | `ghcr.io/{owner}/cerberus-backend`、`ghcr.io/{owner}/cerberus-frontend`、`ghcr.io/{owner}/cerberus-batch` |
 | タグ | `latest` と `sha-${{ github.sha }}`（ロールバック可能にするため両方付与） |
 | 認証 | `docker/login-action` + `GITHUB_TOKEN`（`permissions: packages: write`） |
 | deploy ジョブ | `runs-on: self-hosted`。`needs: build-and-push` |
@@ -294,5 +340,7 @@ sequenceDiagram
 | バックアップ | `pgdata` volume の `pg_dump` 手動取得のみ（自動化はスコープ外） |
 | 監視 | `/health` の手動確認のみ。監視・アラートはスコープ外（要件書§11） |
 | ログ | コンテナ標準出力（`docker compose logs`）。集約はスコープ外 |
+| 定期通知の確認 | `docker compose logs batch` で毎朝10時の実行ログ（対象件数・作成件数）を確認する。実行されていない場合は `BATCH_ENABLED` と `APP_TIMEZONE`、Redisの `lock:notify_due:{日付}` の残存を確認し、必要なら `docker compose run --rm batch python -m app.main --run-once due_notification` で手動実行する |
+| 通知の肥大化 | `notifications` は `sp_purge_notifications`（`NOTIFICATION_RETENTION_DAYS`、既定90日）で日次ジョブ内から削除される。保持日数を延ばす場合は行数の増加に注意する |
 | シークレットローテーション | `JWT_SECRET_KEY` を変更すると全アクセストークンが無効になる（リフレッシュはRedis管理のため生存）。挙動を理解した上で実施すること |
 | マイグレーション失敗時 | backend コンテナは起動失敗とし、DBバックアップとログを確認して原因を修正する。アプリイメージだけを直前タグへ戻し、**適用済みmigrationを自動downgradeしない**。旧アプリが新しいスキーマと後方互換であることを前提にし、不可逆変更はexpand/contract方式で段階適用する |

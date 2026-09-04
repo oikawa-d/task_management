@@ -13,6 +13,8 @@
 | セッションストア | Redis 8（永続化なし） |
 | ORM / マイグレーション | SQLAlchemy 2.x + Alembic |
 | 認証方式 | session（Cookie + Redis） / JWT（Access + Refresh） / Google OAuth2 |
+| 定期実行 | `batch` コンテナ（常駐スケジューラ。毎朝10時のタスク期限通知） |
+| 基準タイムゾーン | `APP_TIMEZONE`（既定 `Asia/Tokyo`）。DBはUTC保存、日次境界・「朝10時」の判定はこのTZで行う |
 | CI/CD | GitHub Actions（CI: Lint・型チェック・テスト、CD: GHCR + self-hosted runner） |
 
 ## 2. システム構成
@@ -28,6 +30,7 @@ flowchart TB
     subgraph compose["Docker Compose ネットワーク"]
         FE["frontend<br/>Vite / Nginx"]
         API["backend<br/>FastAPI + Uvicorn"]
+        BAT["batch<br/>常駐スケジューラ<br/>毎朝10:00 JST"]
         PG[("postgres<br/>PostgreSQL 17")]
         RD[("redis<br/>Redis 8")]
         MAIL["mailpit<br/>開発用SMTP"]
@@ -41,6 +44,8 @@ flowchart TB
     FE -->|"/api proxy<br/>Cookie or Bearer"| API
     API -->|"SQLAlchemy"| PG
     API -->|"redis-py"| RD
+    BAT -->|"SQLAlchemy<br/>notifications INSERT"| PG
+    BAT -->|"redis-py<br/>実行ロック"| RD
     API -->|"SMTP"| MAIL
     API -->|"token / userinfo"| GOOGLE
     BROWSER -->|"リダイレクト"| GOOGLE
@@ -89,11 +94,11 @@ project-root/
 │   │   │   ├── security.py        # パスワードハッシュ、トークン署名
 │   │   │   ├── exceptions.py      # 業務例外とハンドラ
 │   │   │   └── deps.py            # 共通DI（現在ユーザー、DBセッション等）
-│   │   ├── api/routers/           # auth, projects, tasks, comments, users, admin
+│   │   ├── api/routers/           # auth, projects, tasks, comments, users, admin, notifications
 │   │   ├── schemas/               # リクエスト/レスポンスDTO
-│   │   ├── service/               # auth_service, project_service, task_service...
+│   │   ├── service/               # auth_service, project_service, task_service, notification_service...
 │   │   ├── auth/                  # Strategy実装（session_auth/jwt_auth/oauth/base）
-│   │   ├── repository/            # user_repo, project_repo, task_repo, redis_store...
+│   │   ├── repository/            # user_repo, project_repo, task_repo, notification_repo, redis_store...
 │   │   ├── models/                # SQLAlchemy ORMモデル
 │   │   ├── db.py                  # エンジン・セッションファクトリ
 │   │   └── redis_client.py        # Redis接続プール
@@ -101,6 +106,15 @@ project-root/
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── frontend/  （詳細は 05_frontend.md）
+├── batch/
+│   ├── app/
+│   │   ├── main.py                # APScheduler 起動（常駐）
+│   │   ├── core/{config.py, logger.py}
+│   │   ├── jobs/due_notification_job.py
+│   │   └── repository/            # batch専用のDB/Redisアクセス
+│   ├── tests/
+│   ├── Dockerfile
+│   └── requirements.txt
 ├── db/{migrations/, functions/, procedures/}
 ├── docker-compose.yml
 ├── .env / .env.example
@@ -210,6 +224,7 @@ flowchart LR
         TR["tasks_router"]
         ADR["admin_router"]
         UR["users_router"]
+        NR["notifications_router"]
     end
 
     subgraph service
@@ -218,6 +233,7 @@ flowchart LR
         TS["task_service"]
         US["user_service"]
         MS["mail_service"]
+        NS["notification_service"]
     end
 
     subgraph auth_strategy
@@ -232,6 +248,7 @@ flowchart LR
         PRP["project_repository"]
         TRP["task_repository"]
         LRP["login_history_repository"]
+        NRP["notification_repository"]
         RS["redis_store"]
     end
 
@@ -239,6 +256,7 @@ flowchart LR
     PR --> PS
     TR --> TS
     UR --> US
+    NR --> NS
     ADR --> US
     ADR --> PS
 
@@ -253,6 +271,8 @@ flowchart LR
     JWTS --> RS
     PS --> PRP
     TS --> TRP
+    TS --> NS
+    NS --> NRP
     US --> URP
 ```
 
@@ -269,6 +289,11 @@ flowchart LR
         S6["refresh_used / refresh_family_revoked"]
         S7["oauth_handoff:{code}"]
         S8["emailverify / emailverify_current"]
+        S9["lock:notify_due:{YYYY-MM-DD}"]
+    end
+
+    subgraph batch["batch（常駐スケジューラ）"]
+        B1["due_notification_job<br/>毎朝10:00 JST"]
     end
 
     subgraph pg["PostgreSQL（永続）"]
@@ -279,12 +304,17 @@ flowchart LR
         T5["tasks"]
         T6["task_comments"]
         T7["login_history"]
+        T8["notifications"]
     end
 
     S1 -->|user_id| T1
     S3 -->|user_id| T1
     S5 -->|user_id| T1
     T7 -->|user_id| T1
+    T8 -->|user_id| T1
+    T8 -->|task_id| T5
+    B1 -->|"due_at を走査"| T5
+    B1 -->|"通知をINSERT"| T8
 ```
 
 「ログインが有効かどうか」の判定は Redis のみを参照し、「誰がいつログインしたか」の履歴は設定した保持期間の範囲で PostgreSQL の `login_history` に残す。この分離により、Redis 再起動でログイン状態は失われても監査ログは独立して残る。
@@ -300,3 +330,5 @@ flowchart LR
 | テスト | バックエンド pytest（Redis/PostgreSQL は実コンテナ接続）、フロント Vitest |
 | 秘匿情報 | `.env` および GitHub Secrets 管理。リポジトリへ直接コミットしない |
 | Redis永続化 | RDB/AOF 無効。再起動時に全ログアウトとなることを許容 |
+| 定期実行 | `batch` コンテナの常駐スケジューラ。二重実行はRedisの実行ロック（`lock:notify_due:{日付}`）で防止（[02_redis](./02_redis.md#2-キー一覧)） |
+| タイムゾーン | 保存はUTC（`TIMESTAMPTZ`）、業務上の日次境界の判定は `APP_TIMEZONE`（既定 `Asia/Tokyo`）。フロントは表示のみローカル変換 |
