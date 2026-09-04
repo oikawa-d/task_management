@@ -22,6 +22,8 @@
 | 接続先 | `env.py` 内で `DATABASE_URL`（環境変数）から取得。`alembic.ini` にはURLをハードコードしない |
 | `db/migrations/` の位置づけ | 参考用の手動DDLスナップショット置き場。CIやアプリ起動では**参照しない**（`api/alembic/versions/` のみが実行対象） |
 | オートジェネレート | `alembic revision --autogenerate -m "<message>"` でモデル差分から下書きを生成し、CHECK制約・関数・トリガ適用は手動でリビジョンに追記する（`basic_design/01_database.md` §6） |
+| backendのbuild context | リポジトリルート（`docker build -f api/Dockerfile .`）。`api/`だけをcontextにせず、`db/functions/`・`db/procedures/`をruntimeイメージへ含める |
+| runtime配置 | `api/`は`/app/api/`、SQL資材は`/app/db/functions/`・`/app/db/procedures/`へ配置する。Alembicリビジョンからは`Path(__file__).resolve().parents[3] / "db"`で参照する |
 
 ## 2. `api/alembic/versions/` ディレクトリ構成と初期リビジョン
 
@@ -175,7 +177,6 @@ Revision ID: 0010
 Revises: 0009
 """
 import os
-import uuid
 from alembic import op
 import sqlalchemy as sa
 
@@ -186,14 +187,13 @@ def upgrade() -> None:
     op.execute(
         sa.text(
             """
-            INSERT INTO users (id, username, email, password_hash, role,
+            INSERT INTO users (username, email, password_hash, role,
                                 is_active, email_verified_at, created_at, updated_at)
-            VALUES (:id, :username, :email, :password_hash, 'admin',
+            VALUES (:username, :email, :password_hash, 'admin',
                     true, now(), now(), now())
             ON CONFLICT (lower(username)) DO NOTHING
             """
-        ).bindparams(id=str(uuid.uuid4()), username=username, email=email,
-                      password_hash=password_hash)
+        ).bindparams(username=username, email=email, password_hash=password_hash)
     )
 
 def downgrade() -> None:

@@ -177,7 +177,7 @@ stateDiagram-v2
 | 入力 | なし（クエリ・認証不要、[../api/system/01_get_health.md](../api/system/01_get_health.md)） |
 | 出力 | `HealthResponse`（`status`/`auth_mode`/`components.database`/`components.redis`） |
 | 失敗条件 | HTTP 503、または接続自体がタイムアウト |
-| 処理内容 | 1. `curl -s http://localhost:${FRONTEND_PORT}/api/health` 2. `status`が`degraded`なら`components`を見てDB/Redisいずれの異常か切り分け 3. 応答自体がない場合は`docker compose ps`でbackend/frontendコンテナの起動状態を確認 |
+| 処理内容 | 1. `wget -qO- http://localhost:${FRONTEND_PORT}/api/health` 2. `status`が`degraded`なら`components`を見てDB/Redisいずれの異常か切り分け 3. 応答自体がない場合は`docker compose ps`でbackend/frontendコンテナの起動状態を確認 |
 | 副作用 | なし |
 
 ### 8.2 構造化ログとリクエストIDによる相関

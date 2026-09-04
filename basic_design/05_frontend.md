@@ -168,6 +168,7 @@ flowchart TB
               ├──────────────────────────────┤
               │   CIを直す                   │  ← 既読（マークなし・淡色）
               │   期限 09/04 18:00           │
+              │ [前へ] 1 2 [次へ]             │  ← 2ページ以上で表示
               ├──────────────────────────────┤
               │ 通知はありません（0件時）     │
               └──────────────────────────────┘
@@ -181,6 +182,7 @@ flowchart TB
 | 通知行 | クリックで `/projects/{project_id}` へ遷移し、対象タスクの詳細モーダルを開く。遷移と同時に `PATCH /notifications/{id}/read` を実行する。`task` が `null`（タスク削除済み）の行は遷移せず、既読化のみ行う |
 | すべて既読ボタン | `POST /notifications/read-all`。`unread_count === 0` のときは非活性 |
 | 空状態 | 通知0件のとき「通知はありません」を表示する |
+| ページネーション | `GET /notifications?page={page}&per_page=20&unread_only={unreadOnly}` の `meta.page` / `meta.total_pages` を使い、2ページ以上のときだけ表示する。ページ番号変更で一覧を再取得し、`unreadOnly`変更時は`page=1`へ戻す |
 
 **未読件数の取得（ポーリング）**
 

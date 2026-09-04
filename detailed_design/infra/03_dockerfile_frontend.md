@@ -142,6 +142,16 @@ flowchart TB
 | `/api` proxy | `location /api/ { proxy_pass http://backend:8000/api/; proxy_set_header Host $host; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; }`（backendの内部ポート`8000`固定、サービス名`backend`で名前解決） |
 | 静的アセットキャッシュ | ハッシュ付きファイル名（Viteのデフォルト）に対して `Cache-Control: public, max-age=31536000, immutable` を設定可能（`index.html`自体はキャッシュしない） |
 
+### 8.4 API境界対応表
+
+| 外部URL | Nginx転送 | FastAPIルート | API履歴 |
+|---------|-----------|---------------|---------|
+| `/api/{resource}` | `location /api/` → `http://backend:8000/api/{resource}` | `/api/{resource}` | `/api`配下のため記録 |
+| `/api/health` | `location /api/` → `http://backend:8000/api/health` | `/api/health` | 記録 |
+| `/`・SPAルート | 静的配信または`index.html`へfallback | なし | 記録しない |
+
+Nginxは`/api`プレフィックスを削除せず転送する。`api_history.path`はクエリ文字列を除いたFastAPIのルートテンプレートを保存する（詳細は [../log/00_history.md](../log/00_history.md)）。
+
 ## 9. 関数・要素相関図
 
 ```mermaid

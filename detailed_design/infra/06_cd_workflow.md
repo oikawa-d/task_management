@@ -23,7 +23,7 @@
 | `deploy` | ジョブ | self-hosted runner上で`.env`生成 → pull → `docker compose up -d` → ヘルスチェック | `needs: build-and-push`、`runs-on: [self-hosted, linux, cerberus]` |
 | GitHub Environment `production` | 環境 | Secretsのスコープ分離、必要に応じた承認フロー | `deploy`ジョブに`environment: production`を指定 |
 | `concurrency` グループ | ワークフロー設定 | 同時デプロイの競合防止 | `group: deploy-main, cancel-in-progress: false` |
-| イメージタグ | 命名規則 | `latest`と`sha-{短縮SHA}`の2本立て | ロールバック時は`sha-{短縮SHA}`を指定 |
+| イメージタグ | 命名規則 | backend/frontend/batchそれぞれに`latest`と`sha-{短縮SHA}`を付与。Composeは3つの`*_IMAGE_TAG`でSHAタグを指定 | ロールバック時も3イメージを同じ直前成功SHAタグへ戻す |
 
 ## 3. 設定項目（環境変数・Secrets）
 
@@ -36,7 +36,19 @@
 | `GITHUB_TOKEN` | str | 自動発行 | `docker/login-action`によるGHCR認証（`permissions: packages: write`） | **Secret**（GitHub自動管理） |
 | すべての`.env`項目（[04_env_config.md](./04_env_config.md)§3） | - | - | `deploy`ジョブが`GitHub Environment: production`のSecretsから`.env`をヒアドキュメント生成 | **Secret**表記の項目はすべてGitHub Secrets |
 | `DEPLOY_HOST_HEALTHCHECK_URL` | str | `http://localhost:${FRONTEND_PORT}/api/health` | デプロイ後ポーリング先URL | 否（self-hosted runnerローカルの値） |
-| `DEPLOY_HEALTHCHECK_RETRIES` / `DEPLOY_HEALTHCHECK_INTERVAL_SECONDS` | int | `10` / `5` | ヘルスチェックのポーリング回数・間隔 | 否（ワークフロー内の`env:`。学習用途の仮値であり基本設計に明記はない。§12参照） |
+| `DEPLOY_HEALTHCHECK_RETRIES` / `DEPLOY_HEALTHCHECK_INTERVAL_SECONDS` | int | `10` / `5` | ヘルスチェックのポーリング回数・間隔 | 否 |
+
+### 3.1 イメージタグ・ロールバック状態
+
+| 項目 | 定義 |
+|------|------|
+| 新規デプロイタグ | `IMAGE_TAG=sha-{github.shaの先頭12文字}`。backend/frontend/batchの3イメージへ同じ`IMAGE_TAG`を付け、`latest`も同時に更新する |
+| Composeの参照値 | `BACKEND_IMAGE_TAG` / `FRONTEND_IMAGE_TAG` / `BATCH_IMAGE_TAG`。通常デプロイでは3つとも`IMAGE_TAG`、ロールバックでは3つとも直前成功値を設定する |
+| 直前成功値 | self-hosted runnerの`DEPLOY_STATE_FILE`（既定：`/var/lib/cerberus/last-successful-deploy.env`）に3つのタグを保存する。ヘルスチェック成功後だけ原子的に更新し、デプロイ開始前の値をロールバック入力として読む |
+| 初回デプロイ | 状態ファイルがない場合はロールバックせず、手動対応が必要なfailureとして終了する |
+| イメージラベル | build時に3イメージへ`com.cerberus.managed=true`と`com.cerberus.component=backend|frontend|batch`を付ける |
+| 保持条件 | 現在稼働中の3イメージと`DEPLOY_STATE_FILE`に記録した直前成功の3イメージは、保持期間に関係なく保持する |
+| 削除条件 | `com.cerberus.managed=true`、未使用、現在・直前成功のいずれでもない、かつ`IMAGE_RETENTION_DAYS`（既定30日）を超えたイメージだけを削除する。他プロジェクトのラベルなしイメージは対象外とする |
 
 `.env`生成は`deploy`ジョブ内のステップで`cat <<EOF > .env` 形式のヒアドキュメントを用い、`${{ secrets.* }}`を展開する。生成後の`.env`の中身をワークフローログへ出力するステップ（`cat .env`等）は設けない。
 
@@ -84,7 +96,7 @@ sequenceDiagram
             SELF->>SELF: DEPLOY_HEALTHCHECK_INTERVAL_SECONDS 待機して再試行
         end
     end
-    SELF->>SELF: com.cerberus.managed=true ラベル付き旧イメージをprune
+    SELF->>SELF: 3タグをDEPLOY_STATE_FILEへ保存し、保持対象外のmanagedイメージだけprune
     SELF-->>GH: ジョブ成功
     GH-->>DEV: デプロイ完了通知
 ```
@@ -104,8 +116,8 @@ sequenceDiagram
         SELF->>HC: GET /api/health
         HC-->>SELF: 503 / 接続失敗
     end
-    SELF->>SELF: 直前の成功タグ（sha-{prev}）を記録済み変数から取得
-    SELF->>DC: backend/frontend/batchイメージを sha-{prev} へ差し替えて再起動<br/>（DB downgradeは行わない）
+    SELF->>SELF: DEPLOY_STATE_FILEから3つの直前成功タグを取得
+    SELF->>DC: backend/frontend/batchを各直前成功タグへ差し替えて再起動<br/>（DB downgradeは行わない）
     DC-->>SELF: 旧イメージで再起動完了
     SELF->>HC: GET /api/health（復旧確認）
     alt 復旧成功
@@ -159,7 +171,8 @@ stateDiagram-v2
     Unhealthy --> RolledBack: 直前タグ（sha-prev）へアプリイメージのみ差し替え
     RolledBack --> Healthy: 復旧確認成功
     RolledBack --> Failed: 復旧確認も失敗
-    Healthy --> Pruned: com.cerberus.managed=true旧イメージをprune
+    Healthy --> StateSaved: 3つの直前成功タグをDEPLOY_STATE_FILEへ保存
+    StateSaved --> Pruned: 保持対象を除くmanagedイメージをprune
     Pruned --> [*]
     Failed --> [*]
 
@@ -187,10 +200,10 @@ stateDiagram-v2
 | 項目 | 内容 |
 |------|------|
 | シグネチャ / 定義 | `runs-on: ubuntu-latest`。`permissions: { packages: write, contents: read }` |
-| 引数 / 入力 | `api/Dockerfile`（[02_dockerfile_api.md](./02_dockerfile_api.md)）、`frontend/Dockerfile`（[03_dockerfile_frontend.md](./03_dockerfile_frontend.md)）、`batch/Dockerfile`（[08_dockerfile_batch.md](./08_dockerfile_batch.md)）、`${{ github.sha }}` |
+| 引数 / 入力 | context`.` + `api/Dockerfile`（[02_dockerfile_api.md](./02_dockerfile_api.md)）、context`frontend` + `frontend/Dockerfile`（[03_dockerfile_frontend.md](./03_dockerfile_frontend.md)）、context`.` + `batch/Dockerfile`（[08_dockerfile_batch.md](./08_dockerfile_batch.md)）、`${{ github.sha }}` |
 | 戻り値 / 出力 | GHCR上のイメージ3種（各`latest`/`sha-{短縮SHA}`タグ） |
 | 送出例外 / 失敗条件 | `docker/login-action`の認証失敗、`docker build`のビルドエラー、`docker push`の権限エラー |
-| 処理内容 | 1. チェックアウト 2. `docker/setup-buildx-action@v3` 3. `docker/login-action@v3`（`registry: ghcr.io`, `username: ${{ github.actor }}`, `password: ${{ secrets.GITHUB_TOKEN }}`） 4. `docker/build-push-action@v6`をbackend/frontend/batch用に3回実行し、各イメージへ`latest`と`sha-${{ github.sha }}`を付けてpush 5. `VITE_API_BASE_URL`をfrontendのビルド`ARG`として本番相当値で渡す |
+| 処理内容 | 1. チェックアウト 2. `docker/setup-buildx-action@v3` 3. `docker/login-action@v3`（`registry: ghcr.io`, `username: ${{ github.actor }}`, `password: ${{ secrets.GITHUB_TOKEN }}`） 4. `GITHUB_SHA`の先頭12文字から`IMAGE_TAG=sha-{短縮SHA}`を生成 5. `docker/build-push-action@v6`をbackend（context`.`）、frontend（context`frontend`）、batch（context`.`）用に3回実行し、各イメージへ`latest`と`IMAGE_TAG`を付け、`com.cerberus.managed=true`とcomponentラベルを付けてpush 6. `VITE_API_BASE_URL`をfrontendのビルド`ARG`として本番相当値で渡す |
 | 副作用 | GHCR上に新規イメージタグが公開される |
 
 ### 8.3 `deploy` ジョブ
@@ -201,7 +214,7 @@ stateDiagram-v2
 | 引数 / 入力 | GitHub Environment `production`のSecrets（[04_env_config.md](./04_env_config.md)全一覧）、`${{ github.sha }}` |
 | 戻り値 / 出力 | デプロイ成功可否、ヘルスチェック結果 |
 | 送出例外 / 失敗条件 | `.env`生成失敗（Secrets未設定）、`docker compose pull`失敗、ヘルスチェック未達（リトライ上限到達） |
-| 処理内容 | 1. `actions/checkout@v4`（`clean: true`を明示、self-hostedのワークスペース再利用対策） 2. `.env`をヒアドキュメントで生成（`cat <<EOF > .env` 形式、`${{ secrets.* }}`を展開しログ出力しない） 3. `docker compose pull` 4. `docker compose up -d --remove-orphans` 5. `GET ${DEPLOY_HOST_HEALTHCHECK_URL}` を`DEPLOY_HEALTHCHECK_RETRIES`回まで`DEPLOY_HEALTHCHECK_INTERVAL_SECONDS`間隔でポーリング 6. 失敗時は「8.4 ロールバック手順」を実行 7. 成功時は`docker image prune`（`com.cerberus.managed=true`ラベル限定） |
+| 処理内容 | 1. `actions/checkout@v4`（`clean: true`を明示、self-hostedのワークスペース再利用対策） 2. デプロイ開始前に`DEPLOY_STATE_FILE`から直前成功の3タグを読み込む 3. `.env`をヒアドキュメントで生成（`cat <<EOF > .env` 形式、`${{ secrets.* }}`を展開しログ出力しない） 4. `BACKEND_IMAGE_TAG`/`FRONTEND_IMAGE_TAG`/`BATCH_IMAGE_TAG`へ新規`IMAGE_TAG`を設定 5. `docker compose pull` 6. `docker compose up -d --remove-orphans` 7. `GET ${DEPLOY_HOST_HEALTHCHECK_URL}` を`DEPLOY_HEALTHCHECK_RETRIES`回まで`DEPLOY_HEALTHCHECK_INTERVAL_SECONDS`間隔でポーリング 8. 失敗時は「8.4 ロールバック手順」を実行 9. 成功時は3タグを状態ファイルへ原子的に保存し、保持対象外のmanagedイメージだけを削除する |
 | 副作用 | self-hosted runnerホスト上のコンテナ・イメージ・`.env`ファイルを変更する |
 
 ### 8.4 ロールバック手順（`deploy`ジョブ内の失敗時ステップ）
@@ -209,10 +222,10 @@ stateDiagram-v2
 | 項目 | 内容 |
 |------|------|
 | シグネチャ / 定義 | ヘルスチェック失敗時に実行される後続ステップ（`if: failure()`相当の条件付きステップ） |
-| 引数 / 入力 | デプロイ直前に記録した直前成功タグ（`sha-{prev}`。runner上のファイルまたは前回ジョブの出力から取得） |
+| 引数 / 入力 | デプロイ開始前に`DEPLOY_STATE_FILE`から読み出したbackend/frontend/batchそれぞれの直前成功タグ |
 | 戻り値 / 出力 | ロールバック後の稼働状態 |
 | 送出例外 / 失敗条件 | ロールバック後も`/api/health`が失敗する場合は復旧不能としてジョブ失敗のまま終了 |
-| 処理内容 | 1. `docker compose.yml`のイメージタグを`sha-{prev}`に一時的に差し替え（環境変数`BACKEND_IMAGE_TAG`/`FRONTEND_IMAGE_TAG`をrunner上で上書きし`docker compose up -d`を再実行する想定） 2. **DBマイグレーションのdowngradeは行わない**（[../database/09_migration.md](../database/09_migration.md)§5） 3. `/api/health`で復旧確認 4. 結果に関わらずジョブ全体は「新バージョンの反映失敗」としてfailure終了する |
+| 処理内容 | 1. `BACKEND_IMAGE_TAG`/`FRONTEND_IMAGE_TAG`/`BATCH_IMAGE_TAG`を`DEPLOY_STATE_FILE`の各値へ設定し`docker compose pull && docker compose up -d`を再実行 2. **DBマイグレーションのdowngradeは行わない**（[../database/09_migration.md](../database/09_migration.md)§5） 3. `/api/health`で復旧確認 4. 結果に関わらずジョブ全体は「新バージョンの反映失敗」としてfailure終了する |
 | 副作用 | 稼働イメージが旧バージョンに戻る。DBスキーマは変更しない（前進のみ） |
 
 ## 9. 関数・要素相関図
@@ -232,8 +245,9 @@ flowchart LR
     PULL --> UP["docker compose up -d"]
     UP --> MIG["alembic upgrade head"]
     MIG --> HEALTH["GET /api/health ポーリング"]
-    HEALTH -->|失敗| ROLLBACK["直前タグへロールバック<br/>（DB downgradeなし）"]
-    HEALTH -->|成功| PRUNE["com.cerberus.managed=true<br/>旧イメージprune"]
+    HEALTH -->|失敗| ROLLBACK["直前成功タグへ3イメージをロールバック<br/>（DB downgradeなし）"]
+    HEALTH -->|成功| SAVE["3つの直前成功タグを<br/>DEPLOY_STATE_FILEへ保存"]
+    SAVE --> PRUNE["保持対象外のmanagedイメージprune"]
     ROLLBACK --> HEALTH2["復旧確認"]
 ```
 
@@ -244,10 +258,10 @@ flowchart LR
 | Secretsのログ非出力 | `.env`生成ステップは値をログへ`echo`/`cat`しない。GitHub Actionsのマスキング機能（Secrets値の自動置換）にも依存しない設計とする | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §6.2 |
 | GitHub Environment承認 | `environment: production`を用い、必要に応じて手動承認（reviewers）を必須化できる構成とする | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §6.2 |
 | 同時実行制御 | `concurrency: group: deploy-main, cancel-in-progress: false`により、連続pushでデプロイが競合しない（先行デプロイ完了を待つ） | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §6.2 |
-| イメージ削除の限定 | `docker image prune`は`com.cerberus.managed=true`ラベル付きイメージのみ対象とし、共有ホスト上の他プロジェクトのイメージを誤削除しない | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §6.2 |
+| イメージ削除の限定 | `com.cerberus.managed=true`、未使用、保持対象外、かつ`IMAGE_RETENTION_DAYS`超過の3条件を満たすイメージだけを削除し、共有ホスト上の他プロジェクトのイメージを誤削除しない | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §6.2 |
 | ロールバック方針 | アプリイメージのみを直前タグへ戻し、DBマイグレーションのdowngradeは行わない（fail-close：新スキーマ前提の旧アプリ動作は保証しない前提のため、不可逆変更はexpand/contract方式で段階適用する） | [../database/09_migration.md](../database/09_migration.md)§5、[../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §8 |
-| self-hosted runnerのワークスペース | `actions/checkout`の`clean: true`を明示し、前回実行の残留ファイルによる意図しない挙動を防ぐ | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §6.3 |
-| パブリックリポジトリでの利用回避 | self-hosted runnerは第三者PRからの任意コード実行リスクがあるため、本ワークフローは`pull_request`をトリガーにせず`push: [main]`限定とする | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §6.3 |
+| self-hosted runnerのワークスペース | `actions/checkout`の`clean: true`を明示し、前回実行の残留ファイルによる意図しない挙動を防ぐ | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §6.4 |
+| パブリックリポジトリでの利用回避 | self-hosted runnerは第三者PRからの任意コード実行リスクがあるため、本ワークフローは`pull_request`をトリガーにせず`push: [main]`限定とする | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §6.4 |
 
 ## 11. テスト設計
 
@@ -267,7 +281,7 @@ flowchart LR
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 要検討 | `DEPLOY_HEALTHCHECK_RETRIES`/`DEPLOY_HEALTHCHECK_INTERVAL_SECONDS`は基本設計に環境変数として明記がなく、本書が実装レベルの詳細として仮値（10回・5秒）を提案した。[../api/system/01_get_health.md](../api/system/01_get_health.md)の`HEALTH_CHECK_TIMEOUT_SECONDS`（アプリ内DB/Redisタイムアウト）とは別概念であり、両者の関係整理が必要 | ワークフロー内の`env:`定義 |
-| 要検討 | ロールバック時に「直前の成功タグ（`sha-{prev}`）」をどう記録・取得するか（runner上のファイル保存、GitHub Deployments API、Actions Artifactsのいずれか）は基本設計に明記がなく実装時の裁量とする | `deploy`ジョブのロールバックステップ実装 |
+| 確定 | `DEPLOY_HEALTHCHECK_RETRIES`/`DEPLOY_HEALTHCHECK_INTERVAL_SECONDS`はデプロイジョブのポーリング設定、`HEALTH_CHECK_TIMEOUT_SECONDS`はAPI内部のDB/Redis確認設定として分離する | ワークフロー内の`env:`定義 |
+| 確定 | 直前成功タグは`DEPLOY_STATE_FILE`にbackend/frontend/batchの3値を保存し、ヘルスチェック成功後だけ更新する | `deploy`ジョブのロールバックステップ実装 |
 | 要検討 | `environment: production`の手動承認（reviewers）を必須にするかは基本設計に明記がなく、学習用途では省略も許容されるため要検討 | GitHub Environmentsの設定 |
 | 不明 | self-hosted runnerが単一ホストのみか、複数環境（開発者ごとの自宅サーバー等）を想定するかは基本設計に明記がなく、本書は単一`production`環境を前提とした |`runs-on`ラベル設計、GitHub Environments構成数 |

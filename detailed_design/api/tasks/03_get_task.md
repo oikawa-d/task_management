@@ -108,8 +108,10 @@ sequenceDiagram
     D-->>R: "CurrentUser"
     R->>S: "get_task_detail(task_id, current_user)"
     S->>TR: "get_with_project(task_id)"
-    TR->>PG: "SELECT tasks JOIN projects<br/>WHERE tasks.id = task_id"
+    TR->>PG: "SELECT tasks WHERE tasks.id = task_id"
     PG-->>TR: "task行 + project_id"
+    TR->>PG: "selectinload(assignee) / selectinload(created_by) の追加SELECT"
+    PG-->>TR: "users行"
     alt "タスクが存在しない"
         TR-->>S: "None"
         S-->>R: "NotFoundError"
@@ -181,7 +183,7 @@ flowchart TB
 | 引数 | db: DBセッション／task_id: 対象タスクID |
 | 戻り値 | `TaskWithProject`（`Task` に `assignee` / `created_by` をEager Loadしたもの）または `None` |
 | 送出例外 | `OperationalError`（503へ変換） |
-| 処理内容 | 1. `tasks` を `id = task_id` で1件取得し、`assignee`（`users`）・`created_by`（`users`）を `selectinload` でEager Load<br/>2. 存在しない場合は `None` を返す（例外は投げない。所属確認前の存在チェックはサービス層で行う） |
+| 処理内容 | 1. `tasks` を `id = task_id` で1回取得 2. `assignee` と `created_by` の各 `selectinload` による追加SELECTを実行してEager Load（最大3クエリ。対象行がない場合は主クエリのみ）<br/>3. 存在しない場合は `None` を返す（例外は投げない。所属確認前の存在チェックはサービス層で行う） |
 | 副作用 | なし |
 
 ## 7. 関数相関図
@@ -205,7 +207,7 @@ flowchart LR
 flowchart LR
     subgraph read["参照範囲（PostgreSQL）"]
         T["tasks<br/>WHERE id = :task_id"]
-        U["users<br/>assignee / created_by（JOIN）"]
+        U["users<br/>assignee / created_by（selectinload追加SELECT）"]
         PM["project_members<br/>所属確認（非adminのみ）"]
         C["task_comments<br/>COUNT（別クエリ）"]
     end
@@ -220,8 +222,8 @@ flowchart LR
 
 | テーブル | 操作 | 条件・TTL | 備考 |
 |----------|------|-----------|------|
-| tasks | SELECT | `id = task_id` | JOIN先の `project_id` から認可判定を行う起点 |
-| users | SELECT（JOIN） | `assignee_id` / `created_by` | 表示用情報のEager Load |
+| tasks | SELECT | `id = task_id` | `project_id` から認可判定を行う起点 |
+| users | SELECT（`selectinload`の追加SELECT各1回） | `assignee_id` / `created_by` | 表示用情報のEager Load。主クエリとは別ラウンドトリップ |
 | project_members | SELECT | `project_id`, `user_id` | admin以外の所属確認 |
 | task_comments | SELECT（COUNT） | `task_id = :task_id` | `comment_count` 算出。一覧取得（[01](./01_get_project_tasks.md)）とは別クエリでN+1にならない（対象が1件のため） |
 

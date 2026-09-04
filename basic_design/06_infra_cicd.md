@@ -41,9 +41,9 @@ flowchart TB
 |----------|----------|------|---------------|------|
 | `postgres` | `postgres:17-alpine` | - | `pg_isready` | volume `pgdata` で永続化。ホストポートは公開しない |
 | `redis` | `redis:8-alpine` | - | `redis-cli ping` | `--save "" --appendonly no --maxmemory-policy noeviction`。**volumeなし**。ホストポートは公開しない |
-| `backend` | 自ビルド（`api/Dockerfile`） | postgres, redis（`service_healthy`） | `GET /health` | 起動時に `alembic upgrade head` |
-| `batch` | 自ビルド（`batch/Dockerfile`） | postgres, redis（`service_healthy`） | プロセス生存監視（`pgrep -f app.main`） | 常駐スケジューラ。ポートは公開しない。マイグレーションは実行しない（backend の責務） |
-| `frontend` | 自ビルド（`frontend/Dockerfile`） | backend | `GET /` | 本番相当はビルド成果物を nginx で配信 |
+| `backend` | 自ビルド（context: リポジトリルート、`api/Dockerfile`） | postgres, redis（`service_healthy`） | Python標準ライブラリで `GET /api/health` | 起動時に `alembic upgrade head`。`db/functions/`・`db/procedures/`をイメージに含める |
+| `batch` | 自ビルド（context: リポジトリルート、`batch/Dockerfile`） | postgres, redis（`service_healthy`） | PythonでPID 1の生存確認 | 常駐スケジューラ。ポートは公開しない。マイグレーションは実行しない（backend の責務） |
+| `frontend` | 自ビルド（context: `frontend/`、`frontend/Dockerfile`） | backend | BusyBox `wget`で `GET /` | 本番相当はビルド成果物を nginx で配信 |
 | `mailpit` | `axllent/mailpit` | - | - | SMTP `1025` / Web UI `8025`。`dev` profile専用。UI/SMTPはloopback公開のみ |
 
 - `redis` に volume を割り当てないことで、要件書§4の「再起動で全ログアウト」という挙動を意図的に再現する
@@ -51,7 +51,7 @@ flowchart TB
 - 開発時はソースをバインドマウントしてホットリロード（`uvicorn --reload` / `vite dev`）、CD時はイメージ内の成果物を使う構成を `docker-compose.override.yml` で切り替える
 - 基本Composeは `frontend` の `/api` proxyを経由する。`backend` / `postgres` / `redis` は `ports` を持たず、開発者が直接接続する場合だけ `compose.dev.yml` で `127.0.0.1:${...}` を追加する
 - `mailpit` は `profiles: [dev]` とし、production/CDでは起動しない。productionの `SMTP_HOST` は外部SMTPを指定する
-- `batch` は `backend` に依存させない（HTTP APIを呼ばずDB/Redisへ直接アクセスするため）。ただしスキーマは backend 起動時の `alembic upgrade head` に依存するため、`restart: unless-stopped` とし、テーブル未作成で起動に失敗した場合は再起動で回復させる
+- `batch` は `backend` に依存させない（HTTP APIを呼ばずDB/Redisへ直接アクセスするため）。ただしスキーマは backend 起動時の `alembic upgrade head` に依存するため、`restart: unless-stopped` とし、スキーマ未適用で起動に失敗した場合は再起動で回復させる
 - `batch` を1レプリカに限定する（`deploy.replicas` を指定しない）。複数起動しても Redis の実行ロックと `UNIQUE (user_id, dedupe_key)` により通知は重複しないが、無駄なDB走査を避けるため
 
 ### 2.1 batch コンテナの構成
@@ -67,7 +67,7 @@ flowchart TB
 
 ## 3. Dockerfile 方針
 
-### 3.1 backend（`api/Dockerfile`）
+### 3.1 backend（`api/Dockerfile`、context: リポジトリルート）
 
 | 項目 | 内容 |
 |------|------|
@@ -75,7 +75,7 @@ flowchart TB
 | 構成 | マルチステージ（builder で `pip install --prefix`、runtime へコピー） |
 | 実行ユーザー | 非root（`appuser`） |
 | エントリポイント | `alembic upgrade head` → `uvicorn app.main:app --host 0.0.0.0 --port 8000` |
-| キャッシュ | `requirements.txt` のみを先にコピーして `pip install` する（レイヤキャッシュ） |
+| キャッシュ | `api/requirements.txt` のみを先にコピーして `pip install` する（レイヤキャッシュ） |
 
 ### 3.2 frontend（`frontend/Dockerfile`）
 
@@ -204,7 +204,9 @@ flowchart TB
 | `VITE_API_BASE_URL` | `/api` | フロントのAPIベースURL（ビルド時埋め込み）。認証モード等は `/auth/config` で実行時取得 |
 | `VITE_NOTIFICATION_POLL_INTERVAL_MS` | `60000` | 未読通知件数のポーリング間隔（ミリ秒。ビルド時埋め込み） |
 
-**pydantic-settings による定義**：`api/app/core/config.py` および `batch/app/core/config.py` に `Settings(BaseSettings)` を定義し、上記を型付きで受け取る。既定値はコード側に持たせるが、URL・ポート・秘密情報は必ず環境変数から取得する（ハードコード禁止）。
+**pydantic-settings による定義**：`api/app/core/config.py` に `BackendSettings(BaseSettings)`、`batch/app/core/config.py` に `BatchSettings(BaseSettings)` を定義し、各サービスの項目を型付きで受け取る。既定値はコード側に持たせるが、URL・ポート・秘密情報は必ず環境変数から取得する（ハードコード禁止）。
+
+初期管理者の3環境変数は起動時に空文字も含めて検証する。不足時はseedをスキップせず、HTTP受付前にbackendをfail-closeで終了させる。CIでは専用のダミーSecretを注入する。
 
 初期管理者の3環境変数は起動時に空文字も含めて検証する。不足時はseedをスキップせず、HTTP受付前にbackendをfail-closeで終了させる。CIでは専用のダミーSecretを注入する。
 
@@ -301,7 +303,7 @@ sequenceDiagram
     DC->>DC: alembic upgrade head（backend起動時）
     SELF->>SELF: frontend経由の /api/health をポーリングして疎通確認
     alt ヘルスチェック失敗
-        SELF->>DC: アプリイメージだけ直前タグへ戻して再起動（DB downgradeなし）
+        SELF->>DC: backend/frontend/batchを直前成功タグへ戻して再起動（DB downgradeなし）
         SELF-->>GH: ジョブ失敗
     else 成功
         SELF->>SELF: Cerberus管理ラベル付きイメージだけprune
@@ -315,15 +317,26 @@ sequenceDiagram
 |------|------|
 | トリガ | `on: push: branches: [main]` および `workflow_dispatch`（手動再実行） |
 | イメージ名 | `ghcr.io/{owner}/cerberus-backend`、`ghcr.io/{owner}/cerberus-frontend`、`ghcr.io/{owner}/cerberus-batch` |
-| タグ | `latest` と `sha-${{ github.sha }}`（ロールバック可能にするため両方付与） |
+| タグ | 3イメージそれぞれに`latest`と`sha-{短縮SHA}`を付与。Composeの`BACKEND_IMAGE_TAG`/`FRONTEND_IMAGE_TAG`/`BATCH_IMAGE_TAG`は通常デプロイで同じSHAタグを参照する |
 | 認証 | `docker/login-action` + `GITHUB_TOKEN`（`permissions: packages: write`） |
 | deploy ジョブ | `runs-on: self-hosted`。`needs: build-and-push` |
 | Secrets の受け渡し | deploy ジョブ内で `.env` をヒアドキュメント生成（`${{ secrets.* }}` を展開）。ワークフローログに出力しない |
 | 環境 | GitHub Environments（`production`）を使い、必要に応じて承認を必須化 |
 | 同時実行制御 | `concurrency: group: deploy-main, cancel-in-progress: false`（デプロイの競合を防ぐ） |
-| イメージ削除 | `docker image prune` は `com.cerberus.managed=true` ラベル付きイメージだけを対象にする。共有ホスト上の他プロジェクトを削除しない |
+| イメージ削除 | `com.cerberus.managed=true`、未使用、現在・直前成功の保持対象外、かつ`IMAGE_RETENTION_DAYS`超過のイメージだけを削除する。共有ホスト上の他プロジェクトを削除しない |
 
-### 6.3 self-hosted runner のセットアップ
+### 6.3 イメージ保持とロールバック
+
+| 項目 | 方針 |
+|------|------|
+| 新規デプロイ | `${GITHUB_SHA}`の先頭12文字から`sha-{短縮SHA}`を作り、backend/frontend/batchの3イメージを同じタグでpushする。`latest`も同時に更新する |
+| ロールバック対象 | backend/frontend/batchのアプリイメージのみ。DBのAlembic migrationはdowngradeしない |
+| 直前成功値 | self-hosted runnerの`DEPLOY_STATE_FILE`（既定`/var/lib/cerberus/last-successful-deploy.env`）に3つの`*_IMAGE_TAG`を保存する。デプロイ後ヘルスチェック成功時だけ更新する |
+| 保持条件 | 現在稼働中の3イメージと、状態ファイルに記録された直前成功の3イメージは常に保持する |
+| 削除条件 | `com.cerberus.managed=true`のイメージのうち、未使用・保持対象外・`IMAGE_RETENTION_DAYS`（既定30日）超過のものだけを削除する |
+| 初回デプロイ | 直前成功値がないため自動ロールバックせず、手動対応が必要なfailureとして終了する |
+
+### 6.4 self-hosted runner のセットアップ
 
 | 手順 | 内容 |
 |------|------|
@@ -341,7 +354,7 @@ sequenceDiagram
 | ワークフロー構文（`on` / `jobs` / `steps`） | 5.1、6.2 |
 | Secrets の利用方法 | 4章（**Secret** 表記の変数）、6.2 |
 | 依存関係キャッシュ | 5.2（pip / npm / GHA build cache） |
-| self-hosted runner | 6.3 |
+| self-hosted runner | 6.4 |
 | CI/CDのファイル分割 | `ci.yml`（品質検証）と `cd.yml`（配布・反映）に責務分離 |
 | matrix ビルド | 5.3（`AUTH_MODE` の両方式検証） |
 
@@ -350,7 +363,7 @@ sequenceDiagram
 | 項目 | 内容 |
 |------|------|
 | バックアップ | `pgdata` volume の `pg_dump` 手動取得のみ（自動化はスコープ外） |
-| 監視 | `/health` の手動確認のみ。監視・アラートはスコープ外（要件書§11） |
+| 監視 | `/api/health` の手動確認のみ。監視・アラートはスコープ外（要件書§11） |
 | ログ | 構造化標準出力に加え、APIは`api_history`、batchは`batch_history`へ保存。API・batchは30日、ログイン履歴は90日。集約基盤はスコープ外 |
 | 定期通知の確認 | `docker compose logs batch` で10時・17時の実行ログ（対象件数・作成件数）を確認する。実行されていない場合は `BATCH_ENABLED` と `APP_TIMEZONE`、Redisの `lock:notify_due:{日付}:{slot}` の残存を確認し、必要なら `docker compose run --rm batch python -m app.main --run-once due_notification --slot 10` で手動実行する |
 | 通知の肥大化 | `notifications` は `sp_purge_notifications`（`NOTIFICATION_RETENTION_DAYS`、既定90日）で日次ジョブ内から削除される。保持日数を延ばす場合は行数の増加に注意する |

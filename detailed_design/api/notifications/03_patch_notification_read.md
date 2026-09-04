@@ -124,7 +124,52 @@ RETURNING id, read_at;
 
 `user_id` 条件をSQLに含め、サービス層の検証漏れがあっても他人の通知を更新できないようにする。更新0件後の存在確認も同じ `id AND user_id` 条件で行う。
 
-## 6. テスト設計
+## 6. 処理フロー・分岐
+
+```mermaid
+flowchart TB
+    A["リクエスト受信"] --> B{"notification_idはUUID形式か"}
+    B -->|No| E1["422 VALIDATION_ERROR"]
+    B -->|Yes| C["認証・session方式のみCSRF検証"]
+    C -->|認証/CSRF失敗| E2["401/403"]
+    C -->|OK| D["本人の通知をUPDATE ... RETURNING"]
+    D -->|対象なし| E3["404 NOT_FOUND"]
+    D -->|対象あり| F["本人の未読件数をCOUNT"]
+    F --> G["200 id/read_at/unread_count"]
+    D -.->|DB接続不能| E4["503 SERVICE_UNAVAILABLE"]
+```
+
+既読済みの行も `COALESCE(read_at, now())` により既存時刻を保持して対象ありとして扱う。他ユーザーの通知は `id AND user_id` 条件に一致しないため、存在確認で区別せず404とする。
+
+## 7. 関数相関図
+
+```mermaid
+flowchart LR
+    R["notifications_router.mark_notification_read"] --> S["notification_service.mark_read"]
+    S --> NR["notification_repository.mark_read"]
+    NR --> N[("notifications")]
+    NR -->|"COUNT"| N
+```
+
+## 8. データ遷移図
+
+```mermaid
+flowchart LR
+    A["本人の未読通知"] -->|"UPDATE read_at（同一トランザクション）"| B["本人の既読通知"]
+    B --> C["本人の未読件数を再計算"]
+    C --> D["ReadNotificationResponse"]
+    E["他人/不存在"] --> F["状態変更なし・404"]
+```
+
+## 9. クエリ・トランザクション
+
+| 分岐 | 発行クエリ | トランザクション |
+|------|------------|------------------|
+| 本人の通知（未読・既読） | `UPDATE ... RETURNING` 1回 + 未読件数 `COUNT` 1回 | 2クエリを1トランザクションでcommit |
+| 他人・不存在 | `UPDATE` 1回 + 本人条件の存在確認 `SELECT` 1回 | 2クエリをrollbackまたはread-only終了 |
+| UUID不正・認証/CSRF失敗 | 0回 | DB処理なし |
+
+## 10. テスト設計
 
 | No | 区分 | ケース | 期待結果 | テスト名案 |
 |----|------|--------|----------|------------|
@@ -133,3 +178,7 @@ RETURNING id, read_at;
 | 3 | 結合 | 他人の通知IDを指定 | 404、通知は変更されない | `test_mark_read_other_users_notification_returns_404` |
 | 4 | 結合 | session方式でCSRF不正 | 403 `CSRF_INVALID`、DB更新なし | `test_mark_read_rejects_invalid_csrf` |
 | 5 | 単体 | notification_idが不正 | 422 `VALIDATION_ERROR` | `test_mark_read_rejects_invalid_id` |
+
+## 11. 不明点・要検討事項
+
+- 未読件数をレスポンスへ同梱する現行仕様を維持する。通知更新後のリアルタイム反映方式をWebSocket等へ変更する場合は別設計とする。

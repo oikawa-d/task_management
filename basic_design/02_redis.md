@@ -31,7 +31,7 @@
 | `emailverify:{token_hash}` | `{user_id, requested_at}` | `EMAIL_VERIFY_TTL_SECONDS`（既定86400 = 24時間） | 会員登録・認証メール再送 | メール認証トークンの有効性判定 |
 | `emailverify_current:{user_id}` | 現在のtoken_hash | `EMAIL_VERIFY_TTL_SECONDS` | 会員登録・認証メール再送 | 再送時に旧メール認証トークンを失効させるための逆引き |
 | `emailverify_sent:{user_id}` | 直近の送信時刻（数値） | `EMAIL_VERIFY_RESEND_INTERVAL_SECONDS`（既定60） | 認証メール送信時に `SETEX` | 認証メール再送のレート制限（メール爆撃の防止） |
-| `lock:notify_due:{YYYY-MM-DD}:{slot}` | `{started_at, runner_id}` | `NOTIFY_DUE_LOCK_TTL_SECONDS`（既定82800 = 23時間） | 期限通知バッチの実行開始時に `SET NX` | 同一日の同一実行枠（10時または17時）の二重実行防止。`batch` コンテナの再起動・手動実行が重なっても通知を重複させない |
+| `lock:notify_due:{YYYY-MM-DD}:{slot}` | `{started_at, runner_id}` | `NOTIFY_DUE_LOCK_TTL_SECONDS`（既定82800 = 23時間） | 期限通知バッチの実行開始時に `SET NX` | 同一日の同一実行枠（10時または17時）の二重実行防止。成功時はTTLまで保持し、失敗時は所有者確認後に削除する |
 | `login_fail:{key_hash}` | 連続失敗回数（数値） | `LOGIN_LOCK_WINDOW_SECONDS`（既定900） | ログイン失敗時に `INCR` | 正規化した識別子と確定済みクライアントIPの組み合わせ。メール/IDをRedisキーへ平文保存しない |
 | `rate_limit:{scope}:{key_hash}` | リクエスト回数（数値） | エンドポイント別の時間窓 | 登録・メール・OAuth・通知APIのRate Limit | scopeと確定済みクライアントIPまたはuser_idのハッシュ。平文を保存しない |
 
@@ -59,7 +59,7 @@ flowchart TB
 | `session:{sid}` | **する** | 操作中の有効期限を延長するが、`created_at + SESSION_ABSOLUTE_TTL_SECONDS` を超えては延長しない |
 | `refresh:{hash}` | **しない** | ローテーション時に新しいキーを発行するため、TTLは発行時点から固定 |
 | `oauth_state`, `pwreset`, `emailverify` | しない | ワンタイム用途 |
-| `lock:notify_due:{日付}:{slot}` | しない | 日付・実行枠ごとの実行済みマーカーを兼ねるため、当日中は生存させる（TTL 23時間） |
+| `lock:notify_due:{日付}:{slot}` | 成功時はしない。失敗時は所有者確認後に削除 | 成功した実行枠の再実行をTTLまで抑止し、失敗時は手動再実行できるようにする |
 
 > `session` はアイドルタイムアウト（既定30分）に加え、絶対有効期限（既定8時間）を設ける。`touch_session` はセッション作成時刻を確認し、残り時間が0以下なら延長せず失効扱いにする。
 
@@ -155,7 +155,7 @@ stateDiagram-v2
 | `incr_login_failure` | `identifier: str`, `client_ip: str`, `window: int` | `int`（現在の失敗回数） | lower/trimした識別子と確定済みIPからキーを作り、`INCR` → 初回のみ `EXPIRE` |
 | `reset_login_failure` | `identifier: str`, `client_ip: str` | `None` | 同じキーの `DEL` |
 | `check_rate_limit` | `scope: str`, `key: str`, `limit: int`, `window: int` | `int` | `rate_limit:{scope}:{hash}`を原子的に加算し、超過時は429判定用の残秒数を返す |
-| `ping` | なし | `bool` | ヘルスチェック（`/health` から使用） |
+| `ping` | なし | `bool` | ヘルスチェック（`/api/health` から使用） |
 
 ### 5.4 関数相関図
 
@@ -199,7 +199,7 @@ sequenceDiagram
         R-->>B: OK
         B->>P: 対象タスク抽出 → notifications へ INSERT ... ON CONFLICT DO NOTHING
         P-->>B: 作成件数
-        Note over B: ロックは削除せずTTLで失効させる<br/>（当日・10時枠の実行済みマーカーを兼ねる）
+        Note over B: 成功時はロックを削除せずTTLで失効させる<br/>（当日・10時枠の実行済みマーカーを兼ねる）
     else 取得失敗（10時枠実行済み）
         R-->>B: nil
         B-->>B: WARNログを出して即終了（通知は作成しない）
@@ -208,12 +208,24 @@ sequenceDiagram
 
 Redisが停止していてロックを取得できない場合は、バッチを実行せずERRORログを出して終了する。`notifications` 側にも `UNIQUE (user_id, dedupe_key)` があるため、仮にロックなしで二重実行されても通知は重複しない（二重防御）。
 
+### 5.1 期限通知ロックの結果・再実行契約
+
+ロックの所有者は値の `runner_id` で判定する。成功時はロックを保持し、失敗時だけ所有者確認後に削除する。失敗前に確定した通知は残るため、再実行時は `UNIQUE (user_id, dedupe_key)` と `ON CONFLICT DO NOTHING` により未作成分だけが追加される。
+
+| ケース | Redisロック | 通知処理 | `batch_history` | 次の実行枠・手動再実行 |
+|--------|------------|----------|-----------------|----------------------|
+| 正常終了 | 成功時の値をTTLまで保持 | 対象を作成。重複は0件として継続 | `complete` | 同一日・同一slotはロック取得失敗でスキップ。別slotは実行 |
+| タスク抽出・通知INSERT・パージ失敗 | 所有者確認後に削除 | 確定済みチャンクは保持。再実行時に不足分を作成 | `error` | 同一slotのcronまたは `--run-once` で再実行可能 |
+| Redis接続不能 | 取得できない | 通知を作成しない（fail-close） | 作成済みなら `error`、開始前なら履歴を作成できない旨をERRORログ | Redis復旧後にcronまたは `--run-once` で再実行 |
+| 同一slotの同時実行 | 先に `SET NX` 成功した1実行だけ保持 | ロック取得者だけ実行。敗者は作成しない | 敗者は `complete`（`skipped_count` に反映） | 次回別slotまで同一slotは再実行しない |
+| 成功後の手動再実行 | 既存ロックがTTLまで残る | 実行しない | `complete` の新規履歴は作成しない | 同一slotはスキップ。障害復旧の手動再実行は失敗時に行う |
+
 ## 6. 障害・運用時の挙動
 
 | ケース | 挙動 | 対応 |
 |--------|------|------|
 | Redis 再起動 | 全キー消失 → 全ユーザーがログアウト状態。API は 401 を返す | フロントは 401 を検知してログイン画面へ遷移。要件書で許容済み |
-| Redis 接続不能 | 認証判定ができないため、認証必須APIは **503 SERVICE_UNAVAILABLE** を返す（fail-close） | `/health` に Redis 接続状態を含める |
+| Redis 接続不能 | 認証判定ができないため、認証必須APIは **503 SERVICE_UNAVAILABLE** を返す（fail-close） | `/api/health` に Redis 接続状態を含める |
 | メモリ枯渇 | `maxmemory-policy` は **`noeviction`** とする | セッションが勝手に消えるのを防ぐため。LRU等でのeviction は採用しない |
 | TTL満了直後のアクセス | `GET` が nil → 401 `SESSION_EXPIRED` / `TOKEN_EXPIRED` | フロントは再ログインへ誘導 |
 | 同一ユーザーの多重ログイン | 許容（`user_sessions` に複数 session_id が並ぶ） | 端末ごとにログアウト可能 |

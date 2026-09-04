@@ -116,8 +116,10 @@ sequenceDiagram
     end
     R->>S: list_members(project)
     S->>RP: list_members(project_id)
-    RP->>PG: "SELECT pm.*, u.* FROM project_members pm JOIN users u ON u.id = pm.user_id WHERE pm.project_id = ? ORDER BY pm.joined_at"
-    PG-->>RP: 行集合
+    RP->>PG: "SELECT project_members WHERE project_id = ? ORDER BY joined_at"
+    PG-->>RP: project_members行
+    RP->>PG: "selectinload(user) の追加SELECT WHERE users.id IN (user_ids)"
+    PG-->>RP: users行
     RP-->>S: list[Member]
     S-->>R: MemberListResponse
     R-->>FE: "200 {items, meta}"
@@ -135,7 +137,7 @@ flowchart TB
     C -->|Yes| D{"require_project_member<br/>admin または所属あり"}
     D -->|No（非所属 or 不存在）| E4["404 NOT_FOUND"]
     D -->|Yes| F["project_service.list_members呼び出し"]
-    F --> G["project_repository.list_members<br/>JOINでusers情報を取得"]
+    F --> G["project_repository.list_members<br/>selectinloadでusersを一括取得"]
     G --> H["MemberListResponseへ変換"]
     H --> I["200 レスポンス返却"]
 ```
@@ -176,7 +178,7 @@ flowchart TB
 | 引数 | db：`AsyncSession`、project_id：対象プロジェクトID |
 | 戻り値 | `project_members` と `users` を JOIN した行のリスト（`joined_at` 昇順） |
 | 送出例外 | なし（DB例外は `db_error_handler` / `infra_error_handler` に委譲） |
-| 処理内容 | 1. `selectinload` で `users` を同時取得しN+1を回避 2. `ORDER BY project_members.joined_at ASC` |
+| 処理内容 | 1. `project_members`の主クエリを1回実行 2. `selectinload`の追加SELECTを1回実行してusersをまとめて取得しN+1を回避 3. `ORDER BY project_members.joined_at ASC` |
 | 副作用 | なし |
 
 ## 7. 関数相関図
@@ -188,7 +190,7 @@ flowchart LR
     D --> RP1["project_repository.exists"]
     D --> URP["user_repository.get"]
     S --> RP2["project_repository.list_members"]
-    RP2 --> PG[("PostgreSQL<br/>project_members JOIN users")]
+    RP2 --> PG[("PostgreSQL<br/>project_members + users（追加SELECT）")]
     RP1 --> PG
 ```
 
@@ -200,7 +202,7 @@ flowchart LR
 flowchart LR
     subgraph PG["PostgreSQL"]
         PM["project_members<br/>WHERE project_id=:pid"]
-        U["users<br/>JOIN ON id"]
+        U["users<br/>selectinloadの追加SELECT"]
         P["projects<br/>所属チェック用に1行参照"]
     end
     API["GET /members"] -->|"SELECT"| PM
@@ -213,7 +215,7 @@ flowchart LR
 | ストア | テーブル／キー | 操作 | 条件・TTL | 備考 |
 |--------|----------------|------|-----------|------|
 | PostgreSQL | `project_members` | SELECT | `WHERE project_id = :pid ORDER BY joined_at` | `ix_project_members_user_id` は使用しない（本クエリは project_id 主軸のため `PK` を使用） |
-| PostgreSQL | `users` | SELECT | `JOIN` で `id` 一致 | `display_name` / `role` / `is_active` 取得用 |
+| PostgreSQL | `users` | SELECT（`selectinload`の追加SELECT） | `id IN (user_ids)` | `display_name` / `role` / `is_active` 取得用。主クエリとは別ラウンドトリップ |
 | PostgreSQL | `projects` | SELECT | `require_project_member` 内での存在・所属確認用に1行 | |
 | Redis | ー | ー | ー | 本APIはRedisを使用しない |
 

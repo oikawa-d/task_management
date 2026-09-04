@@ -13,7 +13,7 @@
 
 | 項目 | 内容 |
 |------|------|
-| 作成契機 | `/api` 配下の全HTTPリクエストのレスポンス確定後（4xx/5xxを含む）。`/health`も対象とする |
+| 作成契機 | `/api` 配下の全HTTPリクエストのレスポンス確定後（4xx/5xxを含む）。`/api/health`も対象とする |
 | 保存単位 | 1 HTTPリクエストにつき1行。リダイレクトやクライアント再送は別リクエストとして記録 |
 | 更新 | なし。追記専用 |
 | 保持 | `API_HISTORY_RETENTION_DAYS`（既定30日）を超えた行をbatchが日次削除 |
@@ -29,7 +29,7 @@
 | APIパス | `path` | VARCHAR(255) | NO | - | クエリ文字列を除いたFastAPIのルートテンプレート |
 | API状態 | `status` | VARCHAR(20) | NO | - | `success` / `error` |
 | HTTPステータス | `status_code` | SMALLINT | NO | - | 100〜599。2xx/3xxはsuccess、4xx/5xxはerror |
-| エラーコード | `error_code` | VARCHAR(80) | YES | - | エラー時のみ。アプリ定義コード。未定義の例外は`INTERNAL_SERVER_ERROR` |
+| エラーコード | `error_code` | VARCHAR(80) | YES | - | エラー時のみ。basic_design/04_api.md §4.2 のアプリ定義コード。未定義の例外は`INTERNAL_ERROR` |
 | エラー内容 | `error_detail` | TEXT | YES | - | エラー時のみ。スタックトレースや秘密情報は保存しない |
 | リクエストbody | `body` | JSONB | YES | - | JSON bodyのみ。秘匿項目をマスキングし、上限超過時はNULL |
 | ユーザーID | `user_id` | UUID | YES | - | FK → `users.id` `ON DELETE SET NULL`。未認証はNULL |
@@ -80,7 +80,7 @@ CREATE INDEX ix_api_history_status_created ON api_history (status, created_at DE
 
 ## 4. ORMモデル・リポジトリ
 
-モデルは `api/app/models/api_history.py :: ApiHistory` とし、`body`はPostgreSQL方言のSQLAlchemy `JSONB`、`ip_address`はPostgreSQLの`INET`で定義する。`user`リレーションは `lazy="noload"` とし、一覧検索で意図しないユーザー情報取得を行わない。
+モデルは `api/app/models/api_history.py :: ApiHistory`、Repositoryは `api/app/repository/api_history_repository.py` とし、`body`はPostgreSQL方言のSQLAlchemy `JSONB`、`ip_address`はPostgreSQLの`INET`で定義する。`user`リレーションは `lazy="noload"` とし、一覧検索で意図しないユーザー情報取得を行わない。
 
 `created_at`はAPI受付時にミドルウェアが取得した時刻を明示的に設定する。DDLの`DEFAULT now()`は、履歴保存処理側で時刻を渡せない異常時のフォールバックとして使用する。
 
@@ -124,3 +124,50 @@ flowchart LR
 - `X-Forwarded-For`を信頼できるproxyのCIDR範囲はインフラ環境ごとに異なるため、実装前に確定が必要。
 - bodyのマスキング項目と上限値は環境変数で変更可能にするが、秘匿項目の既定値を削除できない仕様にするかは要検討。
 - API履歴を管理者画面や公開APIで閲覧する機能は今回のスコープに含めない。
+
+## 8. 全体の出入力
+
+| 区分 | 内容 |
+|------|------|
+| 入力 | APIミドルウェアが確定したrequest_id、HTTPメソッド・ルート、status、user_id、マスキング済みbody、処理時間 |
+| 出力 | `api_history` への1行INSERT、保存失敗時の構造化ERRORログ |
+| 責務 | API本体のトランザクションと分離して、レスポンス確定後の履歴を追記する |
+| 例外 | 履歴保存のDB例外はAPIレスポンスへ伝播させず、ログに記録する |
+
+## 9. 処理シーケンス
+
+```mermaid
+sequenceDiagram
+    participant MW as API履歴ミドルウェア
+    participant DB as 専用DBセッション
+    participant T as api_history
+    participant LOG as 構造化ログ
+    MW->>MW: レスポンス確定・入力をマスキング
+    MW->>DB: INSERT（1行）
+    DB->>T: commit
+    T-->>MW: 保存完了
+    alt INSERT/commit失敗
+        DB-->>MW: DB例外
+        MW->>LOG: request_id付きERROR
+        MW-->>MW: APIレスポンスは変更しない
+    end
+```
+
+## 10. 関数相関図
+
+```mermaid
+flowchart LR
+    MW["history_middleware"] --> C["ApiHistoryRepository.create"]
+    C --> T[("api_history")]
+    P["purge_expired"] --> SP["sp_purge_api_history"]
+    SP --> T
+    C -.-> LOG["structured ERROR log"]
+```
+
+## 11. クエリ・トランザクション
+
+| 処理 | 発行クエリ | 境界 |
+|------|------------|------|
+| API 1件の記録 | `INSERT` 1回 | 専用セッションで1トランザクション。API本体とは分離 |
+| 保持期間パージ | `CALL sp_purge_api_history` 1回 | ジョブ本体とは分離した1トランザクション |
+| 履歴保存失敗 | 再試行クエリなし | API本体の結果を変更せずERRORログのみ |

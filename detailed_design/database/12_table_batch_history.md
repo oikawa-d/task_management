@@ -84,7 +84,7 @@ CREATE INDEX ix_batch_history_status_started ON batch_history (status, started_a
 
 ## 4. ORMモデル・リポジトリ
 
-モデルは `batch/app/models/batch_history.py :: BatchHistory` とし、API側には同じテーブルを更新できる最小限のモデル定義を置かない。batchが開始・完了・失敗のDB操作を担当する。
+モデルは `batch/app/models/batch_history.py :: BatchHistory`、Repositoryは `batch/app/repository/batch_history_repository.py` とし、API側には同じテーブルを更新できるモデル定義を置かない。batchが開始・完了・失敗のDB操作を担当する。保持期間の削除は `batch/app/repository/purge_repository.py` から `sp_purge_batch_history` を呼び出す。
 
 | 関数 | 入力 | 出力・副作用 |
 |------|------|--------------|
@@ -123,3 +123,52 @@ stateDiagram-v2
 
 - `inprogress`のまま残った行を一定時間後に自動的に`error`へ補正するかは要検討。現設計では事実と推測を混同しないため補正しない。
 - 将来batchが並列実行される場合、同じ`batch_name`・`slot`の多重起動を許可するかはジョブごとに定義する。
+
+## 8. 全体の出入力
+
+| 区分 | 内容 |
+|------|------|
+| 入力 | batch名、trigger_type、slot、対象／成功／スキップ件数、error_code/detail |
+| 出力 | `batch_history` の開始INSERT・終了UPDATE、`run_id`付き構造化ログ |
+| 責務 | 1回のジョブ実行を `run_id` で相関し、inprogressからcomplete/errorへ状態を記録する |
+| 例外 | 履歴操作のDB例外はジョブ本体の結果を上書きせず、標準出力へ記録する |
+
+## 9. 処理シーケンス
+
+```mermaid
+sequenceDiagram
+    participant J as batch job
+    participant DB as 専用DBセッション
+    participant T as batch_history
+    J->>DB: INSERT inprogress（1回）
+    DB->>T: commit
+    J->>J: 通知処理・件数集計
+    alt 正常終了
+        J->>DB: UPDATE complete（1回）
+    else 例外終了
+        J->>DB: UPDATE error（1回）
+    end
+    DB->>T: commit
+```
+
+## 10. 関数相関図
+
+```mermaid
+flowchart LR
+    J["due_notification_job"] --> S["start"]
+    J --> F["complete / fail"]
+    S --> T[("batch_history")]
+    F --> T
+    P["purge_expired"] --> SP["sp_purge_batch_history"]
+    SP --> T
+```
+
+## 11. クエリ・トランザクション
+
+| 処理 | 発行クエリ | 境界 |
+|------|------------|------|
+| 開始記録 | `INSERT` 1回 | ジョブ本体とは分離した1トランザクション |
+| 終了記録 | `UPDATE` 1回 | complete/errorごとに専用トランザクション |
+| 保持期間パージ | `CALL sp_purge_batch_history` 1回 | ジョブ本体・終了記録とは分離 |
+
+開始INSERTに失敗した場合はジョブを実行しない。終了UPDATEに失敗した場合はジョブ結果を維持し、`run_id`を含むERRORログを残す。

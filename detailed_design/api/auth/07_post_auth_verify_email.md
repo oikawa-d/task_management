@@ -53,7 +53,7 @@
     "code": "INVALID_VERIFY_TOKEN",
     "message": "認証リンクが無効か、有効期限が切れています",
     "details": null,
-    "request_id": "01J..."
+    "request_id": "550e8400-e29b-41d4-a716-446655440000"
   }
 }
 ```

@@ -20,10 +20,10 @@
 | 要素 | 種別 | 責務 | 備考 |
 |------|------|------|------|
 | `builder` ステージ | ビルドステージ | `pip install --prefix=/install` で依存関係をビルド | `requirements.txt` のみを先にコピーしレイヤキャッシュを効かせる |
-| `runtime` ステージ | 実行ステージ | `builder` の成果物と `app/` をコピーし、非rootで実行 | ベースは `python:3.14-slim` |
+| `runtime` ステージ | 実行ステージ | `builder` の成果物と `api/app/`・`api/alembic/`・`db/`をコピーし、非rootで実行 | ベースは `python:3.14-slim` |
 | `appuser` | OSユーザー | 非root実行ユーザー | `useradd -m -u 10001 appuser` 相当 |
 | `entrypoint.sh` | シェルスクリプト | `alembic upgrade head` 実行後に `exec uvicorn` へ切り替え | 失敗時は非ゼロで終了しUvicornを起動しない |
-| `HEALTHCHECK` | Dockerfile命令 | `GET /health` を内部的に確認 | コンテナ内部ポート`8000`固定 |
+| `HEALTHCHECK` | Dockerfile命令 | `GET /api/health` を内部的に確認 | コンテナ内部ポート`8000`固定 |
 
 ## 3. 設定項目（環境変数）
 
@@ -41,7 +41,7 @@
 
 | 区分 | 内容 |
 |------|------|
-| 入力 | ビルドコンテキスト（`api/` 配下一式）、実行時環境変数（`.env` 経由でCompose注入） |
+| 入力 | ビルドコンテキスト（リポジトリルート）、実行時環境変数（`.env` 経由でCompose注入） |
 | 出力 | backendイメージ（`ghcr.io/{owner}/cerberus-backend:{tag}`）、起動後は `0.0.0.0:8000` でHTTPを待ち受け |
 | 副作用 | 起動時に `DATABASE_URL` 先のPostgreSQLへ `alembic upgrade head` を適用（スキーマ変更） |
 
@@ -57,12 +57,12 @@ sequenceDiagram
     participant BLD as builderステージ
     participant RT as runtimeステージ
 
-    DEV->>DOCKER: docker build -f api/Dockerfile api
-    DOCKER->>BLD: requirements.txt をコピー
+    DEV->>DOCKER: docker build -f api/Dockerfile .
+    DOCKER->>BLD: api/requirements.txt をコピー
     BLD->>BLD: pip install --prefix=/install -r requirements.txt
     DOCKER->>RT: python:3.14-slim を起点に開始
     RT->>BLD: /install の内容をCOPY --from=builder
-    RT->>RT: app/ 一式・alembic/ をCOPY
+    RT->>RT: api/app/・api/alembic/・db/ をCOPY
     RT->>RT: appuser を作成しUSER切り替え
     RT-->>DOCKER: イメージ完成
 ```
@@ -88,7 +88,7 @@ sequenceDiagram
     else 適用成功
         AL-->>EP: exit 0
         EP->>UV: exec uvicorn app.main:app --host 0.0.0.0 --port 8000
-        UV-->>DC: HEALTHCHECK用 GET /health が200を返す
+        UV-->>DC: HEALTHCHECK用 GET /api/health が200を返す
     end
 ```
 
@@ -98,7 +98,7 @@ sequenceDiagram
 flowchart TB
     A["docker build"] --> B["builder: pip install --prefix=/install"]
     B --> C["runtime: COPY --from=builder /install"]
-    C --> D["runtime: COPY app/ alembic/ alembic.ini"]
+    C --> D["runtime: COPY api/app/ api/alembic/ api/alembic.ini db/"]
     D --> E["非rootユーザーappuserへUSER切替"]
     E --> F["イメージ完成"]
 
@@ -107,7 +107,7 @@ flowchart TB
     H --> I{"alembic upgrade head 成功?"}
     I -->|No| J["exit非ゼロ<br/>fail-close（アプリ起動しない）"]
     I -->|Yes| K["uvicorn起動"]
-    K --> L{"HEALTHCHECK: GET /health"}
+    K --> L{"HEALTHCHECK: GET /api/health"}
     L -->|失敗継続| M["Composeのhealthcheck retries超過でunhealthy"]
     L -->|成功| N["healthy → 依存サービス起動可"]
 ```
@@ -122,8 +122,8 @@ stateDiagram-v2
     MigrationRunning --> MigrationFailed: alembic非ゼロ終了
     MigrationRunning --> AppStarting: alembic成功
     MigrationFailed --> [*]: コンテナ終了（restart policy依存）
-    AppStarting --> Healthy: GET /health 200
-    AppStarting --> Unhealthy: GET /health 非200 継続
+    AppStarting --> Healthy: GET /api/health 200
+    AppStarting --> Unhealthy: GET /api/health 非200 継続
     Healthy --> [*]: docker compose down
 ```
 
@@ -145,10 +145,10 @@ stateDiagram-v2
 | 項目 | 内容 |
 |------|------|
 | ベースイメージ | `python:3.14-slim`（`AS runtime`） |
-| 引数/入力 | `builder` の `/install`、`app/`、`alembic/`、`alembic.ini`、`entrypoint.sh` |
+| 引数/入力 | `builder` の `/install`、`api/app/`、`api/alembic/`、`api/alembic.ini`、`api/entrypoint.sh`、`db/functions/`、`db/procedures/` |
 | 出力 | 実行可能なbackendイメージ |
 | 失敗条件 | `appuser` 作成失敗、`COPY` 対象パス誤り |
-| 処理内容 | 1. `COPY --from=builder /install /usr/local` 2. `RUN useradd -m -u 10001 appuser` 3. `COPY --chown=appuser:appuser app/ ./app`、`alembic/`、`alembic.ini`、`entrypoint.sh` 4. `RUN chmod +x entrypoint.sh` 5. `USER appuser` 6. `EXPOSE 8000` 7. `HEALTHCHECK CMD curl -f http://localhost:8000/health \|\| exit 1` 8. `ENTRYPOINT ["./entrypoint.sh"]` |
+| 処理内容 | 1. `COPY --from=builder /install /usr/local` 2. `RUN useradd -m -u 10001 appuser` 3. `WORKDIR /app/api` 4. `COPY --chown=appuser:appuser api/app ./app`、`api/alembic ./alembic`、`api/alembic.ini ./alembic.ini`、`api/entrypoint.sh ./entrypoint.sh`、`db /app/db` 5. `RUN chmod +x entrypoint.sh` 6. `USER appuser` 7. `EXPOSE 8000` 8. `HEALTHCHECK CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"` 9. `ENTRYPOINT ["./entrypoint.sh"]` |
 | 副作用 | イメージレイヤに非root実行ユーザーを組み込む |
 
 ### 8.3 `entrypoint.sh` :: メインスクリプト
@@ -173,7 +173,7 @@ flowchart LR
     ENTRY --> ALEMBIC["alembic upgrade head"]
     ALEMBIC --> PG[("PostgreSQL")]
     ENTRY --> UVICORN["uvicorn app.main:app"]
-    UVICORN --> HEALTH["GET /health"]
+    UVICORN --> HEALTH["GET /api/health"]
 ```
 
 ## 10. セキュリティ・非機能考慮
@@ -191,9 +191,9 @@ flowchart LR
 
 | No | 区分 | ケース | 前提 | 期待結果 | テスト名案 |
 |----|------|--------|------|----------|-----------|
-| 1 | 結合 | `docker build -f api/Dockerfile api` が成功する | CI `docker-build` ジョブ | ビルドエラーなしでイメージが生成される | `test_backend_image_builds`（CIステップ） |
+| 1 | 結合 | `docker build -f api/Dockerfile .` が成功する | CI `docker-build` ジョブ | `db/functions/`・`db/procedures/`を含むイメージが生成される | `test_backend_image_builds`（CIステップ） |
 | 2 | 結合 | イメージ内プロセスが非rootで実行される | ビルド済みイメージ | `docker run --rm image whoami` が `appuser` を返す | `test_backend_runs_as_nonroot` |
-| 3 | 結合 | マイグレーション成功時にUvicornが起動する | postgres起動済み、`DATABASE_URL`正しい | `/health` が200を返す | `test_entrypoint_migration_success_starts_app` |
+| 3 | 結合 | マイグレーション成功時にUvicornが起動する | postgres起動済み、`DATABASE_URL`正しい | `/api/health` が200を返す | `test_entrypoint_migration_success_starts_app` |
 | 4 | 結合 | マイグレーション失敗時にアプリが起動しない | `DATABASE_URL`を不正な値に設定 | コンテナが非ゼロで終了し、Uvicornが起動しない | `test_entrypoint_migration_failure_blocks_app` |
 | 5 | 結合 | `requirements.txt`未変更時にDockerキャッシュが効く | 2回連続ビルド | 2回目の `pip install` レイヤがキャッシュ利用（ビルドログで確認） | `test_backend_build_cache_effective`（手動/CIログ確認） |
 | 網羅できない範囲 | 実運用のself-hosted runner上でのビルド時間計測 | - | ハードウェア依存のため定量テスト対象外。CIログで定性確認 | - |
@@ -202,5 +202,5 @@ flowchart LR
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 要検討 | `HEALTHCHECK` に `curl` を使う場合、`python:3.14-slim` へ追加インストールが必要（未インストール）。`curl` を入れるか、Python標準ライブラリでの簡易HTTPチェックに置き換えるかは未確定 | イメージサイズ、[01_docker_compose.md](./01_docker_compose.md) 8.1 |
+| 確定 | `python:3.14-slim`に標準搭載されるPython標準ライブラリで`/api/health`を確認し、追加のOSパッケージは導入しない | イメージサイズ、[01_docker_compose.md](./01_docker_compose.md) §8.2 |
 | 不明 | `entrypoint.sh` のシェルを `sh`（`slim`イメージ標準）と`bash`のどちらにするかは基本設計に明記なし。可搬性を優先し `sh` を前提としたが、実装時に確認が必要 | 実装時のスクリプト構文 |

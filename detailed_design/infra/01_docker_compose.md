@@ -21,9 +21,9 @@
 |------|------|------|------|
 | `postgres` | サービス | 永続データストア | イメージ `postgres:17-alpine`。volume `pgdata` |
 | `redis` | サービス | セッション／トークンの一時ストア | イメージ `redis:8-alpine`。volumeなし（永続化しない） |
-| `backend` | サービス（自ビルド） | FastAPI + Uvicorn。起動時に `alembic upgrade head` | [02_dockerfile_api.md](./02_dockerfile_api.md) |
+| `backend` | サービス（自ビルド） | FastAPI + Uvicorn。起動時に `alembic upgrade head` | contextはリポジトリルート。`db/functions/`・`db/procedures/`を含む。[02_dockerfile_api.md](./02_dockerfile_api.md) |
 | `frontend` | サービス（自ビルド） | ビルド成果物を nginx で配信、`/api` を backend へ proxy | [03_dockerfile_frontend.md](./03_dockerfile_frontend.md) |
-| `batch` | サービス（自ビルド） | 毎日10時・17時の期限通知ジョブを2つのcronジョブとして常駐スケジューラで実行 | [08_dockerfile_batch.md](./08_dockerfile_batch.md)。HTTPポートなし |
+| `batch` | サービス（自ビルド） | 毎日10時・17時の期限通知ジョブを2つのcronジョブとして常駐スケジューラで実行 | contextはリポジトリルート。[08_dockerfile_batch.md](./08_dockerfile_batch.md)。HTTPポートなし |
 | `mailpit` | サービス | 開発用SMTPモック | イメージ `axllent/mailpit`。`profiles: [dev]` |
 | `cerberus_net` | ネットワーク | bridge。6サービスを内部DNS名（サービス名）で疎通 | 外部公開は `frontend` の1ポートのみが原則 |
 | `pgdata` | volume | PostgreSQLデータ永続化 | named volume |
@@ -58,7 +58,7 @@
 
 | 区分 | 内容 |
 |------|------|
-| 入力 | `.env`（Compose変数展開）、各サービスのビルドコンテキスト（`api/`、`frontend/`）、ホストの `docker compose up` コマンド |
+| 入力 | `.env`（Compose変数展開）、各サービスのビルドコンテキスト（backend/batchはリポジトリルート、frontendは`frontend/`）、ホストの `docker compose up` コマンド |
 | 出力 | 起動済みコンテナ群、`pgdata` volume（永続データ）、`cerberus_net` 経由の内部通信、ホストへ公開される `${FRONTEND_PORT}`（本番/CD）および開発時追加ポート |
 | 副作用 | `backend` 起動時の `alembic upgrade head` によるDBスキーマ変更 |
 
@@ -90,7 +90,7 @@ sequenceDiagram
     BE->>PG: alembic upgrade head
     PG-->>BE: マイグレーション適用完了
     BE->>BE: uvicorn 起動
-    BE-->>DC: GET /health 200（healthy）
+    BE-->>DC: GET /api/health 200（healthy）
     DC->>BA: コンテナ起動（postgres / redis healthy後。backendには依存しない）
     BA->>BA: python -m app.main（常駐スケジューラ）
     DC->>FE: コンテナ起動（depends_on: backend healthy）
@@ -124,7 +124,7 @@ flowchart TB
     B -->|Yes| C["backend起動<br/>alembic upgrade head"]
     C --> D{"マイグレーション成功?"}
     D -->|No| F2["backendコンテナ異常終了<br/>frontendは起動しない"]
-    D -->|Yes| E["uvicorn起動 → GET /health"]
+    D -->|Yes| E["uvicorn起動 → GET /api/health"]
     E --> G{"healthy?"}
     G -->|No| F3["frontend起動待機のまま<br/>（depends_on未充足）"]
     G -->|Yes| H["frontend起動<br/>nginx配信開始"]
@@ -173,9 +173,9 @@ stateDiagram-v2
 |----------|---------------------|-----------------------------------|
 | `postgres` | `pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}` | 5s / 5s / 5回 |
 | `redis` | `redis-cli ping` | 5s / 5s / 5回 |
-| `backend` | `curl -f http://localhost:8000/health \|\| exit 1`（コンテナ内部ポート固定） | 10s / 5s / 5回、`start_period`でマイグレーション時間を確保 |
-| `frontend` | `curl -f http://localhost:80/ \|\| exit 1`（コンテナ内部ポート固定） | 10s / 5s / 5回 |
-| `batch` | `pgrep -f 'python -m app.main'`（プロセス生存監視） | 10s / 5s / 3回 |
+| `backend` | `python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"`（Python標準ライブラリ） | 10s / 5s / 5回、`start_period`でマイグレーション時間を確保 |
+| `frontend` | `wget -qO- http://127.0.0.1:80/`（nginx:alpineに含まれるBusyBox） | 10s / 5s / 5回 |
+| `batch` | `python -c "import os; os.kill(1, 0)"`（PID 1の生存監視） | 10s / 5s / 3回 |
 | `mailpit` | なし（`dev` profile専用の補助サービスのため必須としない） | - |
 
 ### 8.3 `compose.dev.yml` :: 開発オーバーレイ
@@ -185,7 +185,7 @@ stateDiagram-v2
 | 目的 | ソースのバインドマウント、ホットリロード（`uvicorn --reload` / `vite dev`）、開発用ポート公開を本体定義から分離する |
 | 入力 | `docker compose -f docker-compose.yml -f compose.dev.yml up` |
 | 出力 | `backend`/`frontend`のバインドマウント有効化、`${BACKEND_PORT}`/`${POSTGRES_PORT}`/`${REDIS_PORT}`/`${MAILPIT_SMTP_PORT}`/`${MAILPIT_UI_PORT}` を `127.0.0.1` に限定公開 |
-| 処理内容 | 1. `backend.volumes` に `./api:/app` を追加 2. `backend.command` を `uvicorn app.main:app --reload` に上書き 3. `postgres`/`redis`/`mailpit` の `ports` を `127.0.0.1:${PORT}:内部固定ポート` で追加 |
+| 処理内容 | 1. `backend.volumes` に `./api:/app/api` と `./db:/app/db:ro` を追加 2. `backend.command` を `uvicorn app.main:app --reload` に上書き 3. `postgres`/`redis`/`mailpit` の `ports` を `127.0.0.1:${PORT}:内部固定ポート` で追加 |
 | 副作用 | 本番/CD構成（`docker-compose.yml`単体）には影響しない（オーバーレイのみに閉じる） |
 
 ## 9. 関数・要素相関図
@@ -239,6 +239,6 @@ flowchart LR
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 要検討 | `backend` の healthcheck に `curl` を含めるか、`python -c` 等の軽量代替にするかは未確定（イメージサイズとの兼ね合い） | Dockerfileのパッケージ構成（[02_dockerfile_api.md](./02_dockerfile_api.md)参照） |
+| 確定 | backendはPython標準ライブラリ、frontendはnginx:alpineのBusyBox `wget`、batchはPythonでPID 1を確認する。追加のOSパッケージは導入しない | [02_dockerfile_api.md](./02_dockerfile_api.md)、[03_dockerfile_frontend.md](./03_dockerfile_frontend.md)、[08_dockerfile_batch.md](./08_dockerfile_batch.md) |
 | 要検討 | `mailpit` を `production`/CD環境で誤って起動しない保証は `profiles: [dev]` 運用に依存しており、CDワークフロー側で `--profile` を明示的に付与しない運用ルールが必要 | [06_cd_workflow.md](./06_cd_workflow.md) |
 | 不明 | `pgdata` volumeのバックアップ自動化はスコープ外（要件書§11、[../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §8）のため、本書では手動 `pg_dump` のみを前提とする | 運用手順（[07_operation.md](./07_operation.md)） |
