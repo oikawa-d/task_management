@@ -11,7 +11,7 @@
 
 `basic_design/01_database.md` の設計方針・命名規約・型方針・共通カラム・列挙表現・削除方針・ER図を、実装（DDL・SQLAlchemyモデル・マイグレーション）に落とし込めるレベルまで詳細化する。テーブル個別の定義（カラム定義・DDL・インデックス・リポジトリ関数）は `01_table_*.md` 以降で扱い、本書では全テーブルに共通する方針のみを扱う。
 
-`users` / `oauth_accounts` / `login_history` の3テーブルの詳細は本書とあわせて `01_table_users.md` 〜 `03_table_login_history.md` を参照。`projects` 以降のテーブルおよび DB関数・マイグレーション運用は別担当ファイル（`04_table_projects.md` 〜 `09_migration.md`、`file_index.md` 参照）で扱うため本書では扱わない。
+`users` / `oauth_accounts` / `login_history` の3テーブルの詳細は本書とあわせて `01_table_users.md` 〜 `03_table_login_history.md` を参照。`projects` 以降のテーブルおよび DB関数・マイグレーション運用は別担当ファイル（`04_table_projects.md` 〜 `10_table_notifications.md`、`file_index.md` 参照）で扱うため本書では扱わない。
 
 ## 2. 基本方針（`basic_design/01_database.md` §1 の再掲・詳細化）
 
@@ -21,7 +21,7 @@
 | 保存対象 | 永続的に残す必要のあるデータのみ | ログイン有効性の判定は Redis 側（`../../basic_design/02_redis.md`） |
 | 主キー | `UUID`（`gen_random_uuid()`、`pgcrypto` 拡張） | URL露出時の連番推測を防止 |
 | 文字列型 | 入力上限がある項目は `VARCHAR(n)`、それ以外は `TEXT` | 上限は基本設計のカラム定義に従う |
-| 日時型 | `TIMESTAMPTZ`（UTC保存） | タイムゾーン変換はアプリ層（`core/config.py` の `APP_TIMEZONE` 等は未定義のため、表示専用の変換はフロント側で行う。※要検討：バックエンド側でのタイムゾーン変換方針は基本設計に明記がなく不明） |
+| 日時型 | `TIMESTAMPTZ`（UTC保存） | `APP_TIMEZONE`（既定`Asia/Tokyo`）を基準にアプリ層で表示・日次境界を判定し、DBへはUTCで保存する |
 | 列挙 | `VARCHAR + CHECK制約` | PostgreSQLの `ENUM` 型は使わない（Alembicでの値追加が容易なため） |
 | 論理削除 | 行わない（物理削除） | `users` のみ `is_active` で無効化を表現。他テーブルはFKの `ON DELETE` 挙動に従う |
 | ORM | SQLAlchemy 2.x（`Mapped` / `mapped_column` の宣言的スタイル） | `api/app/models/` |
@@ -54,7 +54,8 @@
 | 長文・可変長 | `TEXT` | `Text` | `password_hash` / `description` / `body` 等 |
 | 真偽値 | `BOOLEAN` | `Boolean` | |
 | 整数 | `INTEGER` | `Integer` | `position` / `version` 等 |
-| 日付のみ | `DATE` | `Date` | `birth_date` / `due_date` |
+| 日付のみ | `DATE` | `Date` | `birth_date` |
+| 日時 | `TIMESTAMPTZ` | `datetime` | `tasks.due_at` / `notifications.due_at`。DBはUTC保存、表示・日次判定は`APP_TIMEZONE` |
 | 日時（タイムゾーン付き） | `TIMESTAMPTZ` | `DateTime(timezone=True)` | UTCで保存 |
 | IPアドレス | `INET` | `INET`（`sqlalchemy.dialects.postgresql`） | `login_history.ip_address` |
 | 列挙 | `VARCHAR(n) + CHECK` | `String(n)` + `CheckConstraint` | Python側は `Literal` 型または `enum.StrEnum` をスキーマ層（pydantic）で使用し、DB側は文字列として保持 |

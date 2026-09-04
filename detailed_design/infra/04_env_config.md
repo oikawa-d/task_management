@@ -143,6 +143,19 @@
 | `INITIAL_ADMIN_PASSWORD` | str | なし（必須） | seed用管理者パスワード（平文はseedスクリプト内でのみ使用しargon2化して保存） | **Secret** |
 | `VITE_API_BASE_URL` | str | `/api` | フロントのAPIベースURL。**ビルド時にArgとして埋め込み**（backendの`Settings`には含めない） | 平文可 |
 
+### 3.10 通知・batch
+
+| 変数名 | 型 | 既定値 | 用途 | 秘匿 |
+|--------|-----|--------|------|------|
+| `APP_TIMEZONE` | str | `Asia/Tokyo` | 「当日」「翌日10時」の判定と日時表示の基準。backend / batchで共有 | 平文可 |
+| `NOTIFY_DUE_RUN_HOURS` | str | `10,17` | 期限通知ジョブを登録する実行時刻（`APP_TIMEZONE`基準）。値ごとに独立したcronジョブを登録 | 平文可 |
+| `NOTIFY_DUE_CRON_MINUTE` | int | `0` | 期限通知ジョブの実行分 | 平文可 |
+| `NOTIFY_DUE_TARGET_HOUR` | int | `10` | 10時・17時の両実行枠で共通する対象期限の翌日境界（`APP_TIMEZONE`基準） | 平文可 |
+| `NOTIFY_DUE_LOCK_TTL_SECONDS` | int | `82800` | `lock:notify_due:{YYYY-MM-DD}:{slot}`のTTL | 平文可 |
+| `NOTIFY_DUE_BATCH_CHUNK_SIZE` | int | `500` | 通知INSERTを分割する件数 | 平文可 |
+| `NOTIFICATION_RETENTION_DAYS` | int | `90` | 通知保持期間。`sp_purge_notifications`へ渡す | 平文可 |
+| `BATCH_ENABLED` | bool | `true` | 定期ジョブ登録の有効/無効。`--run-once`はこの値に関係なく実行 | 平文可 |
+
 ## 4. 全体の出入力
 
 | 区分 | 内容 |

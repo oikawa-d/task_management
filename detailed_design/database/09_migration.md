@@ -8,6 +8,7 @@
 - [00_policy.md](./00_policy.md)（命名規約・共通カラム方針）
 - [../infra/05_ci_workflow.md](../infra/05_ci_workflow.md)（CIでのマイグレーション適用手順）
 - [../infra/02_dockerfile_api.md](../infra/02_dockerfile_api.md)（起動時 `alembic upgrade head` の実行箇所）
+- [../batch/02_due_notification_job.md](../batch/02_due_notification_job.md)（通知保持期間パージの呼び出し元）
 
 ## 1. 概要
 
@@ -37,8 +38,9 @@
 | `0006_create_tasks_table.py` | `tasks` テーブル（`DEFERRABLE` 一意制約含む） |
 | `0007_create_task_comments_table.py` | `task_comments` テーブル |
 | `0008_create_login_history_table.py` | `login_history` テーブル |
-| `0009_create_functions_and_triggers.py` | [08_db_functions.md](./08_db_functions.md) の4オブジェクト（`trg_set_updated_at` とその4トリガ、`fn_is_project_member`、`fn_next_task_position`、`sp_purge_login_history`） |
+| `0009_create_functions_and_triggers.py` | [08_db_functions.md](./08_db_functions.md) の5オブジェクト（`trg_set_updated_at` とその4トリガ、`fn_is_project_member`、`fn_next_task_position`、`sp_purge_login_history`、`sp_purge_notifications`） |
 | `0010_seed_initial_admin.py` | 初期adminユーザーのシード（§3） |
+| `0011_create_notifications_table.py` | `notifications` テーブル、制約・インデックス、`tasks.due_at`への移行 |
 
 **要検討**：上記のリビジョン分割・命名例（`0001_...` 等の連番接頭辞）は本詳細設計での具体化であり、基本設計に明記された正の構成ではない。実装時にAlembicの自動生成ハッシュIDとの整合をどう取るか（`down_revision` チェーンの実ファイル名）は実装担当の裁量とする。
 
@@ -55,7 +57,8 @@ flowchart LR
     R7 --> R8["0008<br/>login_history"]
     R8 --> R9["0009<br/>関数・トリガ"]
     R9 --> R10["0010<br/>シード「初期admin」"]
-    R10 -.->|"以降、機能追加ごとに1リビジョン"| RN["000N..."]
+    R10 --> R11["0011<br/>notifications + due_at"]
+    R11 -.->|"以降、機能追加ごとに1リビジョン"| RN["000N..."]
 ```
 
 ### 2.3 各リビジョンの構造（例：`0009_create_functions_and_triggers.py`）
@@ -93,6 +96,40 @@ def downgrade() -> None:
 ```
 
 `db/functions/*.sql` / `db/procedures/*.sql` は手動DDL置き場（内容の正）であり、Alembicリビジョンは `op.execute()` でその内容を読み込んで適用する橋渡し役に徹する。SQL本体をリビジョンファイル内に直接ハードコードで重複させない。
+
+### 2.4 `0011_create_notifications_table.py`（通知機能）
+
+`0011`は既存データを失わない順序で適用する。まず`tasks.due_at TIMESTAMPTZ NULL`を追加し、既存の期限データが存在する実装環境では`APP_TIMEZONE`の00:00としてUTCへ変換して移行する。その後に`notifications`、外部キー、CHECK制約、`uq_notifications_user_dedupe`、一覧・未読件数用インデックスを作成する。
+
+```python
+def upgrade() -> None:
+    op.add_column("tasks", sa.Column("due_at", sa.DateTime(timezone=True), nullable=True))
+    op.create_table(
+        "notifications",
+        sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("gen_random_uuid()"), primary_key=True),
+        sa.Column("user_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+        sa.Column("task_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("tasks.id", ondelete="SET NULL")),
+        sa.Column("type", sa.String(30), nullable=False),
+        sa.Column("title", sa.String(200), nullable=False),
+        sa.Column("body", sa.Text()),
+        sa.Column("due_at", sa.DateTime(timezone=True)),
+        sa.Column("read_at", sa.DateTime(timezone=True)),
+        sa.Column("dedupe_key", sa.String(255), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.CheckConstraint("type IN ('due_soon_batch','due_today_created','due_today_updated')", name="ck_notifications_type"),
+        sa.UniqueConstraint("user_id", "dedupe_key", name="uq_notifications_user_dedupe"),
+    )
+    op.create_index("ix_notifications_user_created", "notifications", ["user_id", sa.text("created_at DESC")])
+    op.create_index("ix_notifications_user_unread", "notifications", ["user_id"], postgresql_where=sa.text("read_at IS NULL"))
+
+def downgrade() -> None:
+    op.drop_index("ix_notifications_user_unread", table_name="notifications")
+    op.drop_index("ix_notifications_user_created", table_name="notifications")
+    op.drop_table("notifications")
+    op.drop_column("tasks", "due_at")
+```
+
+`downgrade()`は通知履歴と期限日時を削除するため、本番CDのロールバックでは実行しない（§5）。
 
 ## 3. シードデータ（初期adminユーザー）
 

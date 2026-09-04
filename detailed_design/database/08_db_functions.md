@@ -10,7 +10,7 @@
 
 ## 1. 概要
 
-本ファイルは `basic_design/01_database.md` §5 に列挙された4つのDBオブジェクト（トリガ関数1・通常関数2・プロシージャ1）について、SQL本体・呼び出し元・排他制御・テスト方法を具体化する。
+本ファイルは `basic_design/01_database.md` §5 に列挙された5つのDBオブジェクト（トリガ関数1・通常関数2・プロシージャ2）について、SQL本体・呼び出し元・排他制御・テスト方法を具体化する。
 
 | 項目 | 内容 |
 |------|------|
@@ -27,6 +27,7 @@
 | 2 | 関数 | `fn_is_project_member` | `p_project_id UUID`, `p_user_id UUID` | `BOOLEAN` | プロジェクト所属・管理者判定（DB側の二重防御） |
 | 3 | 関数 | `fn_next_task_position` | `p_project_id UUID`, `p_status VARCHAR` | `INTEGER` | タスクの列内次position採番 |
 | 4 | プロシージャ | `sp_purge_login_history` | `p_retention_days INTEGER` | なし | ログイン履歴の保持期間管理 |
+| 5 | プロシージャ | `sp_purge_notifications` | `p_retention_days INTEGER` | なし | 通知の保持期間管理（batchから日次実行） |
 
 ## 3. 関数詳細
 
@@ -194,6 +195,34 @@ CALL sp_purge_login_history(365);
 
 （`test_db_functions.py::test_sp_purge_login_history_*`）
 
+### 3.5 `db/procedures/sp_purge_notifications.sql`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `sp_purge_notifications(p_retention_days INTEGER)` |
+| 呼び出し元 | `batch/app/jobs/due_notification_job.py`。運用者が手動で実行するAPIは提供しない |
+| 処理 | `DELETE FROM notifications WHERE created_at < now() - (p_retention_days || ' days')::interval` |
+| 排他制御 | PostgreSQLの通常のDELETE行ロック。通知作成とは別トランザクションで実行する |
+| 入力検証 | `p_retention_days > 0` でない場合は例外にする |
+
+```sql
+CREATE OR REPLACE PROCEDURE sp_purge_notifications(
+    p_retention_days INTEGER
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF p_retention_days <= 0 THEN
+        RAISE EXCEPTION 'p_retention_days must be positive';
+    END IF;
+    DELETE FROM notifications
+     WHERE created_at < now() - (p_retention_days || ' days')::interval;
+END;
+$$;
+```
+
+テストでは保持期間境界、未読・既読双方の削除、空テーブル、0以下の拒否を確認する。
+
 ## 4. 関数相関図
 
 ```mermaid
@@ -213,6 +242,8 @@ flowchart LR
     subgraph manual["運用者による手動実行"]
         OPS["運用者（psql）"] --> SP["sp_purge_login_history"]
         SP --> LH[("login_history")]
+        JOB["batch due_notification_job"] --> SNP["sp_purge_notifications"]
+        SNP --> NOTIF[("notifications")]
     end
 
     subgraph unused["SQLレベル検証用（アプリからは未使用）"]
@@ -236,6 +267,8 @@ flowchart LR
 | 8 | 正常系 | `sp_purge_login_history`：保持期間超過行あり | 対象行が削除される | `test_sp_purge_login_history_deletes_expired` |
 | 9 | 正常系 | `sp_purge_login_history`：保持期間内の行 | 削除されない | `test_sp_purge_login_history_keeps_recent` |
 | 10 | 異常系 | `sp_purge_login_history`：空テーブルに対して実行 | エラーなく正常終了 | `test_sp_purge_login_history_empty_table_noop` |
+| 11 | 正常系 | `sp_purge_notifications`：保持期間超過行あり | 未読・既読を問わず対象行が削除される | `test_sp_purge_notifications_deletes_expired` |
+| 12 | 異常系 | `sp_purge_notifications`：保持日数0以下 | 明示的なエラーで終了 | `test_sp_purge_notifications_rejects_non_positive_days` |
 
 ## 6. 不明点・要検討事項
 

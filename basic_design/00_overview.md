@@ -13,8 +13,8 @@
 | セッションストア | Redis 8（永続化なし） |
 | ORM / マイグレーション | SQLAlchemy 2.x + Alembic |
 | 認証方式 | session（Cookie + Redis） / JWT（Access + Refresh） / Google OAuth2 |
-| 定期実行 | `batch` コンテナ（常駐スケジューラ。毎朝10時のタスク期限通知） |
-| 基準タイムゾーン | `APP_TIMEZONE`（既定 `Asia/Tokyo`）。DBはUTC保存、日次境界・「朝10時」の判定はこのTZで行う |
+| 定期実行 | `batch` コンテナ（常駐スケジューラ。毎日10時・17時のタスク期限通知） |
+| 基準タイムゾーン | `APP_TIMEZONE`（既定 `Asia/Tokyo`）。DBはUTC保存、日次境界・「10時・17時」の判定はこのTZで行う |
 | CI/CD | GitHub Actions（CI: Lint・型チェック・テスト、CD: GHCR + self-hosted runner） |
 
 ## 2. システム構成
@@ -30,7 +30,7 @@ flowchart TB
     subgraph compose["Docker Compose ネットワーク"]
         FE["frontend<br/>Vite / Nginx"]
         API["backend<br/>FastAPI + Uvicorn"]
-        BAT["batch<br/>常駐スケジューラ<br/>毎朝10:00 JST"]
+        BAT["batch<br/>常駐スケジューラ<br/>毎日10:00 / 17:00 JST"]
         PG[("postgres<br/>PostgreSQL 17")]
         RD[("redis<br/>Redis 8")]
         MAIL["mailpit<br/>開発用SMTP"]
@@ -289,11 +289,11 @@ flowchart LR
         S6["refresh_used / refresh_family_revoked"]
         S7["oauth_handoff:{code}"]
         S8["emailverify / emailverify_current"]
-        S9["lock:notify_due:{YYYY-MM-DD}"]
+        S9["lock:notify_due:{YYYY-MM-DD}:{slot}"]
     end
 
     subgraph batch["batch（常駐スケジューラ）"]
-        B1["due_notification_job<br/>毎朝10:00 JST"]
+        B1["due_notification_job_10 / _17<br/>毎日10:00 / 17:00 JST"]
     end
 
     subgraph pg["PostgreSQL（永続）"]
@@ -330,5 +330,5 @@ flowchart LR
 | テスト | バックエンド pytest（Redis/PostgreSQL は実コンテナ接続）、フロント Vitest |
 | 秘匿情報 | `.env` および GitHub Secrets 管理。リポジトリへ直接コミットしない |
 | Redis永続化 | RDB/AOF 無効。再起動時に全ログアウトとなることを許容 |
-| 定期実行 | `batch` コンテナの常駐スケジューラ。二重実行はRedisの実行ロック（`lock:notify_due:{日付}`）で防止（[02_redis](./02_redis.md#2-キー一覧)） |
+| 定期実行 | `batch` コンテナの常駐スケジューラ。10時・17時の2つのcronジョブを登録し、二重実行はRedisの実行ロック（`lock:notify_due:{日付}:{slot}`）で防止（[02_redis](./02_redis.md#2-キー一覧)） |
 | タイムゾーン | 保存はUTC（`TIMESTAMPTZ`）、業務上の日次境界の判定は `APP_TIMEZONE`（既定 `Asia/Tokyo`）。フロントは表示のみローカル変換 |

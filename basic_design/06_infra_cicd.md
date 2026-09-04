@@ -58,12 +58,12 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| 役割 | 定期実行ジョブの常駐スケジューラ。要件書§3.4 N-1（毎朝10時の期限通知） |
+| 役割 | 定期実行ジョブの常駐スケジューラ。要件書§3.4 N-1（毎日10時・17時の期限通知） |
 | スケジューラ | APScheduler（`AsyncIOScheduler` + `CronTrigger`）。タイムゾーンは `APP_TIMEZONE` |
-| ジョブ | `due_notification_job`（`NOTIFY_DUE_CRON_HOUR`:`NOTIFY_DUE_CRON_MINUTE` に実行）。ジョブ末尾で `sp_purge_notifications` を呼び保持期間超過分を削除する |
-| 二重実行防止 | Redis の `lock:notify_due:{YYYY-MM-DD}`（`SET NX EX`）。詳細は [02_redis.md §4.4](./02_redis.md#44-期限通知バッチの実行ロック) |
+| ジョブ | `due_notification_job_10` と `due_notification_job_17` の2つを登録し、`NOTIFY_DUE_RUN_HOURS` と `NOTIFY_DUE_CRON_MINUTE` に従って実行する。ジョブ末尾で `sp_purge_notifications` を呼び保持期間超過分を削除する |
+| 二重実行防止 | Redis の `lock:notify_due:{YYYY-MM-DD}:{slot}`（`SET NX EX`）。詳細は [02_redis.md §4.4](./02_redis.md#44-期限通知バッチの実行ロック) |
 | 依存の方向 | `jobs → repository → models`。`api/app` のコードは import せず、共有が必要なORMモデルは `batch` 側に同等の定義を置く（コンテナ間でソースを共有しないため） |
-| 手動実行 | `docker compose run --rm batch python -m app.main --run-once due_notification`（障害時のリカバリ用） |
+| 手動実行 | `docker compose run --rm batch python -m app.main --run-once due_notification --slot 10`（17時枠は`--slot 17`。障害時のリカバリ用） |
 
 ## 3. Dockerfile 方針
 
@@ -107,7 +107,7 @@ flowchart TB
 | `COMPOSE_PROJECT_NAME` | `cerberus` | Compose プロジェクト名 |
 | `APP_ENV` | `local` | `local` / `ci` / `production` |
 | `LOG_LEVEL` | `INFO` | ログレベル |
-| `APP_TIMEZONE` | `Asia/Tokyo` | 業務上の日次境界（「当日」「朝10時」）の判定に使うタイムゾーン。DBはUTC保存のまま。backend / batch の両方に渡す |
+| `APP_TIMEZONE` | `Asia/Tokyo` | 業務上の日次境界（「当日」「10時・17時」）の判定に使うタイムゾーン。DBはUTC保存のまま。backend / batch の両方に渡す |
 | `FRONTEND_PORT` | `5173` | フロントの外部公開ポート |
 | `BACKEND_PORT` | `8000` | 開発時にbackendへ接続する場合だけ `127.0.0.1` に公開。通常のCompose/CDでは未公開 |
 | `POSTGRES_PORT` | `5432` | 開発用DB接続が必要な場合だけ `127.0.0.1` に公開 |
@@ -177,14 +177,14 @@ flowchart TB
 
 | 変数 | 例 | 説明 |
 |------|-----|------|
-| `NOTIFY_DUE_CRON_HOUR` | `10` | 期限通知バッチの実行時（`APP_TIMEZONE` 基準） |
+| `NOTIFY_DUE_RUN_HOURS` | `10,17` | 期限通知バッチを登録する実行時刻（`APP_TIMEZONE` 基準）。値ごとに別cronジョブを1つずつ登録する |
 | `NOTIFY_DUE_CRON_MINUTE` | `0` | 期限通知バッチの実行分 |
-| `NOTIFY_DUE_LOOKAHEAD_HOURS` | `24` | 実行時刻から何時間先までの期限を対象にするか。既定24（＝翌日10時まで） |
-| `NOTIFY_DUE_LOCK_TTL_SECONDS` | `82800` | 実行ロック `lock:notify_due:{日付}` のTTL（23時間） |
+| `NOTIFY_DUE_TARGET_HOUR` | `10` | 10時・17時の両実行枠で共通して使う対象期限の翌日境界（`APP_TIMEZONE` 基準） |
+| `NOTIFY_DUE_LOCK_TTL_SECONDS` | `82800` | 実行ロック `lock:notify_due:{日付}:{slot}` のTTL（23時間） |
 | `NOTIFY_DUE_BATCH_CHUNK_SIZE` | `500` | 通知INSERTを分割する件数。1回のトランザクションを短く保つ |
 | `BATCH_ENABLED` | `true` | `false` にするとスケジューラを登録せず常駐のみ（CI・検証用） |
 
-`NOTIFY_DUE_CRON_HOUR` / `NOTIFY_DUE_CRON_MINUTE` / `NOTIFY_DUE_LOOKAHEAD_HOURS` をコードに直書きせず環境変数化することで、「毎朝10時／翌日10時まで」という業務ルールを設定変更だけで調整できるようにする。
+`NOTIFY_DUE_RUN_HOURS` / `NOTIFY_DUE_CRON_MINUTE` / `NOTIFY_DUE_TARGET_HOUR` をコードに直書きせず環境変数化することで、「10時・17時に実行／翌日10時まで」という業務ルールを設定変更だけで調整できるようにする。`NOTIFY_DUE_RUN_HOURS` の各値は独立したcronジョブとして登録する。
 
 ### 4.6 初期データ / フロント
 
@@ -340,7 +340,7 @@ sequenceDiagram
 | バックアップ | `pgdata` volume の `pg_dump` 手動取得のみ（自動化はスコープ外） |
 | 監視 | `/health` の手動確認のみ。監視・アラートはスコープ外（要件書§11） |
 | ログ | コンテナ標準出力（`docker compose logs`）。集約はスコープ外 |
-| 定期通知の確認 | `docker compose logs batch` で毎朝10時の実行ログ（対象件数・作成件数）を確認する。実行されていない場合は `BATCH_ENABLED` と `APP_TIMEZONE`、Redisの `lock:notify_due:{日付}` の残存を確認し、必要なら `docker compose run --rm batch python -m app.main --run-once due_notification` で手動実行する |
+| 定期通知の確認 | `docker compose logs batch` で10時・17時の実行ログ（対象件数・作成件数）を確認する。実行されていない場合は `BATCH_ENABLED` と `APP_TIMEZONE`、Redisの `lock:notify_due:{日付}:{slot}` の残存を確認し、必要なら `docker compose run --rm batch python -m app.main --run-once due_notification --slot 10` で手動実行する |
 | 通知の肥大化 | `notifications` は `sp_purge_notifications`（`NOTIFICATION_RETENTION_DAYS`、既定90日）で日次ジョブ内から削除される。保持日数を延ばす場合は行数の増加に注意する |
 | シークレットローテーション | `JWT_SECRET_KEY` を変更すると全アクセストークンが無効になる（リフレッシュはRedis管理のため生存）。挙動を理解した上で実施すること |
 | マイグレーション失敗時 | backend コンテナは起動失敗とし、DBバックアップとログを確認して原因を修正する。アプリイメージだけを直前タグへ戻し、**適用済みmigrationを自動downgradeしない**。旧アプリが新しいスキーマと後方互換であることを前提にし、不可逆変更はexpand/contract方式で段階適用する |

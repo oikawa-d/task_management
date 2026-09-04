@@ -10,7 +10,7 @@
 | 項目 | 内容 |
 |------|------|
 | 対象 | `.github/workflows/cd.yml` |
-| 責務 | mainマージをトリガーにbackend/frontendイメージをビルドしGHCRへpush、self-hosted runner経由で対象環境へデプロイし、ヘルスチェックで疎通確認する |
+| 責務 | mainマージをトリガーにbackend/frontend/batchイメージをビルドしGHCRへpush、self-hosted runner経由で対象環境へデプロイし、ヘルスチェックで疎通確認する |
 | 適用条件 | `on: push: branches: [main]`、`workflow_dispatch`（手動再実行） |
 | 依存先 | GHCR（`docker/login-action`）、self-hosted runner、Docker Compose（[01_docker_compose.md](./01_docker_compose.md)）、`GET /api/health`（[../api/system/01_get_health.md](../api/system/01_get_health.md)） |
 | 実装ファイル | `.github/workflows/cd.yml` |
@@ -19,7 +19,7 @@
 
 | 要素 | 種別 | 責務 | 備考 |
 |------|------|------|------|
-| `build-and-push` | ジョブ | backend/frontendイメージをビルドしGHCRへpush | `runs-on: ubuntu-latest`（GitHub-hosted runner） |
+| `build-and-push` | ジョブ | backend/frontend/batchイメージをビルドしGHCRへpush | `runs-on: ubuntu-latest`（GitHub-hosted runner） |
 | `deploy` | ジョブ | self-hosted runner上で`.env`生成 → pull → `docker compose up -d` → ヘルスチェック | `needs: build-and-push`、`runs-on: [self-hosted, linux, cerberus]` |
 | GitHub Environment `production` | 環境 | Secretsのスコープ分離、必要に応じた承認フロー | `deploy`ジョブに`environment: production`を指定 |
 | `concurrency` グループ | ワークフロー設定 | 同時デプロイの競合防止 | `group: deploy-main, cancel-in-progress: false` |
@@ -32,6 +32,7 @@
 | `REGISTRY` | str | `ghcr.io` | イメージレジストリのホスト名 | 否 |
 | `IMAGE_NAME_BACKEND` | str | `ghcr.io/{owner}/cerberus-backend` | backendイメージ名（`{owner}`はリポジトリオーナー） | 否 |
 | `IMAGE_NAME_FRONTEND` | str | `ghcr.io/{owner}/cerberus-frontend` | frontendイメージ名 | 否 |
+| `IMAGE_NAME_BATCH` | str | `ghcr.io/{owner}/cerberus-batch` | batchイメージ名 | 否 |
 | `GITHUB_TOKEN` | str | 自動発行 | `docker/login-action`によるGHCR認証（`permissions: packages: write`） | **Secret**（GitHub自動管理） |
 | すべての`.env`項目（[04_env_config.md](./04_env_config.md)§3） | - | - | `deploy`ジョブが`GitHub Environment: production`のSecretsから`.env`をヒアドキュメント生成 | **Secret**表記の項目はすべてGitHub Secrets |
 | `DEPLOY_HOST_HEALTHCHECK_URL` | str | `http://localhost:${FRONTEND_PORT}/api/health` | デプロイ後ポーリング先URL | 否（self-hosted runnerローカルの値） |
@@ -45,7 +46,7 @@
 |------|------|
 | 入力 | `main`ブランチへのpushイベント（マージコミット）、`workflow_dispatch`、GitHub Environment `production`のSecrets一式 |
 | 出力 | GHCR上の`cerberus-backend`/`cerberus-frontend`イメージ（`latest`・`sha-{短縮SHA}`）、self-hosted runner上で稼働するコンテナ群、デプロイ結果（成功/失敗） |
-| 副作用 | self-hosted runner上の`.env`ファイル生成・上書き、稼働中コンテナの置き換え（`docker compose up -d`）、`backend`起動時の`alembic upgrade head`によるDBスキーマ変更、失敗時のイメージロールバック、未使用イメージのprune |
+| 副作用 | self-hosted runner上の`.env`ファイル生成・上書き、稼働中コンテナの置き換え（`docker compose up -d`）、`backend`起動時の`alembic upgrade head`によるDBスキーマ変更、`batch`再起動によるスケジューラ再登録、失敗時のイメージロールバック、未使用イメージのprune |
 
 ## 5. シーケンス図
 
@@ -65,7 +66,7 @@ sequenceDiagram
     DEV->>GH: main へマージ
     GH->>RUN: build-and-push ジョブ開始
     RUN->>RUN: docker/login-action（GHCR認証）
-    RUN->>RUN: docker build（backend / frontend）
+    RUN->>RUN: docker build（backend / frontend / batch）
     RUN->>GHCR: docker push<br/>tag: latest, sha-{短縮SHA}
     RUN-->>GH: 成功
     GH->>SELF: deploy ジョブ開始（needs: build-and-push, environment: production）
@@ -189,7 +190,7 @@ stateDiagram-v2
 | 引数 / 入力 | `api/Dockerfile`（[02_dockerfile_api.md](./02_dockerfile_api.md)）、`frontend/Dockerfile`（[03_dockerfile_frontend.md](./03_dockerfile_frontend.md)）、`${{ github.sha }}` |
 | 戻り値 / 出力 | GHCR上のイメージ2種（各`latest`/`sha-{短縮SHA}`タグ） |
 | 送出例外 / 失敗条件 | `docker/login-action`の認証失敗、`docker build`のビルドエラー、`docker push`の権限エラー |
-| 処理内容 | 1. チェックアウト 2. `docker/setup-buildx-action@v3` 3. `docker/login-action@v3`（`registry: ghcr.io`, `username: ${{ github.actor }}`, `password: ${{ secrets.GITHUB_TOKEN }}`） 4. `docker/build-push-action@v6`をbackend用（`push: true`, `tags: ghcr.io/{owner}/cerberus-backend:latest,ghcr.io/{owner}/cerberus-backend:sha-${{ github.sha }}`）とfrontend用に2回実行 5. `VITE_API_BASE_URL`をビルド`ARG`として本番相当値で渡す |
+| 処理内容 | 1. チェックアウト 2. `docker/setup-buildx-action@v3` 3. `docker/login-action@v3`（`registry: ghcr.io`, `username: ${{ github.actor }}`, `password: ${{ secrets.GITHUB_TOKEN }}`） 4. `docker/build-push-action@v6`をbackend/frontend/batch用に3回実行し、各イメージへ`latest`と`sha-${{ github.sha }}`を付けてpush 5. `VITE_API_BASE_URL`をfrontendのビルド`ARG`として本番相当値で渡す |
 | 副作用 | GHCR上に新規イメージタグが公開される |
 
 ### 8.3 `deploy` ジョブ
@@ -221,7 +222,7 @@ flowchart LR
     TRIG["main へのpush / workflow_dispatch"] --> WF["cd.yml"]
     WF --> BAP["build-and-push"]
     BAP --> LOGIN["docker/login-action"]
-    BAP --> BUILD["docker build backend/frontend"]
+    BAP --> BUILD["docker build backend/frontend/batch"]
     BUILD --> PUSH["docker push<br/>latest + sha-{短縮SHA}"]
     PUSH --> GHCR[("GHCR")]
     BAP --> DEPLOY["deploy<br/>(needs: build-and-push)"]

@@ -11,6 +11,8 @@
 | [../../auth/03_csrf.md](../../auth/03_csrf.md) | 更新系のCSRF検証仕様 |
 | [../../database/06_table_tasks.md](../../database/06_table_tasks.md) | tasks テーブル詳細 |
 | [../../database/08_db_functions.md](../../database/08_db_functions.md) | `fn_next_task_position` の詳細 |
+| [../notifications/01_get_notifications.md](../notifications/01_get_notifications.md) | 通知一覧スキーマ |
+| [../../database/10_table_notifications.md](../../database/10_table_notifications.md) | 通知の`dedupe_key`とINSERT制約 |
 | [./01_get_project_tasks.md](./01_get_project_tasks.md) | 同一リソースの一覧取得API |
 | [./04_patch_task.md](./04_patch_task.md) | position採番・advisory lockの詳細な考え方 |
 
@@ -58,7 +60,7 @@
 | description | string \| null | - | 省略時 `null` | 説明 |
 | status | string | - | `todo` / `in_progress` / `done`、省略時 `todo` | 初期ステータス |
 | assignee_id | string(uuid) \| null | - | 省略時 `null`。有効なプロジェクトメンバーのIDであること | 担当者 |
-| due_date | string(date) \| null | - | 省略時 `null`、`YYYY-MM-DD` | 期限日 |
+| due_at | string(date-time) \| null | - | 省略時 `null`、ISO 8601。オフセットなしは `APP_TIMEZONE` として解釈 | 期限日時 |
 
 `position` はリクエストで指定不可（指定してもpydanticスキーマに定義せず無視、または422とする。本設計では**スキーマに定義しないことで422にする**方針とし、常にサーバー側で対象列の末尾へ採番する）。
 
@@ -77,7 +79,7 @@
   "created_by": { "id": "9a1b...", "username": "taro" },
   "position": 3,
   "version": 1,
-  "due_date": null,
+  "due_at": null,
   "created_at": "2026-09-03T04:05:06Z",
   "updated_at": "2026-09-03T04:05:06Z"
 }
@@ -94,7 +96,7 @@
 | created_by | object | 不可 | `{id, username}` |
 | position | integer | 不可 | 採番された列内位置（`fn_next_task_position` の結果） |
 | version | integer | 不可 | 常に `1` で初期化 |
-| due_date | string(date) | 可 | |
+| due_at | string(date-time) | 可 | ISO 8601 UTC。NULL可 |
 | created_at / updated_at | string(datetime) | 不可 | ISO 8601 UTC |
 
 `Set-Cookie` の発行なし。`X-Request-ID` を全レスポンスに付与。
@@ -121,6 +123,7 @@ sequenceDiagram
     participant R as "tasks_router"
     participant D as "deps: require_project_member /<br/>verify_csrf"
     participant S as "task_service"
+    participant NS as "notification_service"
     participant TR as "task_repository"
     participant PG as "PostgreSQL"
 
@@ -141,6 +144,11 @@ sequenceDiagram
         TR->>PG: "INSERT tasks(..., position, version=1)"
         PG-->>TR: "task行"
         TR-->>S: "Task"
+        alt "assigneeあり かつ due_atがAPP_TIMEZONEの当日"
+            S->>NS: "create_due_today_notification(task, 'due_today_created')"
+            NS->>PG: "INSERT notifications ... ON CONFLICT DO NOTHING"
+        end
+        S->>PG: "COMMIT（tasksと通知を同一トランザクション）"
         S-->>R: "TaskResponse"
         R-->>FE: "201 {task}"
     end
@@ -184,7 +192,7 @@ flowchart TB
 | 戻り値 | `TaskResponse`（201） |
 | 送出例外 | `ValidationError`（422）、`ConflictError`（`ASSIGNEE_INACTIVE`、409） |
 | 処理内容 | 1. CSRF検証はルーター前段の依存性（`verify_csrf`、session モードのみ有効化）で完了済み<br/>2. `task_service.create_task(project, payload, current_user)` を呼び出す<br/>3. 結果を201で返す |
-| 副作用 | DB更新（tasks INSERT） |
+| 副作用 | DB更新（tasks INSERT）。条件成立時は同一トランザクションでnotifications INSERT |
 
 ### 6.2 `service/task_service.py :: create_task`
 
@@ -194,7 +202,7 @@ flowchart TB
 | 引数 | project: 認可済みProject／payload: 作成内容／user: 作成者（`created_by` に記録） |
 | 戻り値 | `Task`（ORMモデルまたはDTO） |
 | 送出例外 | `ValidationError`（`assignee_id` が非メンバー）、`ConflictError`（`assignee_id` が `is_active=false`） |
-| 処理内容 | 1. `payload.assignee_id` が `None` でない場合、`project_repository.is_member(project.id, assignee_id)` で所属確認。非所属なら `ValidationError`<br/>2. 所属確認と同時に取得した対象ユーザーの `is_active` を確認。`false` なら `ConflictError(ASSIGNEE_INACTIVE)`<br/>3. `task_repository.create(project.id, payload, created_by=user.id)` を呼び出す（内部でトランザクション・advisory lock・`fn_next_task_position` を実行） |
+| 処理内容 | 1. `payload.assignee_id` が `None` でない場合、`project_repository.is_member(project.id, assignee_id)` で所属確認。非所属なら `ValidationError`<br/>2. 所属確認と同時に取得した対象ユーザーの `is_active` を確認。`false` なら `ConflictError(ASSIGNEE_INACTIVE)`<br/>3. `task_repository.create(project.id, payload, created_by=user.id)` を呼び出す（内部でトランザクション・advisory lock・`fn_next_task_position` を実行）<br/>4. `assignee_id` があり、`due_at`を`APP_TIMEZONE`へ変換した日付が当日なら`notification_service.create_due_today_notification`を同じDBセッションで呼ぶ。通知の競合は`DO NOTHING`とし、タスク作成を失敗させない |
 | 副作用 | DB更新（tasks INSERT） |
 
 ### 6.3 `repository/task_repository.py :: create`
@@ -205,8 +213,16 @@ flowchart TB
 | 引数 | db: DBセッション／project_id／payload／created_by: 作成者ID |
 | 戻り値 | 作成された `Task` |
 | 送出例外 | `IntegrityError`（`uq_tasks_project_status_position` 違反等。`db_error_handler` が409へ変換） |
-| 処理内容 | 1. `SELECT pg_advisory_xact_lock(hashtext(project_id::text \|\| status))` でトランザクション内advisory lockを取得（同一 `(project_id, status)` への同時作成を直列化）<br/>2. `SELECT fn_next_task_position(project_id, status)` で採番<br/>3. `status` 省略時は既定値 `'todo'` を用いる<br/>4. `INSERT INTO tasks(project_id, title, description, status, assignee_id, created_by, position, version) VALUES (..., 1)` を実行<br/>5. 採番からINSERTまでを同一トランザクション（同一advisory lock保持区間）で行う |
+| 処理内容 | 1. `SELECT pg_advisory_xact_lock(hashtext(project_id::text \|\| status))` でトランザクション内advisory lockを取得（同一 `(project_id, status)` への同時作成を直列化）<br/>2. `SELECT fn_next_task_position(project_id, status)` で採番<br/>3. `status` 省略時は既定値 `'todo'` を用いる<br/>4. `INSERT INTO tasks(project_id, title, description, status, assignee_id, created_by, position, version, due_at) VALUES (..., 1, :due_at)` を実行<br/>5. 採番からINSERTまでを同一トランザクション（同一advisory lock保持区間）で行う |
 | 副作用 | DB更新（tasks INSERT） |
+
+### 6.4 `service/notification_service.py :: create_due_today_notification`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `async def create_due_today_notification(db: AsyncSession, task: Task) -> bool` |
+| 処理内容 | `due_at`を`APP_TIMEZONE`へ変換して当日00:00以上かつ翌日00:00未満を判定し、`user_id=assignee_id`、`type=due_today_created`、`dedupe_key=created:{task_id}`でINSERTする。`ON CONFLICT DO NOTHING`で冪等化する |
+| 副作用 | notificationsへのINSERT（タスク作成と同一トランザクション） |
 
 ## 7. 関数相関図
 
@@ -255,7 +271,7 @@ stateDiagram-v2
 | description | `TaskCreateRequest.description` | `str \| None`、上限なし（`TEXT`） | 同左 |
 | status | `TaskCreateRequest.status` | `Literal["todo","in_progress","done"]`、既定 `"todo"` | セレクトボックスの選択肢と一致 |
 | assignee_id | `TaskCreateRequest.assignee_id` | `UUID \| None` 型検証はpydantic、メンバー検証はサービス層 | 候補一覧APIの返す `id` のみ選択可能な形でUIを制限 |
-| due_date | `TaskCreateRequest.due_date` | `date \| None` | 日付ピッカーの型と一致 |
+| due_at | `TaskCreateRequest.due_at` | `datetime \| None` | 日時入力の型と一致。表示時は `APP_TIMEZONE` へ変換 |
 | position | スキーマに定義しない | クライアントが送信した場合は未知フィールドとして422（`model_config = {"extra": "forbid"}`） | フロントは作成リクエストに `position` を含めない |
 
 ## 11. 非機能・セキュリティ考慮

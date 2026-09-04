@@ -291,7 +291,7 @@ status 別にグルーピングして返すことで、フロント側のカン�
       "id": "…",
       "type": "due_soon_batch",
       "title": "設計書をレビューする",
-      "body": "期限まで24時間を切りました",
+      "body": "期限が近いタスクです",
       "task": { "id": "…", "project_id": "…", "title": "設計書をレビューする" },
       "due_at": "2026-09-05T09:00:00Z",
       "read_at": null,
@@ -303,7 +303,7 @@ status 別にグルーピングして返すことで、フロント側のカン�
 }
 ```
 
-- `type` は `due_soon_batch`（毎朝10時の定期通知） / `due_today_created`（当日期限のタスクを作成） / `due_today_updated`（終了時刻を当日へ変更）の3種
+- `type` は `due_soon_batch`（毎日10時・17時の定期通知） / `due_today_created`（当日期限のタスクを作成） / `due_today_updated`（終了時刻を当日へ変更）の3種
 - `task` は対象タスクが削除済みの場合 `null`。フロントは `null` のとき遷移リンクを描画しない
 - `unread_count` を一覧にも含め、一覧を開いた直後のバッジ表示に追加リクエストを要さないようにする
 - `?unread_only=true` を指定した場合は未読のみを返す（`meta.total` も未読件数になる）
@@ -326,7 +326,7 @@ status 別にグルーピングして返すことで、フロント側のカン�
 |------|------|------------------|
 | `POST /projects/{id}/tasks` | `assignee_id` があり、`due_at` が `APP_TIMEZONE` における**当日**の範囲内 | `due_today_created` |
 | `PATCH /tasks/{id}` | `due_at` が変更され、`assignee_id` があり、変更後の `due_at` が**当日**の範囲内 | `due_today_updated` |
-| `batch` の日次ジョブ | 毎朝10時。未完了かつ担当者ありで `due_at <= 翌日10:00` | `due_soon_batch` |
+| `batch` の日次ジョブ | 毎日10時・17時。未完了かつ担当者ありで `due_at <= 翌日10:00` | `due_soon_batch` |
 
 通知の作成はタスク作成／更新と**同一トランザクション**で行う（通知だけが残る・通知だけが欠けるという不整合を避けるため）。`UNIQUE (user_id, dedupe_key)` に競合した場合は `DO NOTHING` とし、タスク側の処理は成功させる。担当者が操作者自身であっても通知を作成する（要件書§3.4 N-6 に例外規定がないため）。
 
@@ -494,7 +494,7 @@ sequenceDiagram
     end
 ```
 
-### 6.3 毎朝10時の期限通知バッチ
+### 6.3 毎日10時・17時の期限通知バッチ
 
 `batch` コンテナはAPIを経由せず、DB / Redis へ直接アクセスする（詳細は [06_infra_cicd.md §2](./06_infra_cicd.md#2-docker-compose-構成)）。
 
@@ -507,9 +507,10 @@ sequenceDiagram
     participant PG as PostgreSQL
     participant FE as React SPA（ポーリング）
 
-    SC->>J: cron(hour=10, minute=0, tz=APP_TIMEZONE) 発火
-    J->>RD: SET lock:notify_due:{当日} NX EX 82800
-    alt ロック取得失敗（当日実行済み）
+    SC->>J: cron_10(hour=10, minute=0, tz=APP_TIMEZONE) 発火
+    SC->>J: cron_17(hour=17, minute=0, tz=APP_TIMEZONE) 発火
+    J->>RD: SET lock:notify_due:{当日}:{slot} NX EX 82800
+    alt ロック取得失敗（当日・同一枠実行済み）
         RD-->>J: nil
         J-->>SC: WARNログを出して終了
     else ロック取得成功
@@ -518,7 +519,7 @@ sequenceDiagram
         J->>PG: SELECT tasks WHERE status<>'done'<br/>AND assignee_id IS NOT NULL<br/>AND due_at IS NOT NULL AND due_at <= threshold
         PG-->>J: 対象タスク（担当者付き）
         loop チャンク単位（NOTIFY_DUE_BATCH_CHUNK_SIZE 件ずつ）
-            J->>PG: INSERT notifications (type='due_soon_batch',<br/>dedupe_key='batch:{当日}:{task_id}')<br/>ON CONFLICT DO NOTHING
+            J->>PG: INSERT notifications (type='due_soon_batch',<br/>dedupe_key='batch:{当日}:{slot}:{task_id}')<br/>ON CONFLICT DO NOTHING
             PG-->>J: 作成件数
         end
         J->>PG: CALL sp_purge_notifications(NOTIFICATION_RETENTION_DAYS)
@@ -527,7 +528,7 @@ sequenceDiagram
     FE->>FE: 次のポーリングで GET /api/notifications/unread-count<br/>→ バッジ更新
 ```
 
-抽出条件に**下限を設けない**ため、期限を過ぎた未完了タスクは毎朝リマインドされる。`dedupe_key` に実行日を含めるため、同じタスクでも日が変われば新しい通知になる。
+抽出条件に**下限を設けない**ため、期限を過ぎた未完了タスクは10時・17時に各1回リマインドされる。`dedupe_key` に実行日と実行枠を含めるため、同じタスクでも枠が変われば再通知され、同じ枠の再実行では重複しない。両枠の対象期限は共通して翌日10時までとする。
 
 ## 7. サービス層の関数一覧
 

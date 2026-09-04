@@ -10,7 +10,7 @@
 | 項目 | 内容 |
 |------|------|
 | 対象 | `.github/workflows/ci.yml` |
-| 責務 | push/pull_request をトリガーに、backend/frontendのLint・型チェック・テスト・カバレッジ検証、およびDockerイメージのビルド確認（push なし）を行う |
+| 責務 | push/pull_request をトリガーに、backend/frontendのLint・型チェック・テスト・カバレッジ検証、およびbackend/frontend/batch Dockerイメージのビルド確認（push なし）を行う |
 | 適用条件 | `push: branches: [main, develop]`、`pull_request: branches: [main, develop]` |
 | 依存先 | GitHub Actions `services`（PostgreSQL・Redis）、GHA組み込みキャッシュ（`actions/setup-python`・`actions/setup-node`）、`docker/build-push-action` |
 | 実装ファイル | `.github/workflows/ci.yml` |
@@ -23,7 +23,7 @@
 | `backend-test` | ジョブ | `services`でPostgreSQL/Redis起動 → `alembic upgrade head` → `pytest --cov` | `AUTH_MODE`をmatrix化（`session`/`jwt`） |
 | `frontend-lint` | ジョブ | `eslint .` / `tsc --noEmit` | Node v26 |
 | `frontend-test` | ジョブ | `vitest run --coverage` | |
-| `docker-build` | ジョブ | backend/frontendイメージのビルド確認（`push: false`） | 4ジョブすべての成功後に実行 |
+| `docker-build` | ジョブ | backend/frontend/batchイメージのビルド確認（`push: false`） | 4ジョブすべての成功後に実行 |
 | `postgres` service | GitHub Actions `services` | `backend-test`用の一時PostgreSQLコンテナ | `postgres:17-alpine` |
 | `redis` service | GitHub Actions `services` | `backend-test`用の一時Redisコンテナ | `redis:8-alpine` |
 
@@ -156,7 +156,7 @@ flowchart TB
 | 引数 / 入力 | GitHubイベントペイロード（`push`/`pull_request`）、GitHub Secrets |
 | 戻り値 / 出力 | 各ジョブのconclusion（`success`/`failure`） |
 | 送出例外 / 失敗条件 | いずれかのステップが非ゼロ終了した場合、そのジョブはfailureとなる |
-| 処理内容 | 5ジョブ（`backend-lint`/`backend-test`/`frontend-lint`/`frontend-test`/`docker-build`）を定義し、`docker-build`のみ他4ジョブに`needs`で依存する |
+| 処理内容 | 5ジョブ（`backend-lint`/`backend-test`/`frontend-lint`/`frontend-test`/`docker-build`）を定義し、`docker-build`のみ他4ジョブに`needs`で依存する。Docker buildでは`api`/`frontend`/`batch`の3イメージを作成する |
 | 副作用 | なし（ワークフロー定義自体はGitHub側の実行指示） |
 
 ### 8.2 `backend-lint` ジョブ
@@ -208,10 +208,10 @@ flowchart TB
 | 項目 | 内容 |
 |------|------|
 | シグネチャ / 定義 | `runs-on: ubuntu-latest`。`needs: [backend-lint, backend-test, frontend-lint, frontend-test]` |
-| 引数 / 入力 | `api/Dockerfile`（[02_dockerfile_api.md](./02_dockerfile_api.md)）、`frontend/Dockerfile`（[03_dockerfile_frontend.md](./03_dockerfile_frontend.md)） |
+| 引数 / 入力 | `api/Dockerfile`（[02_dockerfile_api.md](./02_dockerfile_api.md)）、`frontend/Dockerfile`（[03_dockerfile_frontend.md](./03_dockerfile_frontend.md)）、`batch/Dockerfile`（[08_dockerfile_batch.md](./08_dockerfile_batch.md)） |
 | 戻り値 / 出力 | ビルド成功可否のみ（イメージはレジストリへpushしない） |
 | 送出例外 / 失敗条件 | いずれかのDockerfileのビルドエラー |
-| 処理内容 | 1. チェックアウト 2. `docker/setup-buildx-action@v3` 3. `docker/build-push-action@v6`を2回呼び出し（backend用・frontend用）、いずれも `push: false`、`cache-from: type=gha`、`cache-to: type=gha,mode=max` を指定 4. `VITE_API_BASE_URL`等のビルド時`ARG`はCIダミー値（`/api`）で埋める |
+| 処理内容 | 1. チェックアウト 2. `docker/setup-buildx-action@v3` 3. `docker/build-push-action@v6`を3回呼び出し（backend用・frontend用・batch用）、いずれも `push: false`、`cache-from: type=gha`、`cache-to: type=gha,mode=max` を指定 4. `VITE_API_BASE_URL`等のビルド時`ARG`はCIダミー値（`/api`）で埋める |
 | 副作用 | runner上に一時イメージが生成されるが、レジストリへは送信されない |
 
 ## 9. 関数・要素相関図
