@@ -45,7 +45,7 @@
 | 区分 | 内容 |
 |------|------|
 | 入力 | `main`ブランチへのpushイベント（マージコミット）、`workflow_dispatch`、GitHub Environment `production`のSecrets一式 |
-| 出力 | GHCR上の`cerberus-backend`/`cerberus-frontend`イメージ（`latest`・`sha-{短縮SHA}`）、self-hosted runner上で稼働するコンテナ群、デプロイ結果（成功/失敗） |
+| 出力 | GHCR上の`cerberus-backend`/`cerberus-frontend`/`cerberus-batch`イメージ（各`latest`・`sha-{短縮SHA}`）、self-hosted runner上で稼働するコンテナ群、デプロイ結果（成功/失敗） |
 | 副作用 | self-hosted runner上の`.env`ファイル生成・上書き、稼働中コンテナの置き換え（`docker compose up -d`）、`backend`起動時の`alembic upgrade head`によるDBスキーマ変更、`batch`再起動によるスケジューラ再登録、失敗時のイメージロールバック、未使用イメージのprune |
 
 ## 5. シーケンス図
@@ -105,7 +105,7 @@ sequenceDiagram
         HC-->>SELF: 503 / 接続失敗
     end
     SELF->>SELF: 直前の成功タグ（sha-{prev}）を記録済み変数から取得
-    SELF->>DC: backend/frontendイメージのみ sha-{prev} へ差し替えて再起動<br/>（DB downgradeは行わない）
+    SELF->>DC: backend/frontend/batchイメージを sha-{prev} へ差し替えて再起動<br/>（DB downgradeは行わない）
     DC-->>SELF: 旧イメージで再起動完了
     SELF->>HC: GET /api/health（復旧確認）
     alt 復旧成功
@@ -123,7 +123,7 @@ sequenceDiagram
 flowchart TB
     A["main へマージ / workflow_dispatch"] --> B["build-and-push ジョブ"]
     B --> C["docker/login-action（GHCR）"]
-    C --> D["backend / frontend を docker build"]
+    C --> D["backend / frontend / batch を docker build"]
     D --> E{"ビルド成功?"}
     E -->|No| F1["ジョブ失敗<br/>deployは実行されない"]
     E -->|Yes| G["docker push<br/>latest + sha-{短縮SHA}"]
@@ -187,8 +187,8 @@ stateDiagram-v2
 | 項目 | 内容 |
 |------|------|
 | シグネチャ / 定義 | `runs-on: ubuntu-latest`。`permissions: { packages: write, contents: read }` |
-| 引数 / 入力 | `api/Dockerfile`（[02_dockerfile_api.md](./02_dockerfile_api.md)）、`frontend/Dockerfile`（[03_dockerfile_frontend.md](./03_dockerfile_frontend.md)）、`${{ github.sha }}` |
-| 戻り値 / 出力 | GHCR上のイメージ2種（各`latest`/`sha-{短縮SHA}`タグ） |
+| 引数 / 入力 | `api/Dockerfile`（[02_dockerfile_api.md](./02_dockerfile_api.md)）、`frontend/Dockerfile`（[03_dockerfile_frontend.md](./03_dockerfile_frontend.md)）、`batch/Dockerfile`（[08_dockerfile_batch.md](./08_dockerfile_batch.md)）、`${{ github.sha }}` |
+| 戻り値 / 出力 | GHCR上のイメージ3種（各`latest`/`sha-{短縮SHA}`タグ） |
 | 送出例外 / 失敗条件 | `docker/login-action`の認証失敗、`docker build`のビルドエラー、`docker push`の権限エラー |
 | 処理内容 | 1. チェックアウト 2. `docker/setup-buildx-action@v3` 3. `docker/login-action@v3`（`registry: ghcr.io`, `username: ${{ github.actor }}`, `password: ${{ secrets.GITHUB_TOKEN }}`） 4. `docker/build-push-action@v6`をbackend/frontend/batch用に3回実行し、各イメージへ`latest`と`sha-${{ github.sha }}`を付けてpush 5. `VITE_API_BASE_URL`をfrontendのビルド`ARG`として本番相当値で渡す |
 | 副作用 | GHCR上に新規イメージタグが公開される |

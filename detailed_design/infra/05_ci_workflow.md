@@ -80,7 +80,7 @@ sequenceDiagram
     FL-->>GH: success
     FT-->>GH: success
     GH->>DB: ジョブ起動（needs: 上記4ジョブ）
-    DB->>DB: docker/build-push-action（push: false）でbackend/frontendをビルド
+    DB->>DB: docker/build-push-action（push: false）でbackend/frontend/batchをビルド
     DB-->>GH: success
     GH-->>DEV: 全チェックgreen（ブランチ保護の必須チェックを満たす）
 ```
@@ -137,7 +137,7 @@ flowchart TB
     P --> Q
     Q -->|Yes| R["docker-build起動<br/>（push: false）"]
     Q -->|No| S["docker-buildはneeds未達成でskip扱い"]
-    R --> T{"backend/frontendとも<br/>ビルド成功?"}
+    R --> T{"backend/frontend/batchとも<br/>ビルド成功?"}
     T -->|No| U["docker-build失敗"]
     T -->|Yes| V["全required status checks green"]
 ```

@@ -330,7 +330,6 @@ flowchart LR
 
 ## 13. 不明点・要検討事項
 
-- `sp_purge_notifications` の関数本体・呼び出しテストは [`08_db_functions.md`](./08_db_functions.md)（他担当ファイル）の管轄だが、本書執筆時点で同ファイルの関数一覧（§2）・関数相関図（§4）に `sp_purge_notifications` が未掲載。`sp_purge_login_history` と対になるオブジェクトのため、担当者側での追記が必要（他担当との整合事項。詳細は完了報告に記載）。
 - Q-Notif-6（保持期間パージ）は `created_at` 単独のインデックスを持たない設計としたが、想定データ量（学習用途）では `Seq Scan` で十分と判断した。実運用でユーザー数・通知量が大きくなった場合に `ix_notifications_created_at` の追加が必要かは要検討。
 - `due_soon_batch` の `bulk_create_if_absent` を `unnest` による配列一括INSERTで実装する案は本書での具体化であり、基本設計・API詳細設計に明記された正の実装ではない（1行ずつの `INSERT` ループでも要件は満たせるため、実装時の性能検証次第でどちらを採るかは要検討）。
 - `notifications.due_at` は作成時点の `tasks.due_at` のスナップショットであり、その後 `tasks.due_at` が変更されても本カラムは追随しない（通知内容の不変性を優先する設計判断）。この理解でよいか、基本設計に明記がないため要確認。
