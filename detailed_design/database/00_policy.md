@@ -27,6 +27,22 @@
 | ORM | SQLAlchemy 2.x（`Mapped` / `mapped_column` の宣言的スタイル） | `api/app/models/` |
 | マイグレーション | Alembic | `db/migrations/` は手動DDL置き場、`api/alembic/versions/` が実行される正（詳細は `09_migration.md`） |
 
+### 2.1 業務ロジックを伴うDBアクセスの責務所在（roadmap #12 に基づく方針）
+
+業務ロジックを伴うDBアクセス（参照系・更新系を問わない）は、**原則としてPostgreSQLのストアドプロシージャ／関数（SP/FN）層が正**とする。repository層はSP/FN呼び出しの薄いラッパーとして実装し、repository層自体に業務判定・条件分岐・複数テーブルにまたがる整合性制御を持たせない。
+
+- SP/FNは `db/functions/`（実装）・`08_db_functions.md`（詳細設計）で定義する。命名は `sp_<動詞>_<対象>`（例：`sp_create_task` / `sp_deactivate_user`）、参照系は `fn_<動詞>_<対象>` を基本とする（詳細命名規約は `08_db_functions.md` に従う）。
+- repository層（`api/app/repository/`）は原則としてSP/FNの呼び出し（`CALL` / `SELECT`）とその戻り値のORM/DTOへの変換のみを担い、業務判定はSP/FN側に委譲する。
+- service層はSP/FN呼び出し結果（正常値・エラーコード）に基づく後続処理（レスポンス整形・通知トリガ等、DBアクセスを伴わない処理）を担当する。
+- **repository層がテーブルへ直接アクセスしてよい例外**（SP/FN経由を要さない）：
+  1. `GET /api/health` のDB疎通確認（単純な `SELECT 1` のみ。業務ロジックを含まない）
+  2. Alembicマイグレーション内のDDL適用・初期データseed（`api/alembic/versions/`）
+  3. テストフィクスチャ（`tests/` 配下のテストデータ準備・後始末）
+
+上記以外でテーブルへ直接SQLを発行する実装（ORMの `session.query` / `session.execute` によるSELECT・INSERT・UPDATE・DELETEを含む）は、業務ロジックを伴う限りSP/FN経由への置き換えを原則とする。
+
+> 旧方針（「それ以外のビジネスロジックは基本的にAPI（service/repository層）が正」という暗黙の前提）は本節により撤回し、上記に置き換える。
+
 ## 3. 命名規約
 
 | 対象 | 規約 | 例 |
@@ -102,6 +118,7 @@ CHECK制約の記述形式：`CHECK (<column> IN ('value1', 'value2', ...))`。�
 
 - 全テーブルで論理削除フラグ（`deleted_at` 等）は持たない。削除はSQLの `DELETE` による物理削除を基本とする。
 - 例外は `users` / `projects` / `tasks` の3テーブルで、`is_active`（管理者・オーナー・作成者による無効化）を用いて「利用停止」を表現する（issue #10で`projects`/`tasks`に拡張）。これら3テーブルに対する物理削除API自体は基本設計で提供されない（`01_table_users.md` §7、`04_table_projects.md`、`06_table_tasks.md` の各リポジトリ関数節を参照）。`DELETE /api/projects/{id}`・`DELETE /api/tasks/{id}` はいずれも `is_active=false` へのUPDATEとして実装する。
+- `is_active=false` への更新処理の実装主体は**SP**（`sp_deactivate_users` / `sp_deactivate_projects` / `sp_deactivate_tasks` 等の `sp_deactivate_*`）とする（§2.1の方針に従う）。repository層はこれらSPの呼び出しのみを行い、無効化に伴う付随処理（権限チェック・関連レコードの整合性制御等）はSP側に持たせる。
 - 親テーブル削除時の子テーブル挙動は外部キーの `ON DELETE` 句に従う（`CASCADE` / `RESTRICT` / `SET NULL`）。ただし `users` / `projects` / `tasks` はアプリケーションAPIとして物理削除経路を提供しないため、これらを起点とする `ON DELETE CASCADE` / `SET NULL` は通常運用では発火しない防御的制約という位置づけになる。各テーブルの詳細は `01_table_users.md` 〜 `03_table_login_history.md` の「制約・インデックス」節、および `projects` 以降は担当ファイルを参照。
 - `login_history` / `api_history` / `batch_history` は保持期間超過分をそれぞれの `sp_purge_*_history` プロシージャによる物理削除の対象とする（保持期間はそれぞれ90日 / 30日 / 30日）。
 
@@ -188,3 +205,10 @@ DDLの実適用（Alembicリビジョンの構成・初期データseed・CI/CD�
 
 - `TIMESTAMPTZ` で保存した日時をアプリ層でどのタイムゾーンに変換して返却するか（`APP_TIMEZONE` 等の環境変数が基本設計に定義されていない）は不明。要検討。
 - CHECK制約の値追加時のAlembic運用（`DROP CONSTRAINT` → `ADD CONSTRAINT` の具体的な手順・ダウングレード時の扱い）は `09_migration.md` 側で詳細化が必要（本書では方針のみ記載）。要検討。
+- エラーコード対応表をDB側（`08_db_functions.md`）とAPI側（`basic_design/04_api.md` §4.2）のどちらを正とするか、SQLSTATEを業務エラーコードごとに個別採番するか `P0001` 共通＋MESSAGE文字列で判定するかは未確定。要検討・本taskでは決定しない（roadmap #12 phase1 の task1.2 で扱う）。
+- admin操作（role変更・強制ログアウト等）でSP/FN層への責務移管が進んだ場合の、Redisセッション失効順序制御（DBの状態変更とRedis側のセッション無効化の順序保証）の扱いは不明。要検討。
+- 本節§2.1の新方針は roadmap #12 に基づく先行改訂であり、basic_designとdetailed_designの改訂順序が本書冒頭「## 0. 関連ドキュメント」記載の文書間優先順位ルール（矛盾時は基本設計が正）と一時的に矛盾する期間が生じる。当該期間の扱い（basic_design側の追従改訂タイミング・暫定的な優先順位の扱い）は要検討。
+- ヘルスチェック（`GET /api/health`）を例外としてSP/FN化しない方針（本書§2.1に反映済み）が有力だが、roadmap #12 側での最終確定はまだ済んでいない。要検討。
+- `api_history` 記録ミドルウェアをSP化した場合の全リクエストへのレイテンシ影響は未検証。要検討（性能検証が必要）。
+- `APP_TIMEZONE` を `sp_create_task` 等のSP/FNへ呼び出しの都度引数として渡すか、DBセッションのカスタムGUC（`SET app.timezone = ...`）として扱うかは未確定。要検討。
+- repository層がSP/FN呼び出しの薄いラッパーに縮小すること（本書§2.1）に伴い、SQLAlchemy ORMモデル（`api/app/models/`）の存在意義自体が変わる可能性がある（型定義・スキーマ検証用途への縮小等）。要検討。
