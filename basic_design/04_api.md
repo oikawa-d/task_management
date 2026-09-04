@@ -106,7 +106,19 @@
 
 | メソッド | パス | 概要 | 認証 |
 |----------|------|------|------|
-| GET | `/health` | ヘルスチェック（DB / Redis の接続状態、`auth_mode`） | 不要 |
+| GET | `/api/health` | ヘルスチェック（DB / Redis の接続状態、`auth_mode`） | 不要 |
+
+### 2.8 URL・転送・履歴記録の対応
+
+本章の各API一覧で `/api` を省略しているパスも、外部公開URLとFastAPIルートでは `/api` を付ける。Nginxは `/api/` のプレフィックスを維持したままbackendへ転送する。
+
+| 外部URL（ブラウザ） | Nginx | FastAPIルート | `api_history` |
+|---------------------|-------|---------------|---------------|
+| `/api/{resource}` | `location /api/` → `http://backend:8000/api/{resource}` | `/api/{resource}` | 記録する（成功・エラーを問わず） |
+| `/api/health` | `location /api/` → `http://backend:8000/api/health` | `/api/health` | 記録する（ヘルスチェックも `/api` 配下） |
+| `/`、`/{spa_route}` | Nginxの静的配信・SPA fallback | なし | 記録しない |
+
+`api_history.path` にはクエリ文字列を含めず、FastAPIのルートテンプレート（例：`/api/tasks/{task_id}`）を保存する。Cookie、Authorizationヘッダ、bodyの秘匿情報は保存しない。詳細は [../detailed_design/log/00_history.md](../detailed_design/log/00_history.md) を参照する。
 
 ## 3. 主要スキーマ
 

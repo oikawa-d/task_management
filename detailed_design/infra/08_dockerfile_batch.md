@@ -45,7 +45,7 @@ CMD ["python", "-m", "app.main"]
 | dockerfile | `batch/Dockerfile` |
 | restart | `unless-stopped` |
 | depends_on | `postgres` / `redis` の`service_healthy` |
-| healthcheck | `pgrep -f 'python -m app.main'`等でプロセス生存を確認 |
+| healthcheck | `python -c "import os; os.kill(1, 0)"`でPID 1の生存を確認 |
 | logging | backendと同じ標準出力の構造化ログ。秘密情報を含めない |
 | network | `cerberus_net`のみ |
 

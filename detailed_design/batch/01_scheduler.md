@@ -137,7 +137,7 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| 方式 | HTTPエンドポイントを持たないため、`pgrep -f app.main` 相当のプロセス存在確認を `docker-compose.yml` の `HEALTHCHECK` として使う（[../infra/01_docker_compose.md](../infra/01_docker_compose.md) §8.2） |
+| 方式 | HTTPエンドポイントを持たないため、`python -c "import os; os.kill(1, 0)"` によるPID 1の生存確認を `docker-compose.yml` の `HEALTHCHECK` として使う（[../infra/01_docker_compose.md](../infra/01_docker_compose.md) §8.2） |
 | 判定内容 | 「メインプロセスが生きているか」のみを見る。スケジューラが実際にジョブを登録できているか、直近の実行が成功したかは**ヘルスチェックの対象外**（§12要検討） |
 | 運用時の確認 | 実行結果（成功/失敗、作成件数）は `docker compose logs batch` で確認する（[../infra/07_operation.md](../infra/07_operation.md)） |
 

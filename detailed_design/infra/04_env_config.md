@@ -160,6 +160,14 @@
 | `NOTIFICATION_RETENTION_DAYS` | int | `90` | 通知保持期間。`sp_purge_notifications`へ渡す | 平文可 |
 | `BATCH_ENABLED` | bool | `true` | 定期ジョブ登録の有効/無効。`--run-once`はこの値に関係なく実行 | 平文可 |
 
+### 3.11 デプロイ・イメージ管理
+
+| 変数名 | 型 | 既定値 | 用途 | 秘匿 |
+|--------|-----|--------|------|------|
+| `BACKEND_IMAGE_TAG` / `FRONTEND_IMAGE_TAG` / `BATCH_IMAGE_TAG` | str | `latest`（ローカル） | Composeが参照する各アプリイメージのタグ。CDの通常デプロイでは同じ`sha-{短縮SHA}`を設定し、ロールバックでは直前成功値を設定 | 平文可 |
+| `IMAGE_RETENTION_DAYS` | int | `30` | self-hosted runner上で保持対象外のmanagedイメージを削除するまでの日数 | 平文可 |
+| `DEPLOY_STATE_FILE` | str | `/var/lib/cerberus/last-successful-deploy.env` | backend/frontend/batchの直前成功タグを保存するrunner専用ファイル | 平文可 |
+
 ## 4. 全体の出入力
 
 | 区分 | 内容 |

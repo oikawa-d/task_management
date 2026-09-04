@@ -267,7 +267,7 @@ flowchart LR
 | 起動 | `docker compose up -d batch`。PostgreSQL・Redisがhealthyになるまで起動を待つ |
 | 常駐 | `python -m app.main` で起動し、HTTPポートは公開しない |
 | 再起動 | `restart: unless-stopped`。予期しない終了後はスケジューラを再登録する |
-| healthcheck | `pgrep -f 'python -m app.main'` によるプロセス生存確認。ジョブ成功までは判定しない |
+| healthcheck | `python -c "import os; os.kill(1, 0)"` によるPID 1の生存確認。ジョブ成功までは判定しない |
 | マイグレーション | 実行しない。スキーマ適用はbackend起動時のAlembicが担う |
 | 手動実行 | `docker compose run --rm batch python -m app.main --run-once due_notification --slot 10`（17時枠は `--slot 17`） |
 

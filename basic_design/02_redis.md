@@ -152,7 +152,7 @@ stateDiagram-v2
 | `mark_email_verify_sent` | `user_id: UUID`, `interval: int` | `bool` | `SET emailverify_sent:{uid} NX EX interval`。`False` なら再送間隔内のため送信しない |
 | `incr_login_failure` | `identifier: str`, `client_ip: str`, `window: int` | `int`（現在の失敗回数） | lower/trimした識別子と確定済みIPからキーを作り、`INCR` → 初回のみ `EXPIRE` |
 | `reset_login_failure` | `identifier: str`, `client_ip: str` | `None` | 同じキーの `DEL` |
-| `ping` | なし | `bool` | ヘルスチェック（`/health` から使用） |
+| `ping` | なし | `bool` | ヘルスチェック（`/api/health` から使用） |
 
 ### 5.4 関数相関図
 
@@ -210,7 +210,7 @@ Redisが停止していてロックを取得できない場合は、バッチを
 | ケース | 挙動 | 対応 |
 |--------|------|------|
 | Redis 再起動 | 全キー消失 → 全ユーザーがログアウト状態。API は 401 を返す | フロントは 401 を検知してログイン画面へ遷移。要件書で許容済み |
-| Redis 接続不能 | 認証判定ができないため、認証必須APIは **503 SERVICE_UNAVAILABLE** を返す（fail-close） | `/health` に Redis 接続状態を含める |
+| Redis 接続不能 | 認証判定ができないため、認証必須APIは **503 SERVICE_UNAVAILABLE** を返す（fail-close） | `/api/health` に Redis 接続状態を含める |
 | メモリ枯渇 | `maxmemory-policy` は **`noeviction`** とする | セッションが勝手に消えるのを防ぐため。LRU等でのeviction は採用しない |
 | TTL満了直後のアクセス | `GET` が nil → 401 `SESSION_EXPIRED` / `TOKEN_EXPIRED` | フロントは再ログインへ誘導 |
 | 同一ユーザーの多重ログイン | 許容（`user_sessions` に複数 session_id が並ぶ） | 端末ごとにログアウト可能 |
