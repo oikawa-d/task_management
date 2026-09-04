@@ -148,10 +148,12 @@ flowchart LR
 
 各詳細設計書の「不明点・要検討事項」節から、**基本設計側の修正・追記が必要**なものを抜粋する。詳細は各リンク先を参照。
 
+「解消済」は本詳細設計の作成過程で基本設計・詳細設計の双方を修正して整合させたもの、「未定義／仕様差／運用制約／選択」は実装着手前に方針決定が必要なもの。
+
 | 区分 | 内容 | 該当 |
 |------|------|------|
-| 矛盾 | `require_project_owner` の失敗時ステータスが、基本設計 03_auth §9.2 では403のみだが、04_api §5 認可マトリクスでは非所属memberに404を要求している。詳細設計では「非所属→404 / 所属だが非オーナー→403」の2段階判定とした | [api/projects/04](./api/projects/04_patch_project.md) |
-| 矛盾 | Origin検証失敗時のHTTPステータスが、基本設計内で400（ログイン/ログアウトAPI）と403（エラーコード一覧 `CSRF_INVALID`）に分かれている | [auth/03_csrf.md](./auth/03_csrf.md) |
+| 解消済 | `require_project_owner` の失敗時ステータス。基本設計 [03_auth.md](../basic_design/03_auth.md) §9.2 の表を「非所属→404 / 所属だが非オーナー→403」に修正し、04_api §5 認可マトリクスおよび詳細設計と整合させた | [api/projects/04](./api/projects/04_patch_project.md) |
+| 解消済 | Origin検証失敗時のHTTPステータス。基本設計（04_api §4.2、03_auth §9.2）が定める **`403 CSRF_INVALID`** に全詳細設計を統一した（一部APIで400と記載していたものを修正） | [auth/03_csrf.md](./auth/03_csrf.md) |
 | 未定義 | ログイン以外のレート制限（register / verify-email/resend / password/forgot / コメント投稿）が未定義。IP単位の制限を含め要検討 | [api/auth/01](./api/auth/01_post_auth_register.md), [08](./api/auth/08_post_auth_verify_email_resend.md) |
 | 未定義 | `pwreset` に `emailverify_current` 相当の逆引きキーがなく、短時間の複数要求で複数トークンが同時に有効になり得る | [auth/06_token_mail.md](./auth/06_token_mail.md) |
 | 未定義 | DB更新成功後にRedis失効が失敗した場合の補償処理（管理者による無効化・パスワード変更時） | [api/admin/03](./api/admin/03_patch_admin_user_status.md), [api/users/03](./api/users/03_put_users_me_password.md) |

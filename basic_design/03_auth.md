@@ -500,7 +500,7 @@ flowchart TB
 | `get_current_user_optional` | 同上 | `CurrentUser \| None` | 条件付きで認証を利用する公開エンドポイントで使用。`/auth/me` は必須認証の `get_current_user` を使う | - |
 | `require_admin` | `user: CurrentUser` | `CurrentUser` | `role == 'admin'` を確認 | 403 `FORBIDDEN` |
 | `require_project_member` | `project_id`, `user`, `db` | `Project` | admin は無条件通過。それ以外は `project_members` の存在を確認 | 403 / 404 |
-| `require_project_owner` | `project_id`, `user`, `db` | `Project` | admin または `owner_id == user.id` | 403 |
+| `require_project_owner` | `project_id`, `user`, `db` | `Project` | admin は無条件通過。それ以外は `project_members` の存在を確認し、非所属なら404。所属していて `owner_id != user.id` なら403 | 403 / 404 |
 | `verify_origin` / `verify_csrf` | `request`, `strategy` | `None` | ログインを含むCookie発行・利用リクエストで許可Originを検証し、session モードの更新系、または jwt モードの `/auth/refresh`・`/auth/logout` ではCookie/headerのCSRFも検証 | 403 `CSRF_INVALID` |
 
 存在しないリソースと権限のないリソースの区別による情報漏洩を避けるため、**所属していないプロジェクトIDに対しては 404 を返す**方針とする（管理者のみ 403/404 を厳密に区別）。

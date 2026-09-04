@@ -88,7 +88,7 @@ Set-Cookie（`03_auth.md` §4.1 準拠）
 
 | HTTP | code | 発生条件 | メッセージ | 備考 |
 |------|------|----------|------------|------|
-| 400 | `CSRF_INVALID` | Origin不一致 | 許可されていないOriginからのリクエストです | |
+| 403 | `CSRF_INVALID` | Origin不一致 | 許可されていないOriginからのリクエストです | |
 | 401 | `INVALID_CREDENTIALS` | `identifier`該当なし、または`password`不一致 | IDまたはパスワードが正しくありません | ユーザー存在有無を区別しない |
 | 403 | `USER_INACTIVE` | `users.is_active = false` | このアカウントは無効化されています | |
 | 403 | `EMAIL_NOT_VERIFIED` | `users.email_verified_at IS NULL` | メールアドレスの認証が完了していません | パスワード検証**後**にのみ判定（列挙対策、§6参照） |
@@ -117,7 +117,7 @@ sequenceDiagram
     R->>D: verify_origin(request)
     alt Origin不一致
         D-->>R: CsrfInvalidError
-        R-->>FE: 400 CSRF_INVALID
+        R-->>FE: 403 CSRF_INVALID
     else Origin一致
         R->>S: login(identifier, password, request, response)
         S->>RS: incr_login_failure相当のGETで現在値確認
@@ -179,7 +179,7 @@ sequenceDiagram
 ```mermaid
 flowchart TB
     A["リクエスト受信"] --> B{"Origin検証"}
-    B -->|"不一致"| E400["400 CSRF_INVALID"]
+    B -->|"不一致"| E403["403 CSRF_INVALID"]
     B -->|"一致"| C{"pydanticバリデーション"}
     C -->|"NG"| E422["422 VALIDATION_ERROR"]
     C -->|"OK"| D{"login_fail 上限超過?"}
@@ -349,7 +349,7 @@ stateDiagram-v2
 | 9 | 結合 | レート制限 | 事前に上限まで失敗させる | `429 TOO_MANY_ATTEMPTS` | `test_login_endpoint_rate_limited` |
 | 10 | 結合 | 未認証メールでのログイン拒否 | `email_verified_at=NULL`のユーザー | `403 EMAIL_NOT_VERIFIED`、`login_history.failure_reason='email_not_verified'` | `test_login_endpoint_email_not_verified` |
 | 11 | 結合 | 無効化ユーザー | `is_active=false` | `403 USER_INACTIVE` | `test_login_endpoint_user_inactive` |
-| 12 | 結合 | Origin不一致 | 許可外Origin | `400 CSRF_INVALID` | `test_login_endpoint_invalid_origin` |
+| 12 | 結合 | Origin不一致 | 許可外Origin | `403 CSRF_INVALID` | `test_login_endpoint_invalid_origin` |
 
 `AUTH_MODE`両モードでのパラメータ化テストを7・8で実施。それ以外の異常系はモード非依存のためsessionモードのみで代表させる（jwtモードでの重複確認は工数対効果が低いため実施しない旨を明記）。
 
