@@ -45,6 +45,7 @@
 | `0010_seed_initial_admin.py` | 初期adminユーザーのシード（§3） |
 | `0011_create_notifications_table.py` | `tasks.due_at`への移行、`notifications` テーブル、制約・インデックス、`sp_purge_notifications` |
 | `0012_create_history_tables.py` | `api_history` / `batch_history` テーブル、制約・インデックス、履歴パージ用プロシージャ |
+| `0013_alter_projects_tasks_lifecycle.py` | `projects` への `is_active`/`start_at`/`end_at`/`ck_projects_period` 追加、`tasks` への `is_active` 追加、`tasks.project_id` のNULL許容化とFK付け替え（`ON DELETE CASCADE` → `ON DELETE SET NULL`）（issue #10） |
 
 **要検討**：上記のリビジョン分割・命名例（`0001_...` 等の連番接頭辞）は本詳細設計での具体化であり、基本設計に明記された正の構成ではない。実装時にAlembicの自動生成ハッシュIDとの整合をどう取るか（`down_revision` チェーンの実ファイル名）は実装担当の裁量とする。
 
@@ -63,7 +64,8 @@ flowchart LR
     R9 --> R10["0010<br/>シード「初期admin」"]
     R10 --> R11["0011<br/>notifications + due_at"]
     R11 --> R12["0012<br/>api_history + batch_history"]
-    R12 -.->|"以降、機能追加ごとに1リビジョン"| RN["000N..."]
+    R12 --> R13["0013<br/>projects/tasks<br/>ライフサイクル変更（issue #10）"]
+    R13 -.->|"以降、機能追加ごとに1リビジョン"| RN["000N..."]
 ```
 
 ### 2.3 各リビジョンの構造（例：`0009_create_functions_and_triggers.py`）
@@ -157,6 +159,59 @@ def downgrade() -> None:
 `api_history`と`batch_history`を作成し、両テーブルの制約・検索用インデックス・`sp_purge_api_history`・`sp_purge_batch_history`を適用する。`batch_history`の`updated_at`には既存の`trg_set_updated_at`を適用する。`downgrade()`では両テーブルとプロシージャを削除するため、本番では実行しない。
 
 詳細なDDLは [11_table_api_history.md](./11_table_api_history.md) と [12_table_batch_history.md](./12_table_batch_history.md)を正とし、リビジョン内に重複してハードコードしない。
+
+### 2.6 `0013_alter_projects_tasks_lifecycle.py`（プロジェクト論理削除・期間、タスクの任意紐付け）
+
+issue #10（プロジェクトの論理削除・開始終了日時、タスクのプロジェクト任意紐付け）に対応するリビジョン。`projects`/`tasks` 双方のスキーマ変更を1リビジョンにまとめる（同一issueの一体の変更のため分割しない）。適用順は「`projects` へのカラム追加・CHECK制約 → `tasks.project_id` のFK再作成 → `tasks` へのカラム追加」とし、`tasks.project_id` を先にNULL許容へ変更してから既存FKを一度落として `ON DELETE SET NULL` で貼り直す。
+
+```python
+"""alter projects and tasks lifecycle (issue #10)
+
+Revision ID: 0013
+Revises: 0012
+"""
+import sqlalchemy as sa
+from alembic import op
+
+def upgrade() -> None:
+    # projects: 論理削除フラグ・開始終了日時
+    op.add_column("projects", sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()))
+    op.add_column("projects", sa.Column("start_at", sa.DateTime(timezone=True), nullable=True))
+    op.add_column("projects", sa.Column("end_at", sa.DateTime(timezone=True), nullable=True))
+    op.create_check_constraint(
+        "ck_projects_period",
+        "projects",
+        "start_at IS NULL OR end_at IS NULL OR end_at >= start_at",
+    )
+
+    # tasks.project_id: NOT NULL解除 + FKをON DELETE SET NULLへ付け替え
+    op.alter_column("tasks", "project_id", nullable=True)
+    op.drop_constraint("tasks_project_id_fkey", "tasks", type_="foreignkey")
+    op.create_foreign_key(
+        "tasks_project_id_fkey", "tasks", "projects",
+        ["project_id"], ["id"], ondelete="SET NULL",
+    )
+
+    # tasks: 論理削除フラグ
+    op.add_column("tasks", sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()))
+
+def downgrade() -> None:
+    op.drop_column("tasks", "is_active")
+
+    op.drop_constraint("tasks_project_id_fkey", "tasks", type_="foreignkey")
+    op.create_foreign_key(
+        "tasks_project_id_fkey", "tasks", "projects",
+        ["project_id"], ["id"], ondelete="CASCADE",
+    )
+    op.alter_column("tasks", "project_id", nullable=False)
+
+    op.drop_constraint("ck_projects_period", "projects", type_="check")
+    op.drop_column("projects", "end_at")
+    op.drop_column("projects", "start_at")
+    op.drop_column("projects", "is_active")
+```
+
+`downgrade()` は `tasks.project_id` を `NOT NULL` に戻す前提として、適用時点で `project_id IS NULL` の行が存在しないことを要求する（存在すればNOT NULL制約違反で失敗する）。本番運用では §5 の方針どおりdowngradeは実施しないため、ローカル開発・CI健全性検証でのみ使用する想定。既存データに未所属タスクが作成された後にこのリビジョンをdowngradeする運用上の対応（強制的にダミー`project_id`を割り当てる等）は基本設計に明記がなく要検討（§9参照）。
 
 ## 3. シードデータ（初期adminユーザー）
 
@@ -312,6 +367,10 @@ flowchart LR
 | 8 | 正常系 | 関数・トリガ適用リビジョン後、`UPDATE users` で `updated_at` が更新される | [08_db_functions.md](./08_db_functions.md) のテストと重複しない範囲でマイグレーション経由の適用を確認 | `test_migration_functions_applied_correctly` |
 | 9 | 正常系 | `0012`適用後にAPI・batch履歴テーブルとプロシージャが存在する | 全制約・インデックス・パージプロシージャが作成される | `test_migration_history_tables_created` |
 | 10 | 正常系 | `0012`のupgrade→downgrade | 履歴テーブル・プロシージャが削除される | `test_migration_history_downgrade` |
+| 11 | 正常系 | `0013`適用後、`projects`に`is_active`/`start_at`/`end_at`、`tasks`に`is_active`が存在し、`tasks.project_id`がNULL許容になっている | 全カラム・`ck_projects_period`・`tasks_project_id_fkey`（`ON DELETE SET NULL`）が期待どおり作成される | `test_migration_0013_columns_and_constraints_created` |
+| 12 | 正常系 | `0013`適用後に`project_id`をNULLとしてタスクをINSERTする | NOT NULL制約違反にならず成功する | `test_migration_0013_allows_null_project_id_task` |
+| 13 | 異常系 | `project_id IS NULL`の行が存在する状態で`0013`をdowngradeする | `NOT NULL`制約違反で失敗する（想定どおりの挙動であることの確認） | `test_migration_0013_downgrade_fails_with_unassigned_tasks` |
+| 14 | 正常系 | 未所属タスクが存在しない状態で`0013`のupgrade→downgrade→upgradeを実行する | 最終的なスキーマが初回`upgrade head`と一致する | `test_migration_0013_roundtrip_without_unassigned_tasks` |
 
 ## 9. 不明点・要検討事項
 
@@ -319,3 +378,4 @@ flowchart LR
 - `INITIAL_ADMIN_PASSWORD` 等が未設定の場合の挙動（起動失敗 or 警告スキップ）は基本設計に明記がなく、本設計では起動失敗を既定としたが要検討。
 - CI上でのupgrade/downgrade往復健全性検証を必須ステップにするかは基本設計に記載がなく要検討（実行時間とのトレードオフ）。
 - `db/migrations/` （手動DDL置き場）と `api/alembic/versions/` の内容をどの頻度・手順で同期させるか（自動生成スクリプトの要否）は基本設計に明記がなく要検討。
+- `0013`のdowngradeで`project_id IS NULL`の行が既に存在する場合の運用対応（強制的にダミー`project_id`を割り当てる、downgrade自体を禁止する等）は基本設計に明記がなく要検討。本設計では「本番ではdowngradeを実施しない」（§5）の方針に委ねる形とした。

@@ -17,7 +17,7 @@
 | エンドポイント | `GET /api/projects` |
 | 目的 | ログインユーザーが所属するプロジェクトの一覧をページングして返す。ダッシュボード画面の初期表示に使用する |
 | 認証 | 必要（session Cookie または `Authorization: Bearer`） |
-| 認可 | member（自分の所属分のみ）／admin（全件） |
+| 認可 | member（自分の所属分のみ）／admin（全件）。無効化プロジェクト（`is_active=false`）の閲覧は、adminは無条件、memberは自分がオーナーのプロジェクトに限り可能（後述） |
 | CSRF検証 | 不要（参照系 GET） |
 | Origin検証 | 不要（Cookie発行・更新系ではないため） |
 | AUTH_MODE差異 | 差異なし（`deps.get_current_user` が方式差を吸収する） |
@@ -35,8 +35,18 @@
 |------|----|------|------|------|
 | page | integer | 任意 | 1以上。既定 `1` | ページ番号 |
 | per_page | integer | 任意 | 1〜100。既定 `20`（`core/config.py` の `PAGINATION_DEFAULT_PER_PAGE` / `PAGINATION_MAX_PER_PAGE`） | 1ページあたり件数 |
+| include_inactive | boolean | 任意 | 既定 `false` | `true` の場合、無効化（`is_active=false`）済みプロジェクトも一覧に含める。適用範囲は認可により異なる（下記参照） |
 
 パスパラメータ／ヘッダ（認証ヘッダ・Cookieを除く）／ボディ：なし。
+
+**`include_inactive` の適用範囲（確定方針）**
+
+| ユーザー種別 | `include_inactive=false`（既定） | `include_inactive=true` |
+|--------------|-----------------------------------|---------------------------|
+| admin | `is_active=true` の全件 | 有効・無効を問わず全件 |
+| member | 自分が所属する `is_active=true` のプロジェクトのみ | 上記に加えて、**自分がオーナーである** `is_active=false` のプロジェクトも含める。所属しているが非オーナーの無効化プロジェクトは対象外（他人が無効化した履歴を一覧から覗けないようにするため） |
+
+無効化操作自体がオーナー/admin限定（`05_delete_project.md`参照）であることと対称になるよう、閲覧可能範囲も「無効化した本人＋admin」に限定する。
 
 ### 2.2 レスポンス
 
@@ -53,6 +63,9 @@
       "member_count": 3,
       "task_counts": { "todo": 4, "in_progress": 2, "done": 7 },
       "is_owner": true,
+      "is_active": true,
+      "start_at": "2026-09-01T00:00:00Z",
+      "end_at": null,
       "created_at": "2026-09-01T00:00:00Z"
     }
   ],
@@ -70,6 +83,9 @@
 | items[].member_count | integer | 不可 | `project_members` の件数 |
 | items[].task_counts.todo / in_progress / done | integer | 不可 | status別タスク件数。0件のstatusも `0` を返す |
 | items[].is_owner | boolean | 不可 | `owner_id == current_user.id` |
+| items[].is_active | boolean | 不可 | 論理削除フラグ。`false` は無効化（論理削除）済みを示す |
+| items[].start_at | string(datetime) | 可 | プロジェクト開始日時。ISO 8601 UTC |
+| items[].end_at | string(datetime) | 可 | プロジェクト終了日時。ISO 8601 UTC |
 | items[].created_at | string(datetime) | 不可 | ISO 8601 UTC |
 | meta.page / per_page / total / total_pages | integer | 不可 | ページング情報 |
 
@@ -100,20 +116,20 @@ sequenceDiagram
     participant RP as "project_repository"
     participant PG as "PostgreSQL"
 
-    FE->>R: GET /api/projects?page=1&per_page=20
+    FE->>R: GET /api/projects?page=1&per_page=20&include_inactive=false
     R->>D: 認証（Cookie or Bearer）
     D-->>R: CurrentUser
-    R->>S: list_projects(user, page, per_page)
+    R->>S: list_projects(user, page, per_page, include_inactive)
     alt user.role == admin
-        S->>RP: count_all()
-        RP->>PG: "SELECT COUNT(*) FROM projects"
-        S->>RP: list_all(page, per_page)
-        RP->>PG: "SELECT * FROM projects ORDER BY created_at DESC LIMIT/OFFSET"
+        S->>RP: count_all(include_inactive)
+        RP->>PG: "SELECT COUNT(*) FROM projects [WHERE is_active] "
+        S->>RP: list_all(page, per_page, include_inactive)
+        RP->>PG: "SELECT * FROM projects [WHERE is_active] ORDER BY created_at DESC LIMIT/OFFSET"
     else member
-        S->>RP: count_by_member(user.id)
-        RP->>PG: "SELECT COUNT(*) FROM projects JOIN project_members ..."
-        S->>RP: list_by_member(user.id, page, per_page)
-        RP->>PG: "SELECT projects.* FROM projects JOIN project_members ... LIMIT/OFFSET"
+        S->>RP: count_by_member(user.id, include_inactive)
+        RP->>PG: "SELECT COUNT(*) FROM projects JOIN project_members ... WHERE (is_active OR (include_inactive AND owner_id=:uid))"
+        S->>RP: list_by_member(user.id, page, per_page, include_inactive)
+        RP->>PG: "SELECT projects.* FROM projects JOIN project_members ... WHERE (is_active OR (include_inactive AND owner_id=:uid)) LIMIT/OFFSET"
     end
     PG-->>RP: project行
     RP->>PG: "selectinload(Project.owner) の追加SELECT（owner_id IN (...)）"
@@ -143,10 +159,10 @@ flowchart TB
     B -->|"制約外"| B1["422 VALIDATION_ERROR"]
     B -->|"OK"| C["deps.get_current_user"]
     C -->|"認証情報なし/不正"| C1["401 UNAUTHENTICATED / SESSION_EXPIRED / TOKEN_EXPIRED"]
-    C -->|"is_active=false"| C2["403 USER_INACTIVE"]
+    C -->|"ユーザーis_active=false"| C2["403 USER_INACTIVE"]
     C -->|"OK"| D{"user.role == admin?"}
-    D -->|"Yes"| E["全件対象でCOUNT・一覧取得"]
-    D -->|"No"| F["project_members経由で所属分のみCOUNT・一覧取得"]
+    D -->|"Yes"| E["include_inactive次第でprojects.is_activeを絞り込みCOUNT・一覧取得"]
+    D -->|"No"| F["project_members経由で所属分のみ対象に、\ninclude_inactive=trueなら自分がオーナーの無効化分も追加してCOUNT・一覧取得"]
     E --> G["project_idsで member_count / task_counts をバッチ集計"]
     F --> G
     G --> H["ProjectSummaryへマージ・is_owner算出"]
@@ -160,33 +176,33 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def list_projects(page: int = 1, per_page: int = 20, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> ProjectListResponse` |
-| 引数 | `page`: クエリ、1以上 / `per_page`: クエリ、1〜100 / `user`: 認証済みユーザー / `db`: DBセッション |
+| シグネチャ | `async def list_projects(page: int = 1, per_page: int = 20, include_inactive: bool = False, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> ProjectListResponse` |
+| 引数 | `page`: クエリ、1以上 / `per_page`: クエリ、1〜100 / `include_inactive`: クエリ、既定`False` / `user`: 認証済みユーザー / `db`: DBセッション |
 | 戻り値 | `ProjectListResponse`（`items`, `meta`） |
 | 送出例外 | なし（サービス層の例外を `AppError` としてそのまま伝播、例外ハンドラが変換） |
-| 処理内容 | 1. `page`/`per_page` の範囲を pydantic が検証 2. `project_service.list_projects` を呼び出す 3. 戻り値をそのままレスポンスとして返す |
+| 処理内容 | 1. `page`/`per_page`/`include_inactive` の範囲を pydantic が検証 2. `project_service.list_projects` を呼び出す 3. 戻り値をそのままレスポンスとして返す |
 | 副作用 | なし |
 
 ### 6.2 `service/project_service.py :: list_projects`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def list_projects(user: CurrentUser, page: int, per_page: int, db: AsyncSession) -> Page[ProjectSummary]` |
-| 引数 | `user`: 現在ユーザー / `page`, `per_page`: ページング指定 / `db`: DBセッション |
+| シグネチャ | `async def list_projects(user: CurrentUser, page: int, per_page: int, include_inactive: bool, db: AsyncSession) -> Page[ProjectSummary]` |
+| 引数 | `user`: 現在ユーザー / `page`, `per_page`: ページング指定 / `include_inactive`: 無効化プロジェクトを含めるか / `db`: DBセッション |
 | 戻り値 | `Page[ProjectSummary]`（`items: list[ProjectSummary]`, `total: int`） |
 | 送出例外 | `ServiceUnavailableError`（PostgreSQL接続不能時）→503 |
-| 処理内容 | 1. `user.role` により `project_repository.count_all` / `count_by_member` と `list_all` / `list_by_member` を選択 2. 取得した `project_ids` を用いて `aggregate_member_counts` と `aggregate_task_counts` をそれぞれ1回ずつ呼び出す 3. Python側の辞書ルックアップで各プロジェクトへ `member_count` / `task_counts` をマージ（未集計statusは `0` 補完） 4. `is_owner = (project.owner_id == user.id)` を算出し `ProjectSummary` を組み立てる |
+| 処理内容 | 1. `user.role` により `project_repository.count_all` / `count_by_member` と `list_all` / `list_by_member` を選択し、`include_inactive` を渡す 2. admin向け関数は `include_inactive=False` なら `WHERE is_active` を付与、`True` なら無条件（全件） 3. member向け関数は常に「自分の所属分かつ`is_active=true`」を基本条件とし、`include_inactive=True` の場合のみ `OR (is_active=false AND owner_id=user.id)` を追加する（非オーナー所属分の無効化プロジェクトは対象外） 4. 取得した `project_ids` を用いて `aggregate_member_counts` と `aggregate_task_counts` をそれぞれ1回ずつ呼び出す 5. Python側の辞書ルックアップで各プロジェクトへ `member_count` / `task_counts` をマージ（未集計statusは `0` 補完） 6. `is_owner = (project.owner_id == user.id)` を算出し `ProjectSummary`（`is_active`, `start_at`, `end_at` を含む）を組み立てる |
 | 副作用 | なし（読み取りのみ） |
 
 ### 6.3 `repository/project_repository.py :: list_by_member`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def list_by_member(db: AsyncSession, user_id: UUID, page: int, per_page: int) -> list[Project]` |
-| 引数 | `user_id`: 所属確認対象 / `page`, `per_page`: ページング |
+| シグネチャ | `async def list_by_member(db: AsyncSession, user_id: UUID, page: int, per_page: int, include_inactive: bool) -> list[Project]` |
+| 引数 | `user_id`: 所属確認対象 / `page`, `per_page`: ページング / `include_inactive`: 自分がオーナーの無効化分を含めるか |
 | 戻り値 | `owner` を eager load 済みの `Project` エンティティのリスト |
 | 送出例外 | `OperationalError`（DB不通） |
-| 処理内容 | 1. `projects JOIN project_members ON projects.id = project_members.project_id WHERE project_members.user_id = :user_id` の主クエリを1回実行 2. `selectinload(Project.owner)` による追加SELECTを1回実行し、ownerをまとめて解決（N+1回避） 3. `ORDER BY projects.created_at DESC` 4. `OFFSET (page-1)*per_page LIMIT per_page` |
+| 処理内容 | 1. `projects JOIN project_members ON projects.id = project_members.project_id WHERE project_members.user_id = :user_id AND (projects.is_active OR (:include_inactive AND projects.owner_id = :user_id))` の主クエリを1回実行 2. `selectinload(Project.owner)` による追加SELECTを1回実行し、ownerをまとめて解決（N+1回避） 3. `ORDER BY projects.created_at DESC` 4. `OFFSET (page-1)*per_page LIMIT per_page` |
 | 副作用 | なし |
 
 ### 6.4 `repository/project_repository.py :: aggregate_member_counts` / `aggregate_task_counts`
@@ -240,7 +256,7 @@ flowchart LR
 
 | テーブル | 操作 | 条件 | 備考 |
 |----------|------|------|------|
-| projects | SELECT | admin: 全件 / member: `JOIN project_members WHERE user_id=:me` | `ORDER BY created_at DESC LIMIT/OFFSET` |
+| projects | SELECT | admin: `include_inactive`次第で全件 or `is_active=true`のみ / member: `JOIN project_members WHERE user_id=:me` かつ `is_active=true OR (include_inactive AND owner_id=:me)` | `ORDER BY created_at DESC LIMIT/OFFSET` |
 | projects | SELECT COUNT | 同上 | `meta.total` 算出用 |
 | users | SELECT | `projects.owner_id` に対する eager load | owner表示用、N+1回避 |
 | project_members | SELECT + GROUP BY | `project_id = ANY(:ids)` | `member_count` 集計 |
@@ -258,6 +274,7 @@ flowchart LR
 |-------------------|-----------|------|--------------------------|
 | `ProjectListQuery` | page | `int, ge=1`, 既定1 | `zod.number().int().min(1)` |
 | `ProjectListQuery` | per_page | `int, ge=1, le=100`, 既定 `PAGINATION_DEFAULT_PER_PAGE`（20） | `zod.number().int().min(1).max(100)` |
+| `ProjectListQuery` | include_inactive | `bool`, 既定 `False` | `zod.boolean().optional().default(false)` |
 
 ## 11. 非機能・セキュリティ考慮
 
@@ -282,6 +299,10 @@ flowchart LR
 | 6 | 結合 | 未認証は401 | Cookie/Bearerなし | `401 UNAUTHENTICATED` | `test_list_projects_unauthenticated` |
 | 7 | 結合 | per_page=101は422 | クエリ不正 | `422 VALIDATION_ERROR` | `test_list_projects_invalid_per_page` |
 | 8 | 結合 | N+1が発生しないことの確認 | プロジェクト10件、SQLAlchemyのクエリカウンタで検証 | 発行クエリ数が定数（プロジェクト件数に比例しない） | `test_list_projects_query_count_constant` |
+| 9 | 結合 | 既定（include_inactive未指定）では無効化プロジェクトが一覧に含まれない | 所属プロジェクトのうち1件を`is_active=false`にしておく | `items`に含まれない、`meta.total`も減算される | `test_list_projects_excludes_inactive_by_default` |
+| 10 | 結合 | memberがinclude_inactive=trueを指定しても非オーナーの無効化プロジェクトは見えない | 自分が非オーナーで所属する`is_active=false`プロジェクトを用意 | `items`に含まれない | `test_list_projects_member_cannot_see_others_inactive` |
+| 11 | 結合 | memberがinclude_inactive=trueを指定すると自分がオーナーの無効化プロジェクトが見える | 自分がオーナーの`is_active=false`プロジェクトを用意 | `items`に含まれ`is_active=false`で返る | `test_list_projects_member_sees_own_inactive` |
+| 12 | 結合 | adminがinclude_inactive=trueを指定すると全ユーザーの無効化プロジェクトが見える | 他人がオーナーの`is_active=false`プロジェクトを用意 | `items`に含まれる | `test_list_projects_admin_sees_all_inactive` |
 
 `AUTH_MODE=session` / `jwt` の両方で No.6（401判定経路の違い：`SESSION_EXPIRED` と `TOKEN_EXPIRED`）をパラメータ化して実施する。Google連携そのものは対象外（認証確立後の一覧取得のみを検証するため）。
 
@@ -290,3 +311,4 @@ flowchart LR
 | 区分 | 内容 | 影響 |
 |------|------|------|
 | 確定 | `owner.display_name` は`last_name`と`first_name`がともに空でない場合に結合し、それ以外は`username`へフォールバックする | OAuth新規ユーザーなど姓名未設定でも表示名を必ず返す |
+| 確定 | `include_inactive` の可視範囲は「admin: 全件」「member: 自分がオーナーの無効化分のみ追加」とした（issue #10のブリーフで詳細判断を委譲されたため設計として確定） | 非オーナーメンバーは他人が無効化した履歴を一覧から閲覧できない |

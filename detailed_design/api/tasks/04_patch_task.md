@@ -16,15 +16,18 @@
 | [./02_post_project_tasks.md](./02_post_project_tasks.md) | 採番ロジック（`fn_next_task_position`）の共通部分 |
 | [./05_delete_task.md](./05_delete_task.md) | 削除時のposition詰め（本APIと同じadvisory lock方針） |
 | [../../screen/07_project_board.md](../../screen/07_project_board.md) | D&Dでの楽観的更新・ロールバック |
+| [../../database/06_table_tasks.md](../../database/06_table_tasks.md) | `tasks.is_active`（論理削除フラグ） |
+| [./05_delete_task.md](./05_delete_task.md) | 論理削除（`is_active=false`）の詳細。本APIの`is_active=true`指定は削除の取り消し（再有効化）に相当 |
+| [../admin/03_patch_admin_user_status.md](../admin/03_patch_admin_user_status.md) | ユーザーの有効/無効切替API（再有効化フローの対称の参照元） |
 
 ## 1. 概要
 
 | 項目 | 内容 |
 |------|------|
 | エンドポイント | `PATCH /api/tasks/{task_id}` |
-| 目的 | タスクの部分更新。`title`/`description`/`status`/`assignee_id`/`position`/`due_at` を個別に更新できる。カンバンD&Dの `status`/`position` 変更もこのAPIに統一する |
+| 目的 | タスクの部分更新。`title`/`description`/`status`/`assignee_id`/`position`/`due_at`/`is_active` を個別に更新できる。カンバンD&Dの `status`/`position` 変更もこのAPIに統一する。`project_id` の付け替え（プロジェクト間移動）は本APIのスコープ外（§13参照） |
 | 認証 | session モード：`cerberus_sid` Cookie ／ jwt モード：`Authorization: Bearer {access_token}` |
-| 認可 | プロジェクトメンバー（`task_id` からプロジェクトを特定し所属確認。admin は無条件許可） |
+| 認可 | 基本：プロジェクトメンバー（`task_id` からプロジェクトを特定し所属確認。admin は無条件許可）。ただし `is_active` フィールドの変更（再有効化）のみ、追加で「作成者本人 / プロジェクトオーナー / admin」に限定する（§5.3参照） |
 | CSRF検証 | 必要（session モードの更新系。`X-CSRF-Token` ヘッダ必須） |
 | Origin検証 | 不要（本APIはCookie発行を伴わないため対象外） |
 | AUTH_MODE差異 | CSRF検証の要否のみ異なる。楽観ロック・列並べ替えのロジックに差異なし |
@@ -57,6 +60,9 @@
 | assignee_id | string(uuid) \| null | - | 有効なプロジェクトメンバーであること。`null` で担当解除 | 変更しない |
 | position | integer | - | 0以上 | 5.1節の規則に従う |
 | due_at | string(date-time) \| null | - | ISO 8601。オフセットなしは `APP_TIMEZONE` として解釈 | 変更しない |
+| is_active | boolean | - | `true`/`false`。指定できるのは作成者本人／プロジェクトオーナー／adminのみ（§5.3） | 変更しない |
+
+`project_id` はボディに含めない（`extra="forbid"` により指定時は422）。タスクの所属プロジェクトを変更する「付け替え」操作は本APIのスコープ外とし、必要になった場合は別途専用エンドポイントの新設を検討する（§13）。
 
 未指定と `null` 明示を区別するため、スキーマは `pydantic` の `exclude_unset=True` を用いたPATCH方式で実装する（`description` / `assignee_id` / `due_at` は `null` 指定で明示的にクリア可能、フィールド自体を省略すれば変更なし）。
 
@@ -83,7 +89,7 @@
 
 | フィールド | 型 | NULL可否 | 説明 |
 |-----------|----|----------|------|
-| （[03_get_task.md](./03_get_task.md) §2.2 と同一構成） | | | `comment_count` は本レスポンスには含めない（更新APIのため一覧・詳細GETと異なりコメント集計は行わない） |
+| （[03_get_task.md](./03_get_task.md) §2.2 と同一構成。`is_active` / `project_is_active` を含む） | | | `comment_count` は本レスポンスには含めない（更新APIのため一覧・詳細GETと異なりコメント集計は行わない） |
 | version | integer | 不可 | 更新成功後の新しい値（リクエストの `version + 1`） |
 
 `Set-Cookie` の発行なし。`X-Request-ID` を全レスポンスに付与。
@@ -96,6 +102,7 @@
 | 403 | `USER_INACTIVE` | `is_active=false` | アカウントが無効化されています | |
 | 403 | `CSRF_INVALID` | sessionモードでヘッダ欠落・不一致 | CSRFトークンが不正です | |
 | 404 | `NOT_FOUND` | `task_id` 不存在、または非所属member | タスクが見つかりません | |
+| 403 | `FORBIDDEN` | `is_active` を指定したが作成者本人・プロジェクトオーナー・admin のいずれでもない | この操作を行う権限がありません | `is_active` 以外のフィールドのみの更新では発生しない |
 | 409 | `TASK_CONFLICT` | `version` が現在値と不一致 | 他のユーザーが先に更新しました。最新の内容を取得し直してください | フロントは再取得＋再操作を促す |
 | 409 | `ASSIGNEE_INACTIVE` | 指定 `assignee_id` が `is_active=false` | 指定した担当者は無効化されています | |
 | 422 | `VALIDATION_ERROR` | title文字数超過、status不正値、position負数、日付形式不正等 | 入力内容に誤りがあります | |
@@ -131,6 +138,11 @@ sequenceDiagram
             S-->>R: "ConflictError(TASK_CONFLICT)"
             R-->>FE: "409 TASK_CONFLICT"
         else "一致"
+            S->>S: "is_active指定時のみ：作成者本人/オーナー/adminか確認"
+            alt "is_active指定 かつ 権限なし"
+                S-->>R: "ForbiddenError"
+                R-->>FE: "403 FORBIDDEN"
+            else "権限あり or is_active未指定"
             S->>S: "assignee_id検証（変更時のみ）"
             alt "非メンバー"
                 S-->>R: "ValidationError"
@@ -152,6 +164,7 @@ sequenceDiagram
                 TR-->>S: "Task"
                 S-->>R: "TaskResponse"
                 R-->>FE: "200 {task}"
+            end
             end
         end
     end
@@ -185,7 +198,11 @@ flowchart TB
     G -->|"No"| E404["404 NOT_FOUND"]
     G -->|"Yes"| H{"payload.version ==<br/>tasks.version?"}
     H -->|"No"| E409a["409 TASK_CONFLICT"]
-    H -->|"Yes"| I{"assignee_id指定あり?"}
+    H -->|"Yes"| Ia{"is_active指定あり?"}
+    Ia -->|"Yes"| Ib{"作成者本人 または<br/>プロジェクトオーナー または admin?"}
+    Ib -->|"No"| E403c["403 FORBIDDEN"]
+    Ib -->|"Yes"| I{"assignee_id指定あり?"}
+    Ia -->|"No"| I
     I -->|"Yes"| J{"project_membersに存在<br/>かつ is_active?"}
     J -->|"非メンバー"| E422b["422 VALIDATION_ERROR"]
     J -->|"無効化ユーザー"| E409b["409 ASSIGNEE_INACTIVE"]
@@ -228,7 +245,7 @@ flowchart TB
 | 引数 | task_id：対象タスクID／payload：`version` を含む部分更新内容／user：現在ユーザー |
 | 戻り値 | 更新後の `Task` |
 | 送出例外 | `NotFoundError`、`ConflictError(TASK_CONFLICT)`、`ConflictError(ASSIGNEE_INACTIVE)`、`ValidationError` |
-| 処理内容 | 1. `task_repository.get_for_update(task_id)` で行ロック付き取得。`None` または非所属なら `NotFoundError`<br/>2. `payload.version != task.version` なら `ConflictError(TASK_CONFLICT)`（この時点でROLLBACKし行ロックを解放）<br/>3. `assignee_id` が `exclude_unset` に含まれ値が `None` でない場合、メンバー・`is_active` を検証。非メンバーは `ValidationError`、無効化ユーザーは `ConflictError(ASSIGNEE_INACTIVE)`<br/>4. `status` または `position` が指定内容に含まれる場合、`task_repository.reorder_and_update(task, payload)` を呼び出す。それ以外は `task_repository.update_fields(task, payload)` を呼び出す<br/>5. `due_at`が指定され現在値から変化し、担当者があり、変更後の日時が`APP_TIMEZONE`の当日なら`notification_service.create_due_today_notification`を同じDBセッションで呼ぶ。`dedupe_key=updated:{task_id}:{due_atのUTC ISO}`で同じ日時への再設定は重複させない<br/>6. いずれの経路でも `version = task.version + 1`、`updated_at = now()` をセットしてCOMMIT |
+| 処理内容 | 1. `task_repository.get_for_update(task_id)` で行ロック付き取得。`None` または非所属なら `NotFoundError`<br/>2. `payload.version != task.version` なら `ConflictError(TASK_CONFLICT)`（この時点でROLLBACKし行ロックを解放）<br/>3. `is_active` が `exclude_unset` に含まれる場合、`user.id == task.created_by` または `project_repository.is_owner(project_id, user.id)`（`project_id`が非NULLの場合）または `user.role == 'admin'` のいずれかを満たすか検証。満たさなければ `ForbiddenError`（403 `FORBIDDEN`）<br/>4. `assignee_id` が `exclude_unset` に含まれ値が `None` でない場合、メンバー・`is_active` を検証。非メンバーは `ValidationError`、無効化ユーザーは `ConflictError(ASSIGNEE_INACTIVE)`<br/>5. `status` または `position` が指定内容に含まれる場合、`task_repository.reorder_and_update(task, payload)` を呼び出す。それ以外は `task_repository.update_fields(task, payload)` を呼び出す。`is_active` は `status`/`position`とは独立して同一UPDATE文に含める<br/>6. `due_at`が指定され現在値から変化し、担当者があり、変更後の日時が`APP_TIMEZONE`の当日なら`notification_service.create_due_today_notification`を同じDBセッションで呼ぶ。`dedupe_key=updated:{task_id}:{due_atのUTC ISO}`で同じ日時への再設定は重複させない<br/>7. いずれの経路でも `version = task.version + 1`、`updated_at = now()` をセットしてCOMMIT |
 | 副作用 | DB更新。`due_at`変更後が当日の場合は同一トランザクションでnotifications INSERT |
 
 ### 6.3 `repository/task_repository.py :: get_for_update`
@@ -250,7 +267,7 @@ flowchart TB
 | 引数 | db：DBセッション／task：`get_for_update` で取得済みの行（ロック中）／payload：`status`/`position` を含む更新内容 |
 | 戻り値 | 並べ替え・フィールド更新後の `Task`（`version`/`updated_at` の反映前） |
 | 送出例外 | `IntegrityError`（想定外のシフト漏れ時。`db_error_handler` が409へ変換） |
-| 処理内容 | 1. 旧 `status`（`old_status`）・新 `status`（`new_status`、省略時は `old_status`）を確定<br/>2. 影響する `(project_id, status)` の組を **status文字列の昇順**でソートし、`SELECT pg_advisory_xact_lock(hashtext(project_id::text \|\| status))` を順に実行してデッドロックを回避する<br/>3. 対象タスクの `position` を退避値（新列の `MAX(position) + 新列件数 + 1` など、一時的に重複しない大きな値）へ `UPDATE`（`uq_tasks_project_status_position` は `DEFERRABLE INITIALLY DEFERRED` のため、トランザクション内の一時的な重複は許容される）<br/>4. `old_status != new_status` の場合：旧列側で `position > 旧position` の行を `position - 1` に一括UPDATE<br/>5. 新列側：`position` 指定ありなら挿入位置以降（`position >= 新position`）の行を `position + 1` に一括UPDATE。指定なしなら新列の末尾（`fn_next_task_position` 相当の値）を採用しシフト不要<br/>6. `old_status == new_status` かつ `position` 指定ありの場合：旧position と新positionの間の行を1ずつシフト（新position側へ移動なら間の行を-1、逆方向なら+1）<br/>7. 最後に対象タスクの `status` / `position` を最終値に `UPDATE`<br/>8. `title`/`description`/`assignee_id`/`due_at` のうち指定されたフィールドも同一UPDATE文にまとめて反映 |
+| 処理内容 | 1. 旧 `status`（`old_status`）・新 `status`（`new_status`、省略時は `old_status`）を確定<br/>2. 影響する `(project_id, status)` の組を **status文字列の昇順**でソートし、`SELECT pg_advisory_xact_lock(hashtext(project_id::text \|\| status))` を順に実行してデッドロックを回避する<br/>3. 対象タスクの `position` を退避値（新列の `MAX(position) + 新列件数 + 1` など、一時的に重複しない大きな値）へ `UPDATE`（`uq_tasks_project_status_position` は `DEFERRABLE INITIALLY DEFERRED` のため、トランザクション内の一時的な重複は許容される）<br/>4. `old_status != new_status` の場合：旧列側で `position > 旧position` の行を `position - 1` に一括UPDATE<br/>5. 新列側：`position` 指定ありなら挿入位置以降（`position >= 新position`）の行を `position + 1` に一括UPDATE。指定なしなら新列の末尾（`fn_next_task_position` 相当の値）を採用しシフト不要<br/>6. `old_status == new_status` かつ `position` 指定ありの場合：旧position と新positionの間の行を1ずつシフト（新position側へ移動なら間の行を-1、逆方向なら+1）<br/>7. 最後に対象タスクの `status` / `position` を最終値に `UPDATE`<br/>8. `title`/`description`/`assignee_id`/`due_at`/`is_active` のうち指定されたフィールドも同一UPDATE文にまとめて反映 |
 | 副作用 | DB更新（対象タスク行＋同一列内の複数行） |
 
 ### 6.5 `repository/task_repository.py :: update_fields`
@@ -261,7 +278,7 @@ flowchart TB
 | 引数 | db：DBセッション／task：ロック済み行／payload：更新内容（`status`/`position` を含まない） |
 | 戻り値 | 更新後の `Task` |
 | 送出例外 | `IntegrityError`（想定外の一意制約違反時。通常発生しない） |
-| 処理内容 | 1. `payload.model_dump(exclude_unset=True)` から `version` を除いた指定フィールド（`title`/`description`/`assignee_id`/`due_at`）のみを `UPDATE` 文に反映する<br/>2. `status`/`position` は変更しない |
+| 処理内容 | 1. `payload.model_dump(exclude_unset=True)` から `version` を除いた指定フィールド（`title`/`description`/`assignee_id`/`due_at`/`is_active`）のみを `UPDATE` 文に反映する<br/>2. `status`/`position` は変更しない<br/>3. `is_active` の権限検証はサービス層（6.2 手順3）で完了済みであり、本関数はUPDATE文への反映のみを行う |
 | 副作用 | DB更新（対象タスク行のみ） |
 
 ## 7. 関数相関図
@@ -309,7 +326,7 @@ stateDiagram-v2
 | テーブル | 操作 | 条件・TTL | 備考 |
 |----------|------|-----------|------|
 | tasks | SELECT FOR UPDATE | `id = task_id` | 対象タスクの行ロック |
-| project_members | SELECT | `project_id`, `user_id` | 所属確認・assignee検証 |
+| project_members | SELECT | `project_id`, `user_id` | 所属確認・assignee検証・`is_active`指定時のオーナー判定（`role='owner'`） |
 | users | SELECT | `id = assignee_id` | `is_active` 確認 |
 | tasks | advisory lock（`pg_advisory_xact_lock`） | `(project_id, status)` を昇順で1〜2件 | 列単位の直列化 |
 | tasks | UPDATE（複数） | 退避値設定 → 旧列/新列シフト → 最終確定 | `uq_tasks_project_status_position`（`DEFERRABLE`）に依存 |
@@ -328,6 +345,7 @@ stateDiagram-v2
 | assignee_id | `TaskUpdateRequest.assignee_id` | `UUID \| None` | メンバー検証はサービス層 |
 | position | `TaskUpdateRequest.position` | `int`、`ge=0` | D&Dのドロップ先インデックス |
 | due_at | `TaskUpdateRequest.due_at` | `datetime \| None` | 日時入力と一致。UTCへ正規化 |
+| is_active | `TaskUpdateRequest.is_active` | `bool`。権限検証（作成者本人/オーナー/admin）はサービス層 | 再有効化ボタンのUIから送信する想定 |
 
 `TaskUpdateRequest` は `exclude_unset=True` を前提に実装し、未送信フィールドと `null` 送信を区別する。
 
@@ -342,6 +360,7 @@ stateDiagram-v2
 | fail-close方針 | advisory lock取得やシフトUPDATEの途中で失敗した場合はROLLBACKし、部分適用のposition状態を残さない |
 | 同時更新制御 | 行ロック（`FOR UPDATE`）で同一タスクへの同時PATCHを直列化しつつ、`version` 比較で「先勝ち」の楽観ロック意味論を維持する。行ロックは排他制御の手段であり、`TASK_CONFLICT` の判定基準はあくまで `version` 一致とする |
 | デッドロック回避 | 影響する `(project_id, status)` のadvisory lockは常にstatus文字列の昇順で取得する。異なる2タスクが逆順で列を跨ぐ移動を同時に行っても、ロック取得順序が一致するため待機のみでデッドロックしない |
+| is_active変更の権限 | 一般のプロジェクトメンバーは`is_active`を変更できない（403 `FORBIDDEN`）。作成者本人／プロジェクトオーナー／adminのみ許可し、無効化の取り消し（再有効化）操作の誤用・悪用を防ぐ |
 
 ## 12. テスト設計
 
@@ -362,6 +381,10 @@ stateDiagram-v2
 | 13 | 結合 | 非所属member | 他プロジェクトのタスク | 404 `NOT_FOUND` | `test_patch_task_forbidden_as_404` |
 | 14 | パラメータ化 | AUTH_MODE両対応 | `AUTH_MODE=session` / `jwt` | 5・9・13等を両モードで実行 | フィクスチャ `auth_mode` |
 | 15 | 網羅できない範囲 | advisory lock待機によるデッドロック未発生の厳密証明 | PostgreSQL内部スケジューリングに依存 | No.11の並行実行結果で間接的に確認し、形式的な証明は行わない | 理由：ロック順序制御の妥当性はNo.11の反復実行で経験的に確認する方針とする |
+| 16 | 結合 | is_active再有効化（作成者本人） | 実DB、`is_active=false`のタスクを作成者が`is_active:true`でPATCH | 200、`is_active:true` | `test_patch_task_reactivate_by_creator` |
+| 17 | 結合 | is_active再有効化（プロジェクトオーナー） | 実DB、作成者以外のオーナーが`is_active:true`でPATCH | 200 | `test_patch_task_reactivate_by_owner` |
+| 18 | 結合 | is_active変更・権限なし | 実DB、作成者でも オーナーでもない一般メンバーが`is_active:true`でPATCH | 403 `FORBIDDEN` | `test_patch_task_is_active_forbidden_for_non_owner` |
+| 19 | 結合 | is_active未指定時は無関係 | 実DB、`is_active`を送らずtitleのみ更新 | 200、`is_active`不変 | `test_patch_task_is_active_unaffected_when_omitted` |
 
 ## 13. 不明点・要検討事項
 
@@ -369,3 +392,6 @@ stateDiagram-v2
 |------|------|------|
 | 要検討 | 退避値の具体的な計算式（`MAX(position) + 件数 + 1`）は基本設計 §3.5 の記述を本設計で具体化したものであり、他の安全な値（例：負数を使わない大きな定数オフセット）でもよい。実装時にpydantic/SQLの都合で調整する余地がある | シフトSQLの実装詳細 |
 | 要検討 | `TaskUpdateRequest` で `status`/`position` のみ変更したい場合に他の必須項目（`title`等）を毎回送る必要がない設計（部分更新）だが、フロントのD&D実装が `version` を常に最新値で送れる保証（楽観的更新中の競合）はフロント側の設計（`screen/07_project_board.md`）に委ねる | フロント実装との整合 |
+| 要検討 | `project_id` の付け替え（タスクを別プロジェクトへ移動、または未所属化）は本APIのスコープ外とした。issue #10のユーザー合意にも明記がなく、必要になった場合は`(project_id, status)`のadvisory lock対象が変わる・position採番のやり直しが必要等、本APIとは別の設計検討が要る | 将来のプロジェクト間タスク移動機能 |
+| 要検討 | `is_active=false`（論理削除）を本APIから明示的に指定した場合の挙動は、`DELETE /api/tasks/{task_id}`（[./05_delete_task.md](./05_delete_task.md)）と同じ効果になる想定だが、PATCHの`version`必須・楽観ロック経路を通る点がDELETEと異なる。両者の使い分け（DELETEを正、PATCHは主に再有効化用途）は基本設計に明記がなく確認が必要 | UI導線・API使い分けの一貫性 |
+| 不明 | 「プロジェクトオーナー」の判定に用いる `project_members.role` の具体的な値（`'owner'`）はプロジェクトAPI側（[../projects/04_patch_project.md](../projects/04_patch_project.md)）の`require_project_owner`実装に依存する。本ファイルはそれと同一の判定ロジックを流用する前提で記述した | プロジェクトAPI側の実装との整合確認 |

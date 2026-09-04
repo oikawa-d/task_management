@@ -15,6 +15,8 @@
 | [../../database/10_table_notifications.md](../../database/10_table_notifications.md) | 通知の`dedupe_key`とINSERT制約 |
 | [./01_get_project_tasks.md](./01_get_project_tasks.md) | 同一リソースの一覧取得API |
 | [./04_patch_task.md](./04_patch_task.md) | position採番・advisory lockの詳細な考え方 |
+| [./11_post_tasks.md](./11_post_tasks.md) | `project_id`を任意bodyで受けるフラット作成API（本APIとの使い分け・所属チェック流用） |
+| [../../database/06_table_tasks.md](../../database/06_table_tasks.md) | `tasks.is_active`（論理削除フラグ） |
 
 ## 1. 概要
 
@@ -79,6 +81,8 @@
   "created_by": { "id": "9a1b...", "username": "taro" },
   "position": 3,
   "version": 1,
+  "is_active": true,
+  "project_is_active": true,
   "due_at": null,
   "created_at": "2026-09-03T04:05:06Z",
   "updated_at": "2026-09-03T04:05:06Z"
@@ -96,6 +100,8 @@
 | created_by | object | 不可 | `{id, username}` |
 | position | integer | 不可 | 採番された列内位置（`fn_next_task_position` の結果） |
 | version | integer | 不可 | 常に `1` で初期化 |
+| is_active | boolean | 不可 | `tasks.is_active`。作成直後は常に `true` |
+| project_is_active | boolean | 不可 | `projects.is_active`。本APIは`project_id`がパス由来で確定しているため常にそのプロジェクトの値 |
 | due_at | string(date-time) | 可 | ISO 8601 UTC。NULL可 |
 | created_at / updated_at | string(datetime) | 不可 | ISO 8601 UTC |
 
@@ -213,7 +219,7 @@ flowchart TB
 | 引数 | db: DBセッション／project_id／payload／created_by: 作成者ID |
 | 戻り値 | 作成された `Task` |
 | 送出例外 | `IntegrityError`（`uq_tasks_project_status_position` 違反等。`db_error_handler` が409へ変換） |
-| 処理内容 | 1. `SELECT pg_advisory_xact_lock(hashtext(project_id::text \|\| status))` でトランザクション内advisory lockを取得（同一 `(project_id, status)` への同時作成を直列化）<br/>2. `SELECT fn_next_task_position(project_id, status)` で採番<br/>3. `status` 省略時は既定値 `'todo'` を用いる<br/>4. `INSERT INTO tasks(project_id, title, description, status, assignee_id, created_by, position, version, due_at) VALUES (..., 1, :due_at)` を実行<br/>5. 採番からINSERTまでを同一トランザクション（同一advisory lock保持区間）で行う |
+| 処理内容 | 1. `SELECT pg_advisory_xact_lock(hashtext(project_id::text \|\| status))` でトランザクション内advisory lockを取得（同一 `(project_id, status)` への同時作成を直列化）<br/>2. `SELECT fn_next_task_position(project_id, status)` で採番<br/>3. `status` 省略時は既定値 `'todo'` を用いる<br/>4. `INSERT INTO tasks(project_id, title, description, status, assignee_id, created_by, position, version, due_at) VALUES (..., 1, :due_at)` を実行。`is_active` はカラムのDB既定値 `true` に任せ、INSERT文では明示指定しない<br/>5. 採番からINSERTまでを同一トランザクション（同一advisory lock保持区間）で行う |
 | 副作用 | DB更新（tasks INSERT） |
 
 ### 6.4 `service/notification_service.py :: create_due_today_notification`
@@ -306,3 +312,4 @@ stateDiagram-v2
 |------|------|------|
 | 要検討 | `position` をリクエストで指定した場合の挙動（本設計では `extra="forbid"` により422とした）が基本設計に明記されていない | フロント実装がpositionを誤送信した場合の挙動 |
 | 不明 | `status` に不正な文字列（`todo`/`in_progress`/`done` 以外）を送った場合の詳細メッセージ文言 | フロントのエラー表示 |
+| 要検討 | `is_active=false`（論理削除済み）のプロジェクトへの新規タスク作成を許可するかは要検討。本設計では `require_project_member` が `project.is_active` を判定条件に含めない限り作成を妨げない前提とした（プロジェクト側の認可仕様に依存するため、プロジェクトAPI担当の設計と合わせて最終確認が必要） | 無効化プロジェクトへの新規作成可否 |

@@ -4,8 +4,8 @@
 
 | ドキュメント | 内容 |
 |--------------|------|
-| [../../../basic_design/04_api.md](../../../basic_design/04_api.md) | §2.3 プロジェクトAPI一覧（「タスク・コメントもCASCADE」）、§5 認可マトリクス |
-| [../../../basic_design/01_database.md](../../../basic_design/01_database.md) | §3.3〜3.6 各テーブルのFK定義（`ON DELETE CASCADE` の範囲） |
+| [../../../basic_design/04_api.md](../../../basic_design/04_api.md) | §2.3 プロジェクトAPI一覧、§5 認可マトリクス |
+| [../../../basic_design/01_database.md](../../../basic_design/01_database.md) | §3.3 projects（`is_active`論理削除フラグ）、§3.5 tasks（`project_is_active`との関係） |
 | [../../../basic_design/03_auth.md](../../../basic_design/03_auth.md) | §9.2 `core/deps.py`（`require_project_owner`） |
 | [./04_patch_project.md](./04_patch_project.md) | 同じ認可要件（オーナー/admin）を持つ更新API |
 | [../admin/06_delete_admin_project.md](../admin/06_delete_admin_project.md) | 管理者専用の削除エンドポイント（本APIとは別ルート。認可はadmin固定） |
@@ -15,15 +15,17 @@
 | 項目 | 内容 |
 |------|------|
 | エンドポイント | `DELETE /api/projects/{project_id}` |
-| 目的 | プロジェクトを削除する。所属メンバー・タスク・タスクコメントもあわせて削除する |
+| 目的 | プロジェクトを**論理削除**する（`UPDATE projects SET is_active = false`）。物理削除（`DELETE FROM projects`）は行わない |
 | 認証 | 必要 |
 | 認可 | オーナー／admin（所属memberであっても非オーナーは不可） |
 | CSRF検証 | 必要（session モードの更新系） |
 | Origin検証 | 必要 |
 | AUTH_MODE差異 | session: `X-CSRF-Token` 検証あり／jwt: ヘッダ方式のためCSRF検証なし |
-| 冪等性 | 実質的に冪等（削除済みIDへの再実行は404となり、リソースが存在しない状態は変わらない） |
+| 冪等性 | あり（既に`is_active=false`の対象への再実行も`UPDATE`が0件更新になるだけで200/204として扱い、副作用なく完了する。プロジェクト自体が存在しない場合のみ404） |
 | レート制限 | 対象外 |
-| トランザクション境界 | `DELETE FROM projects WHERE id=:project_id` 一文。`project_members` / `tasks` / `task_comments` はPostgreSQLの外部キー `ON DELETE CASCADE` により同一トランザクション内でDBエンジンが自動削除する |
+| トランザクション境界 | `UPDATE projects SET is_active = false WHERE id=:project_id` 一文。`project_members` / `tasks` / `task_comments` は**変更しない**（配下タスクは無効化されず有効なまま残る） |
+
+**本APIの意味変更（issue #10）**：従来は物理削除（`DELETE FROM projects`、CASCADEで配下も削除）としていたが、`projects.is_active` 論理削除フラグの導入に伴い、本APIは論理削除（`is_active=false`への更新）に意味を変更する。物理DELETEを実行する経路はアプリケーションAPIとしては提供しない（DBの`ON DELETE CASCADE`はusersの物理削除APIが存在しない場合と同様、通常運用では発火しない防御的制約という位置づけになる）。
 
 ## 2. 入出力仕様
 
@@ -41,7 +43,9 @@
 
 **`204 No Content`**
 
-ボディなし。`Set-Cookie` なし。共通ヘッダ `X-Request-ID` を付与する。
+ボディなし。`Set-Cookie` なし。共通ヘッダ `X-Request-ID` を付与する。論理削除後の`Project`表現が必要な場合はフロントは`GET /api/projects/{project_id}`（`03_get_project.md`、`is_active=false`が返る）を再取得すればよいため、本APIは従来どおり204で完結させる。
+
+配下タスクへの影響：本APIはタスクを一切変更しない。プロジェクトが無効化された後もタスクは`is_active=true`のまま一覧・カンバンに表示され続ける。タスク側のレスポンスに含まれる`project_is_active`（`project_id`が`null`の場合は`null`）が`false`になることで、フロントは当該タスクにバッジ等を表示して「所属プロジェクトが無効化されている」ことを示せる。タスク側のスキーマ・実装詳細は`detailed_design/api/tasks/`側の設計に譲る。
 
 ## 3. エラー仕様
 
@@ -71,12 +75,10 @@ sequenceDiagram
     R->>R: verify_origin / verify_csrf（session時）
     R->>D: 認証 + 所属チェック + オーナー判定（04_patch_project.mdと同一処理）
     D-->>R: Project（NotFoundError/ForbiddenErrorは404/403として応答）
-    R->>S: delete_project(project)
-    S->>RP: delete(project.id)
-    RP->>PG: "DELETE FROM projects WHERE id = :project_id"
-    PG->>PG: "ON DELETE CASCADE: project_members / tasks を削除"
-    PG->>PG: "ON DELETE CASCADE: 削除されたtasksに紐づくtask_commentsを削除"
-    PG-->>RP: DELETE 1
+    R->>S: deactivate_project(project)
+    S->>RP: deactivate(project.id)
+    RP->>PG: "UPDATE projects SET is_active = false WHERE id = :project_id RETURNING *"
+    PG-->>RP: 更新後の行（トリガでupdated_at更新。project_members/tasks/task_commentsは無変更）
     RP-->>S: OK
     S-->>R: None
     R-->>FE: 204 No Content
@@ -96,13 +98,13 @@ flowchart TB
     D -->|"OK"| E["projectsをIDで取得"]
     E -->|"存在しない"| E1["404 NOT_FOUND"]
     E -->|"存在する"| F{"user.role == admin?"}
-    F -->|"Yes"| H["DELETE実行"]
+    F -->|"Yes"| H
     F -->|"No"| G["project_membersに存在するか確認"]
     G -->|"非所属"| E1
     G -->|"所属"| I{"owner_id == user.id?"}
     I -->|"No"| I1["403 FORBIDDEN"]
     I -->|"Yes"| H
-    H --> J["204 No Content"]
+    H["UPDATE projects SET is_active=false<br/>（project_members/tasks/task_commentsは無変更）"] --> J["204 No Content"]
 ```
 
 ## 6. 関数詳細
@@ -115,30 +117,30 @@ flowchart TB
 | 引数 | `project`: `04_patch_project.md` §6.1 と同一の `require_project_owner` が解決した対象 / `db`: DBセッション |
 | 戻り値 | `Response(status_code=204)` |
 | 送出例外 | なし（依存関係が例外を送出） |
-| 処理内容 | 1. `project_service.delete_project(db, project)` を呼び出す 2. `204 No Content` を返す |
+| 処理内容 | 1. `project_service.deactivate_project(db, project)` を呼び出す 2. `204 No Content` を返す |
 | 副作用 | なし（副作用はservice層に委譲） |
 
-### 6.2 `service/project_service.py :: delete_project`
+### 6.2 `service/project_service.py :: deactivate_project`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def delete_project(db: AsyncSession, project: Project) -> None` |
-| 引数 | `project`: 削除対象（`require_project_owner` 済み） |
+| シグネチャ | `async def deactivate_project(db: AsyncSession, project: Project) -> None` |
+| 引数 | `project`: 論理削除対象（`require_project_owner` 済み） |
 | 戻り値 | なし |
 | 送出例外 | `ServiceUnavailableError`（DB接続不能）→503 |
-| 処理内容 | 1. `project_repository.delete(db, project.id)` を呼び出す 2. `commit` する |
-| 副作用 | `projects` のDELETE。DBの外部キー `ON DELETE CASCADE` により `project_members` / `tasks` / `task_comments` が連鎖削除される（アプリ層で個別にDELETE文を発行しない） |
+| 処理内容 | 1. `project_repository.deactivate(db, project.id)` を呼び出す 2. `commit` する |
+| 副作用 | `projects.is_active` を `false` に更新するUPDATEのみ。`project_members` / `tasks` / `task_comments` へは一切のDML（DELETE/UPDATE）を発行しない（配下タスクは有効なまま維持される） |
 
-### 6.3 `repository/project_repository.py :: delete`
+### 6.3 `repository/project_repository.py :: deactivate`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def delete(db: AsyncSession, project_id: UUID) -> None` |
-| 引数 | `project_id`: 削除対象 |
+| シグネチャ | `async def deactivate(db: AsyncSession, project_id: UUID) -> None` |
+| 引数 | `project_id`: 論理削除対象 |
 | 戻り値 | なし |
 | 送出例外 | `OperationalError` |
-| 処理内容 | `DELETE FROM projects WHERE id = :project_id` を実行する。存在確認は呼び出し前の `require_project_owner` で完了しているため再チェックしない |
-| 副作用 | DBのDELETE（CASCADE範囲は下表参照） |
+| 処理内容 | `UPDATE projects SET is_active = false WHERE id = :project_id` を実行する（`updated_at` はトリガが自動更新）。既に `is_active=false` の行に対しても同一SQLを冪等に実行できる（0件更新または1件更新のいずれでもエラーにしない）。存在確認は呼び出し前の `require_project_owner` で完了しているため再チェックしない |
+| 副作用 | `projects` のUPDATE（物理DELETEは行わない） |
 
 ## 7. 関数相関図
 
@@ -147,26 +149,30 @@ flowchart LR
     R["projects_router.delete_project"] --> D["deps.require_project_owner"]
     D --> RP1["project_repository.get_by_id"]
     D --> RP2["project_member_repository.exists"]
-    R --> S["project_service.delete_project"]
-    S --> RP3["project_repository.delete"]
+    R --> S["project_service.deactivate_project"]
+    S --> RP3["project_repository.deactivate"]
     RP3 --> M1["models.Project"]
-    M1 -.->|"FK ON DELETE CASCADE"| M2["models.ProjectMember"]
-    M1 -.->|"FK ON DELETE CASCADE"| M3["models.Task"]
-    M3 -.->|"FK ON DELETE CASCADE"| M4["models.TaskComment"]
+    M1 -.->|"変更なし（is_activeのみ更新）"| M2["models.ProjectMember"]
+    M1 -.->|"変更なし（配下タスクは有効のまま）"| M3["models.Task"]
+    M3 -.->|"変更なし"| M4["models.TaskComment"]
 ```
 
 ## 8. データ遷移図
 
 ```mermaid
-flowchart TB
-    A["DELETE /api/projects/{project_id}"] --> B["DELETE FROM projects WHERE id=:pid"]
-    B --> C["FK CASCADE: project_membersのproject_id一致行を削除"]
-    B --> D["FK CASCADE: tasksのproject_id一致行を削除"]
-    D --> E["FK CASCADE: 削除されたtasksのtask_commentsを削除"]
-    C --> F["COMMIT"]
-    E --> F
-    F --> G["204 No Content"]
-    B -.->|"存在しない/接続不能"| H["ROLLBACK / 404 or 503"]
+stateDiagram-v2
+    [*] --> Active: "projects.is_active = true"
+    Active --> Inactive: "DELETE /api/projects/{project_id}\nUPDATE projects SET is_active=false"
+    Inactive --> Active: "PATCH /api/projects/{project_id} {is_active:true}\n（04_patch_project.md参照）再有効化"
+    Inactive --> [*]
+    Active --> [*]
+
+    note right of Inactive
+        project_members / tasks / task_comments は無変更。
+        配下タスクはis_active=trueのまま
+        一覧・カンバンに表示され続ける
+        （project_is_active=falseでバッジ表示、tasks側設計に譲る）
+    end note
 ```
 
 ## 9. データアクセス一覧
@@ -177,12 +183,9 @@ flowchart TB
 |----------|------|------|------|
 | projects | SELECT | `id=:project_id` | `require_project_owner` による存在・所属確認 |
 | project_members | SELECT (EXISTS) | `project_id=:pid AND user_id=:uid` | admin以外の所属確認 |
-| projects | DELETE | `id=:project_id` | 削除の起点 |
-| project_members | DELETE（CASCADE, 自動） | `project_id=:pid` | FK `ON DELETE CASCADE`。アプリ層でDELETE文を発行しない |
-| tasks | DELETE（CASCADE, 自動） | `project_id=:pid` | 同上 |
-| task_comments | DELETE（CASCADE, 自動） | 削除された `tasks.id` に紐づく行 | `tasks`削除に伴う多段CASCADE（同上） |
+| projects | UPDATE | `id=:project_id` | `is_active = false` に更新するのみ。`updated_at` はトリガ更新 |
 
-削除範囲外（CASCADEされない）：`users`（`projects.owner_id` は `ON DELETE RESTRICT` だが、これはユーザー削除時の制約でありプロジェクト削除には無関係）、`login_history`（プロジェクトと無関係のテーブルのため対象外）。
+変更範囲外（本APIでは一切のDML操作を行わない）：`project_members`（所属関係は維持）、`tasks`（`is_active`はそのまま、`project_id`もそのまま。物理削除ではなくなったため`ON DELETE CASCADE`は発火しない）、`task_comments`（同上）。`projects.owner_id`に対する`users`側のFK（`ON DELETE RESTRICT`）は本APIと無関係。
 
 **Redis**
 
@@ -200,29 +203,33 @@ flowchart TB
 
 | 観点 | 内容 |
 |------|------|
-| ログ出力 | 監査ログ対象（破壊的操作）。`project_id`, `user_id`, 削除時点の `task_counts`/`member_count`（削除前に取得しログへ含める）をWARNまたはINFOで出力 |
+| ログ出力 | 監査ログ対象（プロジェクトの状態を変更する操作）。`project_id`, `user_id`, `task_counts`/`member_count`（無効化時点の参考値）をINFOで出力（物理削除ではなくなったためWARN levelへの引き上げは不要と判断） |
 | ユーザー列挙対策 | 非所属は404で統一し存在有無を隠す |
 | タイミング攻撃対策 | 該当なし |
 | レート制限 | なし |
-| 破壊的操作の確認 | フロント側で削除確認ダイアログを表示する（本APIはバックエンド側の取り消し不可を前提とし、Undo機能は提供しない） |
-| fail-close方針 | DB接続不能時は503。DELETE文はトランザクション内で完結し、CASCADE途中で失敗した場合は全体がロールバックされ部分削除は発生しない |
+| 破壊的操作の確認 | フロント側で無効化確認ダイアログを表示する（論理削除のため`04_patch_project.md`の`is_active:true`更新でオーナー/adminが取り消し＝再有効化できる。ただし本APIレスポンス自体にUndo手段は含まない） |
+| fail-close方針 | DB接続不能時は503。`UPDATE`はWHERE句で対象を1件に限定し、部分的な状態変化は発生しない |
 
 ## 12. テスト設計
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 単体 | serviceがrepository.deleteを1回呼び出す | repositoryをモック | `delete(project.id)` 呼び出しを検証 | `test_delete_project_calls_repository` |
-| 2 | 結合 | オーナーが204で削除できる | 実PostgreSQLにタスク・コメントを含むプロジェクトを用意 | `204`、`projects`/`project_members`/`tasks`/`task_comments`が全て削除される | `test_delete_project_cascades_all_related_rows` |
-| 3 | 結合 | 所属memberだが非オーナーは403 | 一般メンバーでDELETE | `403 FORBIDDEN`、データは削除されない | `test_delete_project_forbidden_as_non_owner_member` |
-| 4 | 結合 | 非所属は404 | 未所属ユーザーでDELETE | `404 NOT_FOUND` | `test_delete_project_not_found_as_non_member` |
-| 5 | 結合 | adminは非オーナーでも204 | admin権限で他人のプロジェクトを削除 | `204` | `test_delete_project_success_as_admin` |
-| 6 | 結合 | 削除後の再削除は404 | 同一project_idへ2回目のDELETE | `404 NOT_FOUND` | `test_delete_project_idempotent_second_call_returns_404` |
-| 7 | 結合 | sessionモードでCSRFヘッダ欠落は403 | `X-CSRF-Token`なし | `403 CSRF_INVALID` | `test_delete_project_missing_csrf_session_mode` |
+| 1 | 単体 | serviceがrepository.deactivateを1回呼び出す | repositoryをモック | `deactivate(project.id)` 呼び出しを検証 | `test_deactivate_project_calls_repository` |
+| 2 | 結合 | オーナーが204で無効化できる | 実PostgreSQLにタスク・コメントを含むプロジェクトを用意 | `204`、`projects.is_active=false`に更新、`project_members`/`tasks`/`task_comments`は行数・内容とも変化なし | `test_delete_project_deactivates_without_deleting_related_rows` |
+| 3 | 結合 | 無効化後も配下タスクは有効なまま一覧に表示される | 無効化したプロジェクトの配下タスクをタスク一覧APIで取得 | タスクの`is_active=true`が維持され、`project_is_active=false`が返る | `test_delete_project_tasks_remain_active_with_project_is_active_false` |
+| 4 | 結合 | 所属memberだが非オーナーは403 | 一般メンバーでDELETE | `403 FORBIDDEN`、`is_active`は変化しない | `test_delete_project_forbidden_as_non_owner_member` |
+| 5 | 結合 | 非所属は404 | 未所属ユーザーでDELETE | `404 NOT_FOUND` | `test_delete_project_not_found_as_non_member` |
+| 6 | 結合 | adminは非オーナーでも204 | admin権限で他人のプロジェクトを無効化 | `204` | `test_delete_project_success_as_admin` |
+| 7 | 結合 | 無効化後の再実行も204（冪等） | 同一project_idへ2回目のDELETE | `204`（`is_active=false`のまま、エラーにしない） | `test_delete_project_idempotent_second_call_returns_204` |
+| 8 | 結合 | 存在しないproject_idは404 | ランダムなUUIDへDELETE | `404 NOT_FOUND` | `test_delete_project_not_found_for_nonexistent_id` |
+| 9 | 結合 | 無効化後にPATCHで再有効化できる | オーナーが無効化後、`04_patch_project.md`の`is_active:true`でPATCH | `200`、`is_active=true`に戻る | `test_delete_project_reactivatable_via_patch` |
+| 10 | 結合 | sessionモードでCSRFヘッダ欠落は403 | `X-CSRF-Token`なし | `403 CSRF_INVALID` | `test_delete_project_missing_csrf_session_mode` |
 
-`AUTH_MODE=session` / `jwt` の両方で No.2・No.3・No.4を実施する。Google連携そのものは対象外。
+`AUTH_MODE=session` / `jwt` の両方で No.2・No.4・No.5を実施する。Google連携そのものは対象外。
 
 ## 13. 不明点・要検討事項
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 要検討 | 削除確認（誤操作防止）のUI仕様は `basic_design/05_frontend.md` および `screen/07_project_board.md` 側の管轄であり、本APIの入出力には影響しないため詳細は割愛した |
+| 要検討 | 無効化確認（誤操作防止）のUI仕様は `basic_design/05_frontend.md` および `screen/07_project_board.md` 側の管轄であり、本APIの入出力には影響しないため詳細は割愛した |
+| 対応済み | `../admin/06_delete_admin_project.md`（管理者用削除API）も本issueにあわせて論理削除へ改訂済み |

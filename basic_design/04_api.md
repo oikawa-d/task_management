@@ -58,8 +58,8 @@
 | GET | `/projects` | 所属プロジェクト一覧（admin は全件） | member |
 | POST | `/projects` | プロジェクト作成 | member |
 | GET | `/projects/{project_id}` | プロジェクト詳細（メンバー一覧含む） | プロジェクトメンバー |
-| PATCH | `/projects/{project_id}` | プロジェクト更新（名称・説明） | オーナー / admin |
-| DELETE | `/projects/{project_id}` | プロジェクト削除（タスク・コメントもCASCADE） | オーナー / admin |
+| PATCH | `/projects/{project_id}` | プロジェクト更新（名称・説明・開始/終了日時・`is_active`） | オーナー / admin |
+| DELETE | `/projects/{project_id}` | プロジェクト論理削除（`is_active=false`。配下タスクは無変更で有効のまま） | オーナー / admin |
 | GET | `/projects/{project_id}/members` | メンバー一覧 | プロジェクトメンバー |
 | POST | `/projects/{project_id}/members` | メンバー招待（既存ユーザーを追加） | オーナー / admin |
 | GET | `/projects/{project_id}/members/candidates?q=` | 招待候補検索（username / 表示名の前方一致。emailはレスポンスに含めない） | オーナー / admin |
@@ -71,15 +71,19 @@
 |----------|------|------|------|
 | GET | `/projects/{project_id}/tasks` | タスク一覧（カンバン用。status別にソート済み） | プロジェクトメンバー |
 | POST | `/projects/{project_id}/tasks` | タスク作成 | プロジェクトメンバー |
-| GET | `/tasks/{task_id}` | タスク詳細 | プロジェクトメンバー |
-| PATCH | `/tasks/{task_id}` | タスク更新（title/description/status/assignee/position/due_at/version） | プロジェクトメンバー |
-| DELETE | `/tasks/{task_id}` | タスク削除 | プロジェクトメンバー |
+| GET | `/tasks` | タスク横断一覧（`project_id`で絞込可、`project_id=null`で未所属タスクのみ） | 本人が参照可能な範囲（所属プロジェクト全部＋自分の未所属タスク。adminは全件） |
+| POST | `/tasks` | タスク作成（`project_id`任意。未指定・`null`ならプロジェクト未所属タスクとして作成） | member |
+| GET | `/tasks/{task_id}` | タスク詳細 | プロジェクトメンバー（`project_id`がNULLの場合は作成者本人） |
+| PATCH | `/tasks/{task_id}` | タスク更新（title/description/status/assignee/position/due_at/version/`is_active`） | プロジェクトメンバー（`project_id`がNULLの場合は作成者本人）。`is_active`の変更のみ作成者本人/プロジェクトオーナー/adminに限定 |
+| DELETE | `/tasks/{task_id}` | タスク論理削除（`is_active=false`。position詰めは行わない） | プロジェクトメンバー（`project_id`がNULLの場合は作成者本人） |
 | GET | `/tasks/{task_id}/comments` | コメント一覧 | プロジェクトメンバー |
 | POST | `/tasks/{task_id}/comments` | コメント投稿 | プロジェクトメンバー |
 | PATCH | `/comments/{comment_id}` | コメント編集 | 投稿者本人 / admin |
 | DELETE | `/comments/{comment_id}` | コメント削除 | 投稿者本人 / admin |
 
 コメント更新はLast Write Winsとし、`task_comments`にversion列を追加しない。同時更新は後からcommitされた本文を最終値とする。
+
+`GET/POST /tasks`（issue #10で新設）はプロジェクトに紐づかない横断的なタスク操作用のフラットエンドポイントである。`GET/POST /projects/{project_id}/tasks` はプロジェクト配下専用として引き続き提供し、`project_id`はパス由来のみ（bodyには含めない）とする。詳細は [../detailed_design/api/tasks/](../detailed_design/api/tasks/) を参照。
 
 ### 2.5 管理者（`/api/admin`）
 
@@ -90,7 +94,7 @@
 | PATCH | `/admin/users/{user_id}/status` | 有効化 / 無効化（`is_active`）。無効化時は全セッション・refreshを失効 | admin |
 | POST | `/admin/users/{user_id}/force-logout` | 強制ログアウト（全セッション・全リフレッシュ失効） | admin |
 | GET | `/admin/projects` | 全プロジェクト一覧 | admin |
-| DELETE | `/admin/projects/{project_id}` | プロジェクト削除 | admin |
+| DELETE | `/admin/projects/{project_id}` | プロジェクト論理削除（`is_active=false`。所属・オーナーシップを問わず対象にできる） | admin |
 | GET | `/admin/login-history` | 全ユーザーのログイン履歴（監査） | admin |
 
 ロール変更・無効化では、自分自身の変更を拒否し、最後の有効adminを0人にする操作も拒否する（`409 SELF_MODIFICATION_NOT_ALLOWED` / `409 LAST_ADMIN_REQUIRED`）。無効化時はRedisの全セッション・refresh失効を先に完了してからDBを更新する。Redis失敗時はDBを更新せず `503 SERVICE_UNAVAILABLE` とし、部分失効は同じ処理を再実行する。JWTの既発行access tokenは、DBの `is_active` を毎回確認するため無効化直後から拒否される。強制ログアウトだけの場合はaccess tokenが最大 `ACCESS_TOKEN_TTL_SECONDS`（既定900秒）有効なままになり得る。
@@ -227,7 +231,7 @@ OAuthコールバックはブラウザの直接リダイレクトを受けるた
 
 ### 3.2 プロジェクト・タスク
 
-**`POST /projects`** リクエスト：`{ "name": "...", "description": "..." }`（name は1〜100文字）
+**`POST /projects`** リクエスト：`{ "name": "...", "description": "...", "start_at": null, "end_at": null }`（name は1〜100文字。`start_at`/`end_at`は共にISO 8601の任意項目で、両方指定時は`end_at >= start_at`を422で検証）
 
 **`POST /projects/{id}/tasks`** リクエスト
 
@@ -241,7 +245,7 @@ OAuthコールバックはブラウザの直接リダイレクトを受けるた
 }
 ```
 
-`status` は省略時 `todo`、`assignee_id` は省略時 `null` とし、`position` は指定せず対象列の末尾へ採番する。指定された担当者は有効なプロジェクトメンバーでなければならない。レスポンスは `201 {task}` とする。
+`status` は省略時 `todo`、`assignee_id` は省略時 `null` とし、`position` は指定せず対象列の末尾へ採番する。指定された担当者は有効なプロジェクトメンバーでなければならない。レスポンスは `201 {task}` とする（`is_active`は常に`true`、`project_is_active`は所属プロジェクトの`is_active`をそのまま返す）。
 
 **`GET /projects`** レスポンス `200`
 
@@ -256,12 +260,17 @@ OAuthコールバックはブラウザの直接リダイレクトを受けるた
       "member_count": 3,
       "task_counts": { "todo": 4, "in_progress": 2, "done": 7 },
       "is_owner": true,
+      "is_active": true,
+      "start_at": null,
+      "end_at": null,
       "created_at": "2026-09-01T00:00:00Z"
     }
   ],
   "meta": { "page": 1, "per_page": 20, "total": 1, "total_pages": 1 }
 }
 ```
+
+デフォルトでは `is_active=true` のプロジェクトのみ返す。`?include_inactive=true` を指定すると無効化済みプロジェクトも含める（詳細な認可粒度は [../detailed_design/api/projects/01_get_projects.md](../detailed_design/api/projects/01_get_projects.md) を参照）。
 
 OAuth新規ユーザーではプロフィール5項目が `null` になり得る。`profile_completed` は5項目がすべて設定済みの場合だけ `true` とし、フロントはOAuth直後に `/settings?complete_profile=1` へ誘導する。通常登録のリクエストでは5項目を必須とする。`display_name` は姓・名が両方そろった場合だけ「姓 名」とし、それ以外は `username` を返す。
 
@@ -270,15 +279,31 @@ OAuth新規ユーザーではプロフィール5項目が `null` になり得る
 ```json
 {
   "project_id": "…",
+  "project_is_active": true,
   "columns": {
-    "todo": [ { "id": "…", "title": "…", "assignee": null, "position": 0, "version": 1, "due_at": null, "comment_count": 0 } ],
+    "todo": [ { "id": "…", "title": "…", "assignee": null, "position": 0, "version": 1, "due_at": null, "comment_count": 0, "is_active": true, "project_is_active": true } ],
     "in_progress": [],
     "done": []
   }
 }
 ```
 
-status 別にグルーピングして返すことで、フロント側のカンバン描画をそのまま行える形にする。
+status 別にグルーピングして返すことで、フロント側のカンバン描画をそのまま行える形にする。デフォルトでは`is_active=true`のタスクのみ返し、`?include_inactive=true`で無効分も含める。
+
+**`GET /tasks`** レスポンス `200`（issue #10で新設。プロジェクトに紐づかない横断的なタスク一覧）
+
+```json
+{
+  "items": [
+    { "id": "…", "project_id": null, "project_is_active": null, "title": "買い出しリストを作る", "status": "todo", "is_active": true, "position": 0, "version": 1, "due_at": null }
+  ],
+  "meta": { "page": 1, "per_page": 20, "total": 1, "total_pages": 1 }
+}
+```
+
+`?project_id={uuid}` で特定プロジェクトへ絞込、`?project_id=null` で未所属タスクのみに絞込。省略時は本人が参照可能な全タスク（所属プロジェクト全部＋自分が作成した未所属タスク。adminは全件）を返す。詳細は [../detailed_design/api/tasks/10_get_tasks.md](../detailed_design/api/tasks/10_get_tasks.md) を参照。
+
+**`POST /tasks`** リクエスト（issue #10で新設）：`{ "project_id": null, "title": "...", "description": null, "status": "todo", "assignee_id": null, "due_at": null }`。`project_id`を指定した場合は`POST /projects/{id}/tasks`と同じ所属チェック・position採番を行い、未指定・`null`の場合はプロジェクト未所属タスクとして作成する（`assignee_id`は指定不可。詳細は [../detailed_design/api/tasks/11_post_tasks.md](../detailed_design/api/tasks/11_post_tasks.md) を参照）。レスポンスは `201 {task}`。
 
 **`PATCH /tasks/{id}`** リクエスト（`version` を必須とし、それ以外は任意の部分更新）
 
@@ -290,9 +315,12 @@ status 別にグルーピングして返すことで、フロント側のカン�
 | assignee_id | string(uuid) \| null | 有効なプロジェクトメンバーであること |
 | position | integer | 0以上。status変更時に省略した場合は移動先列の末尾。同じstatusの通常更新で省略した場合は現在位置を維持 |
 | due_at | string(date-time) \| null | ISO 8601。オフセットなしは `APP_TIMEZONE` として解釈しUTCへ正規化。値が変化し、担当者があり、変更後が当日であれば通知を作成する |
+| is_active | boolean | 作成者本人/プロジェクトオーナー/adminのみ変更可（再有効化を含む）。それ以外のユーザーが指定した場合は `403 FORBIDDEN` |
 | version | integer | **必須**。取得時の値と一致した場合だけ更新し、成功時にサーバーが1加算 |
 
-`version` が一致しない場合は `409 TASK_CONFLICT` を返す。status/position変更はDBトランザクション内で列の並べ替えと同時に行い、競合時はフロントがボードを再取得して再操作を促す。
+`version` が一致しない場合は `409 TASK_CONFLICT` を返す。status/position変更はDBトランザクション内で列の並べ替えと同時に行い、競合時はフロントがボードを再取得して再操作を促す。`project_id`の付け替え（プロジェクト間移動）は本APIのスコープ外。
+
+**`PATCH /projects/{id}`** リクエストは `name`/`description` に加え `start_at`/`end_at`/`is_active` を任意フィールドとして受け付ける（`exclude_unset`方式）。`is_active`の変更はオーナー/adminのみ許可し、`true`に戻す再有効化も許容する。`start_at`/`end_at`は更新後の値で`end_at >= start_at`を検証する。
 
 **`PUT /users/me/password`** リクエスト：`{ "current_password": "...", "new_password": "...", "password_confirm": "..." }`
 
@@ -344,7 +372,7 @@ status 別にグルーピングして返すことで、フロント側のカン�
 
 | 契機 | 条件 | 作成される `type` |
 |------|------|------------------|
-| `POST /projects/{id}/tasks` | `assignee_id` があり、`due_at` が `APP_TIMEZONE` における**当日**の範囲内 | `due_today_created` |
+| `POST /projects/{id}/tasks`、`POST /tasks`（`project_id`指定時） | `assignee_id` があり、`due_at` が `APP_TIMEZONE` における**当日**の範囲内 | `due_today_created` |
 | `PATCH /tasks/{id}` | `due_at` が変更され、`assignee_id` があり、変更後の `due_at` が**当日**の範囲内 | `due_today_updated` |
 | `batch` の日次ジョブ | 毎日10時・17時。未完了かつ担当者ありで `due_at <= 翌日10:00` | `due_soon_batch` |
 
@@ -441,6 +469,8 @@ flowchart TB
 | `POST /projects` | × | ○ | ○ | ○ | ○ |
 | `GET /projects/{id}` `/tasks` | × | ×（404） | ○ | ○ | ○ |
 | `POST /projects/{id}/tasks` `PATCH /tasks/{id}` | × | ×（404） | ○ | ○ | ○ |
+| `GET /tasks` `POST /tasks` | × | ○（自分の未所属分＋所属分のみ） | ○ | ○ | ○（全件） |
+| `PATCH /tasks/{id}` の `is_active` | × | ×（404） | ×（403、非作成者かつ非オーナー） | ○ | ○ |
 | `PATCH /projects/{id}` `DELETE /projects/{id}` | × | ×（404） | ×（403） | ○ | ○ |
 | `GET /projects/{id}/members/candidates`、`POST/DELETE /projects/{id}/members` | × | ×（404） | ×（403） | ○ | ○ |
 | `PATCH /comments/{id}` `DELETE /comments/{id}` | × | ×（404） | 投稿者本人のみ○ | 投稿者本人のみ○ | ○ |
@@ -572,14 +602,16 @@ sequenceDiagram
 
 | 関数 | 引数 | 戻り値 | 備考 |
 |------|------|--------|------|
-| `list_projects` | `user`, `page`, `per_page` | `Page[ProjectSummary]` | admin は全件、member は所属分のみ |
-| `create_project` | `user`, `payload` | `Project` | projects と project_members を同一トランザクションで作成 |
-| `update_project` / `delete_project` | `project`, `payload` | `Project` / `None` | オーナー or admin 前提（認可はdeps側） |
+| `list_projects` | `user`, `page`, `per_page`, `include_inactive` | `Page[ProjectSummary]` | admin は全件、member は所属分のみ。既定は`is_active=true`のみ |
+| `create_project` | `user`, `payload` | `Project` | projects と project_members を同一トランザクションで作成。`start_at`/`end_at`を任意で受け取る |
+| `update_project` | `project`, `payload` | `Project` | オーナー or admin 前提（認可はdeps側）。`is_active`/`start_at`/`end_at`の部分更新も担う |
+| `deactivate_project` | `project` | `None` | `is_active=false`へのUPDATEのみ。`project_members`/`tasks`/`task_comments`は変更しない（物理削除は行わない） |
 | `add_member` / `remove_member` | `project`, `user_id`, `invited_by` | `Member` / `None` | オーナーは削除不可（409）。削除対象者が担当中のタスクは同一トランザクションで `assignee_id=NULL` にしてからmembershipを削除 |
-| `get_board` | `project` | `BoardResponse` | status別にグルーピングして返す |
-| `create_task` | `project`, `payload`, `user` | `Task` | assignee のメンバー検証、position 採番 |
-| `update_task` | `task`, `payload`, `user` | `Task` | `version`一致を確認してから更新。status変更時は移動先列の末尾へ、`position` 指定時は列をロックして間の行を再採番 |
-| `delete_task` | `task` | `None` | 対象列の後続positionを詰めるため列のadvisory lockを取得し、コメントはCASCADE |
+| `get_board` | `project`, `include_inactive` | `BoardResponse` | status別にグルーピングして返す。各タスクに`project_is_active`を付与 |
+| `list_tasks` | `user`, `project_id`, `page`, `per_page`, `include_inactive` | `Page[TaskSummary]` | `GET /tasks`用。`project_id`省略時は所属プロジェクト全部＋自分の未所属タスク、`project_id=null`指定時は未所属タスクのみ |
+| `create_task` | `project \| None`, `payload`, `user` | `Task` | assignee のメンバー検証、position 採番。`project`が`None`の場合はプロジェクト未所属タスクとして作成し、advisory lockは固定プレースホルダキーで直列化 |
+| `update_task` | `task`, `payload`, `user` | `Task` | `version`一致を確認してから更新。status変更時は移動先列の末尾へ、`position` 指定時は列をロックして間の行を再採番。`is_active`の変更は作成者本人/プロジェクトオーナー/adminのみ許可 |
+| `deactivate_task` | `task` | `None` | `is_active=false`へのUPDATEのみ。position詰め（compaction）は行わない |
 | `add_comment` / `update_comment` / `delete_comment` | `task` / `comment`, `payload`, `user` | `Comment` / `None` | 編集・削除は投稿者本人または admin |
 
 ### 7.3 `service/notification_service.py`
@@ -601,6 +633,7 @@ sequenceDiagram
 | 結合 | `httpx.AsyncClient` + 実 PostgreSQL / Redis。主要エンドポイントを正常系・異常系（401/403/404/409/422）で検証 |
 | パラメータ化 | 認証必須APIは `AUTH_MODE=session` / `jwt` の両方で実行するフィクスチャを用意 |
 | 競合・認可 | task version不一致が409、非所属の候補検索が404、メンバー削除時に担当タスクがNULL化されること、最後のadmin保護を検証 |
+| 論理削除 | `DELETE /projects/{id}`・`DELETE /tasks/{id}`が`is_active=false`のみを更新し関連行を消さないこと、`PATCH`による再有効化、無効化後もタスクが一覧に残り`project_is_active`が伝播すること、`GET /tasks`で`project_id=null`指定時に未所属タスクのみ返ることを検証 |
 | 通知 | 当日期限のタスク作成・終了時刻変更で通知が1件だけ作成されること、同一 `dedupe_key` の再実行で増えないこと、他人の通知への既読操作が404になること、`APP_TIMEZONE` の日付境界（当日23:59 / 翌日00:00）で判定が切り替わることを検証 |
 | カバレッジ | `pytest --cov=app`。`omit` には自動生成物（`alembic/versions`）のみを指定し、実装コードは除外しない |
 | 網羅できない範囲 | 外部（Google）の実通信、実SMTP送信はモックで代替し、実通信は手動確認とする |

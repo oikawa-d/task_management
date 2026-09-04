@@ -18,7 +18,7 @@
 | テーブル名 / 論理名 | `task_comments` / タスクコメント |
 | 役割 | タスクに対する投稿者コメント。タスク詳細モーダルのスレッド表示に使用 |
 | 想定件数・増加傾向 | タスク数 × 平均コメント数。学習用途のため小規模 |
-| ライフサイクル | 作成契機：`POST /api/tasks/{task_id}/comments`。更新契機：`PATCH /api/comments/{comment_id}`（投稿者本人 or admin）。削除契機：`DELETE /api/comments/{comment_id}`（投稿者本人 or admin）、またはタスク削除時のCASCADE。物理削除のみ |
+| ライフサイクル | 作成契機：`POST /api/tasks/{task_id}/comments`。更新契機：`PATCH /api/comments/{comment_id}`（投稿者本人 or admin）。削除契機：`DELETE /api/comments/{comment_id}`（投稿者本人 or admin）のみ。物理削除。**タスク削除（`DELETE /api/tasks/{task_id}`）はissue #10で論理削除（`is_active=false`）に変更されたため`tasks`行は物理削除されず、`task_id`のFK `ON DELETE CASCADE` は通常運用では発火しない。タスク無効化後もコメントは物理削除されず参照可能なまま残る** |
 | 関連ORMモデル | `models/task_comment.py :: TaskComment` |
 
 ## 2. カラム定義
@@ -62,7 +62,7 @@ CREATE TRIGGER trg_task_comments_set_updated_at
 | 種別 | 名称 | 対象カラム | 内容 | 目的（対応クエリ） |
 |------|------|-----------|------|---------------------|
 | PK | `task_comments_pkey` | `id` | 主キー | コメント単体の更新・削除対象特定 |
-| FK | `task_comments_task_id_fkey` | `task_id` | → `tasks.id` `ON DELETE CASCADE` | タスク削除時にコメントを自動削除 |
+| FK | `task_comments_task_id_fkey` | `task_id` | → `tasks.id` `ON DELETE CASCADE` | タスクの物理削除経路が無いため通常運用では発火しない防御的制約（issue #10でタスク削除は論理削除化） |
 | FK | `task_comments_user_id_fkey` | `user_id` | → `users.id` `ON DELETE RESTRICT` | 投稿者の履歴を保護（ユーザーは無効化のみで物理削除しないため通常は問題にならない） |
 | NOT NULL | - | `task_id`, `user_id`, `body`, `created_at`, `updated_at` | 必須項目の担保 | - |
 | INDEX | `ix_task_comments_task_created` | `(task_id, created_at)` | B-tree複合 | `GET /tasks/{id}/comments` のタスク別・投稿順取得（`01_database.md` Q-4） |
@@ -132,8 +132,8 @@ flowchart LR
     I -->|"No"| J["403 FORBIDDEN"]
     I -->|"Yes"| K["DELETE task_comments"]
 
-    L["DELETE /api/tasks/:id<br/>（タスク削除）"] --> M["CASCADE DELETE<br/>task_comments 全行"]
-    N["DELETE /api/projects/:id<br/>（プロジェクト削除）"] --> O["CASCADE DELETE<br/>tasks → task_comments"]
+    L["DELETE /api/tasks/:id<br/>（タスク論理削除、issue #10）"] -.->|"is_active=falseのみ更新<br/>task_commentsは無変更"| M["task_comments はそのまま参照可能"]
+    N["DELETE /api/projects/:id<br/>（プロジェクト論理削除、issue #10）"] -.->|"is_active=falseのみ更新<br/>tasks/task_commentsは無変更"| O["tasks / task_comments はそのまま参照可能"]
 ```
 
 `status` のような状態カラムを持たないため、状態遷移図（`stateDiagram-v2`）は作成せず、CRUDイベントを `flowchart` で示す。
@@ -242,7 +242,7 @@ flowchart LR
 
 | 項目 | 内容 |
 |------|------|
-| FK CASCADE（`task_id`） | `ON DELETE CASCADE`。タスク削除時にコメントを自動削除（プロジェクト削除時は `tasks` 経由でさらに連鎖） |
+| FK CASCADE（`task_id`） | `ON DELETE CASCADE`。`tasks`の物理削除経路が無いため通常運用では発火しない防御的制約（issue #10でタスク削除は論理削除化。プロジェクト削除も同様に論理削除のため`tasks`経由の連鎖も発火しない） |
 | FK CASCADE（`user_id`） | `ON DELETE RESTRICT`。投稿者の履歴を保護。ユーザーは無効化のみで物理削除しないため通常は問題にならない |
 | トランザクション境界 | 作成・更新・削除いずれも単一SQL文（明示的な複数文トランザクションは不要） |
 | 楽観ロック | `task_comments` に `version` カラムは無い（基本設計上、楽観ロックの対象は `tasks` のみ）。同時編集は最終書き込み優先（Last Write Wins） |
@@ -255,8 +255,8 @@ flowchart LR
 |----|------|--------|----------|------------|
 | T-1 | 正常系 | プロジェクトメンバーがコメントを投稿する | `task_comments` に1行作成され `201` | `test_add_comment_success` |
 | T-2 | 制約違反（FK） | 存在しない `task_id` を指定してコメント作成を試みる | 呼び出し元でタスク存在チェックにより`404`（DB到達前にサービス層で防止） | `test_add_comment_task_not_found_returns_404` |
-| T-3 | CASCADE削除 | コメントが存在するタスクを削除する | 関連する `task_comments` 行がすべて削除される | `test_delete_task_cascades_comments` |
-| T-4 | CASCADE削除（間接） | コメントが存在するプロジェクトを削除する | `tasks` 経由で `task_comments` も削除される | `test_delete_project_cascades_comments_via_tasks` |
+| T-3 | 論理削除の非連鎖（issue #10） | コメントが存在するタスクを `DELETE /api/tasks/{id}` で無効化する | `tasks.is_active=false` に更新されるのみで、`task_comments` 行は削除されずそのまま参照できる | `test_deactivate_task_does_not_delete_comments` |
+| T-4 | 論理削除の非連鎖・間接（issue #10） | コメントが存在するプロジェクトを `DELETE /api/projects/{id}` で無効化する | `projects.is_active=false` に更新されるのみで、`tasks` / `task_comments` は変化しない | `test_deactivate_project_does_not_delete_tasks_or_comments` |
 | T-5 | 認可 | 投稿者本人以外の一般メンバーがコメントを編集/削除しようとする | `403 FORBIDDEN` | `test_update_delete_comment_forbidden_for_other_user` |
 | T-6 | 認可 | admin が他人のコメントを編集/削除する | 成功する | `test_admin_can_update_delete_any_comment` |
 | T-7 | バリデーション | `body` が空文字、または2001文字以上 | `422`（アプリ層バリデーション。DB到達前に拒否） | `test_comment_body_length_validation` |

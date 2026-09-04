@@ -101,8 +101,8 @@ CHECK制約の記述形式：`CHECK (<column> IN ('value1', 'value2', ...))`。�
 ## 8. 物理削除方針
 
 - 全テーブルで論理削除フラグ（`deleted_at` 等）は持たない。削除はSQLの `DELETE` による物理削除を基本とする。
-- 例外は `users` のみで、`is_active`（管理者による無効化）を用いて「利用停止」を表現する。`users` に対する削除API自体は基本設計で提供されない（`01_table_users.md` §7 参照）。
-- 親テーブル削除時の子テーブル挙動は外部キーの `ON DELETE` 句に従う（`CASCADE` / `RESTRICT` / `SET NULL`）。各テーブルの詳細は `01_table_users.md` 〜 `03_table_login_history.md` の「制約・インデックス」節、および `projects` 以降は担当ファイルを参照。
+- 例外は `users` / `projects` / `tasks` の3テーブルで、`is_active`（管理者・オーナー・作成者による無効化）を用いて「利用停止」を表現する（issue #10で`projects`/`tasks`に拡張）。これら3テーブルに対する物理削除API自体は基本設計で提供されない（`01_table_users.md` §7、`04_table_projects.md`、`06_table_tasks.md` の各リポジトリ関数節を参照）。`DELETE /api/projects/{id}`・`DELETE /api/tasks/{id}` はいずれも `is_active=false` へのUPDATEとして実装する。
+- 親テーブル削除時の子テーブル挙動は外部キーの `ON DELETE` 句に従う（`CASCADE` / `RESTRICT` / `SET NULL`）。ただし `users` / `projects` / `tasks` はアプリケーションAPIとして物理削除経路を提供しないため、これらを起点とする `ON DELETE CASCADE` / `SET NULL` は通常運用では発火しない防御的制約という位置づけになる。各テーブルの詳細は `01_table_users.md` 〜 `03_table_login_history.md` の「制約・インデックス」節、および `projects` 以降は担当ファイルを参照。
 - `login_history` / `api_history` / `batch_history` は保持期間超過分をそれぞれの `sp_purge_*_history` プロシージャによる物理削除の対象とする（保持期間はそれぞれ90日 / 30日 / 30日）。
 
 ## 9. 全体ER図

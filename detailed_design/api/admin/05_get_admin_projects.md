@@ -66,6 +66,9 @@
       "owner": { "id": "1a2b...", "username": "taro", "display_name": "山田 太郎" },
       "member_count": 3,
       "task_counts": { "todo": 4, "in_progress": 2, "done": 7 },
+      "is_active": true,
+      "start_at": null,
+      "end_at": null,
       "created_at": "2026-09-01T00:00:00Z"
     }
   ],
@@ -82,6 +85,8 @@
 | items[].owner.display_name | string | 不可 | `last_name + ' ' + first_name`（未設定項目があれば `username` を代替表示。[01_get_projects.md](../projects/01_get_projects.md) と同一規則） |
 | items[].member_count | integer | 不可 | `project_members` の件数 |
 | items[].task_counts.todo / in_progress / done | integer | 不可 | status別タスク件数。0件のstatusも `0` を返す |
+| items[].is_active | boolean | 不可 | `issue #10`で追加された論理削除フラグ。管理者一覧は`is_active`の値に関わらず常に全件（無効化済みも含む）を返す。管理画面から`DELETE /admin/projects/{id}`（無効化）・`PATCH /projects/{id}`（再有効化、admin権限）を実行できる |
+| items[].start_at / end_at | string(datetime) \| null | 可 | プロジェクトの開始・終了日時（ISO 8601 UTC） |
 | items[].created_at | string(datetime) | 不可 | ISO 8601 UTC |
 | meta.page / per_page / total / total_pages | integer | 不可 | ページング情報 |
 
@@ -289,3 +294,4 @@ flowchart LR
 |------|------|------|
 | 要検討 | `q` によるプロジェクト名検索は基本設計に明記がなく、`GET /admin/users` の `q` 検索との一貫性を意図した本書での提案。基本設計側での明文化が望ましい |
 | 要検討 | `project_repository.count_all` / `list_all` に `q` 引数を追加する変更は、既存の `GET /projects`（[01_get_projects.md](../projects/01_get_projects.md)）が呼び出す箇所にも影響するため、実装時は後方互換（`q=None` 既定）を厳守する必要がある |
+| 対応済み | issue #10により`is_active`/`start_at`/`end_at`をレスポンスへ追加。管理者一覧は無効化済みプロジェクトを隠す必要がないため`is_active`によるフィルタは行わず常に全件返す（`GET /projects`の`include_inactive`とは異なる設計判断） | - |
