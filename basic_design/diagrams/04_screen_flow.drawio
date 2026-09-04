@@ -7,8 +7,8 @@
         <mxCell id="n1" value="画面遷移図" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=20;fontStyle=1;" vertex="1" parent="1">
           <mxGeometry x="40" y="24" width="400" height="30" as="geometry" />
         </mxCell>
-        <mxCell id="n2" value="全11画面。ルーティングガード（RequireAuth / RequireAdmin）で認証・権限を判定する。" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=12;fontColor=#616161;" vertex="1" parent="1">
-          <mxGeometry x="40" y="56" width="900" height="20" as="geometry" />
+        <mxCell id="n2" value="全11画面。ルーティングガード（RequireAuth / RequireAdmin）で認証・権限を判定する。ルート / は画面を持たず、常に /login へリダイレクトする。" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=12;fontColor=#616161;" vertex="1" parent="1">
+          <mxGeometry x="40" y="56" width="1060" height="20" as="geometry" />
         </mxCell>
         <mxCell id="n3" value="" style="ellipse;html=1;fillColor=#263238;strokeColor=#263238;" vertex="1" parent="1">
           <mxGeometry x="30" y="185" width="30" height="30" as="geometry" />
@@ -40,7 +40,7 @@
         <mxCell id="n12" value="認証必須（AppLayout：サイドバー home / 管理 / 設定 / ログアウト）" style="container=1;collapsible=0;rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#9E9E9E;dashed=1;dashPattern=8 4;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=13;fontStyle=1;fontColor=#616161;" vertex="1" parent="1">
           <mxGeometry x="1110" y="120" width="620" height="640" as="geometry" />
         </mxCell>
-        <mxCell id="n13" value="⑥ ダッシュボード&lt;br&gt;/&lt;br&gt;&lt;br&gt;所属プロジェクトのカード一覧&lt;br&gt;「新規プロジェクトの作成」ボタン" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#2E7D32;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
+        <mxCell id="n13" value="⑥ ダッシュボード&lt;br&gt;/dashboard&lt;br&gt;&lt;br&gt;所属プロジェクトのカード一覧&lt;br&gt;「新規プロジェクトの作成」ボタン" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#2E7D32;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="1150" y="160" width="260" height="110" as="geometry" />
         </mxCell>
         <mxCell id="n14" value="⑦ プロジェクト詳細（カンバン）&lt;br&gt;/projects/:projectId&lt;br&gt;&lt;br&gt;未着手 / 進行中 / 完了 の3列&lt;br&gt;ドラッグ&amp;ドロップで status 変更" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#2E7D32;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
@@ -240,11 +240,22 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="n38" value="ガードの挙動&lt;br&gt;・未認証で認証必須ページ → /login へリダイレクト&lt;br&gt;・member が /admin/users へ直接アクセス → / へリダイレクト&lt;br&gt;・401（session失効 / refresh不可）→ authStore を初期化し /login へ&lt;br&gt;・jwtモードの401は /auth/refresh を1回試行してから判定&lt;br&gt;・メール未認証のままログイン → 403 EMAIL_NOT_VERIFIED（認証メールの再送を案内）" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;darkOpacity=0.05;fillColor=#FFF9C4;strokeColor=#F9A825;align=left;verticalAlign=top;spacingLeft=10;spacingTop=6;size=14;fontSize=11;" vertex="1" parent="1">
+        <mxCell id="n38" value="ガードの挙動&lt;br&gt;・未認証で認証必須ページ → /login へリダイレクト&lt;br&gt;・member が /admin/users へ直接アクセス → /dashboard へリダイレクト&lt;br&gt;・/ へのアクセス → 認証状態を問わず /login へリダイレクト（認証済みは /login のガードで /dashboard へ）&lt;br&gt;・401（session失効 / refresh不可）→ authStore を初期化し /login へ&lt;br&gt;・jwtモードの401は /auth/refresh を1回試行してから判定&lt;br&gt;・メール未認証のままログイン → 403 EMAIL_NOT_VERIFIED（認証メールの再送を案内）" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;darkOpacity=0.05;fillColor=#FFF9C4;strokeColor=#F9A825;align=left;verticalAlign=top;spacingLeft=10;spacingTop=6;size=14;fontSize=11;" vertex="1" parent="1">
           <mxGeometry x="200" y="950" width="780" height="150" as="geometry" />
         </mxCell>
         <mxCell id="n39" value="凡例&lt;br&gt;■ 青: 未認証画面　■ 緑: 認証必須画面　■ 赤: 管理者専用&lt;br&gt;破線枠: モーダル（親画面の上に重ねて表示）&lt;br&gt;■ 黄: OAuth2 関連　■ 紫: メール経路&lt;br&gt;丸数字は 05_frontend.md の画面No に対応" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#BDBDBD;align=left;verticalAlign=top;spacingLeft=10;spacingTop=6;fontSize=11;" vertex="1" parent="1">
           <mxGeometry x="1020" y="950" width="710" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="n42" value="ルート /&lt;br&gt;（画面を持たない）" style="rounded=1;arcSize=16;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="20" y="290" width="150" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="e42" value="常にリダイレクト" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;jettySize=auto;orthogonalLoop=1;dashed=1;strokeColor=#455A64;strokeWidth=1.5;fontSize=10;fontColor=#455A64;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.85;entryDx=0;entryDy=0;" edge="1" parent="1" source="n42" target="n5">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="185" y="315" />
+              <mxPoint x="185" y="252" />
+            </Array>
+          </mxGeometry>
         </mxCell>
       </root>
     </mxGraphModel>

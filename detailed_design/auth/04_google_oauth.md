@@ -76,7 +76,7 @@ sequenceDiagram
 
     U->>FE: 「Googleでログイン」
     FE->>API: GET /api/auth/oauth/google?redirect_to=/
-    API->>API: normalize_redirect_to("/")
+    API->>API: normalize_redirect_to("/dashboard")
     API->>API: state / code_verifier / code_challenge / nonce 生成
     API->>RD: SETEX oauth_state:{state} TTL=OAUTH_STATE_TTL_SECONDS
     API-->>FE: 302 + Set-Cookie(cerberus_oauth_state) → Google認可URL
@@ -181,7 +181,7 @@ stateDiagram-v2
 | シグネチャ / 定義 | `async def oauth_start(redirect_to: str \| None, request: Request, response: Response) -> str` |
 | 引数 / 入力 | `redirect_to`（クエリ）、`request`/`response` |
 | 戻り値 / 出力 | 認可URL（呼び出し元ルーターが302 Locationに設定） |
-| 送出例外 / 失敗条件 | なし（`redirect_to` は不正値でも既定値`/`へフォールバックし例外にしない） |
+| 送出例外 / 失敗条件 | なし（`redirect_to` は不正値でも既定値`/dashboard`へフォールバックし例外にしない） |
 | 処理内容 | 1. `normalize_redirect_to(redirect_to)` 2. `state`/`code_verifier`/`code_challenge`/`nonce` を `secrets.token_urlsafe` 等で生成 3. `redis_store.save_oauth_state(state, redirect_to, code_verifier, nonce, ttl=OAUTH_STATE_TTL_SECONDS)` 4. `response.set_cookie(COOKIE_NAME_OAUTH_STATE, state, httponly=True, ...)` 5. `GoogleOAuthProvider.build_authorize_url(...)` を返す |
 | 副作用 | Redis書き込み、Cookie設定 |
 
@@ -272,7 +272,7 @@ flowchart LR
 |------|------|------|
 | CSRF/リプレイ | stateはワンタイム消費（GETDEL）+ Cookie照合の二重検証 | [../../basic_design/03_auth.md](../../basic_design/03_auth.md) 5.1 |
 | リプレイ（OIDC） | nonceをid_token claimと照合 | 認可コード横取り・トークン再利用対策 |
-| open redirect | `redirect_to` は同一オリジン相対パスのみ許可。違反時は既定値`/` | [../../basic_design/03_auth.md](../../basic_design/03_auth.md) 5.1 |
+| open redirect | `redirect_to` は同一オリジン相対パスのみ許可。違反時は既定値`OAUTH_DEFAULT_REDIRECT_TO`（既定`/dashboard`） | [../../basic_design/03_auth.md](../../basic_design/03_auth.md) 5.1 |
 | アカウント乗っ取り | `email_verified=false` は紐付け拒否（400） | 5.3節 |
 | トークン露出防止 | jwtモードのaccess_tokenをURLに載せず、handoffコード＋fragment経由で受け渡す | 5.4節 |
 | ログ出力 | `code`/`id_token`/`access_token`/`code_verifier` は平文ログに出さない。stateは検証結果（成功/失敗）のみINFO出力 | 共通ルール |
@@ -290,7 +290,7 @@ flowchart LR
 | 5 | 結合 | state不一致 | Cookieと異なるstateを送信 | 302 `/login?error=invalid_state` | `test_oauth_callback_rejects_state_mismatch` |
 | 6 | 結合 | nonce不一致 | id_tokenのnonceを改変 | 302 `/login?error=invalid_token` | `test_oauth_callback_rejects_nonce_mismatch` |
 | 7 | 結合 | userinfo.sub不一致 | userinfoモックのsubを変更 | 302 `/login?error=invalid_token` | `test_oauth_callback_rejects_sub_mismatch` |
-| 8 | 結合 | 外部`redirect_to` | `redirect_to=https://evil.example` | 既定値`/`に正規化される | `test_oauth_start_normalizes_external_redirect_to` |
+| 8 | 結合 | 外部`redirect_to` | `redirect_to=https://evil.example` | 既定値`/dashboard`に正規化される | `test_oauth_start_normalizes_external_redirect_to` |
 | 9 | 結合 | jwtモードのhandoff交換 | 正常フロー完了後 | access_token/redirect_to が返り、Cookieが設定される | `test_oauth_exchange_returns_tokens` |
 | 10 | 結合 | handoff二重消費 | 同一codeで2回exchange | 2回目は400 `OAUTH_HANDOFF_INVALID` | `test_oauth_exchange_rejects_reused_code` |
 | 11 | 網羅できない範囲 | 実際のGoogle認可画面での同意操作 | - | 自動テスト対象外（手動確認） | - |

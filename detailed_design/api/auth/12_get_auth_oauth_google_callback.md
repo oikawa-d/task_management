@@ -379,7 +379,7 @@ stateDiagram-v2
 | 6 | 結合 | 正常系・jwtモード | 同上 | 302 `#code=...&redirect_to=...`、`oauth_handoff:{code}`がRedisに存在、Set-Cookieは`cerberus_oauth_state`削除のみ | `test_oauth_callback_jwt_mode_issues_handoff` |
 | 7 | 結合 | state Cookie不一致 / state期限切れ | クエリstateとCookie値を変える／Redisから事前削除 | いずれも302 `/login?error=invalid_state` | `test_oauth_callback_rejects_invalid_state` |
 | 8 | 結合 | nonce不一致 / userinfo.sub不一致 | id_tokenのnonceを改ざん／userinfoモックのsubを変更 | いずれも302 `/login?error=oauth_failed` | `test_oauth_callback_rejects_token_tampering` |
-| 9 | 結合 | 外部`redirect_to`の正規化確認 | 11番ファイルで`redirect_to=https://evil.com`を試行→保存値`/`を確認した上でcallback | fragmentの`redirect_to`が`/`になる | `test_oauth_callback_uses_normalized_redirect_to` |
+| 9 | 結合 | 外部`redirect_to`の正規化確認 | 11番ファイルで`redirect_to=https://evil.com`を試行→保存値`/dashboard`を確認した上でcallback | fragmentの`redirect_to`が`/dashboard`になる | `test_oauth_callback_uses_normalized_redirect_to` |
 | 10 | 結合 | Googleの`error=access_denied` | クエリに`error`を付与 | 302 `/login?error=oauth_denied` | `test_oauth_callback_handles_google_denied` |
 | 11 | 結合 | email未検証の新規紐付け試行 | `userinfo.email_verified=false` | 302 `/login?error=oauth_email_unverified` | `test_oauth_callback_rejects_unverified_email` |
 | 12 | 結合 | OAuth新規ユーザーのプロフィール状態 | 完全新規作成 | `profile_completed=false`、`last_name`/`first_name`がGoogle値、フリガナ・生年月日が`NULL` | `test_oauth_callback_new_user_profile_incomplete` |

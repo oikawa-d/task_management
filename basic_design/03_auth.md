@@ -229,7 +229,7 @@ sessionモードはsession Cookieを必要とし、`DEL session:{sid}` 等を実
 | nonce | `token_urlsafe(32)`。stateと同じRedis値に保存し、id_tokenの `nonce` claim と一致検証 |
 | 識別子 | `id_token` の `sub`（`oauth_accounts.provider_user_id`） |
 
-`redirect_to` は state に保存する前に、`/` で始まり `//` で始まらない同一オリジンの相対パスへ正規化する。絶対URL・プロトコル相対URL・外部ドメインは受け付けず、違反時は既定値 `/` を使う。これによりOAuth完了後のopen redirectを防ぐ。
+`redirect_to` は state に保存する前に、`/` で始まり `//` で始まらない同一オリジンの相対パスへ正規化する。絶対URL・プロトコル相対URL・外部ドメインは受け付けず、違反時は既定値 `OAUTH_DEFAULT_REDIRECT_TO`（既定 `/dashboard`）を使う。これによりOAuth完了後のopen redirectを防ぐ。`/` は `/login` へのリダイレクト専用パスであり画面を持たないため、既定値には使わない（[05_frontend.md 2.1](./05_frontend.md#21-ルートパス--の扱い) 参照）。
 
 ### 5.2 シーケンス
 
