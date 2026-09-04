@@ -23,6 +23,7 @@ frontend/
 ├── src/
 │   ├── main.tsx
 │   ├── router.tsx                  # ルート定義・認証ガード
+│   ├── routes.ts                   # 画面パス定数（ROUTES）。パスの直書きを禁止し、遷移先はすべてここを参照する
 │   ├── api/
 │   │   ├── client.ts               # axiosインスタンス生成（認証方式を吸収）
 │   │   ├── authAdapter/            # 認証方式ごとの差異を閉じ込める層
@@ -59,12 +60,13 @@ frontend/
 
 | No | 画面 | パス | レイアウト | ガード | 出典 |
 |----|------|------|-----------|--------|------|
+| 0 | （ルート） | `/` | なし（画面を持たない） | なし | 認証状態にかかわらず `/login` へリダイレクトする。追加要件（2026-09-04） |
 | 1 | ログイン | `/login` | AuthLayout | 未認証のみ | 要件書§2-1 |
 | 2 | 会員登録 | `/register` | AuthLayout | 未認証のみ | 要件書§2-2 |
 | 3 | パスワード再設定要求 | `/password/forgot` | AuthLayout | 公開（認証不要） | - |
 | 4 | パスワード再設定 | `/password/reset#token=` | AuthLayout | 公開（認証不要） | - |
 | 5 | メール認証 | `/verify-email#token=` | AuthLayout | 公開（認証不要） | - |
-| 6 | ダッシュボード | `/` | AppLayout | 認証必須 | 要件書§2-3 |
+| 6 | ダッシュボード | `/dashboard` | AppLayout | 認証必須 | 要件書§2-3 |
 | 7 | プロジェクト詳細（カンバン） | `/projects/:projectId` | AppLayout | 認証必須 | 要件書§2-4 |
 | 8 | タスク詳細/編集 | `/projects/:projectId/tasks/:taskId`（モーダル） | AppLayout | 認証必須 | 要件書§2-5 |
 | 9 | アカウント設定 | `/settings` | AppLayout | 認証必須 | 要件書§2-6 |
@@ -80,8 +82,9 @@ flowchart TB
         PR["/password/reset"]
         VE["/verify-email"]
     end
+    ROOT["/"]
     subgraph private["認証必須（AppLayout）"]
-        D["/"]
+        D["/dashboard"]
         B["/projects/:projectId"]
         T["タスク詳細モーダル"]
         S["/settings"]
@@ -91,7 +94,8 @@ flowchart TB
     end
     MAIL["確認メール / リセットメール<br/>（Mailpit / SMTP）"]
 
-    L --> D
+    ROOT -->|"常にリダイレクト"| L
+    L -->|"ログイン成功"| D
     L --> R
     L --> PF
     PR --> L
@@ -108,6 +112,19 @@ flowchart TB
     D --> AU
     D -->|ログアウト| L
 ```
+
+### 2.1 ルートパス `/` の扱い
+
+`/` は画面を持たない入口専用パスとし、`createBrowserRouter` のルート定義で `<Navigate to="/login" replace />` を返す（`replace` により履歴を汚さず、ブラウザの戻る操作で `/` に戻ってループしない）。認証状態は参照しない。
+
+| アクセス元の状態 | 遷移 |
+|-----------------|------|
+| 未認証で `/` | `/` → `/login`（ログイン画面を表示） |
+| 認証済みで `/` | `/` → `/login` → `/login` の未認証ガードにより `/dashboard` |
+
+認証済みユーザーが `/` を経由すると2ホップになるため、アプリ内の遷移・OAuthの `redirect_to` 既定値・ログアウト後以外のリダイレクト先には `/` を使わず `/dashboard` を指定する。
+
+パスはコンポーネントに直書きせず `src/routes.ts` の定数（`ROUTES.ROOT` / `ROUTES.LOGIN` / `ROUTES.DASHBOARD` …）を参照する。パス変更時の追従漏れを防ぐため、`router.tsx`・ガード・`navigate` の遷移先・サイドバーのリンクはすべて同一定数を用いる。
 
 ## 3. 共通レイアウト
 
@@ -131,7 +148,7 @@ flowchart TB
 | 要素 | 挙動 |
 |------|------|
 | `≡`（ハンバーガー） | サイドバーの開閉。状態は `uiStore` に保持し localStorage へ永続化 |
-| home | `/` へ遷移 |
+| home | `/dashboard` へ遷移 |
 | 管理 | `/admin/users` へ遷移。`role !== 'admin'` の場合は**要素自体を描画しない** |
 | 設定 | `/settings` へ遷移 |
 | ログアウト | `POST /auth/logout` → authStore クリア → `/login` へ |
@@ -338,7 +355,7 @@ flowchart TB
 ### 7.3.1 OAuthコールバック中継
 
 - `/oauth/callback` 到達時は、jwtモードならfragmentの `code` を取得して `POST /auth/oauth/exchange` を1回だけ実行し、成功後に `GET /auth/me` を取得してレスポンスの `redirect_to` へ遷移する
-- sessionモードはcallbackで設定済みのCookieを使って `GET /auth/me` を取得し、fragmentの `redirect_to` を同一オリジン相対パスとして再検証してから遷移する（違反時は `/`）
+- sessionモードはcallbackで設定済みのCookieを使って `GET /auth/me` を取得し、fragmentの `redirect_to` を同一オリジン相対パスとして再検証してから遷移する（違反時は `/dashboard`）
 - codeは送信後に `history.replaceState` でURLから除去し、失敗時は一時コードを再送しない
 - `profile_completed=false` の場合は、サーバーが返した `redirect_to` より優先して `/settings?complete_profile=1` へ遷移する
 
@@ -366,7 +383,7 @@ flowchart TB
 
 ### 7.7 管理者ユーザー管理
 
-- タブ「管理」自体を `role = admin` のみ表示。直接URLアクセス時も `RequireAdmin` で `/` にリダイレクト
+- タブ「管理」自体を `role = admin` のみ表示。直接URLアクセス時も `RequireAdmin` で `/dashboard` にリダイレクト
 - ユーザー一覧（検索・ページング）、ロール変更セレクト、有効/無効トグル、強制ログアウトボタン
 - 自分自身の権限降格・無効化は UI 上で禁止（誤操作防止。サーバー側でも 409 とする）
 - プロジェクト一覧タブ（`GET /admin/projects`）と削除操作
@@ -401,5 +418,6 @@ flowchart LR
 | コンポーネント | LoginForm / RegisterForm | 入力検証・エラー表示・送信内容 |
 | コンポーネント | KanbanBoard | D&D後の楽観的更新とロールバック（MSWで失敗レスポンスを返す） |
 | コンポーネント | Sidebar | `role` による「管理」タブの表示/非表示 |
-| 結合 | ルーティングガード | 未認証で `/` にアクセス → `/login`、member で `/admin/users` → `/` |
+| 結合 | ルートリダイレクト | 未認証・認証済みのいずれでも `/` にアクセス → `/login`（認証済みはさらに `/login` のガードで `/dashboard`） |
+| 結合 | ルーティングガード | 未認証で `/dashboard` にアクセス → `/login`、member で `/admin/users` → `/dashboard` |
 | 網羅できない範囲 | 実ブラウザでのD&Dのピクセル単位挙動、Google認可画面 | `@dnd-kit` のイベントはユーティリティでシミュレートし、実操作は手動確認とする |

@@ -151,7 +151,7 @@ sequenceDiagram
     OCP->>OCP: "location.hashからredirect_toを取得"
     OCP->>OCP: "同一オリジンの相対パスか再検証（isSafeRelativePath）"
     alt 検証NG（外部オリジン・スキーム付き等）
-        OCP->>OCP: redirect_to = "/"（安全側にフォールバック）
+        OCP->>OCP: redirect_to = "/dashboard"（安全側にフォールバック）
     end
     OCP->>EP: getMe()
     EP->>API: GET /api/auth/me
@@ -223,6 +223,8 @@ flowchart TB
 
 zodによるフォーム入力は存在しない（本画面はフォームを持たない）。`redirect_to`の安全性検証は9.3の`isSafeRelativePath`（プレーンなTypeScript関数）で行い、zodスキーマ化はしない。
 
+`isSafeRelativePath`が`false`を返した場合のフォールバック先は`ROUTES.DASHBOARD`（`/dashboard`）とし、パスは直書きせず`src/routes.ts`の定数を参照する。`/`は`/login`へのリダイレクト専用パスであり画面を持たないため、フォールバック先には使わない（[05_frontend.md 2.1](../../basic_design/05_frontend.md#21-ルートパス--の扱い)）。
+
 ## 11. エラーハンドリング
 
 | APIエラーコード / HTTP | 画面表示 | 遷移 | 再試行導線 |
@@ -274,7 +276,7 @@ flowchart LR
 | 6 | コンポーネント | jwtモードで`profile_completed:false` | 同上だが`profile_completed:false` | `navigate('/settings?complete_profile=1')`が優先される | `OAuthCallbackPage prioritizes profile completion redirect` |
 | 7 | コンポーネント | jwt交換失敗 | `POST /auth/oauth/exchange` → 400 `OAUTH_HANDOFF_INVALID` | ③表示、`history.replaceState`でhashが除去される | `OAuthCallbackPage shows error and clears hash on exchange failure` |
 | 8 | コンポーネント | sessionモード正常系 | fragmentに`redirect_to`のみ、`GET /auth/me` → 200 | `navigate(redirect_to)`が呼ばれ、`POST /auth/oauth/exchange`は呼ばれない | `OAuthCallbackPage skips exchange call in session mode` |
-| 9 | コンポーネント | sessionモードで不正な`redirect_to` | `redirect_to="//evil.com"` | `navigate('/')`（フォールバック）が呼ばれる | `OAuthCallbackPage falls back to root for unsafe redirect_to in session mode` |
+| 9 | コンポーネント | sessionモードで不正な`redirect_to` | `redirect_to="//evil.com"` | `navigate('/dashboard')`（フォールバック）が呼ばれる | `OAuthCallbackPage falls back to dashboard for unsafe redirect_to in session mode` |
 | 10 | 結合 | `AuthProvider`が本パスで先行リダイレクトしない | 未認証状態でCookie/access_tokenがまだ無い瞬間に本画面へ遷移 | `/login`への強制リダイレクトが発生せず`OAuthCallbackPage`自身の処理が先に走る | `AuthProvider does not preempt redirect on /oauth/callback` |
 | 11 | 結合 | `/auth/me`が401 | `GET /auth/me` → 401 | ③表示 | `OAuthCallbackPage shows error when session confirmation fails` |
 | 網羅できない範囲 | - | 実際のGoogle認可画面遷移、ブラウザの`window.location.hash`書き換えタイミングの実機挙動 | - | jsdom環境では実ナビゲーションを検証できないため、`location.hash`をモックした単体・コンポーネントテストに留め、実操作は手動確認とする | - |
@@ -284,4 +286,4 @@ flowchart LR
 | 区分 | 内容 | 影響 |
 |------|------|------|
 | 要検討 | sessionモードでの`redirect_to`のfragment受け渡し形式（キー名・URLエンコード方式）が基本設計（[05_frontend.md §2](../../basic_design/05_frontend.md#2-画面一覧とルーティング) No.11、[03_auth.md §5.4](../../basic_design/03_auth.md#54-jwt-モードでのトークン受け渡し)）に厳密なフォーマット定義がなく、本書では`#redirect_to=...`形式を前提とした。バックエンド（`GET /auth/oauth/google/callback`）側の実際のfragment組み立て仕様との整合を要確認 | fragment解析処理の実装がバックエンド仕様とずれるリスク |
-| 不明 | `profile_completed=false`による`/settings?complete_profile=1`への優先遷移は、jwt（レスポンスの`redirect_to`を破棄）・session（fragmentの`redirect_to`を破棄）のいずれの経路でも同様に適用されるが、元の`redirect_to`（例：招待リンク経由の特定プロジェクトURL）を設定完了後に復元する導線が基本設計に明記されていない。本設計では復元せず`/settings`完了後は`/`へ遷移する前提とした | プロフィール未補完のOAuth新規ユーザーが招待リンク経由で登録した場合、元の遷移先を失う可能性 |
+| 不明 | `profile_completed=false`による`/settings?complete_profile=1`への優先遷移は、jwt（レスポンスの`redirect_to`を破棄）・session（fragmentの`redirect_to`を破棄）のいずれの経路でも同様に適用されるが、元の`redirect_to`（例：招待リンク経由の特定プロジェクトURL）を設定完了後に復元する導線が基本設計に明記されていない。本設計では復元せず`/settings`完了後は`/dashboard`へ遷移する前提とした | プロフィール未補完のOAuth新規ユーザーが招待リンク経由で登録した場合、元の遷移先を失う可能性 |

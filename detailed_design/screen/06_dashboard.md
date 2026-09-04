@@ -1,4 +1,4 @@
-# ダッシュボード詳細設計（`/`）
+# ダッシュボード詳細設計（`/dashboard`）
 
 ## 0. 関連ドキュメント
 
@@ -14,7 +14,7 @@
 
 | 項目 | 内容 |
 |------|------|
-| 画面名 / パス | ダッシュボード `/` |
+| 画面名 / パス | ダッシュボード `/dashboard`（`/` は `/login` へのリダイレクト専用パス。[05_frontend.md 2.1](../../basic_design/05_frontend.md#21-ルートパス--の扱い)） |
 | レイアウト | AppLayout（左サイドバー + ヘッダー。詳細は本書§2、共通仕様は [05_frontend.md §3](../../basic_design/05_frontend.md#3-共通レイアウト)） |
 | ガード | 認証必須（`RequireAuth`）。未認証は `/login` へリダイレクト |
 | 対応要件 | 要件書§2-3 |
@@ -118,7 +118,7 @@ sequenceDiagram
     participant AA as AuthAdapter
     participant API as FastAPI
 
-    U->>DP: `/` にアクセス（AppLayoutマウント済み）
+    U->>DP: `/dashboard` にアクセス（AppLayoutマウント済み）
     DP->>Q: useQuery(['projects', {page:1}])
     Q->>EP: getProjects({page:1, per_page:20})
     EP->>AA: attach(config)

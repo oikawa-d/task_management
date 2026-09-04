@@ -19,7 +19,7 @@
 |------|------|
 | 画面名 / パス | 管理者ユーザー管理画面 / `/admin/users` |
 | レイアウト | `AppLayout`（サイドバーの「管理」から遷移） |
-| ガード | `admin`のみ。`RequireAdmin`で`role !== 'admin'`の場合は`/`へリダイレクトする。サイドバーの「管理」リンク自体も`role !== 'admin'`では描画しない（[05_frontend.md §3](../../basic_design/05_frontend.md#3-共通レイアウト)） |
+| ガード | `admin`のみ。`RequireAdmin`で`role !== 'admin'`の場合は`/dashboard`へリダイレクトする。サイドバーの「管理」リンク自体も`role !== 'admin'`では描画しない（[05_frontend.md §3](../../basic_design/05_frontend.md#3-共通レイアウト)） |
 | 対応要件 | 要件書§2-7 |
 | 主なユースケース | 全ユーザーの検索・閲覧、ロール変更、有効/無効切替、強制ログアウト、全プロジェクトの閲覧・削除 |
 | 実装ファイル | `frontend/src/features/admin/pages/AdminUsersPage.tsx`、`frontend/src/features/admin/components/UserTable.tsx`、`frontend/src/features/admin/components/ProjectTable.tsx`、`frontend/src/features/admin/hooks/useAdminUsers.ts`、`frontend/src/features/admin/hooks/useAdminProjects.ts` |
@@ -304,7 +304,7 @@ flowchart TB
 
 | APIエラーコード / HTTP | 画面表示 | 遷移 | 再試行導線 |
 |--------------------------|----------|------|------------|
-| 403 `FORBIDDEN`（`role!=admin`でのAPI直叩き等） | `RequireAdmin`により本画面自体に到達しないため通常発生しない。念のためのフォールバックとしてトースト＋`/`へリダイレクト | `/` | - |
+| 403 `FORBIDDEN`（`role!=admin`でのAPI直叩き等） | `RequireAdmin`により本画面自体に到達しないため通常発生しない。念のためのフォールバックとしてトースト＋`/dashboard`へリダイレクト | `/dashboard` | - |
 | 409 `SELF_MODIFICATION_NOT_ALLOWED` | 確認ダイアログ内にエラー表示、ダイアログは閉じない | なし | ダイアログをキャンセルして操作をやり直す |
 | 409 `LAST_ADMIN_REQUIRED` | 確認ダイアログ内（ロール変更時）／一覧上トースト（無効化時、⑧の表示を元に戻す） | なし | 別の管理者を先に昇格させてから再操作 |
 | 404 `NOT_FOUND`（ユーザー／プロジェクト） | トースト「対象が見つかりません」＋一覧再取得 | なし | 一覧最新化後に再操作 |
@@ -354,7 +354,7 @@ flowchart LR
 | 9 | コンポーネント | 検索語入力のデバウンス | ③に連続入力 | APIが300ms後に1回だけ呼ばれる | `UserFilterBar debounces search input` |
 | 10 | コンポーネント | プロジェクト削除確認とキャンセル | ⑫クリック→キャンセル | `DELETE`が呼ばれない | `ProjectTable cancels delete confirmation without calling API` |
 | 11 | コンポーネント | プロジェクト削除成功 | `DELETE /admin/projects/:id` → 204 | 一覧から対象行が消える | `ProjectTable removes row after successful delete` |
-| 12 | 結合 | `role=member`ユーザーが`/admin/users`へ直接アクセス | `authStore.user.role='member'` | `/`へリダイレクトされる | `RequireAdmin redirects non-admin user away from /admin/users` |
+| 12 | 結合 | `role=member`ユーザーが`/admin/users`へ直接アクセス | `authStore.user.role='member'` | `/dashboard`へリダイレクトされる | `RequireAdmin redirects non-admin user away from /admin/users` |
 | 13 | 結合 | サイドバーの「管理」タブがmemberには表示されない | `role='member'` | Sidebarに「管理」リンクが描画されない | `Sidebar hides admin link for member role`（[05_frontend.md §3](../../basic_design/05_frontend.md#3-共通レイアウト)参照。実装は`Sidebar`側だが本画面へのアクセス経路として検証） |
 | 14 | 結合 | ページネーション操作 | ユーザー25件（1ページ20件） | 2ページ目クリックで残り5件が表示される | `UserTable paginates through GET /admin/users` |
 

@@ -184,7 +184,7 @@
   "access_token": "...",
   "token_type": "bearer",
   "expires_in": 900,
-  "redirect_to": "/"
+  "redirect_to": "/dashboard"
 }
 ```
 

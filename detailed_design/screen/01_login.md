@@ -20,7 +20,7 @@
 |------|------|
 | 画面名 / パス | ログイン画面 / `/login` |
 | レイアウト | `AuthLayout` |
-| ガード | 未認証のみ（`authStore.status === 'authenticated'` の場合は `/` へリダイレクト） |
+| ガード | 未認証のみ（`authStore.status === 'authenticated'` の場合は `/dashboard` へリダイレクト）。`/` からのリダイレクト先でもあるため、認証済みユーザーが `/` にアクセスした場合はこのガードが `/dashboard` へ送る |
 | 対応要件 | 要件書§2-1 |
 | 主なユースケース | メール/ユーザー名 + パスワードでのログイン、Googleログイン開始、メール未認証時の再送、登録直後の案内表示 |
 | 実装ファイル | `src/features/auth/pages/LoginPage.tsx`、`src/features/auth/components/LoginForm.tsx`、`src/features/auth/components/GoogleLoginButton.tsx` |
@@ -75,7 +75,7 @@
 | No | 呼び出しタイミング | メソッド／パス | 送信内容 | 成功時処理 | 失敗時処理 | queryKey / mutationKey |
 |----|--------------------|-----------------|----------|------------|------------|--------------------------|
 | 1 | マウント時（`AuthProvider` 経由。本画面独自では呼ばない） | GET `/auth/config` | - | `authConfig` を store に保持、⑦の表示可否決定 | トースト表示のみ（ログイン自体はブロックしない） | `['auth', 'config']` |
-| 2 | ⑥クリック／Enter | POST `/auth/login` | `{ identifier, password }` | session: `authStore` を `authenticated` に更新し `/` へ `navigate`。jwt: `access_token` を保存後に同様 | §11参照 | `mutationKey: ['auth', 'login']` |
+| 2 | ⑥クリック／Enter | POST `/auth/login` | `{ identifier, password }` | session: `authStore` を `authenticated` に更新し `/dashboard` へ `navigate`。jwt: `access_token` を保存後に同様 | §11参照 | `mutationKey: ['auth', 'login']` |
 | 3 | ①''の再送ボタンクリック | POST `/auth/verify-email/resend` | `{ email: lastAttemptedIdentifierIfEmail }` | 結果に関わらず「送信しました」表示（§7） | 同上（202固定のためエラー分岐なし） | `mutationKey: ['auth', 'resendVerification']` |
 
 ## 5. 状態管理
@@ -110,7 +110,7 @@ stateDiagram-v2
     ErrorTooMany --> Idle: 待機後に再入力
     ErrorValidation --> Idle: 再入力
     ErrorGeneric --> Idle: 再入力
-    Success --> [*]: "/" へ遷移
+    Success --> [*]: "/dashboard" へ遷移
 ```
 
 ## 7. 処理シーケンス
@@ -137,7 +137,7 @@ sequenceDiagram
     LP->>AD: onLoginSuccess(res)
     AD-->>LP: authStoreへ反映（jwtはaccessToken保持）
     LP->>LP: authStore.status = "authenticated"
-    LP-->>U: "/" へ navigate
+    LP-->>U: "/dashboard" へ navigate
 ```
 
 ### 7.2 メール未認証（403）と再送
@@ -211,7 +211,7 @@ flowchart TB
 | 引数 | なし |
 | 戻り値 | TanStack Query の `mutation` オブジェクト |
 | 処理内容 | 1. `endpoints/auth.ts#login` を呼ぶ 2. 成功時に `authAdapter.onLoginSuccess` → `authStore` 更新 3. 失敗時は `ApiError` をそのまま呼び出し元へ伝播 |
-| 副作用 | API呼び出し、`authStore` 更新、成功時に呼び出し元で `navigate("/")` |
+| 副作用 | API呼び出し、`authStore` 更新、成功時に呼び出し元で `navigate("/dashboard")` |
 
 ### 9.2 `hooks/useResendVerification.ts :: useResendVerification`
 
@@ -285,15 +285,17 @@ flowchart LR
 | No | 区分 | ケース | 前提（MSWのモック応答等） | 期待結果 | テスト名案 |
 |----|------|--------|----------------------------|----------|-------------|
 | 1 | 単体（zod） | identifier/password 未入力 | - | バリデーションエラーメッセージ表示、送信ブロック | `loginSchema rejects empty fields` |
-| 2 | コンポーネント | 正常ログイン（session） | `POST /auth/login` → 204 | `/` へ遷移、authStoreがauthenticated | `LoginForm success (session) navigates to dashboard` |
-| 3 | コンポーネント | 正常ログイン（jwt） | `POST /auth/login` → 200 `{access_token}` | authStoreにaccessToken保存、`/` へ遷移 | `LoginForm success (jwt) stores access token` |
+| 2 | コンポーネント | 正常ログイン（session） | `POST /auth/login` → 204 | `/dashboard` へ遷移、authStoreがauthenticated | `LoginForm success (session) navigates to dashboard` |
+| 3 | コンポーネント | 正常ログイン（jwt） | `POST /auth/login` → 200 `{access_token}` | authStoreにaccessToken保存、`/dashboard` へ遷移 | `LoginForm success (jwt) stores access token` |
 | 4 | コンポーネント | 401 INVALID_CREDENTIALS | `POST /auth/login` → 401 | 統一エラー文言表示 | `LoginForm shows unified error on invalid credentials` |
 | 5 | コンポーネント | 403 EMAIL_NOT_VERIFIED → 再送 | `POST /auth/login` → 403、`POST /verify-email/resend` → 202 | 再送ボタン表示 → クリックで「送信しました」表示 | `LoginForm resend verification flow` |
 | 6 | コンポーネント | 429 TOO_MANY_ATTEMPTS | `POST /auth/login` → 429 | 待機案内メッセージ表示 | `LoginForm shows rate limit message` |
 | 7 | コンポーネント | 登録直後の遷移 | `location.state.registeredEmail = "a@example.com"` | ①'メッセージ表示 | `LoginPage shows post-registration banner` |
 | 8 | コンポーネント | パスワード表示トグル | - | クリックで `type` が `text`⇔`password` 切替 | `PasswordField toggles visibility` |
 | 9 | コンポーネント | Googleログインボタン非表示 | `authConfig.google_login_enabled=false` | ⑦が描画されない | `LoginPage hides Google button when disabled` |
-| 10 | 結合 | 認証済みユーザーが `/login` へアクセス | `authStore.status="authenticated"` | `/` へリダイレクト | `guards redirect authenticated user away from /login` |
+| 10 | 結合 | 認証済みユーザーが `/login` へアクセス | `authStore.status="authenticated"` | `/dashboard` へリダイレクト | `guards redirect authenticated user away from /login` |
+| 11 | 結合 | 未認証で `/` へアクセス | - | `/login` へリダイレクトし、ログイン画面が描画される | `router redirects root to /login when unauthenticated` |
+| 12 | 結合 | 認証済みで `/` へアクセス | `authStore.status="authenticated"` | `/login` 経由で最終的に `/dashboard` へ到達する | `router redirects root to /dashboard when authenticated` |
 | 網羅できない範囲 | - | 実際のGoogle認可画面遷移、`window.location.href` によるフルページ遷移の検証 | - | jsdom環境では実ナビゲーションを検証できないため、遷移URLの組み立てのみ単体で検証し、実操作は手動確認とする | - |
 
 ## 15. 不明点・要検討事項

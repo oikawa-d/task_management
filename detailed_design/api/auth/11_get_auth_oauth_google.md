@@ -38,7 +38,7 @@
 
 | 名前 | 型 | 必須 | 制約 | 説明 |
 |------|----|----|------|------|
-| `redirect_to` | string | 任意 | 省略時は既定値 `/`（`OAUTH_DEFAULT_REDIRECT_TO`） | ログイン成功後にフロントへ戻すパス。サーバー側で正規化・検証する（§10参照） |
+| `redirect_to` | string | 任意 | 省略時は既定値 `/dashboard`（`OAUTH_DEFAULT_REDIRECT_TO`） | ログイン成功後にフロントへ戻すパス。サーバー側で正規化・検証する（§10参照） |
 
 ヘッダ：なし（認証ヘッダ不要）
 
@@ -88,7 +88,7 @@ Cookie値は `state` そのもの。callback側でクエリの `state` とCookie
 
 | HTTP | code | 発生条件 | メッセージ | 備考 |
 |------|------|----------|------------|------|
-| 302 | - | `redirect_to` が不正（絶対URL・`//`始まり・外部ドメイン等） | - | エラーにはせず、正規化して既定値 `/` を用いた上で処理を継続する（オープンリダイレクト対策。§10参照） |
+| 302 | - | `redirect_to` が不正（絶対URL・`//`始まり・外部ドメイン等） | - | エラーにはせず、正規化して既定値 `/dashboard` を用いた上で処理を継続する（オープンリダイレクト対策。§10参照） |
 | 503 | `SERVICE_UNAVAILABLE` | Redis接続不能で `save_oauth_state` が失敗 | 現在サービスをご利用いただけません | fail-close。`basic_design/02_redis.md` §6 に準拠 |
 | 500 | `INTERNAL_ERROR` | 上記以外の未捕捉例外 | - | ログにのみ詳細を出力 |
 
@@ -137,9 +137,9 @@ sequenceDiagram
 
 ```mermaid
 flowchart TB
-    A["GET /api/auth/oauth/google"] --> B["redirect_to クエリを取得<br/>未指定なら既定値'/'"]
+    A["GET /api/auth/oauth/google"] --> B["redirect_to クエリを取得<br/>未指定なら既定値'/dashboard'"]
     B --> C{"'/'で始まり<br/>'//'で始まらない<br/>相対パスか?"}
-    C -->|No| D["redirect_to = 既定値'/'に置換"]
+    C -->|No| D["redirect_to = 既定値'/dashboard'に置換"]
     C -->|Yes| E["正規化済みredirect_toとして採用"]
     D --> F["state/code_verifier/nonce生成"]
     E --> F
@@ -182,7 +182,7 @@ flowchart TB
 |------|------|
 | シグネチャ | `def normalize_redirect_to(raw: str | None) -> str` |
 | 引数 | `raw`: クライアントから渡された未検証の文字列 |
-| 戻り値 | 検証済み相対パス。不正な場合は `settings.oauth_default_redirect_to`（既定 `/`） |
+| 戻り値 | 検証済み相対パス。不正な場合は `settings.oauth_default_redirect_to`（既定 `/dashboard`） |
 | 送出例外 | なし（例外を送出せず既定値へフォールバックする） |
 | 処理内容 | 1. `raw` が `None` または空文字なら既定値を返す 2. `raw` が `/` で始まらない、または `//` で始まる場合は既定値を返す（プロトコル相対URL対策） 3. `urlparse` でスキーム・ホストが含まれないことを確認し、含まれる場合は既定値を返す 4. 上記をすべて満たす場合のみ `raw` をそのまま返す |
 | 副作用 | なし |
@@ -253,13 +253,13 @@ PostgreSQLへの書き込みは発生しない。Redisに `oauth_state:{state}` 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
 | 1 | 単体 | `normalize_redirect_to` に `/projects/1` を渡す | - | そのまま返る | `test_normalize_redirect_to_valid_relative_path` |
-| 2 | 単体 | `normalize_redirect_to` に `//evil.com` を渡す | - | 既定値 `/` が返る | `test_normalize_redirect_to_rejects_protocol_relative` |
-| 3 | 単体 | `normalize_redirect_to` に `https://evil.com/x` を渡す | - | 既定値 `/` が返る | `test_normalize_redirect_to_rejects_absolute_url` |
-| 4 | 単体 | `normalize_redirect_to` に `None` を渡す | - | 既定値 `/` が返る | `test_normalize_redirect_to_defaults_when_none` |
+| 2 | 単体 | `normalize_redirect_to` に `//evil.com` を渡す | - | 既定値 `/dashboard` が返る | `test_normalize_redirect_to_rejects_protocol_relative` |
+| 3 | 単体 | `normalize_redirect_to` に `https://evil.com/x` を渡す | - | 既定値 `/dashboard` が返る | `test_normalize_redirect_to_rejects_absolute_url` |
+| 4 | 単体 | `normalize_redirect_to` に `None` を渡す | - | 既定値 `/dashboard` が返る | `test_normalize_redirect_to_defaults_when_none` |
 | 5 | 単体 | `GoogleOAuthProvider.build_authorize_url` の出力にPKCEパラメータが含まれる | - | `code_challenge_method=S256` を含むURL | `test_build_authorize_url_includes_pkce` |
 | 6 | 結合 | `GET /api/auth/oauth/google` を呼ぶ | `fakeredis` | 302、`Location` にGoogleドメインを含む、`Set-Cookie: cerberus_oauth_state` あり | `test_oauth_google_start_redirects_with_state_cookie` |
 | 7 | 結合 | `redirect_to=/projects/1` 付きで呼ぶ | 実Redis | `oauth_state:{state}` の値に `redirect_to=/projects/1` が保存される | `test_oauth_google_start_stores_redirect_to` |
-| 8 | 結合 | `redirect_to=https://evil.com` 付きで呼ぶ | 実Redis | 保存される `redirect_to` は `/` に正規化されている | `test_oauth_google_start_normalizes_malicious_redirect_to` |
+| 8 | 結合 | `redirect_to=https://evil.com` 付きで呼ぶ | 実Redis | 保存される `redirect_to` は `/dashboard` に正規化されている | `test_oauth_google_start_normalizes_malicious_redirect_to` |
 | 9 | 結合 | Redis接続不能時に呼ぶ | Redis停止をモック | 503 `SERVICE_UNAVAILABLE` | `test_oauth_google_start_returns_503_on_redis_down` |
 | 10 | 結合 | `AUTH_MODE=session` / `jwt` の両方で呼ぶ | 各AUTH_MODE | 挙動に差異がないこと（同じ302形式） | `test_oauth_google_start_no_diff_between_auth_modes` |
 
