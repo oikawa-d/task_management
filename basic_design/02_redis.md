@@ -27,11 +27,13 @@
 | `oauth_state:{state}` | `{redirect_to, code_verifier, nonce, created_at}` | `OAUTH_STATE_TTL_SECONDS`（既定600） | OAuth2認可開始 | ブラウザ結合済みstate・PKCE・OIDC nonceの検証値 |
 | `oauth_handoff:{code}` | `{user_id, redirect_to, created_at}` | 60秒 | jwt OAuthコールバック | フロントへの一時コード。`GETDEL` でワンタイム消費 |
 | `pwreset:{token_hash}` | `{user_id, requested_at}` | `PASSWORD_RESET_TTL_SECONDS`（既定1800） | パスワードリセット要求 | リセットトークンの有効性判定 |
+| `pwreset_current:{user_id}` | 現在のtoken_hash | `PASSWORD_RESET_TTL_SECONDS`（既定1800） | 最新のパスワードリセットトークン以外を失効 |
 | `emailverify:{token_hash}` | `{user_id, requested_at}` | `EMAIL_VERIFY_TTL_SECONDS`（既定86400 = 24時間） | 会員登録・認証メール再送 | メール認証トークンの有効性判定 |
 | `emailverify_current:{user_id}` | 現在のtoken_hash | `EMAIL_VERIFY_TTL_SECONDS` | 会員登録・認証メール再送 | 再送時に旧メール認証トークンを失効させるための逆引き |
 | `emailverify_sent:{user_id}` | 直近の送信時刻（数値） | `EMAIL_VERIFY_RESEND_INTERVAL_SECONDS`（既定60） | 認証メール送信時に `SETEX` | 認証メール再送のレート制限（メール爆撃の防止） |
 | `lock:notify_due:{YYYY-MM-DD}:{slot}` | `{started_at, runner_id}` | `NOTIFY_DUE_LOCK_TTL_SECONDS`（既定82800 = 23時間） | 期限通知バッチの実行開始時に `SET NX` | 同一日の同一実行枠（10時または17時）の二重実行防止。`batch` コンテナの再起動・手動実行が重なっても通知を重複させない |
 | `login_fail:{key_hash}` | 連続失敗回数（数値） | `LOGIN_LOCK_WINDOW_SECONDS`（既定900） | ログイン失敗時に `INCR` | 正規化した識別子と確定済みクライアントIPの組み合わせ。メール/IDをRedisキーへ平文保存しない |
+| `rate_limit:{scope}:{key_hash}` | リクエスト回数（数値） | エンドポイント別の時間窓 | 登録・メール・OAuth・通知APIのRate Limit | scopeと確定済みクライアントIPまたはuser_idのハッシュ。平文を保存しない |
 
 **値に保存しない情報**：パスワード、パスワードハッシュ、アクセストークンそのもの、リフレッシュトークンの平文。
 
@@ -145,13 +147,14 @@ stateDiagram-v2
 | `consume_oauth_state` | `state: str` | `OAuthStateData \| None` | `GETDEL oauth_state:{state}`（ワンタイム消費） |
 | `save_oauth_handoff` | `code: str`, `user_id: UUID`, `redirect_to: str`, `ttl: int` | `None` | `SETEX oauth_handoff:{code}` |
 | `consume_oauth_handoff` | `code: str` | `OAuthHandoffData \| None` | `GETDEL oauth_handoff:{code}`（ワンタイム消費） |
-| `save_password_reset_token` | `token: str`, `user_id: UUID`, `ttl: int` | `None` | `SETEX pwreset:{sha256(token)}` |
-| `consume_password_reset_token` | `token: str` | `UUID \| None` | `GETDEL pwreset:{hash}` → user_id を返す |
+| `save_password_reset_token` | `token: str`, `user_id: UUID`, `ttl: int` | `None` | Luaで旧`pwreset_current:{uid}`と旧tokenを削除し、新tokenとcurrentを原子的に登録 |
+| `consume_password_reset_token` | `token: str` | `UUID \| None` | Luaでcurrent一致を確認し、`pwreset:{hash}`とcurrentを原子的に消費 |
 | `replace_email_verify_token` | `token: str`, `user_id: UUID`, `ttl: int` | `None` | Luaまたは同一トランザクション相当の処理で旧 `emailverify:{old_hash}` を削除し、新tokenと `emailverify_current:{uid}` を登録 |
 | `consume_email_verify_token` | `token: str` | `UUID \| None` | `GETDEL emailverify:{hash}` → user_id を返す（ワンタイム消費） |
 | `mark_email_verify_sent` | `user_id: UUID`, `interval: int` | `bool` | `SET emailverify_sent:{uid} NX EX interval`。`False` なら再送間隔内のため送信しない |
 | `incr_login_failure` | `identifier: str`, `client_ip: str`, `window: int` | `int`（現在の失敗回数） | lower/trimした識別子と確定済みIPからキーを作り、`INCR` → 初回のみ `EXPIRE` |
 | `reset_login_failure` | `identifier: str`, `client_ip: str` | `None` | 同じキーの `DEL` |
+| `check_rate_limit` | `scope: str`, `key: str`, `limit: int`, `window: int` | `int` | `rate_limit:{scope}:{hash}`を原子的に加算し、超過時は429判定用の残秒数を返す |
 | `ping` | なし | `bool` | ヘルスチェック（`/health` から使用） |
 
 ### 5.4 関数相関図

@@ -31,7 +31,7 @@
 | ユーザーID | `user_id` | UUID | YES | - | FK → `users.id`（`ON DELETE SET NULL`） | 存在しないID/メール入力時はNULL |
 | 入力識別子 | `login_identifier` | VARCHAR(50) | NO | - | - | 入力された username / email（原文。パスワードは記録しない） |
 | ログイン方式 | `login_method` | VARCHAR(20) | NO | - | - | `session` / `jwt` / `oauth_google`（CHECK） |
-| IPアドレス | `ip_address` | INET | YES | - | - | `X-Forwarded-For` を考慮して取得 |
+| IPアドレス | `ip_address` | INET | YES | - | - | `TRUSTED_PROXY_CIDRS`に含まれる直近ProxyからのXFFだけを解決して取得。未信頼時は接続元IP |
 | ユーザーエージェント | `user_agent` | TEXT | YES | - | - | |
 | 成否 | `success` | BOOLEAN | NO | - | - | |
 | 失敗理由 | `failure_reason` | VARCHAR(50) | YES | - | - | `invalid_credentials` / `user_inactive` / `oauth_denied` 等 |
@@ -166,7 +166,7 @@ flowchart LR
 | 発行SQL | `INSERT INTO login_history (user_id, login_identifier, login_method, ip_address, user_agent, success, failure_reason) VALUES (:user_id, :login_identifier, :login_method, :ip_address, :user_agent, :success, :failure_reason) RETURNING *` |
 | 使用インデックス | なし（INSERTのみ） |
 | 送出例外 | `IntegrityError`（`ck_login_history_login_method` / `ck_login_history_failure_reason_consistency` 違反時。通常はservice層で許容値のみ渡すため到達しない想定） |
-| 処理内容 | 1. ログイン試行（成功・失敗）確定直後に必ず1件INSERTする 2. `auth_service` はこの呼び出しの失敗（DB接続断等）でログイン処理全体を失敗させない設計とはしない（監査ログの記録漏れを防ぐため、INSERT失敗時はログイン処理自体も失敗として扱う。※要検討：基本設計に明記なし） |
+| 処理内容 | 1. ログイン試行（成功・失敗）確定直後に必ず1件INSERTする 2. INSERT失敗時はログイン処理を失敗として扱い、成功時に作成したRedis状態を補償削除して `503 SERVICE_UNAVAILABLE` を返す |
 
 ### 8.2 `repository/login_history_repository.py :: list_by_user_id`
 
@@ -227,7 +227,7 @@ flowchart LR
 | 外部キーCASCADE | `user_id` は `ON DELETE SET NULL`。他テーブルの多くが `RESTRICT`/`CASCADE`であるのに対し、監査ログの独立性（ユーザーが無効化・削除されても履歴自体は残す）を優先して `SET NULL` とする |
 | 楽観ロック | なし（UPDATEが発生しないテーブルのため不要） |
 | advisory lock | 使用しない（`purge_expired` は運用者が手動実行するバッチ処理であり、通常のリクエスト処理と競合する頻度が低いため見送り。同時実行を厳密に防ぐ必要が生じた場合は要検討） |
-| トランザクション境界 | `create` はログイン処理（Redisへのセッション/トークン登録）と同一の論理トランザクションの一部として扱うが、PostgreSQLのトランザクションはRedis操作を含められないため、`login_history` へのINSERT失敗時はログイン処理全体を失敗として扱う運用とする（§8.1参照、要検討） |
+| トランザクション境界 | PostgreSQLとRedisは同一トランザクションにできないため、`login_history` INSERTを認証成立の完了条件とする。INSERT失敗時はRedis状態を補償削除し、監査ログなしのログインを許可しない |
 | 保持期間管理 | `LOGIN_HISTORY_RETENTION_DAYS`（既定90）を超えた行は `sp_purge_login_history` で削除。削除はバッチ処理であり、通常のAPIリクエスト経路からは呼び出さない |
 
 ## 12. テスト設計
@@ -243,9 +243,10 @@ flowchart LR
 | 7 | 保持期間 | `retention_days` より古い行と新しい行を混在させて `purge_expired` を実行 | 古い行のみ削除され、新しい行は残る | `test_purge_expired_deletes_only_old_rows` |
 | 8 | リポジトリ | `list_all` がRBACの制御なしに全件返すこと（呼び出し元制御の確認） | service層で管理者以外からの呼び出しが拒否される（403） | `test_list_all_login_history_requires_admin_at_service_layer` |
 
-## 13. 不明点・要検討事項
+## 13. Issue #8で確定した事項
 
 - `ck_login_history_failure_reason_consistency`（成功時は `failure_reason` をNULLにする制約）は基本設計に明記のない補助的な制約として本書で追加した。基本設計の意図と齟齬がないか要確認。
-- `login_history` へのINSERT失敗時にログイン処理全体を失敗とみなすかどうかは基本設計に明記がない。監査ログの記録漏れを許容してでもログイン成功を優先する設計もあり得るため要検討。
+- `login_history` INSERT失敗時は `503 SERVICE_UNAVAILABLE` とし、成功ログインを返さない。構造化ログへ `event=login_history_write_failed`、`request_id`、対象user_idを記録する（パスワード・トークンは記録しない）。
+- `X-Forwarded-For` は `TRUSTED_PROXY_CIDRS` による信頼境界を通過した場合のみ監査IPへ反映する。
 - `purge_expired` の実行中に新規ログイン試行のINSERTと競合した場合の挙動（ロック待ち等）は、PostgreSQLの標準的なMVCCに委ねる前提とし、advisory lockは使用しない方針としたが、運用上問題ないか要検討。
 - `failure_reason` の許容値一覧（`invalid_credentials` / `user_inactive` / `oauth_denied` 等）はCHECK制約化せず基本設計の「等」表記のまま自由記述としたが、値のガバナンスをDB側でも制約すべきか要検討。

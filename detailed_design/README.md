@@ -178,19 +178,19 @@ flowchart LR
 
 各詳細設計書の「不明点・要検討事項」節から、**基本設計側の修正・追記が必要**なものを抜粋する。詳細は各リンク先を参照。
 
-「未定義／仕様差／運用制約」は実装着手前に方針決定が必要なもの。
+Issue #8 の9項目は [security_business_rules.md](../requirements/security_business_rules.md) に正規方針を集約し、各詳細設計へ反映済みである。以下の表では未決定事項として扱わない。
 
 | 区分 | 内容 | 該当 |
 |------|------|------|
-| 未定義 | ログイン以外のレート制限（register / verify-email/resend / password/forgot / コメント投稿）が未定義。IP単位の制限を含め要検討 | [api/auth/01](./api/auth/01_post_auth_register.md), [08](./api/auth/08_post_auth_verify_email_resend.md) |
-| 未定義 | `pwreset` に `emailverify_current` 相当の逆引きキーがなく、短時間の複数要求で複数トークンが同時に有効になり得る | [auth/06_token_mail.md](./auth/06_token_mail.md) |
-| 未定義 | DB更新成功後にRedis失効が失敗した場合の補償処理（管理者による無効化・パスワード変更時） | [api/admin/03](./api/admin/03_patch_admin_user_status.md), [api/users/03](./api/users/03_put_users_me_password.md) |
-| 未定義 | `display_name` のフォールバック規則（OAuth新規ユーザーで姓名未設定の場合。詳細設計では `username` 代替とした） | [api/projects/01](./api/projects/01_get_projects.md) |
-| 未定義 | `X-Forwarded-For` の信頼範囲（`login_history` のIP記録とレート制限のキーに影響） | [auth/07](./auth/07_password_security.md), [infra/07](./infra/07_operation.md) |
-| 未定義 | `login_history` へのINSERT失敗時にログイン処理自体を失敗とするか | [database/03](./database/03_table_login_history.md) |
-| 未定義 | `INITIAL_ADMIN_PASSWORD` 等が未設定の場合の起動挙動（詳細設計では起動失敗を既定とした） | [database/09](./database/09_migration.md) |
-| 仕様差 | `task_comments` に楽観ロック用 `version` 列がなく、コメントの同時編集は後勝ちになる（`tasks` との仕様差） | [api/tasks/08](./api/tasks/08_patch_comment.md) |
-| 運用制約 | jwtモードのaccess tokenは即時失効できず、強制ログアウト後も最大 `ACCESS_TOKEN_TTL_SECONDS`（15分）有効なまま残る。無効化（status変更）はDBの `is_active` 再確認により即時遮断される | [api/admin/04](./api/admin/04_post_admin_user_force_logout.md), [auth/02](./auth/02_jwt_auth.md) |
+| 確定 | ログイン以外のレート制限、超過時の `429 TOO_MANY_ATTEMPTS` とRedis障害時の `503 SERVICE_UNAVAILABLE` | [security_business_rules.md](../requirements/security_business_rules.md), [api/auth/09](./api/auth/09_post_auth_password_forgot.md) |
+| 確定 | パスワード再設定は `pwreset_current:{user_id}` による最新トークンのみ有効 | [security_business_rules.md](../requirements/security_business_rules.md), [auth/06_token_mail.md](./auth/06_token_mail.md) |
+| 確定 | Redis失効をDB更新に先行し、失敗時はDBを更新せず503。再実行で復旧 | [security_business_rules.md](../requirements/security_business_rules.md), [infra/07](./infra/07_operation.md) |
+| 確定 | `TRUSTED_PROXY_CIDRS` のProxy境界内だけXFFを信頼し、解決IPを監査・レート制限で共用 | [security_business_rules.md](../requirements/security_business_rules.md), [auth/07](./auth/07_password_security.md) |
+| 確定 | `login_history` INSERT失敗時はログインを拒否し、Redis状態を補償して503 | [security_business_rules.md](../requirements/security_business_rules.md), [database/03](./database/03_table_login_history.md) |
+| 確定 | 初期管理者3環境変数は必須。未設定・空値ならHTTP提供前に起動失敗 | [security_business_rules.md](../requirements/security_business_rules.md), [database/09](./database/09_migration.md) |
+| 確定 | OAuthの姓名が揃わない場合は `username` を `display_name` に使用 | [security_business_rules.md](../requirements/security_business_rules.md), [api/projects/01](./api/projects/01_get_projects.md) |
+| 確定 | コメント更新は楽観ロックを採用せずLast Write Wins。両方200で後コミットを最終値とする | [security_business_rules.md](../requirements/security_business_rules.md), [api/tasks/08](./api/tasks/08_patch_comment.md) |
+| 確定 | 強制ログアウト後のJWT access tokenは最大 `ACCESS_TOKEN_TTL_SECONDS`（既定900秒）残存。即時遮断はstatus API | [security_business_rules.md](../requirements/security_business_rules.md), [api/admin/04](./api/admin/04_post_admin_user_force_logout.md) |
 
 ## 9. 記述上の取り決め
 

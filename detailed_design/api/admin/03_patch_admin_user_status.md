@@ -24,7 +24,7 @@
 | AUTH_MODE差異 | DB更新自体はモード非依存だが、無効化直後の効果に差がある（3章参照） |
 | 冪等性 | あり（同じ `is_active` 値を再指定しても結果は同じ状態になる。ただしRedis失効処理は無効化のたびに実行される） |
 | レート制限 | 対象外 |
-| トランザクション境界 | PostgreSQL：`UPDATE users` の単一トランザクション。Redis：`delete_all_sessions` / `revoke_all_refresh_tokens` は同一サービス関数内でDB更新の直後に実行し、処理全体を1つの業務トランザクションとして扱う（Redis操作はPostgreSQLの2相コミットには含まれない。10章参照） |
+| トランザクション境界 | Redis：`delete_all_sessions` / `revoke_all_refresh_tokens` を先に実行。成功後にPostgreSQLの`UPDATE users`をcommitする。Redis失敗時はDBを更新せず503とし、部分失効は同じ処理を再実行する |
 
 ## 2. 入出力仕様
 
@@ -287,7 +287,7 @@ stateDiagram-v2
 | ユーザー列挙対策 | admin専用APIのため対象外 |
 | タイミング攻撃対策 | 該当なし |
 | レート制限 | なし |
-| fail-close方針 | PostgreSQL/Redis接続不能時は `503 SERVICE_UNAVAILABLE`。DB更新成功後にRedis失効が失敗した場合はエラーを返しつつログに残し、運用者が手動で `user_sessions:{uid}` / `user_refresh:{uid}` の状態を確認できるようにする（要検討。13章参照） |
+| fail-close方針 | PostgreSQL/Redis接続不能時は `503 SERVICE_UNAVAILABLE`。Redis失効を先に行うため、Redis失敗時にDBの無効化は実行されない。部分失効はERROR監査後に再実行する |
 | sessionモードへの効果 | `session:{sid}` の即時DELにより、無効化直後のリクエストから `401 SESSION_EXPIRED` となる |
 | jwtモードへの効果 | アクセストークンはRedisを参照しない署名検証のみのため、`user_refresh` 配下のリフレッシュトークンを失効させても既発行のアクセストークンは失効しない。ただし `deps.get_current_user` は認証成立後に必ず `users` テーブルの `is_active` を再確認するため（[03_auth.md §9.2](../../../basic_design/03_auth.md#92-依存性関数coredepspy)）、無効化直後のリクエストからは `403 USER_INACTIVE` で拒否される。すなわち「アクセストークンの署名は有効だがDB確認により403で弾かれる」という形で実質的に即時遮断される |
 | 最後のadmin保護 | ロール変更API（[02](./02_patch_admin_user_role.md)）と同一の `pg_advisory_xact_lock` キーを用いた直列化で、無効化とロール変更が同時に発生しても有効adminが0人になることを防ぐ |
@@ -311,9 +311,9 @@ stateDiagram-v2
 
 No.7〜9は本APIの中核（session/jwt双方での失効挙動の違い）であり、`AUTH_MODE=session` と `AUTH_MODE=jwt` をそれぞれ専用のテストケースとして実施する（両方を1つのパラメータ化テストにまとめず、モードごとの挙動差そのものを検証対象とするため）。
 
-## 13. 不明点・要検討事項
+## 13. Issue #8で確定した事項
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 要検討 | DB更新（`is_active=false`のコミット）に成功した後、Redis失効（`delete_all_sessions`/`revoke_all_refresh_tokens`）が接続断で失敗した場合の扱いは基本設計に明記がない。本書ではAPIとして`503`を返しつつログに記録する方針としたが、DB上は無効化済みのため後続リクエストは`deps.get_current_user`のis_active確認で403になり実害は限定的である旨を要確認・明文化が望ましい |
+| 採用 | Redis失効をDB更新より先に実行する。Redis失敗時はDB更新なしの503、部分失効は同じuser_idで再実行できる | staleな認証状態を残さない |
 | 要検討 | ロール変更API（[02](./02_patch_admin_user_role.md)）と同一の `pg_advisory_xact_lock` キーを共有する設計としたが、ロック粒度（役割変更と無効化を同一キーで直列化するか、別キーにするか）は基本設計に記載がなく本書での提案 |

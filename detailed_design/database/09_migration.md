@@ -203,7 +203,7 @@ def downgrade() -> None:
 
 `_hash_password` は `core/security.py` 相当の argon2 ラッパーをリビジョン内で直接importして使う想定。ハードコードした固定値ではなく、実行時の環境変数から都度生成する。
 
-**要検討**：Alembicリビジョン内で環境変数未設定（`INITIAL_ADMIN_PASSWORD` 等が空）の場合の挙動（起動失敗させるか、スキップしてログ警告するか）は基本設計に明記がなく要検討。本設計では `os.environ[...]`（`KeyError` で起動失敗）を既定とし、CI環境ではダミー値を必ず注入する前提とする。
+`INITIAL_ADMIN_EMAIL` / `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD` のいずれかが未設定または空文字の場合は、`os.environ[...]` と起動時バリデーションで失敗させる。seedをスキップして起動することはなく、CI環境では専用のダミーSecretを必ず注入する。
 
 ## 4. 適用手順
 

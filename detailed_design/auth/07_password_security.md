@@ -27,7 +27,7 @@
 | `verify_password` | 関数（`core/security.py`） | 平文パスワードとハッシュを照合 | 定数時間比較（argon2実装が内包） |
 | `needs_rehash` | 関数（`core/security.py`） | コストパラメータ変更時の再ハッシュ要否判定 | `passlib`の`CryptContext.needs_update`相当 |
 | `_dummy_hash` | モジュール内定数（`core/security.py`） | ユーザー不存在時のダミー検証用ハッシュ | タイミング攻撃対策（§10参照） |
-| `build_login_fail_key` | 関数（`service/auth_service.py`または`core/security.py`） | 識別子とIPからRedisキーのハッシュ値を生成 | 平文の識別子・IPをキーに含めない |
+| `build_login_fail_key` | 関数（`service/auth_service.py`または`core/security.py`） | 識別子と`TRUSTED_PROXY_CIDRS`で確定したIPからRedisキーのハッシュ値を生成 | 平文の識別子・IPをキーに含めない |
 | `incr_login_failure` / `reset_login_failure` | `redis_store`関数 | 失敗回数のINCR/DEL | 詳細は[./08_redis_store.md](./08_redis_store.md) §5.3 |
 
 ## 3. 設定項目（環境変数）

@@ -54,7 +54,7 @@
 ```
 
 - ⑦ロールセレクトと⑧有効/無効トグルは、対象行が現在ログイン中の管理者自身（`user.id === authStore.user.id`）の場合は非活性化しツールチップ「自分自身は変更できません」を表示する（自己変更禁止のUI抑止。§3参照）
-- ⑨強制ログアウトボタンは自分自身に対しても活性のまま（自己対象の禁止規定がAPI側にないため。[04_post_admin_user_force_logout.md](../api/admin/04_post_admin_user_force_logout.md) §13）
+- ⑨強制ログアウトボタンは自分自身に対しても活性のまま（自己対象の禁止規定がAPI側にないため。[04_post_admin_user_force_logout.md](../api/admin/04_post_admin_user_force_logout.md) §13）。session/refreshは即時失効するが、JWT access tokenは最大15分（`ACCESS_TOKEN_TTL_SECONDS`既定900秒）残る旨を確認ダイアログに表示する
 - レスポンシブ：幅768px未満ではテーブルを横スクロール可能な`overflow-x: auto`コンテナに収め、列の折り返しは行わない
 
 ## 3. UI要素仕様
@@ -81,7 +81,7 @@
 | 1 | ユーザータブ表示時／③④⑤変更／⑩ページ切替 | GET `/admin/users` | `?page&per_page&q&role&is_active` | `items`/`meta`を⑥へ描画 | 403は`RequireAdmin`で到達しない想定。5xxはトースト＋再試行ボタン | `queryKey: ['admin','users',{page,perPage,q,role,isActive}]` |
 | 2 | ⑦変更確定 | PATCH `/admin/users/{id}/role` | `{role}` | `invalidateQueries(['admin','users'])`、確認ダイアログを閉じる | `409 SELF_MODIFICATION_NOT_ALLOWED`／`409 LAST_ADMIN_REQUIRED`はダイアログ内にエラー表示し確定させない | `mutationKey: ['admin','changeRole', userId]` |
 | 3 | ⑧トグル操作確定 | PATCH `/admin/users/{id}/status` | `{is_active}` | `invalidateQueries(['admin','users'])` | ⑦と同様の409、404は一覧再取得 | `mutationKey: ['admin','changeStatus', userId]` |
-| 4 | ⑨確認ダイアログ確定 | POST `/admin/users/{id}/force-logout` | パスパラメータのみ | トースト「対象ユーザーを強制ログアウトしました」 | 404は一覧再取得＋トースト | `mutationKey: ['admin','forceLogout', userId]` |
+| 4 | ⑨確認ダイアログ確定 | POST `/admin/users/{id}/force-logout` | パスパラメータのみ | トースト「対象ユーザーを強制ログアウトしました」 | 404は一覧再取得＋トースト。503は再試行案内 | `mutationKey: ['admin','forceLogout', userId]` |
 | 5 | プロジェクトタブ表示時 | GET `/admin/projects` | クエリなし（要検討：§15、ページング要否） | `items`を⑪へ描画 | 5xxはトースト＋再試行ボタン | `queryKey: ['admin','projects']` |
 | 6 | ⑫確認ダイアログ確定 | DELETE `/admin/projects/{id}` | パスパラメータのみ | `invalidateQueries(['admin','projects'])`、確認ダイアログを閉じる | 404は一覧再取得、5xxはトースト | `mutationKey: ['admin','deleteProject', projectId]` |
 

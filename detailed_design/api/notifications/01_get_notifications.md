@@ -27,7 +27,7 @@
 | Origin検証 | 不要（Cookie発行・更新系ではないため） |
 | AUTH_MODE差異 | 差異なし（`deps.get_current_user` が方式差を吸収する） |
 | 冪等性 | あり（GET） |
-| レート制限 | 対象外 |
+| レート制限 | user_id + 解決済みIP単位で120回/60秒。超過時は429 `TOO_MANY_ATTEMPTS`（`Retry-After`付き）、Redis障害時は503 |
 | トランザクション境界 | 単一の読み取りトランザクション（更新なし） |
 
 ## 2. 入出力仕様
@@ -257,7 +257,7 @@ flowchart LR
 | ログ出力 | 監査ログ対象外（参照系）。アクセスログに `user_id`, `page`, `per_page`, `unread_only`, `X-Request-ID` を構造化出力 |
 | ユーザー列挙対策 | 該当なし（`user_id = current_user.id` 固定で他人のデータへは到達しない設計。パスパラメータで他人のIDを渡す余地がないAPIのため404隠蔽は不要） |
 | タイミング攻撃対策 | 該当なし |
-| レート制限 | なし |
+| レート制限 | user_id + 解決済みIP単位で120回/60秒。フロントのポーリング間隔に依存せずサーバー側で制限する |
 | fail-close方針 | PostgreSQL接続不能時は `503 SERVICE_UNAVAILABLE`。空配列を返して隠蔽しない |
 | N+1対策 | task は `selectinload` で1往復に抑える。`unread_only=true` 時は追加の `count_unread` クエリを発行しない（`count_by_user` の結果を再利用） |
 | 個人情報の取り扱い | `title`/`body` はタスク作成者・担当者にのみ関わる業務情報であり、本人以外には返さない（本APIの認可自体がその境界を保証する） |

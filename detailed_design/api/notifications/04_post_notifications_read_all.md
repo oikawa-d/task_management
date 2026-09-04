@@ -20,6 +20,7 @@
 | 認可 | `notification.user_id = current_user.id` の本人一致のみ |
 | CSRF検証 | 必要（session方式）。jwt方式は不要 |
 | 冪等性 | あり。未読0件でも200を返す |
+| レート制限 | user_id + 解決済みIP単位で60回/60秒。超過時は429 `TOO_MANY_ATTEMPTS`（`Retry-After`付き）、Redis障害時は503 |
 | トランザクション境界 | `UPDATE` 1文と件数取得を1トランザクションで行う |
 
 ## 2. 入出力仕様

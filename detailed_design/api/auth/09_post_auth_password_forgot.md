@@ -6,7 +6,7 @@
 |--------------|------|
 | [../../../basic_design/04_api.md](../../../basic_design/04_api.md) | §2.1 エンドポイント一覧、§4 エラー設計 |
 | [../../../basic_design/03_auth.md](../../../basic_design/03_auth.md) | §7 パスワードリセット、§7.1 シーケンス、§7.2 メール送信設計 |
-| [../../../basic_design/02_redis.md](../../../basic_design/02_redis.md) | §2 キー一覧（`pwreset:*`） |
+| [../../../basic_design/02_redis.md](../../../basic_design/02_redis.md) | §2 キー一覧（`pwreset:*` / `pwreset_current:*`） |
 | [../../auth/06_token_mail.md](../../auth/06_token_mail.md) | メール認証・パスワードリセットトークンとメール送信の詳細設計 |
 | [../../auth/08_redis_store.md](../../auth/08_redis_store.md) | `redis_store.py` 関数詳細（`save_password_reset_token`） |
 | [../../database/01_table_users.md](../../database/01_table_users.md) | `users` テーブル定義 |
@@ -25,8 +25,8 @@
 | Origin検証 | 不要（Cookieを発行・利用しないため対象外） |
 | AUTH_MODE差異 | 差異なし |
 | 冪等性 | レスポンスは常に `202 Accepted` で冪等（存在有無を問わない）。副作用（メール送信・トークン発行）はユーザーが存在する場合のみ発生し、その意味では冪等ではない |
-| レート制限 | 対象外。基本設計（`basic_design/03_auth.md` §7）にはメール認証再送のような専用レート制限キーの記載がなく、本設計でも新設しない（要検討） |
-| トランザクション境界 | PostgreSQLへの更新は行わない（参照のみ）。Redisへのトークン保存は単一 `SETEX` |
+| レート制限 | IP単位で5回/900秒。超過時は `429 TOO_MANY_ATTEMPTS`（`Retry-After`付き）、Redis障害時は `503 SERVICE_UNAVAILABLE` |
+| トランザクション境界 | PostgreSQLへの更新は行わない（参照のみ）。Redisへのトークン保存は旧token/current削除と新token/current登録をLuaで原子的に行う |
 
 ## 2. 入出力仕様（全体の出入力）
 
@@ -226,7 +226,7 @@ stateDiagram-v2
 | fail-close方針 | Redis/PostgreSQL接続不能時は `503 SERVICE_UNAVAILABLE` |
 | メール送信失敗時の扱い | `BackgroundTasks` 内で例外を捕捉しログ記録のみ。APIレスポンスへの影響なし |
 | Google OAuthのみのユーザー | `password_hash IS NULL` のユーザーであってもこのAPIはリセットメールを送信する。リセット実行後は通常のパスワード認証ユーザーとして扱われる（`basic_design/03_auth.md` §7.2 末尾の記述と整合） |
-| レート制限 | 未設定（§13で要検討として明記） |
+| レート制限 | IP単位で5回/900秒。超過時は429 `TOO_MANY_ATTEMPTS`（`Retry-After`付き）、Redis障害時は503 `SERVICE_UNAVAILABLE` |
 
 ## 12. テスト設計
 
@@ -246,6 +246,6 @@ stateDiagram-v2
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 要検討 | 同一ユーザーが短時間に複数回要求した場合、`pwreset:*` トークンが複数同時に有効となる（旧トークンを明示的に失効させる仕組みが基本設計 §7 に記載なし。メール認証の `emailverify_current` のような逆引きキーが存在しない） | 中（旧メールのリンクからも一定時間リセットが成立し続ける。セキュリティ上は各トークンが依然として本人のみ知り得る値のため実害は限定的だが、意図した挙動か要確認） |
-| 要検討 | メール爆撃対策としてのレート制限（`emailverify_sent` に相当するキー）が `basic_design/02_redis.md` に定義されていない | 中（外部からの連続要求によるSMTP送信コスト増大・迷惑行為のリスク） |
+| 採用 | `pwreset_current:{uid}`を発行時に置き換え、最新トークン以外を失効させる | 旧メールリンクの再利用防止 |
+| 確定 | メール爆撃対策としてIP単位5回/900秒の`rate_limit:password_forgot:{key_hash}`を使用する。ユーザー不存在時も同じ制限・応答規則とする | 429 `TOO_MANY_ATTEMPTS`（`Retry-After`付き）、Redis障害時503 |
 | 要検討 | 無効化ユーザー（`is_active=false`）に対してもリセットメールを送信すべきかは基本設計に明記がなく、本設計では「送信する」と解釈した | 低（ログイン自体は`is_active`チェックで別途拒否されるため悪用余地は限定的） |

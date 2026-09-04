@@ -280,4 +280,4 @@ flowchart LR
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 不明 | `author.display_name` がプロフィール未設定（`last_name`/`first_name` がNULL）の投稿者の表示形式は基本設計に明記がない。本設計では `username` を代替表示とした | 表示仕様の最終確認が必要 |
+| 確定 | `author.display_name` は`last_name`と`first_name`がともに空でない場合に結合し、それ以外は`username`へフォールバックする | OAuth新規ユーザーを含む投稿者表示を統一する |

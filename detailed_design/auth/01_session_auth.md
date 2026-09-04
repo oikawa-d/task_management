@@ -175,7 +175,7 @@ stateDiagram-v2
 | 項目 | 内容 |
 |------|------|
 | シグネチャ / 定義 | `async def login(self, user: User, request: Request, response: Response) -> LoginResult` |
-| 引数 / 入力 | `user`: 認証済みユーザー。`request`: `client.host`からIP取得（プロキシ経由時は`X-Forwarded-For`を信頼するかは要検討、12章参照）。`response`: Cookie設定先 |
+| 引数 / 入力 | `user`: 認証済みユーザー。`request`: `TRUSTED_PROXY_CIDRS`の境界内だけXFFを右から検証して解決したIPを取得。`response`: Cookie設定先 |
 | 戻り値 / 出力 | `LoginResult(auth_mode="session", access_token=None, refresh_token=None, csrf_token=<発行値>, expires_in=SESSION_TTL_SECONDS)` |
 | 送出例外 / 失敗条件 | Redis書き込み失敗時は`RedisUnavailableError`（呼び出し元で503変換） |
 | 処理内容 | 1. `redis_store.create_session(user.id, ip, ttl=settings.session_ttl_seconds)`を呼びsession_id/csrf_tokenを得る<br/>2. `response.set_cookie`で`cerberus_sid`（HttpOnly, Secure=`COOKIE_SECURE`, SameSite=`COOKIE_SAMESITE`, Path=`/`, Max-Age未設定）を設定<br/>3. `response.set_cookie`で`cerberus_csrf`（HttpOnly=False、他属性は同様）を設定<br/>4. `LoginResult`を組み立てて返す |
@@ -290,6 +290,6 @@ flowchart LR
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 要検討 | `create_session`に渡す`ip`の取得元（`request.client.host`か`X-Forwarded-For`か）が基本設計に明記されていない。リバースプロキシ経由運用時はヘッダ信頼設定（`TRUSTED_PROXY_*`等）が別途必要になる可能性がある | 低〜中。監査目的の`login_history.ip_address`と同じ論点であり、本番相当運用時に要検討 |
+| 確定 | `create_session`に渡す`ip`は`TRUSTED_PROXY_CIDRS`で解決したクライアントIPとする。境界外のXFFは無視し、接続元IPを採用する | `login_history`・レート制限と同じIP解決規則を共有する |
 | 不明 | `SESSION_ABSOLUTE_TTL_SECONDS`超過を検出した`touch_session`が`False`を返した際、当該セッションキー自体をこのタイミングで明示的に`DEL`するか、TTL経過に委ねるかは基本設計に記載がない。本設計では「延長しない」のみを実装し、明示削除は行わない前提とした | 低。どちらでも最終的にTTLで失効するため機能上の差は小さい |
 | なし | 上記以外 | - |
