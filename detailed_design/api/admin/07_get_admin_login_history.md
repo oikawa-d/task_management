@@ -265,7 +265,7 @@ flowchart LR
 | ログ出力 | 監査ログ対象外（参照系）。ただし本APIは大量の個人情報（IPアドレス等）を一括で閲覧可能にする操作であるため、アクセスログには `admin_user_id`（閲覧者）, 検索条件一式, `page`, `per_page`, `X-Request-ID` を構造化出力し、「誰が誰の監査ログを閲覧したか」を追跡可能にする（**要検討**：この“閲覧の監査”自体を `login_history` とは別に記録するかは基本設計に規定がなく本書の提案） |
 | ユーザー列挙対策 | admin専用APIのため対象外 |
 | IPアドレス・UAという個人情報の取り扱い | `ip_address`/`user_agent` は [../../database/03_table_login_history.md](../../database/03_table_login_history.md) の定義どおりマスキングせず生値をレスポンスに含める（不正アクセス調査という監査目的上、一部でも欠落すると調査価値が失われるため）。アクセス制御は `deps.require_admin` によるロールベースの一点集中とし、admin以外には一切公開しない。フロントの画面（`screen/10_admin_users.md`、要検討）側でCSVエクスポート等の二次利用を提供する場合は、エクスポート先ファイルの取り扱い（アクセス権・保管期間）を別途検討する必要がある |
-| 保持期間との関係 | `LOGIN_HISTORY_RETENTION_DAYS`（既定365日）を超えた行は `sp_purge_login_history` により物理削除されるため、本APIの検索対象は常に未削除の保持期間内データのみとなる（[../../database/03_table_login_history.md §11](../../database/03_table_login_history.md)） |
+| 保持期間との関係 | `LOGIN_HISTORY_RETENTION_DAYS`（既定90日）を超えた行は `sp_purge_login_history` により物理削除されるため、本APIの検索対象は常に未削除の保持期間内データのみとなる（[../../database/03_table_login_history.md §11](../../database/03_table_login_history.md)） |
 | 件数増加時の性能 | `login_history` は「INSERTのみで単調増加し、他テーブルより増加速度が速い」（[../../database/03_table_login_history.md §1](../../database/03_table_login_history.md)）。`created_at` 降順の一覧・`user_id`指定検索は既存の `ix_login_history_created` / `ix_login_history_user_created` でカバーされるが、`login_method`/`success` 単独または組み合わせでの絞り込みには専用インデックスが無く、件数が増えるほど `WHERE` 句の絞り込み効率が低下し、`created_at` インデックスを使ったスキャン後にフィルタで行を捨てる形になる（**要検討**：検索頻度が高まる場合は `(login_method, created_at DESC)` や `(success, created_at DESC)` の部分インデックス追加をDB担当と検討する。本書はAPI詳細設計のスコープのためインデックス追加自体は提案に留め、DDL変更は行わない） |
 | タイミング攻撃対策 | 該当なし |
 | レート制限 | なし |

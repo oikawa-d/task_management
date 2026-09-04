@@ -405,6 +405,14 @@ flowchart TB
 | `verify_email` | `token: str` | `None` | `consume_email_verify_token` → `UPDATE users SET email_verified_at = now()`。無効なら `InvalidVerifyTokenError`（400） |
 | `resend_verification` | `email: str`, `background: BackgroundTasks` | `None` | ユーザー検索 → 未認証かつ再送間隔外なら再送。該当なしでも例外は出さない |
 
+### 6.5 ログイン以外のRate Limit
+
+副作用のある公開API、OAuthの各経路、通知APIにエンドポイント別のRate Limitを適用する。具体的な上限は [要件の確定表](../requirements/security_business_rules.md#21-ログイン以外のrate-limit) と `06_infra_cicd.md` §4.3を正とし、超過時は `429 TOO_MANY_ATTEMPTS` と `Retry-After` を返す。一般のGET APIは対象外とする。Rate LimitのRedis判定に失敗した場合は `503 SERVICE_UNAVAILABLE` とし、許可へフォールバックしない。
+
+### 6.6 クライアントIPの確定
+
+`X-Forwarded-For` は接続元が `TRUSTED_PROXY_CIDRS` に含まれる場合だけ右から左へ検証する。信頼できない接続元、不正な値、ヘッダなしの場合は接続元IPを採用し、確定IPをRate Limitと監査ログに共通利用する。
+
 ## 7. パスワードリセット
 
 メール送信を含めて実装する。
@@ -426,7 +434,7 @@ sequenceDiagram
     API->>PG: SELECT users WHERE lower(email)=?
     API->>API: token = token_urlsafe(32)
     alt ユーザーが存在
-        API->>RD: SETEX pwreset:{sha256(token)} TTL=1800
+        API->>RD: Luaで旧pwresetを削除し新token/currentを原子的にSETEX
         API->>SMTP: リセットURL付きメール送信（非同期タスク）
     end
     API-->>FE: 202 Accepted（存在有無を返さない）
@@ -438,8 +446,8 @@ sequenceDiagram
     alt トークン無効/期限切れ
         API-->>FE: 400 INVALID_RESET_TOKEN
     else 有効
-        API->>PG: UPDATE users SET password_hash
-        API->>RD: 全セッション / 全リフレッシュトークンを失効
+        API->>RD: 全セッション / 全リフレッシュトークンを先に失効
+        API->>PG: UPDATE users SET password_hash（失効成功後にcommit）
         API-->>FE: 204
         FE-->>U: ログイン画面へ
     end
@@ -463,7 +471,7 @@ sequenceDiagram
 
 メール内の認証・リセットURLは query string ではなく fragment（`#token=...`）を使う。fragmentはHTTPリクエストや通常のRefererに送られない。フロントは読み取り後に `history.replaceState` でURLから除去し、APIにはPOST本文でのみトークンを送る。
 
-Google OAuthのみで登録したユーザーは `password_hash` が NULL のため、設定画面の `PUT /users/me/password` で `current_password` を省略してパスワードを設定できる。既にパスワードがあるユーザーでは `current_password` を必須とする。どちらの場合も成功後は全セッション・リフレッシュトークンを失効させる。JWTの既発行access tokenは最大15分残り得るため、即時失効は本設計の対象外とする。
+パスワード変更・再設定では、Redisの全セッション・全リフレッシュトークン失効を先に完了してからDB更新をcommitする。Redis失敗時はDBを更新せず `503 SERVICE_UNAVAILABLE` とし、部分失効は同じ処理を再実行する。Google OAuthのみで登録したユーザーは `password_hash` が NULL のため、設定画面の `PUT /users/me/password` で `current_password` を省略してパスワードを設定できる。JWTのforce-logout後の既発行Access Tokenは最大 `ACCESS_TOKEN_TTL_SECONDS`（既定900秒）残り得るため、即時遮断が必要な場合は管理者の無効化APIを使用する。
 
 ## 8. CSRF対策
 

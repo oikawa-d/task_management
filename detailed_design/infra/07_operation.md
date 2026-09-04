@@ -3,7 +3,7 @@
 ## 0. 関連ドキュメント
 
 - 基本設計：[../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md)（§8 運用時の確認事項）、[../../basic_design/02_redis.md](../../basic_design/02_redis.md)（§6 障害・運用時の挙動）
-- 詳細設計：[01_docker_compose.md](./01_docker_compose.md)、[04_env_config.md](./04_env_config.md)、[06_cd_workflow.md](./06_cd_workflow.md)、[../batch/02_due_notification_job.md](../batch/02_due_notification_job.md)、[../api/system/01_get_health.md](../api/system/01_get_health.md)、[../database/08_db_functions.md](../database/08_db_functions.md)（`sp_purge_login_history` / `sp_purge_notifications`）、[../database/09_migration.md](../database/09_migration.md)、[../auth/00_strategy_base.md](../auth/00_strategy_base.md)（`AUTH_MODE`切替）
+- 詳細設計：[01_docker_compose.md](./01_docker_compose.md)、[04_env_config.md](./04_env_config.md)、[06_cd_workflow.md](./06_cd_workflow.md)、[../log/00_history.md](../log/00_history.md)、[../database/11_table_api_history.md](../database/11_table_api_history.md)、[../database/12_table_batch_history.md](../database/12_table_batch_history.md)、[../batch/02_due_notification_job.md](../batch/02_due_notification_job.md)、[../api/system/01_get_health.md](../api/system/01_get_health.md)、[../database/08_db_functions.md](../database/08_db_functions.md)（`sp_purge_*`）、[../database/09_migration.md](../database/09_migration.md)、[../auth/00_strategy_base.md](../auth/00_strategy_base.md)（`AUTH_MODE`切替）
 
 ## 1. 概要
 
@@ -12,7 +12,7 @@
 | 対象 | 稼働中システムの監視・ログ・バックアップ・障害対応・`AUTH_MODE`切替に関する運用手順 |
 | 責務 | 要件書§11でスコープ外とされた自動監視・アラートを除き、手動で実施可能な運用作業を定義する |
 | 適用条件 | ローカル/自宅サーバーでの本番相当稼働時（CD後） |
-| 依存先 | `GET /api/health`、`docker compose logs`、`pg_dump`、`sp_purge_login_history`、`sp_purge_notifications`、batch、Redis（永続化なし） |
+| 依存先 | `GET /api/health`、`docker compose logs`、`pg_dump`、`sp_purge_*`、`api_history`、`batch_history`、batch、Redis（永続化なし） |
 | 実装ファイル | 運用手順書のため実装ファイルなし（`docker compose`コマンド・`psql`コマンドの実行手順として記載） |
 
 ## 2. 構成要素
@@ -26,6 +26,8 @@
 | `sp_purge_login_history` | 保守用プロシージャ | `login_history`の保持期間超過行削除 | [../database/08_db_functions.md](../database/08_db_functions.md) §3.4 |
 | `batch` | 常駐スケジューラ | 毎日10時・17時の期限通知作成と通知保持期間パージ | [../batch/02_due_notification_job.md](../batch/02_due_notification_job.md) |
 | `sp_purge_notifications` | batch用プロシージャ | `notifications`の保持期間超過行削除 | [../database/08_db_functions.md](../database/08_db_functions.md) §3.5 |
+| `api_history` / `batch_history` | DB履歴 | APIリクエスト、batch実行の検索可能な履歴。各30日保持 | [../log/00_history.md](../log/00_history.md) |
+| `sp_purge_api_history` / `sp_purge_batch_history` | 履歴保守 | API・batch履歴の保持期間超過行削除 | [../database/08_db_functions.md](../database/08_db_functions.md) §3.6〜3.7 |
 | Redis再起動時の全ログアウト | 既知の挙動 | volumeなしのため再起動でセッション/リフレッシュトークンが消失 | [../../basic_design/02_redis.md](../../basic_design/02_redis.md) §6 |
 | `AUTH_MODE`切替手順 | 運用手順 | `session`⇔`jwt`の切り替え | [../auth/00_strategy_base.md](../auth/00_strategy_base.md) |
 
@@ -34,7 +36,8 @@
 | 変数名 | 型 | 既定値 | 用途 | 秘匿 |
 |--------|-----|--------|------|------|
 | `LOG_LEVEL` | str | `INFO` | 構造化ログの出力レベル | 否 |
-| `LOGIN_HISTORY_RETENTION_DAYS` | int | `365` | `sp_purge_login_history`実行時に運用者が渡す保持日数 | 否 |
+| `LOGIN_HISTORY_RETENTION_DAYS` | int | `90` | `sp_purge_login_history`へ渡すログイン履歴の保持日数 | 否 |
+| `API_HISTORY_RETENTION_DAYS` / `BATCH_HISTORY_RETENTION_DAYS` | int | `30` / `30` | 各履歴パージへ渡す保持日数 | 否 |
 | `AUTH_MODE` | Literal["session","jwt"] | `session` | 切替対象の設定値。変更後は`backend`再起動が必須（起動時1回評価、[../auth/00_strategy_base.md](../auth/00_strategy_base.md)） | 否 |
 | `POSTGRES_USER` / `POSTGRES_DB` | str | `cerberus` | `pg_dump`実行時の接続情報 | 否（`POSTGRES_PASSWORD`のみ**Secret**） |
 | `COMPOSE_PROJECT_NAME` | str | `cerberus` | `docker compose logs`等の対象プロジェクト特定 | 否 |
@@ -137,7 +140,7 @@ flowchart TB
 stateDiagram-v2
     [*] --> 蓄積中: ログイン成功/失敗のたびにINSERT
     蓄積中 --> 蓄積中: 継続的なログイン試行
-    蓄積中 --> 保持期間超過: created_at が now() - LOGIN_HISTORY_RETENTION_DAYS 日 より前
+    蓄積中 --> 保持期間超過: created_at が now() - LOGIN_HISTORY_RETENTION_DAYS 日（既定90）より前
     保持期間超過 --> 削除済み: 運用者がCALL sp_purge_login_historyを月次実行
     削除済み --> [*]
 
@@ -174,7 +177,7 @@ stateDiagram-v2
 | 入力 | なし（クエリ・認証不要、[../api/system/01_get_health.md](../api/system/01_get_health.md)） |
 | 出力 | `HealthResponse`（`status`/`auth_mode`/`components.database`/`components.redis`） |
 | 失敗条件 | HTTP 503、または接続自体がタイムアウト |
-| 処理内容 | 1. `curl -s http://localhost:${FRONTEND_PORT}/api/health` 2. `status`が`degraded`なら`components`を見てDB/Redisいずれの異常か切り分け 3. 応答自体がない場合は`docker compose ps`でbackend/frontendコンテナの起動状態を確認 |
+| 処理内容 | 1. `wget -qO- http://localhost:${FRONTEND_PORT}/api/health` 2. `status`が`degraded`なら`components`を見てDB/Redisいずれの異常か切り分け 3. 応答自体がない場合は`docker compose ps`でbackend/frontendコンテナの起動状態を確認 |
 | 副作用 | なし |
 
 ### 8.2 構造化ログとリクエストIDによる相関
@@ -226,7 +229,7 @@ stateDiagram-v2
 | 項目 | 内容 |
 |------|------|
 | 手順定義 | 月次等の頻度で運用者が`psql`から手動実行する（[../database/08_db_functions.md](../database/08_db_functions.md) §3.4） |
-| 入力 | `LOGIN_HISTORY_RETENTION_DAYS`（環境変数、既定365） |
+| 入力 | `LOGIN_HISTORY_RETENTION_DAYS`（環境変数、既定90） |
 | 出力 | なし（副作用として`login_history`の該当行削除） |
 | 失敗条件 | 大量データ時のロック長時間化（想定データ量では問題ないと判断、[../database/08_db_functions.md](../database/08_db_functions.md) §3.4） |
 | 処理内容 | 1. `docker compose exec postgres psql -U ${POSTGRES_USER} -d ${POSTGRES_DB} -c "CALL sp_purge_login_history(${LOGIN_HISTORY_RETENTION_DAYS});"` を運用者が実行 2. 実行前に`SELECT count(*) FROM login_history WHERE created_at < now() - (${LOGIN_HISTORY_RETENTION_DAYS} || ' days')::interval;`で削除見込み件数を確認することを推奨 3. 自動cron化は行わない（学習範囲外） |
@@ -264,6 +267,26 @@ stateDiagram-v2
 | 二重実行 | Redis `lock:notify_due:{APP_TIMEZONEの実行日}:{slot}`と通知の一意制約で同一実行枠の重複を防止する。ロック取得失敗時は正常終了として扱う |
 | 障害時 | Redis/DBエラーはERRORログとし、原因復旧後に`--run-once`で再実行する。通知作成済み分は`dedupe_key`で重複しない |
 | 注意 | 手動実行も本番DBへ書き込むため、実行者・対象環境・実行日を確認してから行う |
+
+### 8.10 API・batch履歴の確認・保持期間運用
+
+| 項目 | 内容 |
+|------|------|
+| API履歴の確認 | `api_history`を`request_id`、`path`、`status`、`created_at`で検索する。標準出力の`X-Request-ID`と照合して詳細ログを追跡する |
+| batch履歴の確認 | `batch_history`を`batch_name`、`run_id`、`status`、`started_at`で検索する。`inprogress`が残る場合はプロセスクラッシュ等と判断し標準出力を確認する |
+| 自動パージ | batchのジョブ終了処理から`sp_purge_api_history(API_HISTORY_RETENTION_DAYS)`、`sp_purge_batch_history(BATCH_HISTORY_RETENTION_DAYS)`を呼び出す |
+| 保持期間 | API・batch履歴は各30日、ログイン履歴は90日。値は環境変数で管理し、パージ失敗は標準出力と`batch_history`で確認する |
+| セキュリティ | body、error_detail、標準出力のいずれにもパスワード、token、Cookie、接続文字列を出力しない |
+
+### 8.11 認証失効・監査書き込み失敗の復旧
+
+| 障害 | 安全側の挙動 | 復旧手順 |
+|------|--------------|----------|
+| Redis失効失敗 | DB更新を実行せず `503 SERVICE_UNAVAILABLE`。部分削除は維持 | `docker compose exec redis redis-cli ping`、ERRORイベントのuser_id/request_idを確認し、Redis復旧後に同じ管理操作またはパスワード再設定を再実行 |
+| `login_history` INSERT失敗 | ログインを返さず、作成済みsession/refreshを補償削除 | PostgreSQL接続・権限・容量を復旧し、`event=login_history_write_failed`を確認してログインを再試行。補償削除失敗時は対象user_idの全失効を手動実行 |
+| 初期管理者設定不足 | backendはHTTP受付前に起動失敗 | `INITIAL_ADMIN_EMAIL`、`INITIAL_ADMIN_USERNAME`、`INITIAL_ADMIN_PASSWORD`をSecretから注入し、`docker compose up -d backend`後に`/api/health`を確認 |
+
+上記の再実行は削除操作が冪等であることを前提とする。復旧中に認証を許可するためのfail-open変更は禁止する。
 
 ## 9. 関数・要素相関図
 

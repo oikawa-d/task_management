@@ -11,6 +11,7 @@
 | [02_backend_layers.drawio](./02_backend_layers.drawio) | バックエンドのレイヤ / モジュール構成図（api → service → repository → models、認証Strategy、core、通知） | [00_overview.md §3](../00_overview.md#3-バックエンドのレイヤ構成) / [03_auth.md §2](../03_auth.md#2-strategyパターン設計) |
 | [03_er_diagram.drawio](./03_er_diagram.drawio) | ER図（PostgreSQL 8テーブル）＋ Redisキー一覧・主要インデックス・DB関数 | [01_database.md §2](../01_database.md#2-er図) / [02_redis.md §2](../02_redis.md#2-キー一覧) |
 | [04_screen_flow.drawio](./04_screen_flow.drawio) | 画面遷移図（11画面、認証ガード、モーダル、OAuth・メール認証/パスワードリセットのメール経路、ヘッダーの通知パネル） | [05_frontend.md §2](../05_frontend.md#2-画面一覧とルーティング) |
+| [05_batch_architecture.drawio](./05_batch_architecture.drawio) | batch構成図（スケジューラ、期限通知ジョブ、DB/Redisアクセス、将来のメール通知拡張） | [07_batch.md §2](../07_batch.md#2-構成と責務) |
 
 ## 編集方法
 

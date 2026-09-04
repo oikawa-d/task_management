@@ -30,6 +30,7 @@ erDiagram
     tasks ||--o{ task_comments : "コメント"
     users ||--o{ task_comments : "投稿者"
     users |o--o{ login_history : "ログイン試行"
+    users |o--o{ api_history : "API利用者"
     users ||--o{ notifications : "受信者"
     tasks |o--o{ notifications : "対象タスク"
 
@@ -103,6 +104,38 @@ erDiagram
         boolean success
         varchar_50 failure_reason "NULL可"
         timestamptz created_at
+    }
+    api_history {
+        uuid id PK
+        uuid request_id UK "相関ID"
+        varchar_10 method
+        varchar_255 path
+        varchar_20 status "success / error"
+        smallint status_code
+        varchar_80 error_code "NULL可"
+        text error_detail "NULL可"
+        jsonb body "マスキング済み・NULL可"
+        uuid user_id FK "NULL可"
+        inet ip_address "NULL可"
+        text user_agent "NULL可"
+        integer duration_ms
+        timestamptz created_at
+    }
+    batch_history {
+        uuid id PK
+        uuid run_id UK "実行相関ID"
+        varchar_100 batch_name
+        varchar_20 trigger_type
+        varchar_20 slot "NULL可"
+        varchar_20 status "inprogress / complete / error"
+        timestamptz started_at
+        timestamptz ended_at "NULL可"
+        varchar_80 error_code "NULL可"
+        text error_detail "NULL可"
+        integer target_count
+        integer success_count
+        integer skipped_count
+        timestamptz updated_at
     }
     notifications {
         uuid id PK
@@ -242,7 +275,7 @@ erDiagram
 
 ### 3.7 login_history
 
-Redis の失効状況とは独立して、設定した保持期間（既定365日）保管する監査ログ。保持期間を超えた行は `sp_purge_login_history` で削除する。
+Redis の失効状況とは独立して、設定した保持期間（既定90日）保管する監査ログ。保持期間を超えた行は `sp_purge_login_history` で削除する。
 
 | カラム | 型 | NULL | 備考 |
 |--------|----|------|------|
@@ -298,6 +331,44 @@ Redis の失効状況とは独立して、設定した保持期間（既定365�
 `INSERT` は必ず `ON CONFLICT (user_id, dedupe_key) DO NOTHING` とし、競合時は「作成0件」として正常終了させる。
 
 **保持期間**：`NOTIFICATION_RETENTION_DAYS`（既定90）を超えた行は `sp_purge_notifications`（§5.5）で削除する。
+
+### 3.9 api_history
+
+APIリクエストの障害調査用履歴。`/api`配下の全リクエストを1リクエスト1行で保存し、HTTPステータスとアプリケーションエラーを対応付ける。リクエスト処理のトランザクションとは分離してINSERTするため、エラー応答も履歴に残る。保持期間は `API_HISTORY_RETENTION_DAYS`（既定30日）とする。
+
+| カラム | 型 | NULL | 備考 |
+|--------|----|------|------|
+| `id` | UUID | NO | PK |
+| `request_id` | UUID | NO | UNIQUE。サーバー発行の`X-Request-ID`と同一 |
+| `method` / `path` | VARCHAR(10) / VARCHAR(255) | NO | HTTPメソッド、クエリを除くルートテンプレート |
+| `status` | VARCHAR(20) | NO | `success` / `error`。status_codeから決定 |
+| `status_code` | SMALLINT | NO | 100〜599。2xx/3xxはsuccess、4xx/5xxはerror |
+| `error_code` / `error_detail` | VARCHAR(80) / TEXT | YES | エラー時のみ。秘密情報・stack traceは保存しない |
+| `body` | JSONB | YES | JSON bodyのみ。パスワード・token等をマスキングし、サイズ超過時はNULL |
+| `user_id` | UUID | YES | FK → users.id `ON DELETE SET NULL`。未認証はNULL |
+| `ip_address` / `user_agent` | INET / TEXT | YES | クライアント情報。proxyの信頼範囲に従う |
+| `duration_ms` | INTEGER | NO | 0以上の処理時間（ミリ秒） |
+| `created_at` | TIMESTAMPTZ | NO | 受付時刻。UTC保存 |
+
+**インデックス**：`ix_api_history_created` (created_at DESC)、`ix_api_history_path_created` (path, created_at DESC)、`ix_api_history_status_created` (status, created_at DESC)。bodyにCookie、Authorization、資格情報は保存しない。
+
+### 3.10 batch_history
+
+batchジョブの実行履歴。ジョブ開始時に `inprogress` で作成し、同じ `run_id` の行を完了時に `complete`、失敗時に `error` へ更新する。保持期間は `BATCH_HISTORY_RETENTION_DAYS`（既定30日）とする。
+
+| カラム | 型 | NULL | 備考 |
+|--------|----|------|------|
+| `id` / `run_id` | UUID | NO | PK / UNIQUE。run_idは1実行1件 |
+| `batch_name` | VARCHAR(100) | NO | `due_notification`等 |
+| `trigger_type` | VARCHAR(20) | NO | `scheduled` / `manual` |
+| `slot` | VARCHAR(20) | YES | 期限通知の`10`/`17`等。対象外はNULL |
+| `status` | VARCHAR(20) | NO | `inprogress` / `complete` / `error` |
+| `started_at` / `ended_at` | TIMESTAMPTZ | NO / YES | 起動時刻、完了・失敗時の終了時刻 |
+| `error_code` / `error_detail` | VARCHAR(80) / TEXT | YES | `error`時の詳細。少なくとも一方を設定し、秘密情報は保存しない |
+| `target_count` / `success_count` / `skipped_count` | INTEGER | NO | ジョブ結果の件数。0以上 |
+| `updated_at` | TIMESTAMPTZ | NO | 状態・件数の更新時刻 |
+
+`inprogress`でプロセスが停止した行は、プロセスクラッシュ等の可能性を示す。自動的に`error`へ補正せず、標準出力と照合する。`updated_at`には `trg_set_updated_at` を適用する。
 
 ## 4. データ遷移図
 
@@ -375,7 +446,7 @@ flowchart LR
 | 種別 | トリガ関数 |
 | 入出力 | 引数なし / `RETURNS TRIGGER` |
 | 処理 | `NEW.updated_at := now()` を設定して `NEW` を返す |
-| 適用対象 | `users` / `projects` / `tasks` / `task_comments` の `BEFORE UPDATE` トリガ |
+| 適用対象 | `users` / `projects` / `tasks` / `task_comments` / `batch_history` の `BEFORE UPDATE` トリガ |
 
 ### 5.2 `db/functions/fn_is_project_member.sql`
 
@@ -403,7 +474,7 @@ flowchart LR
 | 引数 | `p_retention_days INTEGER` |
 | 戻り値 | なし（`PROCEDURE`） |
 | 処理 | `DELETE FROM login_history WHERE created_at < now() - (p_retention_days || ' days')::interval` |
-| 用途 | 監査ログの保持期間管理。保持日数は環境変数 `LOGIN_HISTORY_RETENTION_DAYS` から渡す |
+| 用途 | 監査ログの保持期間管理。保持日数は環境変数 `LOGIN_HISTORY_RETENTION_DAYS`（既定90日）から渡す |
 | 実行方法 | 運用者が月次で手動実行する。アプリ内cronは設けない（学習範囲外） |
 
 ### 5.5 `db/procedures/sp_purge_notifications.sql`
@@ -415,6 +486,24 @@ flowchart LR
 | 処理 | `DELETE FROM notifications WHERE created_at < now() - (p_retention_days \|\| ' days')::interval` |
 | 用途 | 通知の保持期間管理。保持日数は環境変数 `NOTIFICATION_RETENTION_DAYS` から渡す |
 | 実行方法 | `batch` コンテナの日次ジョブから期限通知ジョブの後に実行する（[06_infra_cicd.md §2](./06_infra_cicd.md#2-docker-compose-構成)） |
+
+### 5.6 `db/procedures/sp_purge_api_history.sql`
+
+| 項目 | 内容 |
+|------|------|
+| 引数 | `p_retention_days INTEGER` |
+| 処理 | `DELETE FROM api_history WHERE created_at < now() - (p_retention_days || ' days')::interval` |
+| 用途 | API履歴の保持期間管理。`API_HISTORY_RETENTION_DAYS`（既定30日）から渡す |
+| 実行方法 | `batch`のジョブ終了処理で日次実行 |
+
+### 5.7 `db/procedures/sp_purge_batch_history.sql`
+
+| 項目 | 内容 |
+|------|------|
+| 引数 | `p_retention_days INTEGER` |
+| 処理 | `DELETE FROM batch_history WHERE started_at < now() - (p_retention_days || ' days')::interval` |
+| 用途 | batch履歴の保持期間管理。`BATCH_HISTORY_RETENTION_DAYS`（既定30日）から渡す |
+| 実行方法 | `batch`のジョブ終了処理で日次実行 |
 
 ## 6. マイグレーション方針
 

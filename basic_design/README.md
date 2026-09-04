@@ -13,6 +13,7 @@
 | 04 | [04_api.md](./04_api.md) | API | エンドポイント定義、リクエスト/レスポンススキーマ、エラー体系、認可マトリクス |
 | 05 | [05_frontend.md](./05_frontend.md) | フロントエンド | 画面設計、コンポーネント構成、状態管理、APIクライアント層、ルーティング |
 | 06 | [06_infra_cicd.md](./06_infra_cicd.md) | インフラ/CI・CD | Docker Compose構成、環境変数一覧、CI/CDワークフロー設計 |
+| 07 | [07_batch.md](./07_batch.md) | batch | 期限通知バッチの責務、スケジュール、処理方式、障害時挙動、テスト方針 |
 | - | [diagrams/](./diagrams/README.md) | 構成図（drawio） | システム構成図・レイヤ構成図・ER図・画面遷移図（`.drawio` 形式・編集可能） |
 
 ## 読む順番の推奨
@@ -26,6 +27,8 @@ flowchart LR
     D --> E[04 API]
     E --> F[05 Front]
     A --> G[06 インフラ/CICD]
+    A --> H[07 batch]
+    G --> H
 ```
 
 各設計書の図は本文中の Mermaid 図と、[diagrams/](./diagrams/README.md) 配下の編集用 drawio ファイル・表示用SVGで保持している。

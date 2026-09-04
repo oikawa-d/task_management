@@ -13,7 +13,7 @@
 | セッションストア | Redis 8（永続化なし） |
 | ORM / マイグレーション | SQLAlchemy 2.x + Alembic |
 | 認証方式 | session（Cookie + Redis） / JWT（Access + Refresh） / Google OAuth2 |
-| 定期実行 | `batch` コンテナ（常駐スケジューラ。毎日10時・17時のタスク期限通知） |
+| 定期実行 | `batch` コンテナ（常駐スケジューラ。現在は毎日10時・17時のタスク期限通知。将来の定期ジョブ追加基盤） |
 | 基準タイムゾーン | `APP_TIMEZONE`（既定 `Asia/Tokyo`）。DBはUTC保存、日次境界・「10時・17時」の判定はこのTZで行う |
 | CI/CD | GitHub Actions（CI: Lint・型チェック・テスト、CD: GHCR + self-hosted runner） |
 
@@ -91,6 +91,7 @@ project-root/
 │   │   ├── core/
 │   │   │   ├── config.py          # pydantic-settings による環境変数定義
 │   │   │   ├── logger.py          # logging設定
+│   │   │   ├── history_middleware.py # 全APIリクエストのapi_history記録
 │   │   │   ├── security.py        # パスワードハッシュ、トークン署名
 │   │   │   ├── exceptions.py      # 業務例外とハンドラ
 │   │   │   └── deps.py            # 共通DI（現在ユーザー、DBセッション等）
@@ -305,19 +306,24 @@ flowchart LR
         T6["task_comments"]
         T7["login_history"]
         T8["notifications"]
+        T9["api_history"]
+        T10["batch_history"]
     end
 
     S1 -->|user_id| T1
     S3 -->|user_id| T1
     S5 -->|user_id| T1
     T7 -->|user_id| T1
+    T9 -->|user_id（NULL可）| T1
     T8 -->|user_id| T1
     T8 -->|task_id| T5
     B1 -->|"due_at を走査"| T5
     B1 -->|"通知をINSERT"| T8
+    B1 -->|"開始・完了・失敗を記録"| T10
+    API["backend API"] -->|"リクエスト履歴をINSERT"| T9
 ```
 
-「ログインが有効かどうか」の判定は Redis のみを参照し、「誰がいつログインしたか」の履歴は設定した保持期間の範囲で PostgreSQL の `login_history` に残す。この分離により、Redis 再起動でログイン状態は失われても監査ログは独立して残る。
+「ログインが有効かどうか」の判定は Redis のみを参照し、「誰がいつログインしたか」の履歴は90日、API・batchの実行履歴は30日を既定の保持期間として PostgreSQL に残す。この分離により、Redis 再起動でログイン状態は失われても履歴は独立して残る。
 
 ## 8. 非機能設計サマリ
 
@@ -326,7 +332,7 @@ flowchart LR
 | パスワード保存 | argon2id（`passlib[argon2]`）。コストパラメータは環境変数化 |
 | CSRF | sessionの更新系とjwtのrefresh/logoutでDouble Submit Cookie + Origin検証（[03_auth](./03_auth.md#8-csrf対策)） |
 | トークン失効 | session/refresh はいずれも Redis のキー削除で即時失効 |
-| ログ | 構造化ログ（JSON）。リクエストIDを付与し、認証イベントは監査目的で INFO 出力 |
+| ログ | 構造化ログ（JSON）に加え、APIは`api_history`、batchは`batch_history`へ保存。API・batchは30日、ログイン履歴は90日保持 |
 | テスト | バックエンド pytest（Redis/PostgreSQL は実コンテナ接続）、フロント Vitest |
 | 秘匿情報 | `.env` および GitHub Secrets 管理。リポジトリへ直接コミットしない |
 | Redis永続化 | RDB/AOF 無効。再起動時に全ログアウトとなることを許容 |

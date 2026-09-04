@@ -128,9 +128,11 @@ sequenceDiagram
         D-->>R: "Task"
         R->>S: "list_comments(task)"
         S->>TR: "list_comments_by_task(task_id)"
-        TR->>PG: "SELECT * FROM task_comments<br/>JOIN users ON user_id<br/>WHERE task_id = :task_id<br/>ORDER BY created_at ASC"
-        PG-->>TR: "comments行 + users行"
-        TR-->>S: "list[Comment]（authorをselectinload済み）"
+        TR->>PG: "SELECT * FROM task_comments<br/>WHERE task_id = :task_id<br/>ORDER BY created_at ASC"
+        PG-->>TR: "comments行"
+        TR->>PG: "selectinload(Comment.author) の追加SELECT<br/>WHERE users.id IN (author_ids)"
+        PG-->>TR: "users行"
+        TR-->>S: "list[Comment]（authorをロード済み）"
         S-->>R: "list[CommentResponse]"
         R-->>FE: "200 {task_id, items, count}"
     end
@@ -198,7 +200,7 @@ flowchart TB
 | 引数 | `task_id`：対象タスクID／`db`：DBセッション |
 | 戻り値 | `task_comments` 行のORMモデルリスト（`selectinload(Comment.author)` 適用） |
 | 送出例外 | なし |
-| 処理内容 | 1. `SELECT * FROM task_comments WHERE task_id = :task_id ORDER BY created_at ASC` を `selectinload` 付きで実行し返す（インデックス `ix_task_comments_task_created` 使用） |
+| 処理内容 | 1. `SELECT * FROM task_comments WHERE task_id = :task_id ORDER BY created_at ASC` を1回実行 2. `selectinload(Comment.author)` の追加SELECTを1回実行してauthorをまとめて取得する（インデックス `ix_task_comments_task_created` 使用） |
 | 副作用 | なし |
 
 ## 7. 関数相関図
@@ -241,7 +243,7 @@ flowchart LR
 | tasks | SELECT | `id = :task_id` | 存在確認・project_id取得 |
 | project_members | SELECT | `project_id = :pid AND user_id = :uid` | admin以外の所属確認 |
 | task_comments | SELECT | `task_id = :task_id ORDER BY created_at ASC` | `ix_task_comments_task_created` を使用 |
-| users | SELECT（JOIN/selectinload） | `id IN (author_ids)` | 投稿者表示名の取得 |
+| users | SELECT（`selectinload`の追加SELECT） | `id IN (author_ids)` | 投稿者表示名の取得。task_commentsの主クエリとは別ラウンドトリップ |
 
 **Redis**：なし（本APIはRedisへアクセスしない）
 
@@ -259,7 +261,7 @@ flowchart LR
 |------|------|
 | ログ出力 | INFO：`task_id`, `user_id`, `request_id`。コメント本文はログに出さない |
 | 情報漏洩対策 | タスク不存在／非所属を区別せず404で統一（`basic_design/03_auth.md` §9.2） |
-| N+1対策 | `selectinload` で `author` をまとめて取得し、コメント件数分のクエリを発生させない |
+| N+1対策・クエリ回数 | 認可のtask取得1回 + 所属確認1回（adminは省略） + コメント主クエリ1回 + authorの`selectinload`追加SELECT 1回。author取得は別ラウンドトリップだが、コメント件数に比例する追加クエリは発行しない |
 | レート制限 | 対象外（参照系） |
 | fail-close | PostgreSQL接続不能時は `503 SERVICE_UNAVAILABLE` |
 
@@ -280,4 +282,4 @@ flowchart LR
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 不明 | `author.display_name` がプロフィール未設定（`last_name`/`first_name` がNULL）の投稿者の表示形式は基本設計に明記がない。本設計では `username` を代替表示とした | 表示仕様の最終確認が必要 |
+| 確定 | `author.display_name` は`last_name`と`first_name`がともに空でない場合に結合し、それ以外は`username`へフォールバックする | OAuth新規ユーザーを含む投稿者表示を統一する |

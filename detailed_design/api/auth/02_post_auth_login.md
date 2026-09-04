@@ -26,7 +26,7 @@
 | Origin検証 | 必要（Cookie/トークンを新規発行する更新系APIのため） |
 | AUTH_MODE差異 | **あり**。詳細は§4・§5・§9を参照 |
 | 冪等性 | なし（成功のたびに新規セッション/リフレッシュトークンを発行し、多重ログインを許容する） |
-| レート制限 | ログイン失敗回数（`login_fail:{key_hash}`、`LOGIN_LOCK_WINDOW_SECONDS`既定900秒）。上限は`LOGIN_MAX_ATTEMPTS`で環境変数化 |
+| レート制限 | ログイン失敗回数（`login_fail:{key_hash}`、`LOGIN_LOCK_WINDOW_SECONDS`既定900秒）。上限は`LOGIN_MAX_ATTEMPTS`で環境変数化。クライアントIPは`TRUSTED_PROXY_CIDRS`で解決する |
 | トランザクション境界 | `login_history` INSERT 1件（成功/失敗いずれも記録）。`users` SELECTのみで更新なし |
 
 ## 2. 入出力仕様
@@ -326,7 +326,7 @@ stateDiagram-v2
 
 | 項目 | 内容 |
 |------|------|
-| 監査ログ | `login_history`に成功/失敗を必ず記録（`failure_reason`：`invalid_credentials`/`user_inactive`/`email_not_verified`）。構造化ログにも`event=login_attempt`, `success`, `auth_mode`, `request_id`をINFO出力し、`identifier`はマスクしない設計だが**パスワードは絶対に出力しない** |
+| 監査ログ | `login_history`に成功/失敗を必ず記録（`failure_reason`：`invalid_credentials`/`user_inactive`/`email_not_verified`）。INSERT失敗時はログインを拒否して503とし、Redis状態を補償する。構造化ログにも`event=login_attempt`, `success`, `auth_mode`, `request_id`をINFO出力し、`identifier`はマスクしない設計だが**パスワードは絶対に出力しない** |
 | ユーザー列挙対策 | ユーザー不存在とパスワード不一致を同一の`401 INVALID_CREDENTIALS`に統合。存在しないユーザーでもダミーハッシュ検証を行いレスポンス時間を均一化する |
 | タイミング攻撃対策 | 上記ダミーハッシュ検証、および`secrets.compare_digest`は本APIでは不使用（argon2 verifyが定数時間比較を内包） |
 | 判定順序 | パスワード検証 → `is_active` → `email_verified_at` の順（`03_auth.md` §6.2）。この順序を変えるとユーザー列挙・アカウント存在漏洩のリスクが生じるため厳守 |
@@ -358,4 +358,4 @@ stateDiagram-v2
 | 区分 | 内容 | 影響 |
 |------|------|------|
 | 要検討 | `LOGIN_MAX_ATTEMPTS`（許容失敗回数の上限値）が`02_redis.md`に明記されていない（TTLのみ既定900秒と記載） | 実装時に具体的な閾値を別途決定する必要がある |
-| 要検討 | `client_ip`の確定方法（`X-Forwarded-For`の何番目を信頼するか）が基本設計に未記載 | `TrustedProxy`設定と合わせてinfra側の詳細設計と整合を取る必要がある |
+| 確定 | `client_ip`は接続元が`TRUSTED_PROXY_CIDRS`内の場合だけXFFを右から検証して解決し、`login_history`・レート制限と共通化する | 監査ログには`client_ip`、`proxy_peer_ip`、`ip_source`を記録する |

@@ -3,27 +3,33 @@
 ## 0. 関連ドキュメント
 
 - 基本設計：[../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md)（§4）、[../../basic_design/03_auth.md](../../basic_design/03_auth.md)、[../../basic_design/00_overview.md](../../basic_design/00_overview.md)
-- 詳細設計：[01_docker_compose.md](./01_docker_compose.md)、[02_dockerfile_api.md](./02_dockerfile_api.md)、[03_dockerfile_frontend.md](./03_dockerfile_frontend.md)、[../auth/00_strategy_base.md](../auth/00_strategy_base.md)、[../auth/04_google_oauth.md](../auth/04_google_oauth.md)、[../api/auth/02_post_auth_login.md](../api/auth/02_post_auth_login.md)
+- 詳細設計：[01_docker_compose.md](./01_docker_compose.md)、[02_dockerfile_api.md](./02_dockerfile_api.md)、[03_dockerfile_frontend.md](./03_dockerfile_frontend.md)、[../log/00_history.md](../log/00_history.md)、[../auth/00_strategy_base.md](../auth/00_strategy_base.md)、[../auth/04_google_oauth.md](../auth/04_google_oauth.md)、[../api/auth/02_post_auth_login.md](../api/auth/02_post_auth_login.md)
 
 ## 1. 概要
 
 | 項目 | 内容 |
 |------|------|
-| 対象 | `api/app/core/config.py`（`Settings(BaseSettings)`）、`.env` / `.env.example`、GitHub Secrets |
+| 対象 | `api/app/core/config.py`（`BackendSettings(BaseSettings)`）、`batch/app/core/config.py`（`BatchSettings(BaseSettings)`）、`.env` / `.env.example`、GitHub Secrets |
 | 責務 | 全環境変数を型付きで一元管理し、起動時に検証する。値のハードコーディングを排除する唯一の入口とする |
-| 適用条件 | backendプロセス起動時（`import app.core.config` の初回評価） |
+| 適用条件 | backendまたはbatchプロセス起動時（各設定モデルの初回評価） |
 | 依存先 | `pydantic-settings`（`BaseSettings`） |
-| 実装ファイル | `api/app/core/config.py` |
+| 実装ファイル | `api/app/core/config.py`、`batch/app/core/config.py`、`api/app/core/history_middleware.py` |
 
 ## 2. 構成要素
 
 | 要素 | 種別 | 責務 | 備考 |
 |------|------|------|------|
-| `Settings` | pydanticモデル | 全環境変数をフィールドとして型定義 | `model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)` |
-| `get_settings()` | 関数（`@lru_cache`） | `Settings()` のシングルトン取得 | 起動時に1度だけ評価し、以後はキャッシュ返却 |
+| `BackendSettings` / `BatchSettings` | pydanticモデル | サービスごとの環境変数をフィールドとして型定義 | 共有 `.env` を読む `SettingsConfigDict`。サービスごとに設定モデルを分離 |
+| `get_settings()` | 関数（`@lru_cache`） | 各設定モデルのシングルトン取得 | 起動時に1度だけ評価し、以後はキャッシュ返却 |
 | `.env` | ファイル | ローカル/自宅サーバーでの実値（**コミット禁止**） | `.gitignore` に登録済み |
 | `.env.example` | ファイル | 変数名と無害な例のみを記載した雛形（コミット対象） | 秘匿値は`***`等のダミー |
 | GitHub Secrets | CI/CD | CI: ダミー値注入、CD: `.env`をヒアドキュメント生成 | ワークフローログへ出力しない |
+
+### 2.1 backend / batch の設定境界
+
+リポジトリルートの `.env` は Compose の変数展開と `backend` / `batch` の両コンテナで共有してよい。ただし設定モデルは分離し、`api/app/core/config.py` の `BackendSettings` は backend 所有の変数、`batch/app/core/config.py` の `BatchSettings` は batch 所有の変数だけをフィールドとして宣言する。`frontend` の `VITE_*` はビルド時、PostgreSQLの `POSTGRES_*` はCompose用として扱う。
+
+共有 `.env` には他サービスの変数が含まれるため、各 `BaseSettings` は `extra="ignore"` とする。`extra="forbid"` は共有ファイルに適用せず、サービス専用の設定ファイルや明示的な辞書を入力する場合だけ使用する。未使用サービスの変数は起動エラーにしない一方、各サービスの必須変数欠落・型不一致・許容値外は起動時に検証エラーとする。
 
 ## 3. 設定項目（環境変数） 全一覧
 
@@ -56,7 +62,11 @@
 | `REDIS_URL` | str | `redis://redis:6379/0` | redis-py接続文字列 | 平文可 |
 | `REDIS_KEY_PREFIX` | str | 空文字 | Redisキー名前空間（環境共有時の衝突回避） | 平文可 |
 | `REDIS_TEST_DB` | int | `1` | テスト実行時のRedis DB番号 | 平文可 |
-| `LOGIN_HISTORY_RETENTION_DAYS` | int | `365` | `sp_purge_login_history` の保持日数 | 平文可 |
+| `LOGIN_HISTORY_RETENTION_DAYS` | int | `90` | `sp_purge_login_history` の保持日数 | 平文可 |
+| `API_HISTORY_RETENTION_DAYS` | int | `30` | `sp_purge_api_history` の保持日数 | 平文可 |
+| `BATCH_HISTORY_RETENTION_DAYS` | int | `30` | `sp_purge_batch_history` の保持日数 | 平文可 |
+| `API_HISTORY_BODY_MAX_BYTES` | int | `65536` | `api_history.body`へ保存するJSON bodyの最大サイズ | 平文可 |
+| `API_HISTORY_ERROR_DETAIL_MAX_LENGTH` | int | `4000` | `api_history.error_detail`の最大文字数 | 平文可 |
 
 ### 3.3 認証共通・session方式
 
@@ -73,6 +83,16 @@
 | `COOKIE_DOMAIN` | str | 空文字 | Cookieの`Domain`属性（必要時のみ設定） | 平文可 |
 | `LOGIN_MAX_ATTEMPTS` | int | `5` | ログイン失敗の許容回数上限 | 平文可 |
 | `LOGIN_LOCK_WINDOW_SECONDS` | int | `900` | ログイン失敗カウントのロック窓TTL | 平文可 |
+| `RATE_LIMIT_REGISTER_MAX_REQUESTS` | int | `5` | 会員登録のIP単位上限（時間窓900秒） | 平文可 |
+| `RATE_LIMIT_EMAIL_VERIFY_MAX_REQUESTS` | int | `10` | メール認証実行のIP単位上限（時間窓900秒） | 平文可 |
+| `RATE_LIMIT_EMAIL_VERIFY_RESEND_MAX_REQUESTS` | int | `5` | 認証メール再送のIP単位上限（時間窓900秒） | 平文可 |
+| `RATE_LIMIT_PASSWORD_FORGOT_MAX_REQUESTS` | int | `5` | パスワード再設定要求のIP単位上限（時間窓900秒） | 平文可 |
+| `RATE_LIMIT_PASSWORD_RESET_MAX_REQUESTS` | int | `10` | パスワード再設定実行のIP単位上限（時間窓900秒） | 平文可 |
+| `RATE_LIMIT_OAUTH_MAX_REQUESTS` | int | `10` | OAuth開始・callback・exchange各APIのIP単位上限 | 平文可 |
+| `RATE_LIMIT_OAUTH_WINDOW_SECONDS` | int | `900` | OAuth Rate Limit時間窓 | 平文可 |
+| `RATE_LIMIT_NOTIFICATION_READ_MAX_REQUESTS` | int | `120` | 通知GETのuser_id + IP単位上限（時間窓60秒） | 平文可 |
+| `RATE_LIMIT_NOTIFICATION_WRITE_MAX_REQUESTS` | int | `60` | 通知PATCH/POSTのuser_id + IP単位上限（時間窓60秒） | 平文可 |
+| `TRUSTED_PROXY_CIDRS` | list[str] | 空 | `X-Forwarded-For`を信頼する直近ProxyのCIDR一覧。空なら接続元IPを使用 | 平文可 |
 | `ARGON2_TIME_COST` | int | `3` | argon2idコストパラメータ | 平文可 |
 | `ARGON2_MEMORY_COST` | int | `65536` | argon2idコストパラメータ（KiB） | 平文可 |
 | `ARGON2_PARALLELISM` | int | `4` | argon2idコストパラメータ | 平文可 |
@@ -138,7 +158,7 @@
 
 | 変数名 | 型 | 既定値 | 用途 | 秘匿 |
 |--------|-----|--------|------|------|
-| `INITIAL_ADMIN_EMAIL` | str | なし（必須） | seed用管理者メール | **Secret** |
+| `INITIAL_ADMIN_EMAIL` | str | なし（必須） | seed用管理者メール。空文字も不可 | **Secret** |
 | `INITIAL_ADMIN_USERNAME` | str | なし（必須） | seed用管理者ユーザー名 | **Secret** |
 | `INITIAL_ADMIN_PASSWORD` | str | なし（必須） | seed用管理者パスワード（平文はseedスクリプト内でのみ使用しargon2化して保存） | **Secret** |
 | `VITE_API_BASE_URL` | str | `/api` | フロントのAPIベースURL。**ビルド時にArgとして埋め込み**（backendの`Settings`には含めない） | 平文可 |
@@ -155,6 +175,31 @@
 | `NOTIFY_DUE_BATCH_CHUNK_SIZE` | int | `500` | 通知INSERTを分割する件数 | 平文可 |
 | `NOTIFICATION_RETENTION_DAYS` | int | `90` | 通知保持期間。`sp_purge_notifications`へ渡す | 平文可 |
 | `BATCH_ENABLED` | bool | `true` | 定期ジョブ登録の有効/無効。`--run-once`はこの値に関係なく実行 | 平文可 |
+
+### 3.11 デプロイ・イメージ管理
+
+| 変数名 | 型 | 既定値 | 用途 | 秘匿 |
+|--------|-----|--------|------|------|
+| `BACKEND_IMAGE_TAG` / `FRONTEND_IMAGE_TAG` / `BATCH_IMAGE_TAG` | str | `latest`（ローカル） | Composeが参照する各アプリイメージのタグ。CDの通常デプロイでは同じ`sha-{短縮SHA}`を設定し、ロールバックでは直前成功値を設定 | 平文可 |
+| `IMAGE_RETENTION_DAYS` | int | `30` | self-hosted runner上で保持対象外のmanagedイメージを削除するまでの日数 | 平文可 |
+| `DEPLOY_STATE_FILE` | str | `/var/lib/cerberus/last-successful-deploy.env` | backend/frontend/batchの直前成功タグを保存するrunner専用ファイル | 平文可 |
+
+### 3.12 認証・ヘルスチェック・CI/CDで使用する追加項目
+
+| 変数名 | 型 | 既定値・例 | 用途 | 所有者・秘匿 |
+|--------|-----|------------|------|-------------|
+| `CSRF_TRUST_REFERER_ON_HTTPS` | bool | `false` | OriginがないHTTPSリクエストでReferer検証へフォールバックするか | backend・平文可（要検討） |
+| `GOOGLE_OAUTH_PROMPT` | str | `select_account` | Google認可画面のアカウント選択指定 | backend・平文可 |
+| `HEALTH_CHECK_TIMEOUT_SECONDS` | float | `2` | DB/Redisヘルスチェックのタイムアウト | backend・平文可 |
+| `LOGIN_HISTORY_LIST_LIMIT` | int | `50` | `/api/users/me/login-history` の最大返却件数 | backend・平文可 |
+| `IMAGE_NAME_BACKEND` / `IMAGE_NAME_FRONTEND` / `IMAGE_NAME_BATCH` | str | `ghcr.io/{owner}/cerberus-*` | CDで扱う各イメージ名 | CI/CD・平文可 |
+| `BACKEND_IMAGE_TAG` / `FRONTEND_IMAGE_TAG` | str | `latest` | CDの通常デプロイ・ロールバック時のイメージタグ | CI/CD・平文可 |
+| `DEPLOY_HOST_HEALTHCHECK_URL` | str | `http://localhost/api/health` | CDのデプロイ後ヘルスチェック先 | CI/CD・平文可 |
+| `DEPLOY_HEALTHCHECK_RETRIES` | int | `10` | CDのヘルスチェック最大試行回数 | CI/CD・平文可 |
+| `DEPLOY_HEALTHCHECK_INTERVAL_SECONDS` | int | `5` | CDのヘルスチェック試行間隔 | CI/CD・平文可 |
+| `CI_JWT_SECRET_KEY` / `CI_INITIAL_ADMIN_PASSWORD` | GitHub Secret | CI専用値 | CIのJWT署名鍵・初期adminパスワード。実行時は `JWT_SECRET_KEY` / `INITIAL_ADMIN_PASSWORD` へ渡す | CI/CD・Secret |
+
+`INITIAL_ADMIN_EMAIL`、`INITIAL_ADMIN_USERNAME`、`INITIAL_ADMIN_PASSWORD` は3項目すべて起動時に検証する。いずれかが未設定または空文字の場合、seedをスキップせずbackendをHTTP受付前に終了させる。CIでは専用のダミーSecretを注入する。
 
 ## 4. 全体の出入力
 
@@ -209,41 +254,45 @@ flowchart TB
 
 ## 8. 関数・処理詳細
 
-### 8.1 `core/config.py` :: `Settings`
+### 8.1 `core/config.py` :: `BackendSettings` / `BatchSettings`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ / 定義 | `class Settings(BaseSettings): ...`（`model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=True, extra="forbid")` |
+| シグネチャ / 定義 | `class BackendSettings(BaseSettings): ...` / `class BatchSettings(BaseSettings): ...`（共有 `.env` を読むため `SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=True, extra="ignore")`） |
 | 引数 / 入力 | 環境変数（3章の全項目をフィールドとして宣言。必須項目は型のみでデフォルトを与えない） |
-| 戻り値 / 出力 | `Settings` インスタンス |
+| 戻り値 / 出力 | `BackendSettings` または `BatchSettings` インスタンス |
 | 送出例外 / 失敗条件 | `pydantic.ValidationError`（必須項目欠落・型変換失敗・`Literal`範囲外） |
-| 処理内容 | 1. フィールド宣言（`str`/`int`/`bool`/`Literal`/`list[str]`） 2. `CORS_ALLOW_ORIGINS`はカンマ区切り文字列を`list[str]`へ変換する`field_validator`を持つ 3. `extra="forbid"`により未定義環境変数の混入をエラー化しない（`.env`内の無関係変数は許容しつつ、Settingsフィールドの誤字は個別に検知） |
+| 処理内容 | 1. サービスごとに必要なフィールドを宣言（`str`/`int`/`bool`/`Literal`/`list[str]`） 2. `CORS_ALLOW_ORIGINS`はカンマ区切り文字列を`list[str]`へ変換する`field_validator`を持つ 3. 共有 `.env` の他サービス変数は `extra="ignore"` で読み飛ばす 4. 必須項目・型・`Literal`の許容値は各設定モデルで検証する |
 | 副作用 | なし |
 
-### 8.2 `core/config.py` :: `get_settings`
+### 8.2 `core/config.py` :: `get_backend_settings` / `get_batch_settings`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ / 定義 | `@lru_cache def get_settings() -> Settings:` |
+| シグネチャ / 定義 | `@lru_cache def get_backend_settings() -> BackendSettings:` / `@lru_cache def get_batch_settings() -> BatchSettings:` |
 | 引数 / 入力 | なし |
-| 戻り値 / 出力 | `Settings`（キャッシュ済みシングルトン） |
-| 送出例外 / 失敗条件 | 初回呼び出し時に`Settings()`が送出する`ValidationError`をそのまま伝播 |
-| 処理内容 | 1. 初回呼び出し時のみ`Settings()`を評価 2. 以後はキャッシュを返却（`AUTH_MODE`等のリクエスト毎再評価コストを避ける、[../auth/00_strategy_base.md](../auth/00_strategy_base.md)と整合） |
+| 戻り値 / 出力 | `BackendSettings` または `BatchSettings`（各キャッシュ済みシングルトン） |
+| 送出例外 / 失敗条件 | 初回呼び出し時に各設定モデルが送出する`ValidationError`をそのまま伝播 |
+| 処理内容 | 1. 各サービスの設定モデルを初回呼び出し時だけ評価 2. 以後は対応する設定モデルのキャッシュを返却（リクエスト毎・ジョブ毎の再パースを避ける） |
 | 副作用 | プロセスメモリ上にシングルトンを保持 |
 
 ## 9. 関数・要素相関図
 
 ```mermaid
 flowchart LR
-    ENVFILE[".env"] --> SETTINGS["Settings(BaseSettings)"]
-    SECRETS["GitHub Secrets<br/>(CI/CD)"] --> SETTINGS
-    SETTINGS --> GETSETTINGS["get_settings()<br/>@lru_cache"]
-    GETSETTINGS --> DEPS["core/deps.py"]
-    GETSETTINGS --> FACTORY["auth/factory.py<br/>get_auth_strategy"]
-    GETSETTINGS --> DB["db.py<br/>エンジン生成"]
-    GETSETTINGS --> REDISCLIENT["redis_client.py"]
-    GETSETTINGS --> MAILSVC["service/mail_service.py"]
-    GETSETTINGS --> LOGGER["core/logger.py"]
+    ENVFILE[".env"] --> BACKEND["BackendSettings"]
+    ENVFILE --> BATCH["BatchSettings"]
+    SECRETS["GitHub Secrets<br/>(CI/CD)"] --> BACKEND
+    SECRETS --> BATCH
+    BACKEND --> GETBACKEND["get_backend_settings()<br/>@lru_cache"]
+    BATCH --> GETBATCH["get_batch_settings()<br/>@lru_cache"]
+    GETBACKEND --> DEPS["core/deps.py"]
+    GETBACKEND --> FACTORY["auth/factory.py<br/>get_auth_strategy"]
+    GETBACKEND --> DB["db.py<br/>エンジン生成"]
+    GETBATCH --> REDISCLIENT["batch/redis_client.py"]
+    GETBACKEND --> MAILSVC["service/mail_service.py"]
+    GETBACKEND --> LOGGER["core/logger.py"]
+    GETBACKEND --> HISTORY["core/history_middleware.py"]
 ```
 
 ## 10. セキュリティ・非機能考慮

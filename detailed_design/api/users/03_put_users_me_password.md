@@ -26,7 +26,7 @@
 | AUTH_MODE差異 | 成功時の失効対象がsessionは`session:{sid}`系、jwtは`refresh:{hash}`系という保存先の違いのみ。判定ロジック・レスポンスに差異なし |
 | 冪等性 | なし（同一`current_password`/`new_password`で2回目を実行すると1回目成功後は`current_password`が新パスワードと一致しなくなるため2回目は`401 INVALID_CREDENTIALS`となる） |
 | レート制限 | 対象外（ログイン試行のレート制限とは別事象。ログイン済みユーザーの操作のため`login_fail`は使用しない） |
-| トランザクション境界 | `users.password_hash`のUPDATE（PostgreSQL）と、Redisの全セッション/全リフレッシュトークン失効（同一サービス処理内で連続実行するが、PostgreSQLトランザクションには含められない。`04_api.md`の管理者無効化操作と同様の非分散トランザクション方針） |
+| トランザクション境界 | Redisの全セッション/全リフレッシュトークン失効を先に完了し、その後`users.password_hash`をUPDATEする。Redis失敗時はDBを更新せず503。DB失敗時は安全側にログアウト状態を維持する |
 
 ## 2. 入出力仕様
 
@@ -182,7 +182,7 @@ flowchart TB
 | 引数 | `current_user`、`payload`、`db`、`redis_store` |
 | 戻り値 | `None` |
 | 送出例外 | `InvalidCredentialsError`(401)、`ValidationError`(422) |
-| 処理内容 | 1. `user_repository.get_by_id`で現在の`password_hash`を取得 2. `password_hash is not None`（`has_password=true`）の場合：`current_password`が未送信なら`ValidationError`、送信済みで`argon2 verify`が不一致なら`InvalidCredentialsError` 3. `password_hash is None`（`has_password=false`）の場合：`current_password`が送信されていれば`ValidationError`（未設定ユーザーには検証対象がないため） 4. `new_password`をargon2idでハッシュ化 5. `user_repository.update_password(db, user_id, new_hash)` 6. `redis_store.delete_all_sessions(user_id)` 7. `redis_store.revoke_all_refresh_tokens(user_id)` |
+| 処理内容 | 1. `user_repository.get_by_id`で現在の`password_hash`を取得 2. 現在パスワードを検証 3. `new_password`をargon2idでハッシュ化 4. `redis_store.delete_all_sessions(user_id)` 5. `redis_store.revoke_all_refresh_tokens(user_id)` 6. Redis成功後に`user_repository.update_password(db, user_id, new_hash)`。Redis失敗時はDBを更新せず503 |
 | 副作用 | DB更新（`password_hash`）、Redis全失効（`session:*` / `csrf:*` / `user_sessions:{uid}` / `refresh:*` / `user_refresh:{uid}`） |
 
 ### 6.4 `repository/user_repository.py :: update_password`
@@ -267,7 +267,7 @@ sessionモードの認証解決・CSRF検証自体の`GET`/`EXPIRE`は本APIの�
 |------|------|
 | 監査ログ | パスワード変更成功はアプリログにINFOレベルで記録する（ユーザーID・実行時刻のみ。パスワードそのもの・ハッシュは出力しない）。`login_history`テーブルへは記録しない（ログイン試行ではないため対象外。`03_table_login_history.md`§1参照） |
 | タイミング攻撃対策 | `current_password`検証は`argon2 verify`（定数時間比較を内部で行う実装）を使用。`has_password=false`ケースでも`current_password`未送信時は即座に次へ進むため計算コストの差でユーザー種別が漏れる余地は小さいが、Google専用ユーザーの存在自体は`GET /users/me`の`has_password`で判別可能なため本APIでの追加対策は不要 |
-| fail-close方針 | Redis/PostgreSQL接続不能時は503。ただし`password_hash`のUPDATEが成功した後にRedis全失効が失敗した場合は、旧Cookie/トークンが失効しないまま残るリスクがあるため、Redis接続不能を検知した時点で500ではなく503とし、フロントに再試行を促す（DB更新のロールバックは行わない。§13参照） |
+| fail-close方針 | Redis/PostgreSQL接続不能時は503。Redis全失効をDB更新に先行させ、失効失敗時はDBを更新しない。DB更新失敗時は新パスワードを有効化せず、全失効済み状態から再試行する |
 | レート制限 | 対象外（ログイン中ユーザーの操作のため`LOGIN_MAX_ATTEMPTS`は適用しない。総当たり対策が必要であれば要検討） |
 | 全端末ログアウト | パスワード漏えい時の被害抑止のため、変更成功時は必ず全セッション・全リフレッシュトークンを失効させる（`03_auth.md`§7.2末尾の方針） |
 
@@ -295,4 +295,4 @@ sessionモードの認証解決・CSRF検証自体の`GET`/`EXPIRE`は本APIの�
 | 区分 | 内容 | 影響 |
 |------|------|------|
 | 要検討 | 基本設計（`03_auth.md`末尾）は「`has_password=false`のユーザーでは`current_password`を省略可」とのみ記載し、「送信した場合にエラーとすべきか無視すべきか」までは明記していない。本書では不整合な入力として`VALIDATION_ERROR`にする方針としたが、無視して処理を継続する設計も選択肢としてあり得る |
-| 要検討 | `password_hash`のPostgreSQL更新に成功した直後にRedis全失効が失敗した場合の整合性確保（リトライ・補償処理）は基本設計・Redis詳細設計のいずれにも記述がなく、本書でも503を返すのみに留めた。運用上許容できるか要確認 |
+| 確定 | Redis全失効をDB更新に先行させ、Redis失敗時はDBを更新せず503とする。再試行は冪等な全失効処理として扱う |

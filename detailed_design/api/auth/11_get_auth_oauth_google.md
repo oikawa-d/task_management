@@ -25,7 +25,7 @@
 | Origin検証 | 不要（ブラウザの直接ナビゲーションであり、Originヘッダが付与されない場合がある） |
 | AUTH_MODE差異 | 差異なし。`AUTH_MODE` に関わらず本APIの処理は同一（分岐はcallback/exchange側で発生する） |
 | 冪等性 | 冪等ではない（呼び出しごとに新しい `state` を発行しRedisに書き込む） |
-| レート制限 | 対象外（`GET /auth/login` 等と異なりパスワード試行を伴わないため）。ただし将来的な濫用対策として要検討 |
+| レート制限 | `oauth start` はIP単位で10回/900秒。超過時は429 `TOO_MANY_ATTEMPTS`、Redis障害時は503 `SERVICE_UNAVAILABLE` |
 | トランザクション境界 | なし（PostgreSQL操作を行わない） |
 
 ## 2. 入出力仕様
@@ -245,7 +245,7 @@ PostgreSQLへの書き込みは発生しない。Redisに `oauth_state:{state}` 
 | タイミング攻撃対策 | 該当なし |
 | オープンリダイレクト対策 | `redirect_to` を相対パスに限定し、`//`始まり・絶対URL・外部ドメインを拒否して既定値へフォールバックする（本設計の中心的な対策） |
 | CSRF対策 | 本API自体はGETで状態変更を伴わないため対象外。ただし発行する `state` と `cerberus_oauth_state` Cookieが、callback時のCSRF相当の攻撃（別セッションでの認可コード注入）を防ぐ |
-| レート制限 | 対象外（要検討：濫用防止のためIPベースの制限を将来的に追加するか） |
+| レート制限 | `oauth start` はIP単位10回/900秒。ブラウザの再試行を妨げないよう、429時は`Retry-After`を返す |
 | fail-close方針 | Redis接続不能時は認可URLへのリダイレクトを行わず503を返す（`basic_design/02_redis.md` §6準拠） |
 
 ## 12. テスト設計
@@ -269,6 +269,6 @@ PostgreSQLへの書き込みは発生しない。Redisに `oauth_state:{state}` 
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 要検討 | 本APIへのレート制限の要否・具体的な閾値が基本設計に明記されていない | 濫用（大量のstate発行によるRedisメモリ消費）のリスク。IPベースの制限を追加するかは別途決定が必要 |
+| 確定 | 本APIはIP単位10回/900秒のレート制限を適用する | 超過時429 `TOO_MANY_ATTEMPTS`（`Retry-After`付き）、Redis障害時503 |
 | 要検討 | `redirect_to` の最大長（`OAUTH_REDIRECT_TO_MAX_LENGTH`）は基本設計に定義がなく、本ファイルで既定値2048として仮置きした | 実装時に環境変数の既定値として確定させる必要がある |
 | 不明 | `prompt=select_account` は基本設計に明記がなく、UX観点で妥当と判断し追加した仮の設計 | Googleアカウントを複数持つユーザーの体験に影響。要件との整合を確認したい |

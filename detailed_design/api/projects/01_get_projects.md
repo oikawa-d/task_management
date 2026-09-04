@@ -115,7 +115,9 @@ sequenceDiagram
         S->>RP: list_by_member(user.id, page, per_page)
         RP->>PG: "SELECT projects.* FROM projects JOIN project_members ... LIMIT/OFFSET"
     end
-    PG-->>RP: project行（owner を JOIN 済み）
+    PG-->>RP: project行
+    RP->>PG: "selectinload(Project.owner) の追加SELECT（owner_id IN (...)）"
+    PG-->>RP: owner行
     RP-->>S: Project一覧
     S->>RP: aggregate_member_counts(project_ids)
     RP->>PG: "SELECT project_id, COUNT(*) FROM project_members WHERE project_id = ANY(:ids) GROUP BY project_id"
@@ -184,7 +186,7 @@ flowchart TB
 | 引数 | `user_id`: 所属確認対象 / `page`, `per_page`: ページング |
 | 戻り値 | `owner` を eager load 済みの `Project` エンティティのリスト |
 | 送出例外 | `OperationalError`（DB不通） |
-| 処理内容 | 1. `projects JOIN project_members ON projects.id = project_members.project_id WHERE project_members.user_id = :user_id` 2. `selectinload(Project.owner)` で owner を同一往復で解決（N+1回避） 3. `ORDER BY projects.created_at DESC` 4. `OFFSET (page-1)*per_page LIMIT per_page` |
+| 処理内容 | 1. `projects JOIN project_members ON projects.id = project_members.project_id WHERE project_members.user_id = :user_id` の主クエリを1回実行 2. `selectinload(Project.owner)` による追加SELECTを1回実行し、ownerをまとめて解決（N+1回避） 3. `ORDER BY projects.created_at DESC` 4. `OFFSET (page-1)*per_page LIMIT per_page` |
 | 副作用 | なし |
 
 ### 6.4 `repository/project_repository.py :: aggregate_member_counts` / `aggregate_task_counts`
@@ -266,7 +268,7 @@ flowchart LR
 | タイミング攻撃対策 | 該当なし |
 | レート制限 | なし（一般GETは対象外） |
 | fail-close方針 | PostgreSQL接続不能時は `503 SERVICE_UNAVAILABLE`。空配列を返して隠蔽しない |
-| N+1対策 | owner は `selectinload` で1往復、`member_count`/`task_counts` はプロジェクト件数に依らず定数回のクエリ（バッチ集計）に抑える |
+| N+1対策・クエリ回数 | 非空ページでは `count` 1回 + 一覧主クエリ1回 + ownerの`selectinload`追加SELECT 1回 + member/task集計各1回の計5回。owner取得は同一ラウンドトリップではないが、プロジェクト件数に比例しない。空ページでは集計と関連追加SELECTを発行せず、計2回を基本とする |
 
 ## 12. テスト設計
 
@@ -287,4 +289,4 @@ flowchart LR
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 要検討 | `owner.display_name` の算出規則（姓名未設定時に`username`へフォールバックする方針）は基本設計に明記がないため本書での提案。基本設計側での明文化が望ましい |
+| 確定 | `owner.display_name` は`last_name`と`first_name`がともに空でない場合に結合し、それ以外は`username`へフォールバックする | OAuth新規ユーザーなど姓名未設定でも表示名を必ず返す |

@@ -120,7 +120,9 @@ sequenceDiagram
     PG-->>RP: total
     S->>RP: list_all(q, page, per_page)
     RP->>PG: "SELECT projects.* FROM projects WHERE ... ORDER BY created_at DESC LIMIT/OFFSET"
-    PG-->>RP: project行（owner を selectinload 済み）
+    PG-->>RP: project行
+    RP->>PG: "selectinload(Project.owner) の追加SELECT（owner_id IN (...)）"
+    PG-->>RP: owner行
     RP-->>S: Project一覧
     S->>RP: aggregate_member_counts(project_ids)
     RP->>PG: "SELECT project_id, COUNT(*) FROM project_members WHERE project_id = ANY(:ids) GROUP BY project_id"
@@ -263,7 +265,7 @@ flowchart LR
 | タイミング攻撃対策 | 該当なし |
 | レート制限 | なし |
 | fail-close方針 | PostgreSQL接続不能時は `503 SERVICE_UNAVAILABLE` |
-| N+1対策 | owner は `selectinload` で1往復、`member_count`/`task_counts` はプロジェクト件数に依らず定数回のクエリ（バッチ集計）に抑える（[01_get_projects.md](../projects/01_get_projects.md) と同じ方針） |
+| N+1対策・クエリ回数 | 非空ページでは `count` 1回 + 一覧主クエリ1回 + ownerの`selectinload`追加SELECT 1回 + member/task集計各1回の計5回。owner取得は同一ラウンドトリップではないが、プロジェクト件数に比例しない。空ページでは集計と関連追加SELECTを発行せず、計2回を基本とする（[01_get_projects.md](../projects/01_get_projects.md) と同じ方針） |
 
 ## 12. テスト設計
 

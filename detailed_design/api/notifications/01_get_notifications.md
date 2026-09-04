@@ -27,7 +27,7 @@
 | Origin検証 | 不要（Cookie発行・更新系ではないため） |
 | AUTH_MODE差異 | 差異なし（`deps.get_current_user` が方式差を吸収する） |
 | 冪等性 | あり（GET） |
-| レート制限 | 対象外 |
+| レート制限 | user_id + 解決済みIP単位で120回/60秒。超過時は429 `TOO_MANY_ATTEMPTS`（`Retry-After`付き）、Redis障害時は503 |
 | トランザクション境界 | 単一の読み取りトランザクション（更新なし） |
 
 ## 2. 入出力仕様
@@ -116,7 +116,9 @@ sequenceDiagram
     NR->>PG: "SELECT COUNT(*) FROM notifications WHERE user_id=:me [AND read_at IS NULL]"
     S->>NR: "list_by_user(user.id, page, per_page, unread_only)"
     NR->>PG: "SELECT * FROM notifications<br/>WHERE user_id=:me [AND read_at IS NULL]<br/>ORDER BY created_at DESC LIMIT/OFFSET<br/>(ix_notifications_user_created 使用)"
-    PG-->>NR: "notification行（task を LEFT JOIN 済み）"
+    PG-->>NR: "notification行"
+    NR->>PG: "selectinload(Notification.task) の追加SELECT<br/>WHERE tasks.id IN (task_ids)"
+    PG-->>NR: "task行（削除済みIDはなし）"
     NR-->>S: "Notification一覧"
     S->>NR: "count_unread(user.id)"
     NR->>PG: "SELECT COUNT(*) FROM notifications WHERE user_id=:me AND read_at IS NULL<br/>(ix_notifications_user_unread 使用)"
@@ -172,7 +174,7 @@ flowchart TB
 | 引数 | `user`: 現在ユーザー / `page`, `per_page`: ページング指定 / `unread_only`: 未読絞り込み / `db`: DBセッション |
 | 戻り値 | `(Page[NotificationItem], unread_count)`。`Page` は `items: list[NotificationItem]`, `total: int` |
 | 送出例外 | `ServiceUnavailableError`（PostgreSQL接続不能時）→503 |
-| 処理内容 | 1. `notification_repository.count_by_user(db, user.id, unread_only)` と `list_by_user(db, user.id, page, per_page, unread_only)` を呼び出す 2. `unread_only=false` の場合でも `unread_count` バッジ用に `notification_repository.count_unread(db, user.id)` を別途1回呼び出す（`unread_only=true` のときは `count_by_user` の結果を再利用し追加クエリを発行しない） 3. `task_id IS NULL` の行は `task=None` としてマッピングし、`task_id` が存在する行は `LEFT JOIN` 済みのタスク情報（`id`, `project_id`, 現在の `title`）を埋め込む |
+| 処理内容 | 1. `notification_repository.count_by_user(db, user.id, unread_only)` と `list_by_user(db, user.id, page, per_page, unread_only)` を呼び出す 2. `unread_only=false` の場合でも `unread_count` バッジ用に `notification_repository.count_unread(db, user.id)` を別途1回呼び出す（`unread_only=true` のときは `count_by_user` の結果を再利用し追加クエリを発行しない） 3. `task_id IS NULL` の行は `task=None` としてマッピングし、`task_id` が存在する行は `selectinload` の追加SELECTで取得したタスク情報（`id`, `project_id`, 現在の `title`）を埋め込む |
 | 副作用 | なし（読み取りのみ） |
 
 ### 6.3 `repository/notification_repository.py :: list_by_user`
@@ -183,7 +185,7 @@ flowchart TB
 | 引数 | `user_id`: 対象ユーザー / `page`, `per_page`: ページング / `unread_only`: 未読絞り込み |
 | 戻り値 | `task` を eager load 済みの `Notification` エンティティのリスト |
 | 送出例外 | `OperationalError`（DB不通） |
-| 処理内容 | 1. `WHERE user_id = :user_id` を必須条件とし、`unread_only=true` なら `AND read_at IS NULL` を追加 2. `selectinload(Notification.task)` で task を同一往復で解決（N+1回避。`task_id IS NULL` の行は `None` のまま） 3. `ORDER BY created_at DESC` で `ix_notifications_user_created (user_id, created_at DESC)` を使用 4. `OFFSET (page-1)*per_page LIMIT per_page` |
+| 処理内容 | 1. `WHERE user_id = :user_id` を必須条件とし、`unread_only=true` なら `AND read_at IS NULL` を追加 2. 通知本体を1回SELECTし、`selectinload(Notification.task)` が発行する追加SELECT（通知行の`task_id`をIN条件に使用）でtaskをまとめて取得する（N+1回避。`task_id IS NULL` の行は `None` のまま） 3. `ORDER BY created_at DESC` で `ix_notifications_user_created (user_id, created_at DESC)` を使用 4. `OFFSET (page-1)*per_page LIMIT per_page` |
 | 副作用 | なし |
 
 ### 6.4 `repository/notification_repository.py :: count_unread`
@@ -257,9 +259,9 @@ flowchart LR
 | ログ出力 | 監査ログ対象外（参照系）。アクセスログに `user_id`, `page`, `per_page`, `unread_only`, `X-Request-ID` を構造化出力 |
 | ユーザー列挙対策 | 該当なし（`user_id = current_user.id` 固定で他人のデータへは到達しない設計。パスパラメータで他人のIDを渡す余地がないAPIのため404隠蔽は不要） |
 | タイミング攻撃対策 | 該当なし |
-| レート制限 | なし |
+| レート制限 | user_id + 解決済みIP単位で120回/60秒。フロントのポーリング間隔に依存せずサーバー側で制限する |
 | fail-close方針 | PostgreSQL接続不能時は `503 SERVICE_UNAVAILABLE`。空配列を返して隠蔽しない |
-| N+1対策 | task は `selectinload` で1往復に抑える。`unread_only=true` 時は追加の `count_unread` クエリを発行しない（`count_by_user` の結果を再利用） |
+| N+1対策・クエリ回数 | `count_by_user` 1回 + 通知本体SELECT 1回 + taskの`selectinload`追加SELECT 1回（taskを持つ通知行がある場合）。`unread_only=false` の場合は `count_unread` 1回を加える。`unread_only=true` は `count_by_user` の結果を再利用するため追加しない。関連取得は通知件数に比例して増えないが、同一ラウンドトリップではない |
 | 個人情報の取り扱い | `title`/`body` はタスク作成者・担当者にのみ関わる業務情報であり、本人以外には返さない（本APIの認可自体がその境界を保証する） |
 
 ## 12. テスト設計

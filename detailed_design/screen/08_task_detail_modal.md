@@ -88,7 +88,7 @@
 | 2 | 表示時（1と並行） | GET `/tasks/{taskId}/comments` | パスパラメータのみ | ⑦へ描画 | トースト表示、再試行ボタン | `queryKey: ['comments', taskId]` |
 | 3 | ②③④⑤⑥のいずれか変更確定時 | PATCH `/tasks/{taskId}` | `{version, <変更フィールドのみ>}`（1回のリクエストにつき1フィールド。§9.2参照） | レスポンスの`task`でキャッシュを更新し`version`を最新化。`['board', projectId]`も`invalidateQueries` | `409 TASK_CONFLICT`は⑬表示＋`['task', taskId]`を`invalidateQueries`して再取得。`409 ASSIGNEE_INACTIVE`／`422`はフィールド直下にエラー | `mutationKey: ['updateTaskField', taskId]` |
 | 4 | ⑪クリック | POST `/tasks/{taskId}/comments` | `{body}` | `['comments', taskId]`に新規コメントを追加反映、⑩をクリア | 422はフィールドエラー、404はモーダルをエラー表示に切替 | `mutationKey: ['addComment', taskId]` |
-| 5 | ⑧⑨編集/削除確定 | PATCH／DELETE `/comments/{commentId}` | `{body}` または パスパラメータのみ | 該当コメントを更新表示、または`['comments', taskId]`から即時除去 | 403は「権限がありません」トースト、404はコメント一覧を再取得（削除済みの可能性） | `mutationKey: ['updateComment'\|'deleteComment', commentId]` |
+| 5 | ⑧⑨編集/削除確定 | PATCH／DELETE `/comments/{commentId}` | `{body}` または パスパラメータのみ | 該当コメントを更新表示、または`['comments', taskId]`から即時除去。コメント更新はLast Write Winsで後のコミットを表示する | 403は「権限がありません」トースト、404はコメント一覧を再取得（削除済みの可能性） | `mutationKey: ['updateComment'\|'deleteComment', commentId]` |
 | 6 | ⑭削除確定 | DELETE `/tasks/{taskId}` | パスパラメータのみ | `['board', projectId]`を`invalidateQueries`し、モーダルを閉じて`/projects/:pid`へ`navigate` | 404は既に削除済みとして同様にボードへ戻る、CSRF系はトースト | `mutationKey: ['deleteTask', taskId]` |
 | 7 | 表示時（④の選択肢構築） | （[07_project_board.md](./07_project_board.md) の`['project', projectId]`キャッシュを再利用） | - | メンバー一覧を④の選択肢に変換 | - | `queryKey: ['project', projectId]`（新規fetchしない） |
 

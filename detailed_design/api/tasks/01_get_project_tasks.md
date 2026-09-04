@@ -128,8 +128,10 @@ sequenceDiagram
         D-->>R: "Project"
         R->>S: "get_board(project)"
         S->>TR: "list_board(project_id)"
-        TR->>PG: "SELECT tasks JOIN users(assignee)<br/>+ 相関サブクエリ COUNT(task_comments)<br/>ORDER BY status, position"
+        TR->>PG: "SELECT tasks<br/>+ 相関サブクエリ COUNT(task_comments)<br/>ORDER BY status, position"
         PG-->>TR: "tasks行 + comment_count"
+        TR->>PG: "selectinload(assignee) の追加SELECT<br/>WHERE users.id IN (assignee_ids)"
+        PG-->>TR: "assignee行"
         TR-->>S: "list[TaskWithCommentCount]"
         S->>S: "status別にグルーピング（todo/in_progress/done）"
         S-->>R: "BoardResponse"
@@ -224,7 +226,7 @@ flowchart LR
 |----------|------|-----------|------|
 | project_members | SELECT | `project_id`, `user_id` | `require_project_member` による認可（admin時は省略） |
 | tasks | SELECT | `project_id` 一致、`ORDER BY status, position` | 主クエリ。`uq_tasks_project_status_position` を使用 |
-| users | SELECT（JOIN） | `tasks.assignee_id = users.id` | assignee 情報のEager Load |
+| users | SELECT（`selectinload`の追加SELECT） | `tasks.assignee_id = users.id` | assignee 情報のEager Load。tasks主クエリとは別ラウンドトリップ |
 | task_comments | SELECT（相関サブクエリ COUNT） | `task_id = tasks.id` | `comment_count` 算出。`ix_task_comments_task_created` を使用 |
 
 **Redis**：使用なし。
@@ -246,7 +248,7 @@ flowchart LR
 | タイミング攻撃対策 | 本APIは認証情報の真偽比較を含まないため対象外 |
 | レート制限 | なし |
 | fail-close方針 | DB接続不能時は503を返し、部分的なデータでの200応答は行わない |
-| N+1対策 | `selectinload`（assignee）と相関サブクエリ（comment_count）で1クエリに集約し、タスク件数に比例したクエリ発行を避ける |
+| N+1対策・クエリ回数 | 認可の所属確認1回（adminは省略）に加え、tasks主クエリ1回とassigneeの`selectinload`追加SELECT 1回を実行する。`comment_count`は主クエリ内の相関サブクエリであり、タスクごとの追加クエリは発行しない。関連取得は同一ラウンドトリップではないが、タスク件数に比例してクエリ数は増えない |
 
 ## 12. テスト設計
 

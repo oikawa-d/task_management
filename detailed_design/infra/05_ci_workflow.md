@@ -211,7 +211,7 @@ flowchart TB
 | 引数 / 入力 | `api/Dockerfile`（[02_dockerfile_api.md](./02_dockerfile_api.md)）、`frontend/Dockerfile`（[03_dockerfile_frontend.md](./03_dockerfile_frontend.md)）、`batch/Dockerfile`（[08_dockerfile_batch.md](./08_dockerfile_batch.md)） |
 | 戻り値 / 出力 | ビルド成功可否のみ（イメージはレジストリへpushしない） |
 | 送出例外 / 失敗条件 | いずれかのDockerfileのビルドエラー |
-| 処理内容 | 1. チェックアウト 2. `docker/setup-buildx-action@v3` 3. `docker/build-push-action@v6`を3回呼び出し（backend用・frontend用・batch用）、いずれも `push: false`、`cache-from: type=gha`、`cache-to: type=gha,mode=max` を指定 4. `VITE_API_BASE_URL`等のビルド時`ARG`はCIダミー値（`/api`）で埋める |
+| 処理内容 | 1. チェックアウト 2. `docker/setup-buildx-action@v3` 3. `docker/build-push-action@v6`を3回呼び出し（backendはcontext`.`・`api/Dockerfile`、frontendはcontext`frontend`・`frontend/Dockerfile`、batchはcontext`.`・`batch/Dockerfile`）、いずれも `push: false`、`cache-from: type=gha`、`cache-to: type=gha,mode=max` を指定 4. `VITE_API_BASE_URL`等のビルド時`ARG`はCIダミー値（`/api`）で埋める |
 | 副作用 | runner上に一時イメージが生成されるが、レジストリへは送信されない |
 
 ## 9. 関数・要素相関図
@@ -231,8 +231,9 @@ flowchart LR
     BT --> DB
     FL --> DB
     FT --> DB
-    DB --> IMGBE["api/Dockerfile ビルド"]
+    DB --> IMGBE["context . + api/Dockerfile ビルド<br/>db/を含む"]
     DB --> IMGFE["frontend/Dockerfile ビルド"]
+    DB --> IMGBA["context . + batch/Dockerfile ビルド"]
     DB -.->|"push: false"| NOPUSH["GHCRへは送信しない"]
     WF --> BP["ブランチ保護<br/>required status checks"]
 ```

@@ -26,7 +26,7 @@
 | Origin検証 | 不要（Googleからのブラウザリダイレクトのため、通常Originヘッダは付与されない） |
 | AUTH_MODE差異 | **あり**。sessionモードはここで`SessionAuthStrategy.login()`を完了させCookieを発行する。jwtモードはログインを完了させず、`oauth_handoff:{code}` を発行してフロントの`/oauth/exchange`呼び出しを待つ |
 | 冪等性 | 冪等ではない（`state`はワンタイム消費。同一codeでの再実行はGoogle側で失敗する） |
-| レート制限 | 対象外（Google側の認可コードは推測不可能なため）。ただし異常系リダイレクト先の濫用は要検討 |
+| レート制限 | `oauth callback` はIP単位で10回/900秒。超過時は429相当のエラー表示へ遷移し、Redis障害時は503相当で認可を成立させない |
 | トランザクション境界 | ユーザー解決/作成（`users` INSERT または `oauth_accounts` INSERT）は1トランザクション。session モードでは同トランザクション確定後に `login_history` を別途INSERTする |
 
 ## 2. 入出力仕様
@@ -364,7 +364,7 @@ stateDiagram-v2
 | オープンリダイレクト対策 | `redirect_to`は11番ファイルで正規化済みの値をRedisから取得するのみで、本APIでは再検証しない（改ざん不可能なRedis保存値のため） |
 | アカウント乗っ取り対策 | `email_verified=false`の場合は既存ユーザーへの紐付けを行わず400/`oauth_email_unverified`とする（`basic_design/03_auth.md` §5.3） |
 | CSRF対策 | state + Cookie一致検証により、第三者が発行したcodeを被害者のブラウザに注入する攻撃を防ぐ |
-| レート制限 | 対象外（Google側の認可コードは推測不能） |
+| レート制限 | `oauth callback` はIP単位10回/900秒。Google認可コードの高エントロピー性に依存せず汎用IP制限を適用する |
 | fail-close方針 | Redis接続不能時は`oauth_failed`として`/login`へリダイレクトする（503の代わりにブラウザ向けエラー表示。§13要検討） |
 
 ## 12. テスト設計

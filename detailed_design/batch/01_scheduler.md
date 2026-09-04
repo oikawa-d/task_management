@@ -3,7 +3,7 @@
 ## 0. 関連ドキュメント
 
 - 基本設計：[../../basic_design/00_overview.md](../../basic_design/00_overview.md)（§7/§8）、[../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md)（§2.1）、[../../basic_design/02_redis.md](../../basic_design/02_redis.md)（§4.4）
-- 詳細設計：[00_overview.md](./00_overview.md)、[02_due_notification_job.md](./02_due_notification_job.md)、[../infra/01_docker_compose.md](../infra/01_docker_compose.md)、[../infra/04_env_config.md](../infra/04_env_config.md)、[../infra/07_operation.md](../infra/07_operation.md)
+- 詳細設計：[00_overview.md](./00_overview.md)、[02_due_notification_job.md](./02_due_notification_job.md)、[../log/00_history.md](../log/00_history.md)、[../database/12_table_batch_history.md](../database/12_table_batch_history.md)、[../infra/01_docker_compose.md](../infra/01_docker_compose.md)、[../infra/04_env_config.md](../infra/04_env_config.md)、[../infra/07_operation.md](../infra/07_operation.md)
 
 ## 1. 概要
 
@@ -20,8 +20,8 @@
 | 区分 | 内容 |
 |------|------|
 | 入力 | 起動時コマンドライン引数（`--run-once <job名>` の有無）、環境変数（`core/config.py` 経由） |
-| 出力 | プロセスの標準出力への構造化ログ。常駐時は終了しない（プロセスとして稼働し続ける） |
-| 副作用 | DBコネクションプール・Redis接続プールの生成、ジョブ実行時の `notifications` へのINSERTと `sp_purge_notifications` 実行（[02_due_notification_job.md](./02_due_notification_job.md)） |
+| 出力 | プロセスの標準出力への構造化ログ、`batch_history`の開始・完了・失敗履歴。常駐時は終了しない（プロセスとして稼働し続ける） |
+| 副作用 | DBコネクションプール・Redis接続プールの生成、`batch_history`の状態更新、ジョブ実行時の`notifications`へのINSERTと保持期間パージ |
 
 ## 3. 起動シーケンス
 
@@ -38,7 +38,7 @@ sequenceDiagram
 
     DC->>MAIN: python -m app.main
     MAIN->>CFG: get_settings() を呼び出し
-    CFG-->>MAIN: Settings（DATABASE_URL/REDIS_URL/APP_TIMEZONE等）
+    CFG-->>MAIN: BatchSettings（DATABASE_URL/REDIS_URL/APP_TIMEZONE等）
     MAIN->>DB: create_async_engine(DATABASE_URL)
     MAIN->>RD: create_redis_pool(REDIS_URL)
     alt コマンドライン引数に --run-once <job名>
@@ -137,7 +137,7 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| 方式 | HTTPエンドポイントを持たないため、`pgrep -f app.main` 相当のプロセス存在確認を `docker-compose.yml` の `HEALTHCHECK` として使う（[../infra/01_docker_compose.md](../infra/01_docker_compose.md) §8.2） |
+| 方式 | HTTPエンドポイントを持たないため、`python -c "import os; os.kill(1, 0)"` によるPID 1の生存確認を `docker-compose.yml` の `HEALTHCHECK` として使う（[../infra/01_docker_compose.md](../infra/01_docker_compose.md) §8.2） |
 | 判定内容 | 「メインプロセスが生きているか」のみを見る。スケジューラが実際にジョブを登録できているか、直近の実行が成功したかは**ヘルスチェックの対象外**（§12要検討） |
 | 運用時の確認 | 実行結果（成功/失敗、作成件数）は `docker compose logs batch` で確認する（[../infra/07_operation.md](../infra/07_operation.md)） |
 
@@ -151,21 +151,21 @@ flowchart TB
     D --> E["APSchedulerはプロセスをクラッシュさせない<br/>次回トリガまで待機"]
     E --> F{"当日・同一枠の実行ロックは取得済みか？"}
     F -->|"ロック取得前に失敗"| G["翌回のCronトリガまたは<br/>--run-once手動実行でリカバリ可能"]
-    F -->|"ロック取得後・INSERT前後で失敗"| H["ロックはTTLで存在するため<br/>同日中の自動再実行はされない<br/>--run-once手動実行での復旧が必要（要検討§12）"]
+    F -->|"ロック取得後・INSERT前後で失敗"| H["自分のrunner_idを確認してロック削除<br/>--run-once手動実行で即時復旧可能"]
 ```
 
 | 項目 | 内容 |
 |------|------|
 | ジョブ内例外 | ジョブ関数内で捕捉しERRORログを出力後、例外を握ってプロセスを継続させる（1回の失敗でプロセス全体を落とさない） |
 | プロセスクラッシュ | 予期しないクラッシュ時は Docker の `restart: unless-stopped`（[../infra/01_docker_compose.md](../infra/01_docker_compose.md) §2.1）により再起動される。再起動後はスケジューラが再登録され、次回のCronトリガまで待機する |
-| 当日分のリカバリ | ロック取得後に失敗した場合、対象枠の再実行は `--run-once due_notification --slot 10|17` の手動実行に依る（§4、[02_due_notification_job.md](./02_due_notification_job.md) §3のロック仕様） |
+| 当日分のリカバリ | ロック取得後に失敗した場合、所有者確認後にロックを削除し、`--run-once due_notification --slot 10|17` で再実行する（§4、[02_due_notification_job.md](./02_due_notification_job.md) §5〜§6） |
 
 ## 10. テスト設計
 
 | No | 区分 | ケース | 前提 | 期待結果 | テスト名案 |
 |----|------|--------|------|----------|-----------|
-| 1 | 単体 | `BATCH_ENABLED=true` でジョブが登録される | `Settings(batch_enabled=True)` | `scheduler.add_job` が呼ばれる | `test_main_registers_job_when_enabled` |
-| 2 | 単体 | `BATCH_ENABLED=false` でジョブが登録されない | `Settings(batch_enabled=False)` | `scheduler.add_job` が呼ばれない | `test_main_skips_job_when_disabled` |
+| 1 | 単体 | `BATCH_ENABLED=true` でジョブが登録される | `BatchSettings(batch_enabled=True)` | `scheduler.add_job` が呼ばれる | `test_main_registers_job_when_enabled` |
+| 2 | 単体 | `BATCH_ENABLED=false` でジョブが登録されない | `BatchSettings(batch_enabled=False)` | `scheduler.add_job` が呼ばれない | `test_main_skips_job_when_disabled` |
 | 3 | 単体 | 10時・17時の2つの `CronTrigger` が `APP_TIMEZONE`・設定値で構成される | `NOTIFY_DUE_RUN_HOURS=10,17` を注入 | `add_job` が2回呼ばれ、各 `hour`/`minute`/`timezone` と `slot` が期待値と一致 | `test_main_registers_two_cron_triggers` |
 | 4 | 単体 | `--run-once due_notification` でジョブが1回だけ実行され常駐しない | CLI引数を模擬 | ジョブが1回 await 実行され、`scheduler.start()` が呼ばれない | `test_main_run_once_executes_job_without_scheduler` |
 | 5 | 単体 | SIGTERM受信で `scheduler.shutdown(wait=True)` が呼ばれる | シグナルハンドラを模擬発火 | `shutdown` 呼び出し確認、`engine.dispose()`/`redis_pool.disconnect()` 呼び出し確認 | `test_main_sigterm_graceful_shutdown` |
@@ -179,7 +179,7 @@ flowchart TB
 |------|-----------|----------|
 | `main` | `def main() -> None` | CLI引数解析（`argparse`。`--run-once <job名> --slot <10|17>`）→ `asyncio.run(async_main(args))` |
 | `async_main` | `async def async_main(args: Namespace) -> None` | Settings取得 → DB/Redisプール生成 → `--run-once` 分岐 or 常駐スケジューラ起動 → シャットダウン処理 |
-| `build_scheduler` | `def build_scheduler(settings: Settings) -> AsyncIOScheduler` | `AsyncIOScheduler(timezone=settings.app_timezone)` を生成し、`BATCH_ENABLED=true` の場合のみ `NOTIFY_DUE_RUN_HOURS` の各値に対応する2つのcronジョブを `add_job` する |
+| `build_scheduler` | `def build_scheduler(settings: BatchSettings) -> AsyncIOScheduler` | `AsyncIOScheduler(timezone=settings.app_timezone)` を生成し、`BATCH_ENABLED=true` の場合のみ `NOTIFY_DUE_RUN_HOURS` の各値に対応する2つのcronジョブを `add_job` する |
 | `handle_sigterm` | `def handle_sigterm(scheduler: AsyncIOScheduler, shutdown_event: asyncio.Event) -> None` | `signal.signal(SIGTERM, ...)` から呼ばれ、`shutdown_event.set()` してメインループを終了させる |
 
 ## 12. 不明点・要検討事項
@@ -188,5 +188,36 @@ flowchart TB
 |------|------|------|
 | 要検討 | `misfire_grace_time` の具体値（例示3600秒）は基本設計に明記がなく、本書が学習用途の仮値として提案した。コード定数か環境変数化するかも未確定 | `batch/app/main.py` の `add_job` 呼び出し |
 | 要検討 | ヘルスチェックが「プロセス生存」のみで「直近ジョブの成功」を見ない点について、運用上十分か（[../infra/07_operation.md](../infra/07_operation.md) の手動確認手順に依存する）は要検討 | [../infra/01_docker_compose.md](../infra/01_docker_compose.md) §8.2 |
-| 要検討 | ロック取得後に失敗した当日・同一枠を自動リトライする仕組み（例：一定時間後に再試行）を持たせるかは基本設計に明記がなく、本書は手動 `--run-once` のみを前提とした | [02_due_notification_job.md](./02_due_notification_job.md) §3 |
+| 要検討 | ロック取得後に失敗した当日・同一枠を自動リトライする仕組み（例：一定時間後に再試行）を持たせるかは基本設計に明記がなく、本書は失敗時のロック削除後に手動 `--run-once` で再実行する前提とした | [02_due_notification_job.md](./02_due_notification_job.md) §5〜§6 |
 | 不明 | Docker停止時のSIGTERMグレースピリオド（既定10秒）が、チャンク処理中のジョブの安全な中断に十分かは実測が必要 | `docker-compose.yml` の `stop_grace_period` 設定要否（[../infra/01_docker_compose.md](../infra/01_docker_compose.md)） |
+
+## 13. 関数相関図
+
+```mermaid
+flowchart LR
+    M["main"] --> AM["async_main"]
+    AM --> BS["build_scheduler"]
+    AM -->|"--run-once"| JOB["run_due_notification_job"]
+    BS --> SCH["AsyncIOScheduler"]
+    SCH --> JOB
+    AM --> CFG["get_settings"]
+    AM --> POOL["DB/Redis pool"]
+    AM --> SIG["handle_sigterm"]
+```
+
+`main`は引数解析、`async_main`はライフサイクル、`build_scheduler`は実行枠の登録、ジョブ本体は通知処理を担当する。スケジューラからrepositoryを直接呼び出さない。
+
+## 14. データ遷移図
+
+```mermaid
+flowchart LR
+    A["Settings・CLI引数"] --> B["async_main"]
+    B -->|"常駐"| C["10時/17時のscheduler登録"]
+    B -->|"--run-once"| D["due_notification_job 1回実行"]
+    C --> E["ジョブ実行"]
+    D --> E
+    E --> F["batch_history / notifications / ログ"]
+    F --> G["shutdownでpool close"]
+```
+
+設定不備は起動失敗、ジョブ例外は履歴とログへ記録して常駐プロセスを継続する。scheduler自体の失敗とジョブ本体の失敗を混同しない。

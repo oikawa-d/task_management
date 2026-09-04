@@ -9,6 +9,7 @@
 - [../infra/05_ci_workflow.md](../infra/05_ci_workflow.md)（CIでのマイグレーション適用手順）
 - [../infra/02_dockerfile_api.md](../infra/02_dockerfile_api.md)（起動時 `alembic upgrade head` の実行箇所）
 - [../batch/02_due_notification_job.md](../batch/02_due_notification_job.md)（通知保持期間パージの呼び出し元）
+- [../log/00_history.md](../log/00_history.md)（履歴の記録契機・保持期間）
 
 ## 1. 概要
 
@@ -21,6 +22,8 @@
 | 接続先 | `env.py` 内で `DATABASE_URL`（環境変数）から取得。`alembic.ini` にはURLをハードコードしない |
 | `db/migrations/` の位置づけ | 参考用の手動DDLスナップショット置き場。CIやアプリ起動では**参照しない**（`api/alembic/versions/` のみが実行対象） |
 | オートジェネレート | `alembic revision --autogenerate -m "<message>"` でモデル差分から下書きを生成し、CHECK制約・関数・トリガ適用は手動でリビジョンに追記する（`basic_design/01_database.md` §6） |
+| backendのbuild context | リポジトリルート（`docker build -f api/Dockerfile .`）。`api/`だけをcontextにせず、`db/functions/`・`db/procedures/`をruntimeイメージへ含める |
+| runtime配置 | `api/`は`/app/api/`、SQL資材は`/app/db/functions/`・`/app/db/procedures/`へ配置する。Alembicリビジョンからは`Path(__file__).resolve().parents[3] / "db"`で参照する |
 
 ## 2. `api/alembic/versions/` ディレクトリ構成と初期リビジョン
 
@@ -41,6 +44,7 @@
 | `0009_create_functions_and_triggers.py` | [08_db_functions.md](./08_db_functions.md) の通知テーブルに依存しない関数・プロシージャ（`trg_set_updated_at` とその4トリガ、`fn_is_project_member`、`fn_next_task_position`、`sp_purge_login_history`） |
 | `0010_seed_initial_admin.py` | 初期adminユーザーのシード（§3） |
 | `0011_create_notifications_table.py` | `tasks.due_at`への移行、`notifications` テーブル、制約・インデックス、`sp_purge_notifications` |
+| `0012_create_history_tables.py` | `api_history` / `batch_history` テーブル、制約・インデックス、履歴パージ用プロシージャ |
 
 **要検討**：上記のリビジョン分割・命名例（`0001_...` 等の連番接頭辞）は本詳細設計での具体化であり、基本設計に明記された正の構成ではない。実装時にAlembicの自動生成ハッシュIDとの整合をどう取るか（`down_revision` チェーンの実ファイル名）は実装担当の裁量とする。
 
@@ -58,7 +62,8 @@ flowchart LR
     R8 --> R9["0009<br/>関数・トリガ"]
     R9 --> R10["0010<br/>シード「初期admin」"]
     R10 --> R11["0011<br/>notifications + due_at"]
-    R11 -.->|"以降、機能追加ごとに1リビジョン"| RN["000N..."]
+    R11 --> R12["0012<br/>api_history + batch_history"]
+    R12 -.->|"以降、機能追加ごとに1リビジョン"| RN["000N..."]
 ```
 
 ### 2.3 各リビジョンの構造（例：`0009_create_functions_and_triggers.py`）
@@ -147,6 +152,12 @@ def downgrade() -> None:
 
 `downgrade()`は通知履歴と期限日時を削除するため、本番CDのロールバックでは実行しない（§5）。
 
+### 2.5 `0012_create_history_tables.py`（API・batch履歴）
+
+`api_history`と`batch_history`を作成し、両テーブルの制約・検索用インデックス・`sp_purge_api_history`・`sp_purge_batch_history`を適用する。`batch_history`の`updated_at`には既存の`trg_set_updated_at`を適用する。`downgrade()`では両テーブルとプロシージャを削除するため、本番では実行しない。
+
+詳細なDDLは [11_table_api_history.md](./11_table_api_history.md) と [12_table_batch_history.md](./12_table_batch_history.md)を正とし、リビジョン内に重複してハードコードしない。
+
 ## 3. シードデータ（初期adminユーザー）
 
 | 項目 | 内容 |
@@ -166,7 +177,6 @@ Revision ID: 0010
 Revises: 0009
 """
 import os
-import uuid
 from alembic import op
 import sqlalchemy as sa
 
@@ -177,14 +187,13 @@ def upgrade() -> None:
     op.execute(
         sa.text(
             """
-            INSERT INTO users (id, username, email, password_hash, role,
+            INSERT INTO users (username, email, password_hash, role,
                                 is_active, email_verified_at, created_at, updated_at)
-            VALUES (:id, :username, :email, :password_hash, 'admin',
+            VALUES (:username, :email, :password_hash, 'admin',
                     true, now(), now(), now())
             ON CONFLICT (lower(username)) DO NOTHING
             """
-        ).bindparams(id=str(uuid.uuid4()), username=username, email=email,
-                      password_hash=password_hash)
+        ).bindparams(username=username, email=email, password_hash=password_hash)
     )
 
 def downgrade() -> None:
@@ -194,7 +203,7 @@ def downgrade() -> None:
 
 `_hash_password` は `core/security.py` 相当の argon2 ラッパーをリビジョン内で直接importして使う想定。ハードコードした固定値ではなく、実行時の環境変数から都度生成する。
 
-**要検討**：Alembicリビジョン内で環境変数未設定（`INITIAL_ADMIN_PASSWORD` 等が空）の場合の挙動（起動失敗させるか、スキップしてログ警告するか）は基本設計に明記がなく要検討。本設計では `os.environ[...]`（`KeyError` で起動失敗）を既定とし、CI環境ではダミー値を必ず注入する前提とする。
+`INITIAL_ADMIN_EMAIL` / `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD` のいずれかが未設定または空文字の場合は、`os.environ[...]` と起動時バリデーションで失敗させる。seedをスキップして起動することはなく、CI環境では専用のダミーSecretを必ず注入する。
 
 ## 4. 適用手順
 
@@ -301,6 +310,8 @@ flowchart LR
 | 6 | 正常系 | `upgrade head` → `downgrade -1` → `upgrade head` の往復 | 最終的なスキーマが初回 `upgrade head` と一致する | `test_migration_upgrade_downgrade_upgrade_roundtrip` |
 | 7 | 正常系 | CI環境（`AUTH_MODE` matrix: session / jwt）でそれぞれマイグレーション適用後にpytestが通る | 両方式で成功する | `test_migration_ci_matrix_session_and_jwt` |
 | 8 | 正常系 | 関数・トリガ適用リビジョン後、`UPDATE users` で `updated_at` が更新される | [08_db_functions.md](./08_db_functions.md) のテストと重複しない範囲でマイグレーション経由の適用を確認 | `test_migration_functions_applied_correctly` |
+| 9 | 正常系 | `0012`適用後にAPI・batch履歴テーブルとプロシージャが存在する | 全制約・インデックス・パージプロシージャが作成される | `test_migration_history_tables_created` |
+| 10 | 正常系 | `0012`のupgrade→downgrade | 履歴テーブル・プロシージャが削除される | `test_migration_history_downgrade` |
 
 ## 9. 不明点・要検討事項
 

@@ -65,7 +65,7 @@
 
 | No | 呼び出しタイミング | メソッド／パス | 送信内容 | 成功時処理 | 失敗時処理 | queryKey / mutationKey |
 |----|---------------------|-----------------|----------|------------|------------|--------------------------|
-| 1 | ⑥ボタン押下（フォーム送信） | `POST /api/auth/password/reset` | `{ token, new_password, password_confirm }`（`password_confirm` はクライアント側一致検証のみに使い、APIへは送らない。実際の送信フィールドはAPI側スキーマ [10_post_auth_password_reset.md](../api/auth/10_post_auth_password_reset.md) を正とする） | 204 → トースト「パスワードを再設定しました」→ `/login` へ `navigate` | 400 `INVALID_RESET_TOKEN` → ⑦⑧を表示。422 → フィールドエラー表示。429 → 待機時間案内 | `mutationKey: ['auth', 'passwordReset']` |
+| 1 | ⑥ボタン押下（フォーム送信） | `POST /api/auth/password/reset` | `{ token, new_password, password_confirm }`（`password_confirm` はクライアント側一致検証のみに使い、APIへは送らない。実際の送信フィールドはAPI側スキーマ [10_post_auth_password_reset.md](../api/auth/10_post_auth_password_reset.md) を正とする） | 204 → トースト「パスワードを再設定しました」→ `/login` へ `navigate` | 400 `INVALID_RESET_TOKEN` → ⑦⑧を表示。422 → フィールドエラー表示。429 `TOO_MANY_ATTEMPTS` → `Retry-After`に基づく待機時間案内。503 → 再試行案内 | `mutationKey: ['auth', 'passwordReset']` |
 
 ## 5. 状態管理
 
@@ -208,6 +208,7 @@ flowchart TB
 | `400 INVALID_RESET_TOKEN` | "リンクの有効期限が切れているか、既に使用済みです" | 画面内に留まる | 「もう一度リセットを申請する」→ `/password/forgot` |
 | `422 VALIDATION_ERROR` | フィールド単位のエラー | 画面内に留まる | 再入力して送信 |
 | `429 TOO_MANY_ATTEMPTS` | 待機時間の案内 | 画面内に留まる | 待機後に再送信 |
+| `503 SERVICE_UNAVAILABLE` | サービス一時停止の案内 | 入力値を保持して画面内に留まる | 復旧後に再送信 |
 | token欠落（クライアント側判定） | "リンクが不正です" | 画面内に留まる（APIは呼ばない） | 「もう一度リセットを申請する」→ `/password/forgot` |
 | その他4xx/5xx | 共通トースト表示 | 画面内に留まる | 再送信ボタンで再試行可 |
 
