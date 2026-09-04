@@ -359,8 +359,8 @@ flowchart LR
 | 7 | コンポーネント | 有効化操作は確認なしで即時反映 | ⑧をONへ操作 | 確認ダイアログなしで`PATCH .../status`が呼ばれる | `UserRow reactivates without confirmation dialog` |
 | 8 | コンポーネント | 強制ログアウト成功 | `POST .../force-logout` → 204 | 成功トースト表示 | `UserRow shows success toast after force logout` |
 | 9 | コンポーネント | 検索語入力のデバウンス | ③に連続入力 | APIが300ms後に1回だけ呼ばれる | `UserFilterBar debounces search input` |
-| 10 | コンポーネント | プロジェクト削除確認とキャンセル | ⑫クリック→キャンセル | `DELETE`が呼ばれない | `ProjectTable cancels delete confirmation without calling API` |
-| 11 | コンポーネント | プロジェクト削除成功 | `DELETE /admin/projects/:id` → 204 | 一覧から対象行が消える | `ProjectTable removes row after successful delete` |
+| 10 | コンポーネント | プロジェクト無効化確認とキャンセル | ⑫クリック→キャンセル | `DELETE`が呼ばれない | `ProjectTable cancels deactivate confirmation without calling API` |
+| 11 | コンポーネント | プロジェクト無効化成功 | `DELETE /admin/projects/:id`（論理削除） → 204 | 一覧から対象行が消える（既定は`is_active=true`のみ表示） | `ProjectTable removes row after successful deactivation` |
 | 12 | 結合 | `role=member`ユーザーが`/admin/users`へ直接アクセス | `authStore.user.role='member'` | `/dashboard`へリダイレクトされる | `RequireAdmin redirects non-admin user away from /admin/users` |
 | 13 | 結合 | サイドバーの「管理」タブがmemberには表示されない | `role='member'` | Sidebarに「管理」リンクが描画されない | `Sidebar hides admin link for member role`（[05_frontend.md §3](../../basic_design/05_frontend.md#3-共通レイアウト)参照。実装は`Sidebar`側だが本画面へのアクセス経路として検証） |
 | 14 | 結合 | ページネーション操作 | ユーザー25件（1ページ20件） | 2ページ目クリックで残り5件が表示される | `UserTable paginates through GET /admin/users` |
@@ -372,5 +372,5 @@ flowchart LR
 |------|------|------|
 | 要検討 | タブの選択状態（②）をURLクエリ（例：`?tab=projects`）に同期させ、リロード・共有時にタブ状態を保持すべきかは基本設計（[05_frontend.md §7.7](../../basic_design/05_frontend.md#77-管理者ユーザー管理)）に明記がない。本設計ではローカルstateのみとし同期させない方針とした | リロード時に常にユーザータブへ戻る点のUX確認が必要 |
 | なし | プロジェクトタブも`page` / `per_page` / `q`と⑬ページネーションを使用する | - |
-| 要検討 | プロジェクト削除（⑫）にタスク・コメントもCASCADE削除される旨の警告文言を確認ダイアログに含めるべきかは画面設計側の裁量とした（基本設計にはCASCADEの事実のみ記載） | 誤削除時の影響範囲をユーザーが認識できるかどうか |
+| 要検討 | プロジェクト無効化（⑫、issue #10で論理削除に変更）は配下タスク・コメントを削除せず有効なまま残す（`is_active=true`のタスクは`project_is_active=false`付きで一覧・カンバンに残り続ける）。この挙動を確認ダイアログの警告文言に含めるべきかは画面設計側の裁量とした | 誤操作時の影響範囲・再有効化可能であることをユーザーが認識できるかどうか |
 | なし | 上記以外 | - |

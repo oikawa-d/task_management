@@ -2,11 +2,11 @@
 
 `requirements/task_management_requirements.md`（要件定義書）と [basic_design/](../basic_design/README.md)（基本設計書）を入力とし、実装に着手できる粒度まで具体化した詳細設計書。
 
-- **APIは1エンドポイントにつき1ファイル**（全47エンドポイント）
+- **APIは1エンドポイントにつき1ファイル**（全49エンドポイント）
 - **画面は1画面につき1ファイル**（全11画面）
 - DB・認証・インフラは対象単位（テーブル／認証方式／コンテナ・ワークフロー）で分割
 
-全94ファイル。各ファイルは「関連ドキュメント／概要／全体の出入力／シーケンス図／処理フロー／関数詳細／関数相関図／データ遷移図／テスト設計／不明点・要検討事項」を共通の章立てで持つ。図はすべて Mermaid 記法。章の適用範囲と検査手順は [quality_check.md](./quality_check.md) にまとめる。
+全96ファイル。各ファイルは「関連ドキュメント／概要／全体の出入力／シーケンス図／処理フロー／関数詳細／関数相関図／データ遷移図／テスト設計／不明点・要検討事項」を共通の章立てで持つ。図はすべて Mermaid 記法。章の適用範囲と検査手順は [quality_check.md](./quality_check.md) にまとめる。
 
 ## 読む順番
 
@@ -26,7 +26,7 @@ flowchart LR
     L --> I
 ```
 
-## 1. API（47エンドポイント）
+## 1. API（49エンドポイント）
 
 ### 1.1 認証 `api/auth/`
 | ファイル | エンドポイント |
@@ -67,18 +67,20 @@ flowchart LR
 | [08_get_project_member_candidates.md](./api/projects/08_get_project_member_candidates.md) | GET /api/projects/{project_id}/members/candidates |
 | [09_delete_project_member.md](./api/projects/09_delete_project_member.md) | DELETE /api/projects/{project_id}/members/{user_id} |
 
-### 1.4 タスク・コメント `api/tasks/`
+### 1.4 タスク・コメント `api/tasks/`（全11エンドポイント）
 | ファイル | エンドポイント |
 |----------|----------------|
 | [01_get_project_tasks.md](./api/tasks/01_get_project_tasks.md) | GET /api/projects/{project_id}/tasks |
 | [02_post_project_tasks.md](./api/tasks/02_post_project_tasks.md) | POST /api/projects/{project_id}/tasks |
 | [03_get_task.md](./api/tasks/03_get_task.md) | GET /api/tasks/{task_id} |
 | [04_patch_task.md](./api/tasks/04_patch_task.md) | PATCH /api/tasks/{task_id} |
-| [05_delete_task.md](./api/tasks/05_delete_task.md) | DELETE /api/tasks/{task_id} |
+| [05_delete_task.md](./api/tasks/05_delete_task.md) | DELETE /api/tasks/{task_id}（論理削除） |
 | [06_get_task_comments.md](./api/tasks/06_get_task_comments.md) | GET /api/tasks/{task_id}/comments |
 | [07_post_task_comments.md](./api/tasks/07_post_task_comments.md) | POST /api/tasks/{task_id}/comments |
 | [08_patch_comment.md](./api/tasks/08_patch_comment.md) | PATCH /api/comments/{comment_id} |
 | [09_delete_comment.md](./api/tasks/09_delete_comment.md) | DELETE /api/comments/{comment_id} |
+| [10_get_tasks.md](./api/tasks/10_get_tasks.md) | GET /api/tasks（横断的タスク一覧、`project_id`未所属分を含む） |
+| [11_post_tasks.md](./api/tasks/11_post_tasks.md) | POST /api/tasks（`project_id`任意指定のフラット作成） |
 
 ### 1.5 管理者 `api/admin/`
 | ファイル | エンドポイント |

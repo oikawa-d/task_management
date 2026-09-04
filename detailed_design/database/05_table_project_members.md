@@ -19,7 +19,7 @@
 | テーブル名 / 論理名 | `project_members` / プロジェクト所属 |
 | 役割 | ユーザーとプロジェクトの多対多関係（所属）を表す中間テーブル。認可判定（所属チェック）の唯一の情報源 |
 | 想定件数・増加傾向 | `projects × 平均メンバー数` に比例。学習用途のため小規模 |
-| ライフサイクル | 作成契機：プロジェクト作成時（オーナー自身を自動登録）／`POST /api/projects/{project_id}/members`（オーナー・adminによる招待）。更新契機：なし（更新APIを持たない。再招待は行削除→再作成ではなくINSERTのみで、既存行がある場合は `409 ALREADY_MEMBER`）。削除契機：`DELETE /api/projects/{project_id}/members/{user_id}`、またはプロジェクト削除時のCASCADE。保持期間の定めなし |
+| ライフサイクル | 作成契機：プロジェクト作成時（オーナー自身を自動登録）／`POST /api/projects/{project_id}/members`（オーナー・adminによる招待）。更新契機：なし（更新APIを持たない。再招待は行削除→再作成ではなくINSERTのみで、既存行がある場合は `409 ALREADY_MEMBER`）。削除契機：`DELETE /api/projects/{project_id}/members/{user_id}` のみ。**プロジェクト削除（`DELETE /api/projects/{project_id}`）はissue #10で論理削除（`is_active=false`）に変更されたため、プロジェクト無効化後も所属情報は削除されず維持される**。保持期間の定めなし |
 | 関連ORMモデル | `models/project_member.py :: ProjectMember` |
 
 ## 2. カラム定義
@@ -55,7 +55,7 @@ CREATE INDEX ix_project_members_user_id ON project_members (user_id);
 | 種別 | 名称 | 対象カラム | 内容 | 目的（対応クエリ） |
 |------|------|-----------|------|---------------------|
 | PK | `project_members_pkey` | `(project_id, user_id)` | 複合主キー。同一ユーザーの重複所属を禁止 | `POST .../members` の重複検知（`409 ALREADY_MEMBER`） |
-| FK | `project_members_project_id_fkey` | `project_id` | → `projects.id` `ON DELETE CASCADE` | プロジェクト削除時に所属情報を自動削除 |
+| FK | `project_members_project_id_fkey` | `project_id` | → `projects.id` `ON DELETE CASCADE` | `projects`の物理削除経路が無いため通常運用では発火しない防御的制約（issue #10でプロジェクト削除は論理削除化） |
 | FK | `project_members_user_id_fkey` | `user_id` | → `users.id` `ON DELETE CASCADE` | ユーザー物理削除時に所属情報を自動削除（本設計ではユーザー物理削除APIは提供しないため、実運用では到達しにくいがDB整合性のため定義） |
 | FK | `project_members_invited_by_fkey` | `invited_by` | → `users.id` `ON DELETE SET NULL` | 招待者情報の欠落時にも行自体を残す |
 | INDEX | `ix_project_members_user_id` | `user_id` | B-tree | ダッシュボードの所属プロジェクト一覧取得（`01_database.md` Q-2） |
@@ -128,7 +128,7 @@ flowchart LR
     L --> M["DELETE FROM project_members<br/>WHERE project_id=:pid AND user_id=:uid"]
     M --> N["COMMIT / 204"]
 
-    O["DELETE /api/projects/:id<br/>（プロジェクト削除）"] --> P["CASCADE DELETE<br/>project_members 全行"]
+    O["DELETE /api/projects/:id<br/>（プロジェクト論理削除、issue #10）"] -.->|"is_active=falseのみ更新"| P["project_members はそのまま維持"]
 ```
 
 メンバー削除（DELETEメンバーAPI）では、担当タスクの `assignee_id` を先に `NULL` 化してから `project_members` を削除する（`06_table_tasks.md` の `assignee_id` FKは `ON DELETE SET NULL` だが、これは `users` 行自体の削除時のみ発火するため、所属解除だけを行う本ケースではアプリ層のUPDATEが必須）。
@@ -233,7 +233,7 @@ flowchart LR
 
 | 項目 | 内容 |
 |------|------|
-| FK CASCADE（`project_id`） | `ON DELETE CASCADE`。プロジェクト削除時に所属情報を自動削除 |
+| FK CASCADE（`project_id`） | `ON DELETE CASCADE`。`projects`の物理削除経路が無いため通常運用では発火しない防御的制約（issue #10でプロジェクト削除は論理削除化） |
 | FK CASCADE（`user_id`） | `ON DELETE CASCADE`。ユーザー物理削除時に所属情報を自動削除（本設計ではユーザーは無効化のみで物理削除APIを提供しないため、通常運用では発火しない） |
 | FK CASCADE（`invited_by`） | `ON DELETE SET NULL`。招待者が削除されても所属行自体は残す |
 | メンバー削除とタスクの関係 | `tasks.assignee_id` の `ON DELETE SET NULL` はDBの `users` 行削除にのみ反応するため、「所属解除（`project_members` 削除）」では発火しない。サービス層が明示的に `UPDATE tasks SET assignee_id=NULL` を実行してからメンバー行を削除する（§8.5） |
@@ -248,7 +248,7 @@ flowchart LR
 |----|------|--------|----------|------------|
 | T-1 | 正常系 | オーナーがプロジェクト作成時に自動でメンバー登録される | `project_members` に `(project_id, owner_id)` が1行存在 | `test_create_project_auto_registers_owner` |
 | T-2 | 制約違反（PK） | 既に所属しているユーザーを再度招待する | `409 ALREADY_MEMBER`（DB一意制約違反を変換） | `test_add_member_duplicate_returns_conflict` |
-| T-3 | CASCADE削除 | プロジェクトを削除する | 関連する `project_members` 行がすべて削除される | `test_delete_project_cascades_members` |
+| T-3 | 論理削除の非連鎖（issue #10） | プロジェクトを `DELETE /api/projects/{id}` で無効化する | `projects.is_active=false` に更新されるのみで、`project_members` 行はすべて維持される | `test_deactivate_project_does_not_delete_members` |
 | T-4 | 業務ロジック | 担当タスクを持つメンバーを削除する | 削除前に該当タスクの `assignee_id` が `NULL` になり、その後 `project_members` 行が削除される | `test_remove_member_nullifies_assigned_tasks` |
 | T-5 | 業務ロジック | オーナー自身を削除しようとする | `409 OWNER_CANNOT_BE_REMOVED` となり `project_members` 行は削除されない | `test_remove_owner_forbidden` |
 | T-6 | 並行制御 | メンバー削除と担当タスクのUPDATEを同一トランザクションで実行中にエラーが発生 | ロールバックされ、`assignee_id` のNULL化・メンバー削除のいずれも反映されない | `test_remove_member_rolls_back_on_error` |

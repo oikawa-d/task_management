@@ -12,6 +12,10 @@
 | [../../database/07_table_task_comments.md](../../database/07_table_task_comments.md) | task_comments テーブル詳細 |
 | [./02_post_project_tasks.md](./02_post_project_tasks.md) | 同一リソースの作成API |
 | [../../screen/07_project_board.md](../../screen/07_project_board.md) | 本APIを使用するカンバン画面 |
+| [../../database/06_table_tasks.md](../../database/06_table_tasks.md) | `tasks.is_active`（論理削除フラグ） |
+| [../../database/04_table_projects.md](../../database/04_table_projects.md) | `projects.is_active`（プロジェクトの論理削除フラグ） |
+| [./10_get_tasks.md](./10_get_tasks.md) | 横断的なフラットタスク一覧API（本APIとの使い分け） |
+| [./05_delete_task.md](./05_delete_task.md) | タスク論理削除（`is_active=false`）の詳細 |
 
 ## 1. 概要
 
@@ -38,7 +42,11 @@
 |------|----|----|------|------|
 | project_id | string(uuid) | ○ | UUID v4 形式 | 対象プロジェクトID |
 
-**クエリパラメータ**：なし
+**クエリパラメータ**
+
+| 名前 | 型 | 必須 | 制約 | 説明 |
+|------|----|----|------|------|
+| include_inactive | boolean | - | 省略時 `false` | `true` の場合、`tasks.is_active=false`（論理削除済み）のタスクも列に含めて返す。プロジェクトメンバーであれば admin/オーナーに限らず指定可能（[../projects/04_patch_project.md](../projects/04_patch_project.md) のプロジェクト側 `include_inactive` が admin/オーナー限定なのとは異なり、本APIはボード閲覧権限＝メンバー権限と同一に揃える方針。§13参照） |
 
 **ヘッダ**
 
@@ -58,6 +66,7 @@
 ```json
 {
   "project_id": "3f1c2a10-...",
+  "project_is_active": true,
   "columns": {
     "todo": [
       {
@@ -68,6 +77,7 @@
         "due_at": null,
         "position": 0,
         "version": 1,
+        "is_active": true,
         "comment_count": 2,
         "created_at": "2026-09-01T00:00:00Z",
         "updated_at": "2026-09-01T00:00:00Z"
@@ -82,14 +92,16 @@
 | フィールド | 型 | NULL可否 | 説明 |
 |-----------|----|----------|------|
 | project_id | string(uuid) | 不可 | 対象プロジェクトID |
-| columns.todo / in_progress / done | array\<TaskSummary\> | 不可（空配列可） | 各 status 列。`position` 昇順でソート済み |
+| project_is_active | boolean | 不可 | `projects.is_active`。本APIは `project_id` がパスで確定しているため常に対象プロジェクトの値（`null` にはならない） |
+| columns.todo / in_progress / done | array\<TaskSummary\> | 不可（空配列可） | 各 status 列。`position` 昇順でソート済み。既定では `is_active=true` の行のみ。`include_inactive=true` の場合は `is_active=false` の行も同じ列内に `position` 順で混在させる |
 | TaskSummary.id | string(uuid) | 不可 | タスクID |
 | TaskSummary.title | string | 不可 | タイトル |
 | TaskSummary.description | string | 可 | 説明（カンバンカードでは省略表示） |
 | TaskSummary.assignee | object | 可（未アサイン時 `null`） | `{id, username, display_name}` |
 | TaskSummary.due_at | string(date-time) | 可 | 期限日時。ISO 8601 UTC |
-| TaskSummary.position | integer | 不可 | 列内の並び順（0始まり） |
+| TaskSummary.position | integer | 不可 | 列内の並び順（0始まり）。論理削除されたタスクを除外してもposition詰めは行わないため、`is_active=true` のみで見るとギャップが生じ得る（[./05_delete_task.md](./05_delete_task.md) §11参照） |
 | TaskSummary.version | integer | 不可 | 楽観ロック用バージョン。以後の `PATCH` で必須 |
+| TaskSummary.is_active | boolean | 不可 | `tasks.is_active`。論理削除済みかどうか。`include_inactive=true` 時のみ `false` の行が出現し得る |
 | TaskSummary.comment_count | integer | 不可 | `task_comments` の件数集計 |
 | TaskSummary.created_at / updated_at | string(datetime) | 不可 | ISO 8601 UTC |
 
@@ -118,7 +130,7 @@ sequenceDiagram
     participant TR as "task_repository"
     participant PG as "PostgreSQL"
 
-    FE->>R: "GET /api/projects/{project_id}/tasks"
+    FE->>R: "GET /api/projects/{project_id}/tasks?include_inactive"
     R->>D: "認証 + 所属チェック"
     D->>PG: "SELECT project_members WHERE project_id AND user_id"
     alt "非所属かつadminでない"
@@ -126,16 +138,16 @@ sequenceDiagram
         R-->>FE: "404 NOT_FOUND"
     else "所属 または admin"
         D-->>R: "Project"
-        R->>S: "get_board(project)"
-        S->>TR: "list_board(project_id)"
-        TR->>PG: "SELECT tasks<br/>+ 相関サブクエリ COUNT(task_comments)<br/>ORDER BY status, position"
+        R->>S: "get_board(project, include_inactive)"
+        S->>TR: "list_board(project_id, include_inactive)"
+        TR->>PG: "SELECT tasks<br/>WHERE project_id AND (include_inactive OR is_active=true)<br/>+ 相関サブクエリ COUNT(task_comments)<br/>ORDER BY status, position"
         PG-->>TR: "tasks行 + comment_count"
         TR->>PG: "selectinload(assignee) の追加SELECT<br/>WHERE users.id IN (assignee_ids)"
         PG-->>TR: "assignee行"
         TR-->>S: "list[TaskWithCommentCount]"
         S->>S: "status別にグルーピング（todo/in_progress/done）"
         S-->>R: "BoardResponse"
-        R-->>FE: "200 {project_id, columns}"
+        R-->>FE: "200 {project_id, project_is_active, columns}"
     end
 ```
 
@@ -151,9 +163,9 @@ flowchart TB
     D -->|"No"| E403["403 USER_INACTIVE"]
     D -->|"Yes"| F{"admin または<br/>project_membersに存在?"}
     F -->|"No"| E404["404 NOT_FOUND"]
-    F -->|"Yes"| G["task_repository.list_board 実行"]
+    F -->|"Yes"| G["task_repository.list_board 実行<br/>（include_inactive=falseならis_active=trueのみ）"]
     G --> H["status別にグルーピング"]
-    H --> I["200 レスポンス生成"]
+    H --> I["200 レスポンス生成<br/>（project_is_active, is_active含む）"]
 ```
 
 ## 6. 関数詳細
@@ -162,33 +174,33 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def list_project_tasks(project_id: UUID, project: Project = Depends(require_project_member), db: AsyncSession = Depends(get_db)) -> BoardResponse` |
-| 引数 | project_id: string(uuid)、対象プロジェクトID／project: `require_project_member` が解決した `Project`／db: DBセッション |
-| 戻り値 | `BoardResponse`（`project_id`, `columns`） |
+| シグネチャ | `async def list_project_tasks(project_id: UUID, include_inactive: bool = False, project: Project = Depends(require_project_member), db: AsyncSession = Depends(get_db)) -> BoardResponse` |
+| 引数 | project_id: string(uuid)、対象プロジェクトID／include_inactive: クエリパラメータ、省略時 `False`／project: `require_project_member` が解決した `Project`／db: DBセッション |
+| 戻り値 | `BoardResponse`（`project_id`, `project_is_active`, `columns`） |
 | 送出例外 | `NotFoundError`（404）、`AppError` 系は `core/exceptions.py` のハンドラで変換 |
-| 処理内容 | 1. `require_project_member` の結果から `project` を受け取る（認可はDI側で完了済み）<br/>2. `task_service.get_board(project)` を呼び出す<br/>3. 結果をそのままレスポンスとして返す |
+| 処理内容 | 1. `require_project_member` の結果から `project` を受け取る（認可はDI側で完了済み）<br/>2. `task_service.get_board(project, include_inactive)` を呼び出す<br/>3. 結果をそのままレスポンスとして返す |
 | 副作用 | なし（参照のみ） |
 
 ### 6.2 `service/task_service.py :: get_board`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def get_board(project: Project) -> BoardResponse` |
-| 引数 | project: 認可済みの `Project` エンティティ |
-| 戻り値 | `BoardResponse`（`todo` / `in_progress` / `done` の3キーを持つ `columns`） |
+| シグネチャ | `async def get_board(project: Project, include_inactive: bool) -> BoardResponse` |
+| 引数 | project: 認可済みの `Project` エンティティ／include_inactive: 論理削除済みタスクを含めるか |
+| 戻り値 | `BoardResponse`（`project_id`, `project_is_active=project.is_active`, `todo` / `in_progress` / `done` の3キーを持つ `columns`） |
 | 送出例外 | なし（リポジトリ例外はそのまま上位へ伝播） |
-| 処理内容 | 1. `task_repository.list_board(project.id)` を呼び出す<br/>2. 取得した `TaskWithCommentCount` のリストを `status` ごとに分配し、各列内は `position` 昇順のまま整形する<br/>3. 該当行がない `status` は空配列とする |
+| 処理内容 | 1. `task_repository.list_board(project.id, include_inactive)` を呼び出す<br/>2. 取得した `TaskWithCommentCount` のリストを `status` ごとに分配し、各列内は `position` 昇順のまま整形する<br/>3. 該当行がない `status` は空配列とする<br/>4. `project.is_active` をレスポンスの `project_is_active` にそのまま設定する |
 | 副作用 | なし |
 
 ### 6.3 `repository/task_repository.py :: list_board`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def list_board(db: AsyncSession, project_id: UUID) -> list[TaskWithCommentCount]` |
-| 引数 | db: DBセッション／project_id: 対象プロジェクトID |
+| シグネチャ | `async def list_board(db: AsyncSession, project_id: UUID, include_inactive: bool) -> list[TaskWithCommentCount]` |
+| 引数 | db: DBセッション／project_id: 対象プロジェクトID／include_inactive: `False` の場合 `is_active=true` のみ返す |
 | 戻り値 | `TaskWithCommentCount`（`Task` に `comment_count: int` を付加したDTO）のリスト |
 | 送出例外 | `OperationalError`（DB接続不能。`infra_error_handler` が503へ変換） |
-| 処理内容 | 1. `tasks` を `project_id` で絞り込み、担当者（`users`）を `selectinload` でEager Load<br/>2. `comment_count` は `task_comments` への相関サブクエリ `SELECT COUNT(*) FROM task_comments WHERE task_id = tasks.id` をSELECT列に追加し、N+1を回避する<br/>3. `ORDER BY status, position ASC`（`uq_tasks_project_status_position` を利用） |
+| 処理内容 | 1. `tasks` を `project_id` で絞り込み、`include_inactive=False` の場合はさらに `is_active=true` を条件に追加。担当者（`users`）を `selectinload` でEager Load<br/>2. `comment_count` は `task_comments` への相関サブクエリ `SELECT COUNT(*) FROM task_comments WHERE task_id = tasks.id` をSELECT列に追加し、N+1を回避する<br/>3. `ORDER BY status, position ASC`（`uq_tasks_project_status_position` を利用。`is_active` は絞り込み条件のみでソートキーには使わない） |
 | 副作用 | なし |
 
 ## 7. 関数相関図
@@ -225,7 +237,7 @@ flowchart LR
 | テーブル | 操作 | 条件・TTL | 備考 |
 |----------|------|-----------|------|
 | project_members | SELECT | `project_id`, `user_id` | `require_project_member` による認可（admin時は省略） |
-| tasks | SELECT | `project_id` 一致、`ORDER BY status, position` | 主クエリ。`uq_tasks_project_status_position` を使用 |
+| tasks | SELECT | `project_id` 一致（+ `include_inactive=false`時は`is_active=true`）、`ORDER BY status, position` | 主クエリ。`uq_tasks_project_status_position` を使用 |
 | users | SELECT（`selectinload`の追加SELECT） | `tasks.assignee_id = users.id` | assignee 情報のEager Load。tasks主クエリとは別ラウンドトリップ |
 | task_comments | SELECT（相関サブクエリ COUNT） | `task_id = tasks.id` | `comment_count` 算出。`ix_task_comments_task_created` を使用 |
 
@@ -236,6 +248,7 @@ flowchart LR
 | 対象 | pydanticスキーマ | ルール | フロント側（zod）との一致 |
 |------|-------------------|--------|---------------------------|
 | project_id（パス） | FastAPI の型ヒント `UUID` | UUID v4形式。不一致は自動的に422 | ルーティング側で `:projectId` をUUID形式チェック |
+| include_inactive（クエリ） | FastAPI の型ヒント `bool`、既定 `False` | `true`/`false`（大文字小文字・`1`/`0`等はFastAPIの標準bool変換に従う）。不一致は422 | フロントのチェックボックス状態と対応 |
 
 レスポンス側は `BoardResponse`（`schemas/task.py`）でシリアライズし、追加の入力バリデーションはない。
 
@@ -262,9 +275,13 @@ flowchart LR
 | 6 | 結合 | 未認証 | Cookie/Bearerなし | 401 `UNAUTHENTICATED` | `test_list_project_tasks_unauthenticated` |
 | 7 | パラメータ化 | AUTH_MODE両対応 | `AUTH_MODE=session` / `jwt` それぞれで1〜6を実行 | 認可判定に差異なし | フィクスチャ `auth_mode` でパラメータ化 |
 | 8 | 網羅対象外 | 大量タスクでのパフォーマンス測定 | - | - | 学習用途のためロードテストは対象外とする |
+| 9 | 結合 | 既定は無効タスク除外 | 実DB、`is_active=false` のタスクを含むプロジェクト | 200、`columns`に含まれない | `test_list_project_tasks_excludes_inactive_by_default` |
+| 10 | 結合 | include_inactive指定 | 実DB、`?include_inactive=true` | 200、`is_active=false` の行も `is_active:false` 付きで含まれる | `test_list_project_tasks_include_inactive` |
+| 11 | 結合 | project_is_active反映 | 実DB、対象プロジェクトが `is_active=false` | 200、`project_is_active:false`（タスク自体は通常どおり返る） | `test_list_project_tasks_reflects_inactive_project` |
 
 ## 13. 不明点・要検討事項
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
 | 要検討 | `TaskSummary.description` をカンバン一覧レスポンスに含めるかは基本設計 §3.2 のレスポンス例に明記がない（例では省略）。本設計では詳細画面との差分を減らすため含める判断としたが、カード表示上不要ならレスポンスを軽量化する余地がある | フロント側の実装量・レスポンスサイズ |
+| 要検討 | `include_inactive` の許可範囲をプロジェクトメンバー全員とした（プロジェクト側の `include_inactive` がadmin/オーナー限定なのと非対称）。カンバンは元々メンバー全員が閲覧できるため妥当と判断したが、issue #10のユーザー合意には粒度の明記がなく最終確認が必要 | 認可方針の一貫性 |

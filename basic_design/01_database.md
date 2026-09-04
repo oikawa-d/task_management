@@ -10,7 +10,7 @@
 | 文字列型 | `VARCHAR(n)` は入力上限がある項目、それ以外は `TEXT` |
 | 日時型 | `TIMESTAMPTZ`（UTC保存）。アプリ側で `APP_TIMEZONE`（既定 `Asia/Tokyo`）へ変換する。「当日」「翌日10時」などの業務上の日次境界の判定もこのタイムゾーンで行う |
 | 列挙 | PostgreSQL の `ENUM` 型ではなく `VARCHAR + CHECK制約`（Alembic での値追加が容易なため） |
-| 論理削除 | 行わない（学習用途のため物理削除）。ただし `users` のみ `is_active` で無効化を表現 |
+| 論理削除 | 基本的には行わない（学習用途のため物理削除）。ただし `users` に加え `projects` / `tasks` も `is_active` で無効化（論理削除）を表現する |
 | ORM | SQLAlchemy 2.x（`Mapped` / `mapped_column` の宣言的スタイル） |
 | マイグレーション | Alembic。`db/migrations/` は SQL の手動DDL置き場、`api/alembic/versions/` が実行される正 |
 
@@ -24,7 +24,7 @@ erDiagram
     users ||--o{ projects : "owner"
     users ||--o{ project_members : "所属"
     projects ||--o{ project_members : "メンバー"
-    projects ||--o{ tasks : "保有"
+    projects |o--o{ tasks : "保有（project_id NULL可）"
     users |o--o{ tasks : "assignee"
     users ||--o{ tasks : "created_by"
     tasks ||--o{ task_comments : "コメント"
@@ -63,6 +63,9 @@ erDiagram
         varchar_100 name
         text description
         uuid owner_id FK
+        boolean is_active
+        timestamptz start_at "NULL可"
+        timestamptz end_at "NULL可"
         timestamptz created_at
         timestamptz updated_at
     }
@@ -74,7 +77,7 @@ erDiagram
     }
     tasks {
         uuid id PK
-        uuid project_id FK
+        uuid project_id FK "NULL可"
         varchar_150 title
         text description
         varchar_20 status "todo / in_progress / done"
@@ -82,6 +85,7 @@ erDiagram
         uuid created_by FK
         integer position "列内の並び順"
         integer version "楽観的ロック用"
+        boolean is_active
         timestamptz due_at "期限（日付＋終了時刻）。NULL可"
         timestamptz created_at
         timestamptz updated_at
@@ -215,10 +219,17 @@ erDiagram
 | name | VARCHAR(100) | NO | プロジェクト名 |
 | description | TEXT | YES | |
 | owner_id | UUID | NO | FK → users.id `ON DELETE RESTRICT`（オーナーが残る限りユーザー削除不可） |
+| is_active | BOOLEAN | NO | 既定値 `true`。`DELETE /api/projects/{id}` による論理削除フラグ。オーナー/adminが再有効化可能 |
+| start_at | TIMESTAMPTZ | YES | 既定値 `NULL`。プロジェクトの開始日時。UTC保存 |
+| end_at | TIMESTAMPTZ | YES | 既定値 `NULL`。プロジェクトの終了日時。UTC保存 |
 | created_at | TIMESTAMPTZ | NO | |
 | updated_at | TIMESTAMPTZ | NO | トリガで自動更新 |
 
+`CONSTRAINT ck_projects_period CHECK (start_at IS NULL OR end_at IS NULL OR end_at >= start_at)`：両方に値がある場合のみ `end_at >= start_at` を検証する（片方のみ設定した場合は制約対象外）。
+
 **インデックス**：`ix_projects_owner_id` (owner_id)
+
+> **不明点・要検討事項**：`UNIQUE (project_id, status, position)` は PostgreSQL の仕様上 NULL 同士を区別するため、`project_id IS NULL`（未所属タスク）の行同士では一意性が機能しない。対応方針は §3.5「同時更新制御」を参照。
 
 ### 3.4 project_members
 
@@ -232,13 +243,14 @@ erDiagram
 - 複合主キー `(project_id, user_id)`
 - プロジェクト作成時、オーナー自身も本テーブルへ登録する（所属判定を1箇所に集約するため）
 - **インデックス**：`ix_project_members_user_id` (user_id)（ダッシュボードの所属一覧取得で使用）
+- `project_id` の `ON DELETE CASCADE` は、`projects` の `DELETE` が論理削除（`is_active=false`）に変更されたため、通常運用では発火しない防御的制約という位置づけになる（`user_id` 側のCASCADEも同様に、ユーザーの物理削除APIが提供されていないための防御的制約）
 
 ### 3.5 tasks
 
 | カラム | 型 | NULL | 既定値 | 備考 |
 |--------|----|------|--------|------|
 | id | UUID | NO | `gen_random_uuid()` | PK |
-| project_id | UUID | NO | - | FK → projects.id `ON DELETE CASCADE` |
+| project_id | UUID | YES | `NULL` | FK → projects.id `ON DELETE SET NULL`。NULL可（プロジェクト未所属タスクを許可）。`projects` の物理削除経路は本設計では提供しないため実運用では発火しないが、意味的な正しさのため `SET NULL` とする |
 | title | VARCHAR(150) | NO | - | |
 | description | TEXT | YES | - | |
 | status | VARCHAR(20) | NO | `'todo'` | `CHECK (status IN ('todo','in_progress','done'))` |
@@ -246,6 +258,7 @@ erDiagram
 | created_by | UUID | NO | - | FK → users.id `ON DELETE RESTRICT` |
 | position | INTEGER | NO | `0` | 同一 status 列内の並び順。`CHECK (position >= 0)`、`UNIQUE (project_id, status, position) DEFERRABLE INITIALLY DEFERRED` |
 | version | INTEGER | NO | `1` | 楽観的排他制御用。更新成功時に1加算、`CHECK (version > 0)` |
+| is_active | BOOLEAN | NO | `true` | `DELETE /api/tasks/{id}` による論理削除フラグ。作成者/プロジェクトオーナー/adminが再有効化可能。無効化時は後続positionの詰め（compaction）を行わない |
 | due_at | TIMESTAMPTZ | YES | - | タスクの期限（日付＋終了時刻）。UTC保存し、表示・判定は `APP_TIMEZONE` に変換して行う。期限通知（§3.8）の抽出条件に使う |
 | created_at | TIMESTAMPTZ | NO | `now()` | |
 | updated_at | TIMESTAMPTZ | NO | `now()` | トリガで自動更新 |
@@ -258,7 +271,9 @@ erDiagram
 | `ix_tasks_assignee_id` | (assignee_id) | 担当タスク絞り込み |
 | `ix_tasks_due_at_open` | (due_at) WHERE status <> 'done' AND due_at IS NOT NULL AND assignee_id IS NOT NULL | 期限通知バッチの抽出（未完了・担当者ありの行だけを対象にする部分インデックス） |
 
-**同時更新制御**：`UNIQUE (project_id, status, position)` で列内の重複を防ぐ。タスクの作成・削除・status/position変更では、サービス層が同一トランザクション内でプロジェクト・statusごとの advisory lock を取得してから採番・再並べ替えを行う。再並べ替え中は移動対象を一時的な非負の退避値（現在の最大値 + 件数 + 1）へ置き、他の行を詰めた後に最終位置を設定する（制約は `DEFERRABLE INITIALLY DEFERRED`）。通常更新を含む `PATCH /tasks/{id}` は `version` が一致した場合だけ更新し、成功時に `version + 1` とする。削除時も同じ列の後続positionを詰める。
+**同時更新制御**：`UNIQUE (project_id, status, position)` で列内の重複を防ぐ。タスクの作成・削除・status/position変更では、サービス層が同一トランザクション内でプロジェクト・statusごとの advisory lock を取得してから採番・再並べ替えを行う。再並べ替え中は移動対象を一時的な非負の退避値（現在の最大値 + 件数 + 1）へ置き、他の行を詰めた後に最終位置を設定する（制約は `DEFERRABLE INITIALLY DEFERRED`）。通常更新を含む `PATCH /tasks/{id}` は `version` が一致した場合だけ更新し、成功時に `version + 1` とする。論理削除（`is_active=false`）時は物理削除と異なり、後続positionの詰め（compaction）は行わない（is_active=falseの行を一覧・カンバンから除外するのみで、position自体はギャップがあっても崩れない）。
+
+**`project_id IS NULL`（未所属タスク）の一意性について**：PostgreSQLの仕様上NULLは互いに異なる値として扱われるため、`UNIQUE (project_id, status, position)` は `project_id IS NULL` の行同士では機能せず、複数の未所属タスクが同じstatus/positionを持ちうる。DB制約はそのまま維持しつつ、advisory lockのロックキー生成時に `project_id` がNULLの場合は固定のプレースホルダ値（例：`'00000000-0000-0000-0000-000000000000'`）を用いることで、未所属タスク全体を1つの仮想グループとしてアプリ層で直列化し、実質的な衝突を防ぐ。
 
 ### 3.6 task_comments
 
@@ -272,6 +287,8 @@ erDiagram
 | updated_at | TIMESTAMPTZ | NO | |
 
 **インデックス**：`ix_task_comments_task_created` (task_id, created_at)
+
+`task_id` の `ON DELETE CASCADE` は、`tasks` の `DELETE` が論理削除（`is_active=false`）に変更されたため、通常運用では発火しない防御的制約という位置づけになる。
 
 ### 3.7 login_history
 
@@ -301,7 +318,7 @@ Redis の失効状況とは独立して、設定した保持期間（既定90日
 |--------|----|------|--------|------|
 | id | UUID | NO | `gen_random_uuid()` | PK |
 | user_id | UUID | NO | - | FK → users.id `ON DELETE CASCADE`。通知の受信者 |
-| task_id | UUID | YES | - | FK → tasks.id `ON DELETE SET NULL`。対象タスク。タスクが削除されても通知履歴は残す |
+| task_id | UUID | YES | - | FK → tasks.id `ON DELETE SET NULL`。対象タスク。`tasks` の `DELETE` は論理削除（`is_active=false`）に変わったため通常運用では発火しない防御的制約だが、意味的にはタスクが削除されても通知履歴を残すためのもの |
 | type | VARCHAR(30) | NO | - | `CHECK (type IN ('due_soon_batch','due_today_created','due_today_updated'))` |
 | title | VARCHAR(200) | NO | - | 通知見出し。作成時点のタスク名をスナップショットする（タスク削除後も内容が分かるようにするため） |
 | body | TEXT | YES | - | 補足本文 |
@@ -382,12 +399,13 @@ stateDiagram-v2
     done --> in_progress: 差し戻し
     in_progress --> todo: 差し戻し
     todo --> done: 直接完了（許可する）
-    done --> [*]: 削除
-    todo --> [*]: 削除
-    in_progress --> [*]: 削除
+    done --> inactive: 削除（is_active=false）
+    todo --> inactive: 削除（is_active=false）
+    in_progress --> inactive: 削除（is_active=false）
+    inactive --> [*]: 再有効化（is_active=true、statusは削除時点のまま）
 ```
 
-遷移制限は設けず、任意の status 間の変更を許可する（カンバンのD&Dを素直に反映するため）。
+遷移制限は設けず、任意の status 間の変更を許可する（カンバンのD&Dを素直に反映するため）。`DELETE /api/tasks/{id}` は論理削除（`is_active=false`）であり、`status` は変更しない。無効化中のタスクは一覧・カンバンから除外されるが、`position` の詰め（compaction）は行わない。作成者/プロジェクトオーナー/adminは `PATCH` で `is_active=true` に戻し再有効化できる。
 
 ### 4.1.1 通知の状態遷移
 

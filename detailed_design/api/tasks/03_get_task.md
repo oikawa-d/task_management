@@ -12,15 +12,17 @@
 | [./04_patch_task.md](./04_patch_task.md) | 本APIで取得した `version` を使う更新API |
 | [./06_get_task_comments.md](./06_get_task_comments.md) | コメント一覧（本APIとは別クエリ） |
 | [../../screen/08_task_detail_modal.md](../../screen/08_task_detail_modal.md) | 本APIを使用するタスク詳細モーダル |
+| [../../database/06_table_tasks.md](../../database/06_table_tasks.md) | `tasks.project_id`（NULL許容）・`tasks.is_active` |
+| [./10_get_tasks.md](./10_get_tasks.md) | 未所属タスクを含む横断一覧API |
 
 ## 1. 概要
 
 | 項目 | 内容 |
 |------|------|
 | エンドポイント | `GET /api/tasks/{task_id}` |
-| 目的 | タスク1件の詳細情報を取得する。`task_id` からプロジェクト所属を辿って認可する点が `/projects/{id}/tasks` 系と異なる |
+| 目的 | タスク1件の詳細情報を取得する。`task_id` からプロジェクト所属を辿って認可する点が `/projects/{id}/tasks` 系と異なる。`project_id` が `NULL`（プロジェクト未所属タスク）の場合は作成者本人のみ参照可 |
 | 認証 | session モード：`cerberus_sid` Cookie ／ jwt モード：`Authorization: Bearer {access_token}` |
-| 認可 | プロジェクトメンバー（`task_id` → `tasks.project_id` を特定した上で `require_project_member` 相当の判定。admin は無条件許可） |
+| 認可 | `project_id` が非NULL：プロジェクトメンバー（`task_id` → `tasks.project_id` を特定した上で `require_project_member` 相当の判定。admin は無条件許可）。`project_id` が `NULL`：`created_by` が自分自身であること（admin は無条件許可） |
 | CSRF検証 | 不要（参照系GET） |
 | Origin検証 | 不要 |
 | AUTH_MODE差異 | 認証情報の解決方法のみ異なり、業務ロジックに差異なし |
@@ -58,6 +60,8 @@
   "created_by": { "id": "9a1b...", "username": "taro", "display_name": "山田 太郎" },
   "position": 0,
   "version": 1,
+  "is_active": true,
+  "project_is_active": true,
   "due_at": null,
   "comment_count": 2,
   "created_at": "2026-09-01T00:00:00Z",
@@ -68,14 +72,16 @@
 | フィールド | 型 | NULL可否 | 説明 |
 |-----------|----|----------|------|
 | id | string(uuid) | 不可 | タスクID |
-| project_id | string(uuid) | 不可 | 所属プロジェクトID |
+| project_id | string(uuid) | **可** | 所属プロジェクトID。プロジェクト未所属タスクの場合 `null` |
 | title | string | 不可 | |
 | description | string | 可 | |
 | status | string | 不可 | `todo` / `in_progress` / `done` |
 | assignee | object | 可 | `{id, username, display_name}` |
 | created_by | object | 不可 | `{id, username, display_name}` |
-| position | integer | 不可 | 列内位置 |
+| position | integer | 不可 | 列内位置。`project_id=null` の場合は「未所属タスク全体」という仮想グループ内での位置（[./11_post_tasks.md](./11_post_tasks.md) §6参照） |
 | version | integer | 不可 | 楽観ロック用。以後の `PATCH` で必須 |
+| is_active | boolean | 不可 | `tasks.is_active`。論理削除済みかどうか |
+| project_is_active | boolean | 可 | `projects.is_active`。`project_id` が `null` の場合は本フィールドも `null` |
 | due_at | string(date-time) | 可 | ISO 8601 UTC。表示時は `APP_TIMEZONE` へ変換 |
 | comment_count | integer | 不可 | `task_comments` の件数 |
 | created_at / updated_at | string(datetime) | 不可 | ISO 8601 UTC |
@@ -118,11 +124,15 @@ sequenceDiagram
         R-->>FE: "404 NOT_FOUND"
     else "存在する"
         TR-->>S: "TaskWithProject"
-        S->>S: "current_userがproject_membersに所属 or adminか確認"
-        alt "非所属"
+        alt "project_id が NULL"
+            S->>S: "current_user.id == task.created_by or adminか確認"
+        else "project_id が非NULL"
+            S->>S: "current_userがproject_membersに所属 or adminか確認"
+        end
+        alt "非所属 かつ 作成者でもない（非admin）"
             S-->>R: "NotFoundError"
             R-->>FE: "404 NOT_FOUND"
-        else "所属 または admin"
+        else "所属 または 作成者本人 または admin"
             S->>TR: "count_comments(task_id)"
             TR->>PG: "SELECT COUNT(*) FROM task_comments WHERE task_id"
             PG-->>TR: "comment_count"
@@ -145,7 +155,7 @@ flowchart TB
     D -->|"No"| E403["403 USER_INACTIVE"]
     D -->|"Yes"| F{"tasks.id = task_idが存在?"}
     F -->|"No"| E404a["404 NOT_FOUND"]
-    F -->|"Yes"| G{"project_idを特定し<br/>admin または所属メンバー?"}
+    F -->|"Yes"| G{"project_idを特定し<br/>admin または<br/>(project_id非NULLで所属メンバー) または<br/>(project_id=NULLで作成者本人)?"}
     G -->|"No"| E404b["404 NOT_FOUND"]
     G -->|"Yes"| H["comment_count集計"]
     H --> I["200 レスポンス生成"]
@@ -172,7 +182,7 @@ flowchart TB
 | 引数 | task_id: 対象タスクID／user: 現在ユーザー |
 | 戻り値 | `TaskDetailResponse` |
 | 送出例外 | `NotFoundError`（タスク不存在、または非所属） |
-| 処理内容 | 1. `task_repository.get_with_project(task_id)` でタスクと `project_id` を取得。`None` なら `NotFoundError`<br/>2. `user.role != 'admin'` の場合、`project_repository.is_member(project_id, user.id)` で所属確認。非所属なら `NotFoundError`（プロジェクト単体APIと同じ404統一方針）<br/>3. `task_repository.count_comments(task_id)` で `comment_count` を取得し、レスポンスDTOに合成 |
+| 処理内容 | 1. `task_repository.get_with_project(task_id)` でタスクと `project_id` を取得。`None` なら `NotFoundError`<br/>2. `user.role == 'admin'` の場合は認可チェックをスキップ<br/>3. `project_id` が非NULLの場合、`project_repository.is_member(project_id, user.id)` で所属確認。非所属なら `NotFoundError`<br/>4. `project_id` が `NULL`（未所属タスク）の場合、`task.created_by == user.id` を確認。一致しなければ `NotFoundError`（作成者以外には存在を秘匿）<br/>5. `task_repository.count_comments(task_id)` で `comment_count` を取得し、レスポンスDTOに合成。`project_is_active` は `project_id` が `NULL` なら `None`、非NULLなら取得した `Project.is_active` を設定 |
 | 副作用 | なし |
 
 ### 6.3 `repository/task_repository.py :: get_with_project`
@@ -183,7 +193,7 @@ flowchart TB
 | 引数 | db: DBセッション／task_id: 対象タスクID |
 | 戻り値 | `TaskWithProject`（`Task` に `assignee` / `created_by` をEager Loadしたもの）または `None` |
 | 送出例外 | `OperationalError`（503へ変換） |
-| 処理内容 | 1. `tasks` を `id = task_id` で1回取得 2. `assignee` と `created_by` の各 `selectinload` による追加SELECTを実行してEager Load（最大3クエリ。対象行がない場合は主クエリのみ）<br/>3. 存在しない場合は `None` を返す（例外は投げない。所属確認前の存在チェックはサービス層で行う） |
+| 処理内容 | 1. `tasks` を `id = task_id` で1回取得 2. `assignee` / `created_by` の各 `selectinload` に加え、`project_id` が非NULLの場合のみ `project`（`is_active` 参照用）を `selectinload` で追加SELECT（最大4クエリ。対象行がない場合は主クエリのみ、`project_id=NULL`なら`project`分のSELECTは発行しない）<br/>3. 存在しない場合は `None` を返す（例外は投げない。所属確認前の存在チェックはサービス層で行う） |
 | 副作用 | なし |
 
 ## 7. 関数相関図
@@ -194,7 +204,7 @@ flowchart LR
     S --> TR["task_repository.get_with_project"]
     S --> PR["project_repository.is_member"]
     S --> CC["task_repository.count_comments"]
-    TR --> DB[("PostgreSQL<br/>tasks / users")]
+    TR --> DB[("PostgreSQL<br/>tasks / users / projects")]
     PR --> DBM[("PostgreSQL<br/>project_members")]
     CC --> DBC[("PostgreSQL<br/>task_comments")]
 ```
@@ -208,10 +218,12 @@ flowchart LR
     subgraph read["参照範囲（PostgreSQL）"]
         T["tasks<br/>WHERE id = :task_id"]
         U["users<br/>assignee / created_by（selectinload追加SELECT）"]
-        PM["project_members<br/>所属確認（非adminのみ）"]
+        P["projects<br/>is_active取得（project_id非NULL時のみselectinload）"]
+        PM["project_members<br/>所属確認（project_id非NULL・非adminのみ）"]
         C["task_comments<br/>COUNT（別クエリ）"]
     end
-    T -->|"project_id"| PM
+    T -->|"project_id（非NULLのみ）"| PM
+    T -->|"project_id（非NULLのみ）"| P
     T -->|"assignee_id / created_by"| U
     T -->|"id"| C
 ```
@@ -222,9 +234,10 @@ flowchart LR
 
 | テーブル | 操作 | 条件・TTL | 備考 |
 |----------|------|-----------|------|
-| tasks | SELECT | `id = task_id` | `project_id` から認可判定を行う起点 |
+| tasks | SELECT | `id = task_id` | `project_id`（NULL可）から認可判定を行う起点 |
 | users | SELECT（`selectinload`の追加SELECT各1回） | `assignee_id` / `created_by` | 表示用情報のEager Load。主クエリとは別ラウンドトリップ |
-| project_members | SELECT | `project_id`, `user_id` | admin以外の所属確認 |
+| projects | SELECT（`selectinload`の追加SELECT） | `id = tasks.project_id`（`project_id`が非NULLの場合のみ実行） | `project_is_active` 算出用 |
+| project_members | SELECT | `project_id`, `user_id`（`project_id`が非NULLの場合のみ） | admin以外の所属確認 |
 | task_comments | SELECT（COUNT） | `task_id = :task_id` | `comment_count` 算出。一覧取得（[01](./01_get_project_tasks.md)）とは別クエリでN+1にならない（対象が1件のため） |
 
 **Redis**：使用なし。
@@ -257,7 +270,12 @@ flowchart LR
 | 6 | 結合 | 非所属member | 実DB、他プロジェクトのタスク | 404 `NOT_FOUND` | `test_get_task_forbidden_as_404` |
 | 7 | 結合 | admin | 実DB、非所属プロジェクトのタスクでも200 | 200 | `test_get_task_admin_bypass` |
 | 8 | パラメータ化 | AUTH_MODE両対応 | `AUTH_MODE=session` / `jwt` | 4〜7を両モードで実行 | フィクスチャ `auth_mode` |
+| 9 | 結合 | 未所属タスク・作成者本人 | 実DB、`project_id=NULL`のタスクを自分で作成 | 200、`project_id:null`, `project_is_active:null` | `test_get_task_unassigned_project_owner_success` |
+| 10 | 結合 | 未所属タスク・第三者 | 実DB、`project_id=NULL`のタスクを別ユーザーが参照 | 404 `NOT_FOUND` | `test_get_task_unassigned_project_forbidden_as_404` |
+| 11 | 結合 | 論理削除済みプロジェクトのタスク | 実DB、所属プロジェクトが`is_active=false` | 200、`project_is_active:false`（タスク自体は通常どおり取得可能） | `test_get_task_reflects_inactive_project` |
 
 ## 13. 不明点・要検討事項
 
-なし
+| 区分 | 内容 | 影響 |
+|------|------|------|
+| 要検討 | 未所属タスク（`project_id=NULL`）を参照できる範囲を「作成者本人のみ」としたのはブリーフの方針だが、将来的に`assignee_id`を未所属タスクにも設定可能にする場合、担当者本人にも参照を広げるかは要検討 | 認可範囲の将来拡張時の整合性 |

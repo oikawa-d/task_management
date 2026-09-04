@@ -50,6 +50,9 @@
   "is_owner": true,
   "member_count": 3,
   "task_counts": { "todo": 4, "in_progress": 2, "done": 7 },
+  "is_active": true,
+  "start_at": "2026-09-01T00:00:00Z",
+  "end_at": null,
   "created_at": "2026-09-01T00:00:00Z",
   "updated_at": "2026-09-02T10:00:00Z",
   "members": [
@@ -78,12 +81,17 @@
 | is_owner | boolean | 不可 | `owner_id == current_user.id`（`current_user`がadminで非所属の場合も算出可能なため常に返す） |
 | member_count | integer | 不可 | `members` の件数と一致 |
 | task_counts | object | 不可 | status別タスク件数 |
+| is_active | boolean | 不可 | 論理削除フラグ。`false` は無効化（論理削除）済みを示す |
+| start_at | string(datetime) | 可 | プロジェクト開始日時。ISO 8601 UTC |
+| end_at | string(datetime) | 可 | プロジェクト終了日時。ISO 8601 UTC |
 | created_at / updated_at | string(datetime) | 不可 | ISO 8601 UTC |
 | members[].user_id / username / display_name | - | 不可 | メンバーのユーザー情報 |
 | members[].is_owner | boolean | 不可 | 当該メンバーがオーナーか |
 | members[].joined_at | string(datetime) | 不可 | `project_members.joined_at` |
 
 `Set-Cookie` なし。共通ヘッダ `X-Request-ID` を付与する。
+
+無効化（`is_active=false`）済みのプロジェクトであっても、既存の所属メンバー（admin含む）は詳細取得を継続でき、404にはしない（`01_get_projects.md`の一覧表示制御とは独立した挙動）。フロントは`is_active=false`を用いてバッジ等の表示制御を行う。
 
 ## 3. エラー仕様
 

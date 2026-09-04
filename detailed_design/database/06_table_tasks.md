@@ -10,6 +10,7 @@
   - [`../api/tasks/03_get_task.md`](../api/tasks/03_get_task.md) GET /api/tasks/{task_id}
   - [`../api/tasks/04_patch_task.md`](../api/tasks/04_patch_task.md) PATCH /api/tasks/{task_id}
   - [`../api/tasks/05_delete_task.md`](../api/tasks/05_delete_task.md) DELETE /api/tasks/{task_id}
+  - `../api/tasks/` 配下に新設予定：`GET /api/tasks`（横断一覧）、`POST /api/tasks`（`project_id`任意でのフラット作成）。ファイルは既存9ファイルの次番号で新規作成される想定（API設計担当が対応。issue #10 ブリーフ参照）
 - 関連テーブル：[`04_table_projects.md`](./04_table_projects.md)、[`05_table_project_members.md`](./05_table_project_members.md)、[`01_table_users.md`](./01_table_users.md)、[`07_table_task_comments.md`](./07_table_task_comments.md)
 - DB関数：[`08_db_functions.md`](./08_db_functions.md)（`fn_next_task_position`）
 
@@ -20,7 +21,7 @@
 | テーブル名 / 論理名 | `tasks` / タスク |
 | 役割 | プロジェクト配下のタスク。カンバンの3列（`todo`/`in_progress`/`done`）に `status` で分類され、列内の並び順を `position` で保持する |
 | 想定件数・増加傾向 | プロジェクト数 × 平均タスク数。学習用途のため小〜中規模 |
-| ライフサイクル | 作成契機：`POST /api/projects/{project_id}/tasks`。更新契機：`PATCH /api/tasks/{task_id}`（title/description/status/assignee/position/due_at、`version` 必須）。削除契機：`DELETE /api/tasks/{task_id}`、またはプロジェクト削除時のCASCADE。物理削除のみ |
+| ライフサイクル | 作成契機：`POST /api/projects/{project_id}/tasks`（`project_id`はパス由来）、または `POST /api/tasks`（bodyの`project_id`は任意・NULL可）。更新契機：`PATCH /api/tasks/{task_id}`（title/description/status/assignee/position/due_at/is_active、`version` 必須）。削除契機：`DELETE /api/tasks/{task_id}` → 論理削除（`is_active=false`への更新）。物理削除は行わない。プロジェクトが無効化（論理削除）されてもタスクは削除されない |
 | 関連ORMモデル | `models/task.py :: Task` |
 
 ## 2. カラム定義
@@ -28,7 +29,7 @@
 | 論理名 | カラム名 | 型 | NULL | 既定値 | 主キー/一意 | 説明 |
 |--------|----------|----|------|--------|--------------|------|
 | ID | `id` | UUID | NO | `gen_random_uuid()` | PK | |
-| プロジェクトID | `project_id` | UUID | NO | - | FK → `projects.id` | `ON DELETE CASCADE` |
+| プロジェクトID | `project_id` | UUID | YES | - | FK → `projects.id` | `ON DELETE SET NULL`。NULLはプロジェクト未所属タスクを表す |
 | タイトル | `title` | VARCHAR(150) | NO | - | - | 1〜150文字（アプリ層） |
 | 説明 | `description` | TEXT | YES | - | - | |
 | ステータス | `status` | VARCHAR(20) | NO | `'todo'` | - | `CHECK (status IN ('todo','in_progress','done'))` |
@@ -37,17 +38,20 @@
 | 並び順 | `position` | INTEGER | NO | `0` | 一意（`project_id, status` 内） | `CHECK (position >= 0)`。`UNIQUE (project_id, status, position) DEFERRABLE INITIALLY DEFERRED` |
 | バージョン | `version` | INTEGER | NO | `1` | - | 楽観的排他制御用。`CHECK (version > 0)`。更新成功時に+1 |
 | 期限日時 | `due_at` | TIMESTAMPTZ | YES | - | - | UTC保存。表示・日次境界の判定は`APP_TIMEZONE` |
+| 有効フラグ | `is_active` | BOOLEAN | NO | `true` | - | 論理削除フラグ。`false` は無効化（論理削除）済みを表す |
 | 作成日時 | `created_at` | TIMESTAMPTZ | NO | `now()` | - | |
 | 更新日時 | `updated_at` | TIMESTAMPTZ | NO | `now()` | - | `trg_set_updated_at` トリガで自動更新 |
 
-基本設計 `01_database.md` §3.5 の定義から逸脱しない。
+基本設計 `01_database.md` §3.5 の定義から逸脱しない（`project_id` のNULL許容化・`is_active` 追加は issue #10 対応として本改訂で追加）。
+
+タスクのレスポンスには `project_is_active`（boolean、`project_id`がNULLの場合は`null`）を含める。DBに永続カラムとして保持するのではなく、`projects` とのJOINで都度取得する派生値である（§8.10参照）。
 
 ## 3. DDL
 
 ```sql
 CREATE TABLE tasks (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    project_id   UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    project_id   UUID REFERENCES projects(id) ON DELETE SET NULL,
     title        VARCHAR(150) NOT NULL,
     description  TEXT,
     status       VARCHAR(20) NOT NULL DEFAULT 'todo'
@@ -59,6 +63,7 @@ CREATE TABLE tasks (
     version      INTEGER NOT NULL DEFAULT 1
                  CONSTRAINT ck_tasks_version_positive CHECK (version > 0),
     due_at       TIMESTAMPTZ,
+    is_active    BOOLEAN NOT NULL DEFAULT true,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT uq_tasks_project_status_position
@@ -66,9 +71,11 @@ CREATE TABLE tasks (
 );
 
 COMMENT ON TABLE tasks IS 'カンバンのタスク。statusで列を、positionで列内順序を表す';
+COMMENT ON COLUMN tasks.project_id IS 'FK: projects.id ON DELETE SET NULL。NULLはプロジェクト未所属タスクを表す';
 COMMENT ON COLUMN tasks.status IS 'todo / in_progress / done のいずれか（CHECK制約）';
 COMMENT ON COLUMN tasks.position IS '同一 project_id, status 内の並び順（0起点）';
 COMMENT ON COLUMN tasks.version IS '楽観的排他制御用。PATCH成功時に+1';
+COMMENT ON COLUMN tasks.is_active IS '論理削除フラグ。false は DELETE /api/tasks/{id} による無効化済みを表す';
 
 CREATE INDEX ix_tasks_assignee_id ON tasks (assignee_id);
 
@@ -80,18 +87,20 @@ CREATE TRIGGER trg_tasks_set_updated_at
 
 `DEFERRABLE` な一意制約はPostgreSQLの仕様上、テーブル定義内の `CONSTRAINT ... UNIQUE (...) DEFERRABLE` としてのみ定義可能（`CREATE UNIQUE INDEX` では不可）なため、上記DDLのテーブル制約1本のみで表現する。
 
+**`project_id IS NULL` 行における一意制約の限界**：PostgreSQLのUNIQUE制約はNULLを互いに異なる値として扱うため、`uq_tasks_project_status_position` は `project_id IS NULL`（プロジェクト未所属タスク）の行同士では機能せず、同一 `status`/`position` を持つ複数の未所属タスクが共存し得る。DDL自体はこの挙動を変更せず維持する（`project_id` を含む複合UNIQUE制約でNULLを同一視させるPostgreSQL標準の方法は無いため）。実用上の対応はアプリ層のadvisory lockキー生成で行う（§8.1参照）。DB制約だけでは重複を防げない点は §13 の要検討事項として明記する。
+
 ## 4. 制約・インデックス
 
 | 種別 | 名称 | 対象カラム | 内容 | 目的（対応クエリ） |
 |------|------|-----------|------|---------------------|
 | PK | `tasks_pkey` | `id` | 主キー | タスク詳細取得 |
-| FK | `tasks_project_id_fkey` | `project_id` | → `projects.id` `ON DELETE CASCADE` | プロジェクト削除時にタスクを自動削除 |
+| FK | `tasks_project_id_fkey` | `project_id` | → `projects.id` `ON DELETE SET NULL` | `projects` の物理削除経路が無いため通常運用では発火しない防御的制約。意味上は「プロジェクトが消えたらタスクを未所属にする」を表す |
 | FK | `tasks_assignee_id_fkey` | `assignee_id` | → `users.id` `ON DELETE SET NULL` | ユーザー削除時に担当者を自動的に未割当へ（本設計では所属解除はアプリ層UPDATEで対応。§11参照） |
 | FK | `tasks_created_by_fkey` | `created_by` | → `users.id` `ON DELETE RESTRICT` | 作成者の履歴保護。ユーザーは無効化のみで物理削除しないため通常は問題にならない |
 | CHECK | `ck_tasks_status` | `status` | `status IN ('todo','in_progress','done')` | 不正な状態値の混入防止 |
 | CHECK | `ck_tasks_position_non_negative` | `position` | `position >= 0` | 並び順の健全性 |
 | CHECK | `ck_tasks_version_positive` | `version` | `version > 0` | 楽観ロック値の健全性 |
-| UNIQUE（遅延） | `uq_tasks_project_status_position` | `(project_id, status, position)` | `DEFERRABLE INITIALLY DEFERRED` | 列内重複防止。再採番中の一時的な重複をトランザクション内で許容しつつCOMMIT時に検証 |
+| UNIQUE（遅延） | `uq_tasks_project_status_position` | `(project_id, status, position)` | `DEFERRABLE INITIALLY DEFERRED` | 列内重複防止。再採番中の一時的な重複をトランザクション内で許容しつつCOMMIT時に検証。**`project_id IS NULL` の行同士では機能しない**（上記コラム参照） |
 | INDEX | `ix_tasks_assignee_id` | `assignee_id` | B-tree | 担当タスク絞り込み、メンバー削除時の一括NULL化（`05_table_project_members.md` §8.5） |
 
 `uq_tasks_project_status_position` はカンバン表示クエリ（`WHERE project_id=:pid ORDER BY status, position`）の実行計画でも利用される。
@@ -121,8 +130,8 @@ class Task(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
-    project_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
     )
     title: Mapped[str] = mapped_column(String(150), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -136,6 +145,7 @@ class Task(Base):
     position: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     due_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
@@ -143,7 +153,7 @@ class Task(Base):
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
 
-    project: Mapped["Project"] = relationship("Project", back_populates="tasks", lazy="joined")
+    project: Mapped["Project | None"] = relationship("Project", back_populates="tasks", lazy="joined")
     assignee: Mapped["User | None"] = relationship(
         "User", foreign_keys=[assignee_id], lazy="joined"
     )
@@ -159,14 +169,14 @@ class Task(Base):
 
 ```mermaid
 erDiagram
-    projects ||--o{ tasks : "project_id"
+    projects |o--o{ tasks : "project_id（NULL可）"
     users |o--o{ tasks : "assignee_id（NULL可）"
     users ||--o{ tasks : "created_by"
     tasks ||--o{ task_comments : "task_id"
 
     tasks {
         uuid id PK
-        uuid project_id FK
+        uuid project_id FK "NULL可（未所属タスク）"
         varchar_150 title
         text description
         varchar_20 status "todo/in_progress/done"
@@ -175,6 +185,7 @@ erDiagram
         integer position
         integer version
         timestamptz due_at "期限日時。UTC保存、NULL可"
+        boolean is_active "論理削除フラグ"
         timestamptz created_at
         timestamptz updated_at
     }
@@ -192,10 +203,12 @@ stateDiagram-v2
     done --> in_progress: "PATCH /tasks/:id status=in_progress（差し戻し）"
     in_progress --> todo: "PATCH /tasks/:id status=todo（差し戻し）"
     todo --> done: "PATCH /tasks/:id status=done（直接完了）"
-    done --> [*]: "DELETE /tasks/:id"
-    todo --> [*]: "DELETE /tasks/:id"
-    in_progress --> [*]: "DELETE /tasks/:id"
+    done --> [*]: "DELETE /tasks/:id（論理削除）"
+    todo --> [*]: "DELETE /tasks/:id（論理削除）"
+    in_progress --> [*]: "DELETE /tasks/:id（論理削除）"
 ```
+
+`[*]` への遷移は `is_active=false` への論理削除であり、行自体は削除されない（`status` は最後の値を保持したまま無効化される）。
 
 ### 7.2 行全体のライフサイクルと再採番の契機
 
@@ -216,11 +229,14 @@ flowchart LR
     F -->|"status/position変更なし"| L["UPDATE title/description/assignee/due_at<br/>version=version+1"]
 
     E --> M["DELETE /tasks/:id"]
-    M --> N["advisory lock 取得<br/>(project_id, status)"]
-    N --> O["DELETE tasks 実行"]
-    O --> P["後続positionを-1で詰める"]
-    P --> Q["ROW 消滅（CASCADE: task_comments削除）"]
+    M --> N["UPDATE tasks SET is_active=false<br/>version=version+1"]
+    N --> O["200 OK<br/>position詰め（compaction）は行わない"]
+
+    O --> R["PATCH /tasks/:id<br/>is_active=true（再有効化）"]
+    R --> S["UPDATE tasks SET is_active=true"]
 ```
+
+論理削除（`is_active=false`）はDELETE時点の `position`/`status` をそのまま保持し、後続タスクの `position` 詰めは行わない。無効化されたタスクは一覧・カンバンから除外されるだけで、`position` にギャップが生じても列内の並び順（`ORDER BY position`）自体は崩れないため実用上問題ない（物理削除時代の詰め直しロジックは廃止する。§8.8参照）。
 
 ## 8. リポジトリ関数詳細
 
@@ -233,7 +249,7 @@ flowchart LR
 | 発行SQL | ```sql\nSELECT pg_advisory_xact_lock(\n  hashtextextended(:project_id::text || ':' || :status, 0)\n);\n``` |
 | 使用インデックス | 該当なし（advisory lockはロックテーブルであり行ロックではない） |
 | 送出例外 | なし（`pg_advisory_xact_lock` はトランザクション終了時に自動解放） |
-| 処理内容 | 1. `project_id` と `status` の組み合わせを64bitハッシュ化してロックキーとする<br/>2. 同一列に対する position 採番・再採番を直列化し、同時作成/移動時の一意制約違反やpositionの飛び・重複を防ぐ |
+| 処理内容 | 1. `project_id` が `NULL`（未所属タスク）の場合は固定プレースホルダ文字列 `'00000000-0000-0000-0000-000000000000'` に変換してからロックキーを生成する（未所属タスク全体を1つの仮想グループとして直列化し、`uq_tasks_project_status_position` がNULL同士の重複を検出できない問題をアプリ層で補う。§13参照）<br/>2. `project_id`（または上記プレースホルダ）と `status` の組み合わせを64bitハッシュ化してロックキーとする<br/>3. 同一列に対する position 採番・再採番を直列化し、同時作成/移動時の一意制約違反やpositionの飛び・重複を防ぐ |
 
 ### 8.2 `repository/task_repository.py :: next_position`
 
@@ -301,27 +317,40 @@ flowchart LR
 | 送出例外 | なし（advisory lockで直列化済み） |
 | 処理内容 | `acquire_status_lock(project_id, old_status)` と `(project_id, new_status)` を**キー文字列の昇順**で取得しデッドロックを防止 → 旧列の詰め → 新列末尾へ挿入、の順で実行。`update_with_optimistic_lock` の直前に呼ばれる |
 
-### 8.8 `repository/task_repository.py :: delete_and_compact`
+### 8.8 `repository/task_repository.py :: deactivate`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def delete_and_compact(session: AsyncSession, task: Task) -> None` |
-| 引数 / 戻り値 | 削除対象の `Task` → なし |
-| 発行SQL | ```sql\nDELETE FROM tasks WHERE id = :id;\nUPDATE tasks SET position = position - 1\nWHERE project_id = :project_id AND status = :status AND position > :deleted_position;\n``` |
-| 使用インデックス | `uq_tasks_project_status_position` |
+| シグネチャ | `async def deactivate(session: AsyncSession, task: Task) -> None` |
+| 引数 / 戻り値 | 削除（無効化）対象の `Task` → なし |
+| 発行SQL | ```sql\nUPDATE tasks SET is_active = false, version = version + 1\nWHERE id = :id;\n``` |
+| 使用インデックス | PK |
 | 送出例外 | なし |
-| 処理内容 | `acquire_status_lock(project_id, status)` を取得してから実行。`task_comments` はDBの `ON DELETE CASCADE` で自動削除されるためアプリ側で個別削除しない |
+| 処理内容 | 1. `task.is_active = False` としてORMエンティティを更新し `flush()`（`trg_set_updated_at` により `updated_at` も更新）<br/>2. **position の詰め（compaction）は行わない**（物理削除時代の `delete_and_compact` とは異なり、`status`/`position` は変更しない）<br/>3. `task_comments` はDBの `ON DELETE CASCADE` を持つが、`tasks` 行自体を物理削除しないため発火しない。無効化後もコメント履歴は参照可能なまま残る<br/>4. advisory lockは不要（`position` を変更しないため列内の直列化対象にならない） |
 
-### 8.9 `repository/task_repository.py :: list_by_project_grouped`
+### 8.9 `repository/task_repository.py :: reactivate`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def list_by_project_grouped(session: AsyncSession, project_id: UUID) -> dict[str, list[Task]]` |
+| シグネチャ | `async def reactivate(session: AsyncSession, task: Task) -> None` |
+| 引数 / 戻り値 | 再有効化対象の `Task` → なし |
+| 発行SQL | ```sql\nUPDATE tasks SET is_active = true, version = version + 1\nWHERE id = :id;\n``` |
+| 使用インデックス | PK |
+| 送出例外 | なし |
+| 処理内容 | `PATCH /tasks/{id}` に `is_active=true` を指定した場合に呼ばれる。認可はルータ側（作成者/プロジェクトオーナー/admin）で事前判定する。`position`/`status` はDELETE時点の値のまま復元される |
+
+### 8.10 `repository/task_repository.py :: list_by_project_grouped`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `async def list_by_project_grouped(session: AsyncSession, project_id: UUID, *, include_inactive: bool = False) -> dict[str, list[Task]]` |
 | 引数 / 戻り値 | プロジェクトID → `{"todo": [...], "in_progress": [...], "done": [...]}` |
-| 発行SQL | ```sql\nSELECT id, title, description, status, assignee_id, position, version, due_at\nFROM tasks WHERE project_id = :project_id\nORDER BY status, position ASC;\n``` |
+| 発行SQL | ```sql\nSELECT t.id, t.title, t.description, t.status, t.assignee_id, t.position,\n       t.version, t.due_at, t.is_active, p.is_active AS project_is_active\nFROM tasks t\nLEFT JOIN projects p ON p.id = t.project_id\nWHERE t.project_id = :project_id\n  AND (:include_inactive OR t.is_active = true)\nORDER BY t.status, t.position ASC;\n``` |
 | 使用インデックス | `uq_tasks_project_status_position` |
 | 送出例外 | なし |
-| 処理内容 | 1クエリで取得しアプリ側で `status` ごとにグルーピング。コメント件数は `task_comment_repository.count_by_task_ids()` で別クエリ集計しN+1を回避 |
+| 処理内容 | 1. `projects` を `LEFT JOIN` して `project_is_active` を1クエリで取得し、レスポンスDTOに含める（`project_id` がNULLの行は `project_is_active=null` となる）<br/>2. デフォルトは `t.is_active = true` のみを対象とし、`include_inactive=true` で無効化済みタスクも含める<br/>3. 1クエリで取得しアプリ側で `status` ごとにグルーピング。コメント件数は `task_comment_repository.count_by_task_ids()` で別クエリ集計しN+1を回避 |
+
+`GET /api/tasks`（横断一覧）の `list_all_for_user` 相当のクエリも同様に `projects` を `LEFT JOIN` して `project_is_active` を含める。`project_id IS NULL` を指定した絞り込みは `WHERE t.project_id IS NULL AND t.created_by = :user_id`（未所属タスクは作成者本人のみ参照可）とする。
 
 ## 9. 関数相関図
 
@@ -350,7 +379,9 @@ flowchart LR
     TR -->|"update_with_optimistic_lock"| T1
 
     TS -->|"delete_task"| TR
-    TR -->|"delete_and_compact"| T1
+    TR -->|"deactivate"| T1
+    TS -->|"reactivate_task"| TR
+    TR -->|"reactivate"| T1
 
     TS -->|"get_board"| TR
     TR -->|"list_by_project_grouped"| T1
@@ -365,20 +396,22 @@ flowchart LR
 | Q-Task-3 | 末尾position採番 | `SELECT COALESCE(MAX(position),-1)+1 WHERE project_id=:pid AND status=:status` | `uq_tasks_project_status_position` | Index Scan（Backward、最終要素のみ） |
 | Q-Task-4 | 担当タスク絞り込み | `WHERE assignee_id=:uid` | `ix_tasks_assignee_id` | Index Scan |
 | Q-Task-5 | 楽観ロック更新 | `UPDATE ... WHERE id=:id AND version=:v` | PK | Index Scan（1行、`FOR UPDATE` 併用） |
-| Q-Task-6 | 削除時の後続詰め | `UPDATE ... WHERE project_id=:pid AND status=:status AND position>:p` | `uq_tasks_project_status_position` | Index Scan |
+| Q-Task-6 | 論理削除 | `UPDATE tasks SET is_active=false WHERE id=:id` | PK | Index Scan（1行、後続position詰めは行わないためこれのみ） |
+| Q-Task-7 | カンバン取得（project_is_active付き） | `tasks LEFT JOIN projects ON project_id ORDER BY status, position` | `uq_tasks_project_status_position` | Index Scan → Nested Loop（`projects` PK Lookup） |
 
 ## 11. 整合性・並行制御
 
 | 項目 | 内容 |
 |------|------|
-| FK CASCADE（`project_id`） | `ON DELETE CASCADE`。プロジェクト削除時にタスクを自動削除し、`task_comments` も連鎖削除される |
+| FK CASCADE（`project_id`） | `ON DELETE SET NULL`。`projects` の物理削除経路が無いため通常運用では発火しない防御的制約。`projects` が論理削除（`is_active=false`）されてもタスクの `project_id` は変更されない |
 | FK CASCADE（`assignee_id`） | `ON DELETE SET NULL`。`users` 行自体の削除時にのみ発火。所属解除（`project_members` 削除）はDBのFKでは発火しないため、`05_table_project_members.md` §8.5 のアプリ層UPDATEで対応 |
 | FK CASCADE（`created_by`） | `ON DELETE RESTRICT`。作成者の履歴を保護 |
 | CHECK制約 | `ck_tasks_status`（3値のみ許可）、`ck_tasks_position_non_negative`、`ck_tasks_version_positive` |
-| 一意制約（遅延） | `uq_tasks_project_status_position` は `DEFERRABLE INITIALLY DEFERRED`。再採番の中間状態（退避値経由）での一時的重複をトランザクション内で許容し、COMMIT時に最終検証する |
+| 一意制約（遅延） | `uq_tasks_project_status_position` は `DEFERRABLE INITIALLY DEFERRED`。再採番の中間状態（退避値経由）での一時的重複をトランザクション内で許容し、COMMIT時に最終検証する。ただし `project_id IS NULL` の行同士では機能しないため、advisory lockキー生成でNULLを固定プレースホルダに変換して直列化することで実質的な衝突を防ぐ（§8.1、§13） |
+| 論理削除（`is_active`） | `DELETE /api/tasks/{id}` は `UPDATE tasks SET is_active=false` のみを発行し、`position` の詰め（compaction）は行わない。再有効化は `PATCH /api/tasks/{id}` に `is_active=true` を指定して行う（作成者/プロジェクトオーナー/adminのみ） |
 | 楽観ロック（`version`） | `PATCH /tasks/{id}` は `version` を必須パラメータとし、`UPDATE ... WHERE id=:id AND version=:expected_version` で一致した場合のみ更新、成功時に `version+1`。不一致時は影響行数0件を検知して `409 TASK_CONFLICT` |
 | advisory lock | `pg_advisory_xact_lock(hashtextextended(project_id \|\| ':' \|\| status, 0))` で `(project_id, status)` 単位に position 採番・再採番を直列化。`_xact_` 系のためトランザクション終了で自動解放。列間移動時は旧列・新列のロックをキー文字列の昇順で取得しデッドロックを回避 |
-| トランザクション境界 | 作成：lock取得→採番→INSERTを1トランザクション。更新（status/position変更あり）：`FOR UPDATE`→lock取得→再採番UPDATE群→楽観ロックUPDATEを1トランザクション。削除：lock取得→DELETE→後続詰めUPDATEを1トランザクション |
+| トランザクション境界 | 作成：lock取得→採番→INSERTを1トランザクション。更新（status/position変更あり）：`FOR UPDATE`→lock取得→再採番UPDATE群→楽観ロックUPDATEを1トランザクション。論理削除・再有効化：`UPDATE tasks SET is_active=...` 単文（position詰めを行わないためadvisory lock・複数UPDATEは不要） |
 | ロックの二重性 | 行ロック（`FOR UPDATE`/`version`列）は「この1タスク」、advisory lockは「同じ列の複数タスク」の同時更新を防ぐ。目的が異なるため併用する |
 
 ## 12. テスト設計
@@ -387,17 +420,27 @@ flowchart LR
 |----|------|--------|----------|------------|
 | T-1 | 制約違反（CHECK） | `status='invalid'` / `position=-1` でINSERT/UPDATEを試みる | それぞれ `ck_tasks_status` / `ck_tasks_position_non_negative` 違反でDBエラー | `test_task_check_constraints_reject_invalid_values` |
 | T-2 | 制約違反（UNIQUE） | advisory lockを取らずに同一 `(project_id, status, position)` を持つ2行を並行INSERT | 一意制約違反、またはadvisory lockにより直列化されて後続が採番し直される | `test_concurrent_task_creation_serialized_by_advisory_lock` |
-| T-3 | CASCADE削除 | プロジェクトを削除する | 配下の `tasks` と `task_comments` が連鎖削除される | `test_delete_project_cascades_tasks_and_comments` |
+| T-3 | 論理削除の非連鎖確認 | プロジェクトを `DELETE /api/projects/{id}` で無効化（論理削除）する | 配下の `tasks` は削除も `project_id` NULL化もされず、`is_active` も変化しない | `test_project_deactivation_does_not_affect_tasks` |
+| T-3' | 防御的制約の確認 | （実運用では到達しない）テスト内で直接 `DELETE FROM projects` を発行する | 配下の `tasks.project_id` が `SET NULL` になり、`task_comments` はCASCADE削除される | `test_direct_physical_project_delete_sets_task_project_id_null` |
 | T-4 | 並行更新（楽観ロック） | 2クライアントが同じ `version` を元に同時 `PATCH` する | 先着のみ成功し `version+1`、後着は `409 TASK_CONFLICT` | `test_patch_task_version_conflict_returns_409` |
 | T-5 | 並び順 | 列内の中間位置へタスクを移動する | 移動元より後ろの要素が詰まり、移動先以降がずれ、`position` に欠番・重複が生じない | `test_reorder_within_status_keeps_positions_contiguous` |
 | T-6 | 列間移動 | `todo` → `in_progress` へ `position` 指定なしで移動する | 旧列の後続が詰まり、新列の末尾に採番される | `test_move_status_appends_to_tail_of_new_column` |
-| T-7 | 削除時の再採番 | 列の中間のタスクを削除する | 削除後、後続タスクの `position` が1つずつ詰まる | `test_delete_task_compacts_following_positions` |
+| T-7 | 論理削除時の非compaction確認 | 列の中間のタスクを `DELETE /tasks/{id}` で論理削除する | `is_active=false` になるのみで、後続タスクの `position` は詰められずギャップが残る | `test_deactivate_task_does_not_compact_positions` |
 | T-8 | advisory lock | 同一 `(project_id, status)` への複数の作成・移動リクエストを並行実行 | 採番・並べ替えが直列化され、`uq_tasks_project_status_position` 違反が発生しない | `test_advisory_lock_prevents_position_collision_under_concurrency` |
+| T-8' | advisory lock（未所属タスク） | `project_id IS NULL` の複数タスクを同一 `status` へ並行作成する | プレースホルダキーにより直列化され、`position` の実質的な重複が生じない | `test_advisory_lock_serializes_unassigned_tasks` |
 | T-9 | FK | `assignee_id` に非メンバーのユーザーIDを指定して作成/更新する | アプリ層バリデーションで拒否（`422`または`400`。DB制約ではなくサービス層検証） | `test_assign_non_member_user_rejected` |
-| T-10 | デフォルト値 | `status`/`position`/`version` を指定せずにINSERTする | `status='todo'`、`position` は `next_position` 経由の採番値、`version=1` となる | `test_create_task_defaults_applied` |
+| T-10 | デフォルト値 | `status`/`position`/`version`/`is_active` を指定せずにINSERTする | `status='todo'`、`position` は `next_position` 経由の採番値、`version=1`、`is_active=true` となる | `test_create_task_defaults_applied` |
+| T-11 | 再有効化 | 作成者/プロジェクトオーナー/admin が無効化済みタスクに `PATCH /tasks/{id}` で `is_active=true` を指定 | `is_active` が `true` に戻り、`position`/`status` はDELETE時点の値のまま | `test_reactivate_task_sets_is_active_true` |
+| T-12 | project_id NULL許容 | `project_id` を指定せずに `POST /api/tasks` でタスクを作成する | `tasks.project_id` が `NULL` で作成され、FK違反にならない | `test_create_task_without_project_succeeds` |
+| T-13 | project_is_active | 無効化済みプロジェクト配下の有効タスクを取得する | レスポンスの `project_is_active` が `false`、タスク自体は一覧・カンバンに表示される | `test_task_response_includes_project_is_active` |
+| T-14 | project_is_active（未所属） | `project_id IS NULL` のタスクを取得する | レスポンスの `project_is_active` が `null` | `test_task_response_project_is_active_null_when_unassigned` |
+| T-15 | 一覧デフォルト絞り込み | `GET /api/tasks` をデフォルトパラメータで実行 | `is_active=true` のタスクのみ返る | `test_list_tasks_default_excludes_inactive` |
 
 ## 13. 不明点・要検討事項
 
 - `position` のDB既定値は `01_database.md` の定義上 `0` だが、実運用では常に `fn_next_task_position` 経由で採番するため素の既定値 `0` が使われる場面は基本的に無い（DBスキーマ上の安全弁としてのみ機能する）。この理解でよいか要確認。
 - advisory lockのキー生成方法（`hashtextextended(project_id || ':' || status, 0)`）は基本設計に具体的な実装が無いため、本書での具体化である。`pg_advisory_xact_lock` は単一bigint引数版を用いる想定だが、2引数版（`(classid, objid)` 形式）を用いるかは実装時に確定すること（要検討）。
 - 列間移動時のロック取得順序（キー文字列の昇順固定によるデッドロック回避）は基本設計に記載がなく、本書での具体化である。
+- **`project_id IS NULL` 行に対するUNIQUE制約の限界**：`uq_tasks_project_status_position` はPostgreSQLの仕様上NULL同士を区別するため、未所属タスク間では機能しない。本書ではadvisory lockキー生成でNULLを固定プレースホルダ（`'00000000-0000-0000-0000-000000000000'`）に変換して直列化する対応方針としたが、これはあくまでアプリ層での直列化であり、advisory lockを経由しない経路（バッチ処理・管理ツール等からの直接INSERTなど）が将来追加された場合は重複を防げない。DB制約側での根本的な解決（例：`project_id` に非NULLの番兵値を用いる設計への変更）を行うかは要検討。
+- `start_at`/`end_at` を持つ `projects` の期間外に作成された未所属タスクの扱い（業務ロジック上の制約を設けるか）は基本設計に明記がなく要検討（[`04_table_projects.md`](./04_table_projects.md) §13も参照）。
+- `GET /api/tasks`（横断一覧）における未所属タスクの参照範囲（作成者本人のみ、という方針で確定してよいか）はAPI設計担当の詳細設計で最終確認する。

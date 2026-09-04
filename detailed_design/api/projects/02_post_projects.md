@@ -35,6 +35,10 @@
 |------|----|------|------|------|
 | name | string | ○ | 1〜100文字 | プロジェクト名 |
 | description | string \| null | 任意 | 上限なし（`TEXT`）。省略時 `null` | 説明 |
+| start_at | string(datetime) \| null | 任意 | ISO 8601（`TIMESTAMPTZ`として保存、UTC）。省略時 `null` | プロジェクト開始日時 |
+| end_at | string(datetime) \| null | 任意 | ISO 8601（`TIMESTAMPTZ`として保存、UTC）。省略時 `null` | プロジェクト終了日時 |
+
+`start_at` と `end_at` が両方とも指定された場合、`end_at >= start_at` を満たさなければ `422 VALIDATION_ERROR` とする（片方のみ指定、または両方 `null`/省略の場合は検証対象外）。
 
 パスパラメータ／クエリパラメータ：なし。ヘッダ：`X-CSRF-Token`（sessionモードの更新系で必須）。
 
@@ -51,6 +55,9 @@
   "member_count": 1,
   "task_counts": { "todo": 0, "in_progress": 0, "done": 0 },
   "is_owner": true,
+  "is_active": true,
+  "start_at": null,
+  "end_at": null,
   "created_at": "2026-09-03T04:05:06Z"
 }
 ```
@@ -64,6 +71,9 @@
 | member_count | integer | 不可 | 常に `1`（作成直後はオーナーのみ） |
 | task_counts | object | 不可 | 常に全status `0` |
 | is_owner | boolean | 不可 | 常に `true` |
+| is_active | boolean | 不可 | 常に `true`（作成直後は有効） |
+| start_at | string(datetime) | 可 | リクエストで指定した値、未指定時 `null` |
+| end_at | string(datetime) | 可 | リクエストで指定した値、未指定時 `null` |
 | created_at | string(datetime) | 不可 | ISO 8601 UTC |
 
 `Set-Cookie` なし。共通ヘッダ `X-Request-ID` を全レスポンスに付与する。`Location` ヘッダは付与しない（本設計ではボディのみで完結させる）。
@@ -75,7 +85,7 @@
 | 401 | `UNAUTHENTICATED` / `SESSION_EXPIRED` / `TOKEN_EXPIRED` / `TOKEN_INVALID` | 認証情報なし・無効 | 認証が必要です | `deps.get_current_user` |
 | 403 | `USER_INACTIVE` | `is_active=false` | アカウントが無効化されています | |
 | 403 | `CSRF_INVALID` | sessionモードでCSRFヘッダ／Origin不一致 | CSRFトークンが不正です | `deps.verify_origin` / `verify_csrf` |
-| 422 | `VALIDATION_ERROR` | `name` 未指定・101文字以上等 | 入力内容に誤りがあります | `details` にフィールド情報 |
+| 422 | `VALIDATION_ERROR` | `name` 未指定・101文字以上、または `start_at`/`end_at` 両方指定時に `end_at < start_at` | 入力内容に誤りがあります | `details` にフィールド情報 |
 | 503 | `SERVICE_UNAVAILABLE` | PostgreSQL 接続不能 | しばらくしてから再度お試しください | fail-close |
 
 `basic_design/04_api.md` §4.2 のエラーコード体系から逸脱しない。
@@ -92,16 +102,16 @@ sequenceDiagram
     participant RP as "project_repository"
     participant PG as "PostgreSQL"
 
-    FE->>R: POST /api/projects {name, description}
+    FE->>R: POST /api/projects {name, description, start_at?, end_at?}
     R->>D: verify_origin / verify_csrf（sessionモードのみ実質検証）
     D-->>R: OK
     R->>D: get_current_user
     D-->>R: CurrentUser
-    R->>R: pydanticでリクエストボディを検証
+    R->>R: pydanticでリクエストボディを検証（end_at>=start_atを含む）
     R->>S: create_project(user, payload)
     S->>PG: BEGIN
-    S->>RP: insert_project(name, description, owner_id=user.id)
-    RP->>PG: "INSERT INTO projects (...) VALUES (...) RETURNING *"
+    S->>RP: insert_project(name, description, start_at, end_at, owner_id=user.id)
+    RP->>PG: "INSERT INTO projects (..., start_at, end_at, is_active) VALUES (..., true) RETURNING *"
     PG-->>RP: project行
     RP-->>S: Project
     S->>RP: insert_member(project_id, user_id=user.id, invited_by=NULL)
@@ -128,10 +138,10 @@ flowchart TB
     C -->|"OK"| D["get_current_user"]
     D -->|"未認証"| D1["401 UNAUTHENTICATED系"]
     D -->|"is_active=false"| D2["403 USER_INACTIVE"]
-    D -->|"OK"| E["pydanticでname/descriptionを検証"]
+    D -->|"OK"| E["pydanticでname/description/start_at/end_atを検証（end_at>=start_atを含む）"]
     E -->|"制約外"| E1["422 VALIDATION_ERROR"]
     E -->|"OK"| F["BEGIN"]
-    F --> G["INSERT projects (owner_id=current_user.id)"]
+    F --> G["INSERT projects (owner_id=current_user.id, is_active=true, start_at, end_at)"]
     G --> H["INSERT project_members (project_id, user_id=current_user.id)"]
     H --> I["COMMIT"]
     I --> J["201 {project}"]
@@ -145,7 +155,7 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def create_project(payload: ProjectCreateRequest, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db), _: None = Depends(verify_csrf)) -> ProjectSummaryResponse` |
+| シグネチャ | `async def create_project(payload: ProjectCreateRequest, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db), _: None = Depends(verify_csrf)) -> ProjectSummaryResponse`（`payload` は `name`, `description`, `start_at`, `end_at` を保持） |
 | 引数 | `payload`: リクエストボディ（pydantic検証済み） / `user`: 認証済みユーザー / `db`: DBセッション |
 | 戻り値 | `ProjectSummaryResponse`（201） |
 | 送出例外 | `CsrfInvalidError`（403）を `verify_csrf` 依存関係が送出 |
@@ -157,21 +167,21 @@ flowchart TB
 | 項目 | 内容 |
 |------|------|
 | シグネチャ | `async def create_project(user: CurrentUser, payload: ProjectCreateRequest, db: AsyncSession) -> ProjectSummary` |
-| 引数 | `user`: 作成者 / `payload`: `name`, `description` / `db`: DBセッション |
-| 戻り値 | `ProjectSummary`（`member_count=1`, `task_counts`全0, `is_owner=True` を固定値として組み立てる） |
-| 送出例外 | `InternalError`（INSERT失敗）→500、`ServiceUnavailableError`（DB接続不能）→503 |
-| 処理内容 | 1. `db.begin()` でトランザクションを開始（FastAPIのDIで払い出された `AsyncSession` のコンテキストを使用） 2. `project_repository.insert_project(db, name, description, owner_id=user.id)` を呼び出す 3. 返却された `project.id` を用いて `project_repository.insert_member(db, project_id, user_id=user.id, invited_by=None)` を呼び出す 4. 両方成功した場合のみ `commit`。いずれかで例外が発生した場合は `rollback` してから再送出する 5. `ProjectSummary` を構築して返す（集計クエリは発行せず固定値を使う） |
+| 引数 | `user`: 作成者 / `payload`: `name`, `description`, `start_at`, `end_at` / `db`: DBセッション |
+| 戻り値 | `ProjectSummary`（`member_count=1`, `task_counts`全0, `is_owner=True`, `is_active=True` を固定値として組み立てる） |
+| 送出例外 | `ValidationError`（`end_at < start_at`）→422、`InternalError`（INSERT失敗）→500、`ServiceUnavailableError`（DB接続不能）→503 |
+| 処理内容 | 1. `payload.start_at`・`payload.end_at` が両方とも値を持つ場合 `end_at >= start_at` をpydanticのモデルバリデータで検証（違反時422、サービス層到達前に弾く） 2. `db.begin()` でトランザクションを開始（FastAPIのDIで払い出された `AsyncSession` のコンテキストを使用） 3. `project_repository.insert_project(db, name, description, start_at, end_at, owner_id=user.id)` を呼び出す（`is_active` はDBの `DEFAULT true` に委ねる） 4. 返却された `project.id` を用いて `project_repository.insert_member(db, project_id, user_id=user.id, invited_by=None)` を呼び出す 5. 両方成功した場合のみ `commit`。いずれかで例外が発生した場合は `rollback` してから再送出する 6. `ProjectSummary` を構築して返す（集計クエリは発行せず固定値を使う） |
 | 副作用 | `projects` へのINSERT、`project_members` へのINSERT（同一トランザクション） |
 
 ### 6.3 `repository/project_repository.py :: insert_project` / `insert_member`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def insert_project(db: AsyncSession, name: str, description: str \| None, owner_id: UUID) -> Project` ／ `async def insert_member(db: AsyncSession, project_id: UUID, user_id: UUID, invited_by: UUID \| None) -> None` |
+| シグネチャ | `async def insert_project(db: AsyncSession, name: str, description: str \| None, start_at: datetime \| None, end_at: datetime \| None, owner_id: UUID) -> Project` ／ `async def insert_member(db: AsyncSession, project_id: UUID, user_id: UUID, invited_by: UUID \| None) -> None` |
 | 引数 | 上記の通り |
-| 戻り値 | `insert_project`: 作成された `Project` エンティティ／`insert_member`: なし |
-| 送出例外 | `IntegrityError`（外部キー制約違反等。想定上は発生しない） |
-| 処理内容 | `insert_project`: `INSERT INTO projects (name, description, owner_id) VALUES (...) RETURNING *`。`insert_member`: `INSERT INTO project_members (project_id, user_id, invited_by, joined_at) VALUES (:pid, :uid, :invited_by, now())` |
+| 戻り値 | `insert_project`: 作成された `Project` エンティティ（`is_active=true`）／`insert_member`: なし |
+| 送出例外 | `IntegrityError`（外部キー制約違反、または `ck_projects_period` CHECK制約違反。後者はpydantic側で事前に弾くため想定上は発生しない） |
+| 処理内容 | `insert_project`: `INSERT INTO projects (name, description, start_at, end_at, owner_id) VALUES (...) RETURNING *`（`is_active` はカラムDEFAULT `true` に委ねる）。`insert_member`: `INSERT INTO project_members (project_id, user_id, invited_by, joined_at) VALUES (:pid, :uid, :invited_by, now())` |
 | 副作用 | DBへのINSERT（コミットは呼び出し元のservice層が制御） |
 
 ## 7. 関数相関図
@@ -206,7 +216,7 @@ flowchart LR
 
 | テーブル | 操作 | 条件・TTL | 備考 |
 |----------|------|-----------|------|
-| projects | INSERT | `owner_id = current_user.id` | トランザクション内 |
+| projects | INSERT | `owner_id = current_user.id`、`is_active`はDEFAULT `true`、`start_at`/`end_at`は指定値または`null` | トランザクション内。`ck_projects_period` CHECK制約あり |
 | project_members | INSERT | `project_id`, `user_id = owner_id`, `invited_by = NULL` | 同一トランザクション。所属判定を一箇所に集約するため作成時に自分自身も登録する |
 
 **Redis**
@@ -222,6 +232,9 @@ flowchart LR
 |-------------------|-----------|------|--------------------------|
 | `ProjectCreateRequest` | name | `str, min_length=1, max_length=100` | `zod.string().min(1).max(100)` |
 | `ProjectCreateRequest` | description | `str \| None`, 省略時 `None` | `zod.string().nullable().optional()` |
+| `ProjectCreateRequest` | start_at | `datetime \| None`, 省略時 `None` | `zod.string().datetime().nullable().optional()` |
+| `ProjectCreateRequest` | end_at | `datetime \| None`, 省略時 `None` | `zod.string().datetime().nullable().optional()` |
+| `ProjectCreateRequest` | （モデルバリデータ） | `start_at`と`end_at`が両方とも値を持つ場合、`end_at >= start_at`でなければ422 | `zod.object({...}).refine(end_at >= start_at when both present)` |
 
 ## 11. 非機能・セキュリティ考慮
 
@@ -245,6 +258,9 @@ flowchart LR
 | 5 | 結合 | sessionモードでCSRFヘッダ欠落時403 | `X-CSRF-Token`を送らない | `403 CSRF_INVALID` | `test_create_project_missing_csrf_session_mode` |
 | 6 | 結合 | 未認証は401 | Cookie/Bearerなし | `401 UNAUTHENTICATED` | `test_create_project_unauthenticated` |
 | 7 | 結合 | is_active=falseは403 | 無効化ユーザーでログイン試行済みトークンを使用 | `403 USER_INACTIVE` | `test_create_project_inactive_user` |
+| 8 | 結合 | start_at/end_at省略時はnullで作成される | `start_at`/`end_at`を送らない | `201`、レスポンスの`start_at`/`end_at`が`null`、`is_active`が`true` | `test_create_project_without_period` |
+| 9 | 結合 | start_at/end_atを両方指定して作成できる | `end_at >= start_at`を満たす値を送信 | `201`、レスポンスに指定値が反映される | `test_create_project_with_valid_period` |
+| 10 | 結合 | end_at < start_atは422 | `end_at`が`start_at`より前の値 | `422 VALIDATION_ERROR` | `test_create_project_invalid_period_returns_422` |
 
 `AUTH_MODE=session` / `jwt` の両方で No.3・No.6を実施する。No.5はsessionモード固有のためjwtモードでは対象外（jwtは`Authorization`ヘッダのみでCSRF検証を行わないため）とし、その理由を明記する。
 
