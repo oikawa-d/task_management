@@ -99,7 +99,37 @@ UPDATE notifications
 
 個別既読化・ポーリング・全既読が同時に実行されても、`read_at IS NULL` 条件付きUPDATEが行ロック下で評価される。`updated_count`はそのトランザクションで実際に変更した行数であり、既読を二重計上しない。レスポンスの未読件数はフロントのキャッシュを上書きするが、次回ポーリングで再同期される。
 
-## 7. テスト設計
+## 7. 関数相関図
+
+```mermaid
+flowchart LR
+    R["notifications_router.mark_all_notifications_read"] --> S["notification_service.mark_all_read"]
+    S --> NR["notification_repository.mark_all_read"]
+    NR --> N[("notifications")]
+    NR -->|"未読COUNT"| N
+```
+
+## 8. データ遷移図
+
+```mermaid
+flowchart LR
+    A["本人の未読通知"] -->|"UPDATE read_at（同一トランザクション）"| B["本人の既読通知"]
+    B --> C["更新件数と未読件数を集計"]
+    C --> D["ReadAllResponse"]
+    E["本人の未読0件"] -->|"UPDATE 0件"| C
+    F["他人の通知"] --> G["状態変更なし"]
+```
+
+## 9. クエリ・トランザクション
+
+| 分岐 | 発行クエリ | トランザクション |
+|------|------------|------------------|
+| 常に | 未読通知の `UPDATE` 1回 + 本人の未読件数 `COUNT` 1回 | 2クエリを1トランザクションでcommit |
+| 認証/CSRF失敗 | 0回 | DB処理なし |
+
+`UPDATE` の `rowcount` を `updated_count` に使用するため、既読済み・他人の行は件数に含めない。
+
+## 10. テスト設計
 
 | No | 区分 | ケース | 期待結果 | テスト名案 |
 |----|------|--------|----------|------------|
@@ -108,3 +138,7 @@ UPDATE notifications
 | 3 | 結合 | 他人の未読が存在 | 本人分だけ更新、他人分は未読のまま | `test_mark_all_read_never_updates_other_users` |
 | 4 | 結合 | session方式でCSRF不正 | 403 `CSRF_INVALID`、DB更新なし | `test_mark_all_read_rejects_invalid_csrf` |
 | 5 | 結合 | 個別既読と同時実行 | 件数が負にならず、最終的に本人の未読が0 | `test_mark_all_read_concurrent_mark_read_is_consistent` |
+
+## 11. 不明点・要検討事項
+
+- 個別既読化との同時実行時の最終的な未読件数はDBの行ロックに従う。通知更新を非同期キューへ移す場合は別設計とする。

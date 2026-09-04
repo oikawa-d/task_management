@@ -8,10 +8,10 @@
 | [../../basic_design/04_api.md](../../basic_design/04_api.md) | §2.3 プロジェクトAPI、§2.6 通知API、§3.2 `GET /projects` レスポンス、§3.3 通知スキーマ |
 | [../api/projects/01_get_projects.md](../api/projects/01_get_projects.md) | `GET /api/projects` 詳細設計 |
 | [../api/projects/02_post_projects.md](../api/projects/02_post_projects.md) | `POST /api/projects` 詳細設計 |
-| [../api/notifications/01_get_notifications.md](../api/notifications/01_get_notifications.md) | `GET /api/notifications` 詳細設計（別担当作成中。パスは確定） |
-| [../api/notifications/02_get_notifications_unread_count.md](../api/notifications/02_get_notifications_unread_count.md) | `GET /api/notifications/unread-count` 詳細設計（別担当作成中。パスは確定） |
-| [../api/notifications/03_patch_notification_read.md](../api/notifications/03_patch_notification_read.md) | `PATCH /api/notifications/{id}/read` 詳細設計（別担当作成中。パスは確定） |
-| [../api/notifications/04_post_notifications_read_all.md](../api/notifications/04_post_notifications_read_all.md) | `POST /api/notifications/read-all` 詳細設計（別担当作成中。パスは確定） |
+| [../api/notifications/01_get_notifications.md](../api/notifications/01_get_notifications.md) | `GET /api/notifications` 詳細設計 |
+| [../api/notifications/02_get_notifications_unread_count.md](../api/notifications/02_get_notifications_unread_count.md) | `GET /api/notifications/unread-count` 詳細設計 |
+| [../api/notifications/03_patch_notification_read.md](../api/notifications/03_patch_notification_read.md) | `PATCH /api/notifications/{id}/read` 詳細設計 |
+| [../api/notifications/04_post_notifications_read_all.md](../api/notifications/04_post_notifications_read_all.md) | `POST /api/notifications/read-all` 詳細設計 |
 | [./07_project_board.md](./07_project_board.md) | カード選択後の遷移先。通知行クリック時の遷移先でもある |
 
 ## 1. 概要
@@ -73,6 +73,8 @@
 | ⑪ | ProjectCreateModal / 作成ボタン | button | - | - | `isValid && !isSubmitting` | クリックで `createProjectMutation.mutate()` |
 | ⑫ | ProjectCreateModal / キャンセル | button | - | - | 常時 | モーダルを閉じ `reset()` |
 | ⑬ | ページネーション | pagination | `meta.page`等 | - | `meta.total_pages > 1` | ページ番号クリックで該当ページを再取得 |
+| ⑭ | NotificationBell | button + badge | `unread_count` | - | 常時 | クリックで通知パネルを開き、未読件数を表示 |
+| ⑮ | NotificationPanel | dialog/list | 通知一覧 | - | ⑭クリック時 | 行クリックで既読化・対象タスクへ遷移、「すべて既読」で一括既読化 |
 
 ## 4. 使用API
 
@@ -80,6 +82,10 @@
 |----|--------------------|-----------------|----------|------------|------------|--------------------------|
 | 1 | マウント時／⑬ページ切替 | `GET /api/projects?page={page}&per_page={perPage}` | ページ番号・件数 | `items` をカード描画し、`meta.page` / `meta.total_pages` を⑬へ反映 | 401はAuthAdapterが処理、その他はエラー表示領域にリトライボタン | `queryKey: ['projects', { page, perPage }]` |
 | 2 | 「新規プロジェクトの作成」送信 | `POST /api/projects` | `{ name, description }` | `201` → モーダルを閉じ `invalidateQueries(['projects'])` → 作成された `projects.name` をトーストで通知 | 422はフィールドエラー表示、それ以外はトーストでエラー表示 | `mutationKey: ['createProject']` |
+| 3 | ヘッダー表示・ポーリング | `GET /api/notifications/unread-count` | なし | `unread_count` を⑬へ反映 | 401はAuthAdapter、503は次回ポーリングで再試行 | `queryKey: ['notifications', 'unread-count']` |
+| 4 | ⑭を開く | `GET /api/notifications?page=1&per_page=20` | クエリのみ | 通知一覧と未読件数を描画 | 401はAuthAdapter、その他はパネル内エラー | `queryKey: ['notifications', { page: 1 }]` |
+| 5 | 通知行クリック | `PATCH /api/notifications/{notification_id}/read` | なし | `read_at` と未読件数をキャッシュへ反映後、taskがあればボードへ遷移 | 404は対象行を再取得、その他はトースト | `mutationKey: ['notification-read']` |
+| 6 | 「すべて既読」クリック | `POST /api/notifications/read-all` | なし | `updated_count` / `unread_count` を反映 | 403/503はパネル内またはトースト表示 | `mutationKey: ['notifications-read-all']` |
 
 ## 5. 状態管理
 
@@ -91,6 +97,7 @@
 | Zustand（`uiStore`） | `sidebarOpen`, `fontScale` | `boolean` / `number` | localStorage復元値、無ければ `true` / `1.0` | ①操作、設定画面での変更 | localStorage |
 | Zustand（`authStore`） | `user.role` | `'member'\|'admin'` | `/auth/me` 由来 | ログイン/ログアウト | メモリのみ |
 | TanStack Query | `['projects', {page, perPage}]` | `Page<ProjectSummary>` | 未取得 | `page` / `perPage`変更時fetch、`createProject`成功時に`invalidate` | しない（[05_frontend.md §5](../../basic_design/05_frontend.md#5-状態管理)） |
+| TanStack Query | `['notifications', 'unread-count']` / `['notifications', {page}]` | 件数 / `NotificationListResponse` | 未取得 | ポーリング、パネル開閉、既読操作時 | しない |
 
 ## 6. 画面状態遷移図
 
@@ -274,6 +281,15 @@ flowchart LR
     H["マウント"] --> I["GET /api/projects"]
     I --> J["queryCache['projects']"]
     J --> G
+
+    H2["NotificationBellポーリング"] --> I2["GET /api/notifications/unread-count"]
+    I2 --> J2["unread_count cache"]
+    J2 --> K2["NotificationBell badge"]
+    L2["NotificationPanelを開く"] --> M2["GET /api/notifications"]
+    M2 --> N2["通知一覧 cache"]
+    N2 --> O2["行クリック / すべて既読"]
+    O2 --> P2["PATCH read / POST read-all"]
+    P2 --> J2
 ```
 
 ## 13. アクセシビリティ・表示設定

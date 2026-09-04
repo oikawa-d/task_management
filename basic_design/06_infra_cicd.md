@@ -51,7 +51,7 @@ flowchart TB
 - 開発時はソースをバインドマウントしてホットリロード（`uvicorn --reload` / `vite dev`）、CD時はイメージ内の成果物を使う構成を `docker-compose.override.yml` で切り替える
 - 基本Composeは `frontend` の `/api` proxyを経由する。`backend` / `postgres` / `redis` は `ports` を持たず、開発者が直接接続する場合だけ `compose.dev.yml` で `127.0.0.1:${...}` を追加する
 - `mailpit` は `profiles: [dev]` とし、production/CDでは起動しない。productionの `SMTP_HOST` は外部SMTPを指定する
-- `batch` は `backend` に依存させない（HTTP APIを呼ばずDB/Redisへ直接アクセスするため）。ただしスキーマは backend 起動時の `alembic upgrade head` に依存するため、`restart: unless-stopped` とし、テーブル未作成で起動に失敗した場合は再起動で回復させる
+- `batch` は `backend` に依存させない（HTTP APIを呼ばずDB/Redisへ直接アクセスするため）。ただしスキーマは backend 起動時の `alembic upgrade head` に依存するため、`restart: unless-stopped` とし、スキーマ未適用で起動に失敗した場合は再起動で回復させる
 - `batch` を1レプリカに限定する（`deploy.replicas` を指定しない）。複数起動しても Redis の実行ロックと `UNIQUE (user_id, dedupe_key)` により通知は重複しないが、無駄なDB走査を避けるため
 
 ### 2.1 batch コンテナの構成

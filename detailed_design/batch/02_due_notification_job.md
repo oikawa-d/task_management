@@ -155,3 +155,50 @@ batchのrepositoryはAPIのrouter/serviceをimportしない。接続・ORMモデ
 | 8 | 結合 | ジョブが正常終了する | `batch_history`が`complete`になり、件数と終了時刻が保存される | `test_due_job_completes_batch_history` |
 | 9 | 結合 | ジョブ本体またはパージが失敗する | `batch_history`が`error`になり、error_code/detailが保存される | `test_due_job_records_batch_failure` |
 | 10 | 結合 | API・batch履歴が30日を超過する | 両テーブルの期限超過行だけが削除される | `test_due_job_purges_api_and_batch_history` |
+
+## 9. 関数相関図
+
+```mermaid
+flowchart LR
+    J["run_due_notification_job"] --> L["redis_lock"]
+    J --> T["iter_due_tasks"]
+    T --> I["bulk_create_due_notifications"]
+    I --> N[("notifications")]
+    J --> P["purge_histories"]
+    P --> SP["sp_purge_notifications / api_history / batch_history"]
+    J --> H["start_batch_history / finish_batch_history"]
+    H --> BH[("batch_history")]
+```
+
+## 10. データ遷移図
+
+```mermaid
+flowchart TB
+    A["起動日時・slot"] --> B["batch_history: inprogress"]
+    B --> C{"Redisロック取得"}
+    C -->|"失敗"| D["skipped・終了"]
+    C -->|"成功"| E["期限対象タスクをチャンクSELECT"]
+    E --> F["通知をチャンクINSERT<br/>ON CONFLICT DO NOTHING"]
+    F --> G["保持期間プロシージャ"]
+    G --> H["batch_history: complete"]
+    E -.->|"DB/パージ失敗"| I["batch_history: error"]
+    D --> J["ログ・ロックTTL"]
+    H --> J
+    I --> J
+```
+
+## 11. クエリ・トランザクション
+
+| 処理 | 発行回数 | トランザクション境界 |
+|------|----------|----------------------|
+| 対象抽出 | `SELECT` はチャンクごとに1回 | チャンク単位でcommit。全件を1トランザクションに保持しない |
+| 通知作成 | チャンクごとに `INSERT ... ON CONFLICT DO NOTHING` を1回 | 対象抽出と通知作成をチャンク単位でcommit |
+| 保持期間処理 | 通知・API履歴・Batch履歴の `CALL` を各1回 | ジョブ本体のトランザクションとは分離 |
+| 履歴 | 開始INSERT 1回、終了UPDATE 1回 | 本体処理とは分離し、履歴失敗でジョブ結果を変更しない |
+
+対象0件でも保持期間処理と履歴終了処理は実行する。Redisロック取得失敗時は通知関連のDBクエリを発行しない。
+
+## 12. 不明点・要検討事項
+
+- ロック取得後にプロセスが強制終了した場合の `inprogress` 行は自動補正せず、運用者がログと照合する現行方針を維持する。
+- チャンクサイズ・保持期間・ロックTTLの具体値は [../infra/04_env_config.md](../infra/04_env_config.md) の環境変数を正とする。

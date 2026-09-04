@@ -149,3 +149,33 @@ flowchart LR
 - 履歴を検索する管理者向けAPI・画面は今回作成しない。
 - 外部ログ集約基盤、アラート、ログの暗号化・改ざん検知は要件書のスコープ外であり、必要になった時点で別設計とする。
 - `inprogress`の監視・補正を自動化する場合のタイムアウト値は要検討。
+
+## 9. 全体の出入力
+
+| 区分 | API履歴 | Batch履歴 | 標準出力ログ |
+|------|---------|-----------|--------------|
+| 入力 | request_id、HTTP結果、利用者・マスキング済みbody | run_id、ジョブ名、実行枠、件数・エラー | API／Batch処理の構造化イベント |
+| 出力 | `api_history` へ1行 | `batch_history` へ開始1行・終了1行 | 障害調査用イベント |
+| 責務 | APIレスポンスを変更せず追記 | ジョブの成否と件数を相関 | 秘密情報を含めず詳細を出力 |
+| 例外 | INSERT失敗はERRORログ | INSERT/UPDATE失敗はジョブ結果を維持 | 出力先障害の扱いは運用基盤に委譲 |
+
+## 10. データ遷移図
+
+```mermaid
+flowchart TB
+    A["API受付"] --> B["レスポンス確定"]
+    B --> C["マスキング・サイズ制限"]
+    C --> D[("api_history: INSERT")]
+    E["Batch開始"] --> F[("batch_history: inprogress")]
+    F --> G["ジョブ処理"]
+    G -->|"正常"| H[("batch_history: complete")]
+    G -->|"例外"| I[("batch_history: error")]
+    D --> J["保持期限到来"]
+    H --> J
+    I --> J
+    J --> K["sp_purge_*_history"]
+    C -.-> L["DB失敗：ERRORログ"]
+    G -.-> L
+```
+
+API履歴のINSERT、Batch履歴の開始・終了UPDATE、保持期間パージはそれぞれ専用のトランザクションで実行し、業務処理のトランザクションと混在させない。

@@ -131,3 +131,16 @@ flowchart LR
 | 要検討 | ORMモデルの二重定義について、CIでの自動検知（例：`api`/`batch` 両モデルのカラム定義を比較する専用テスト）を追加するかは基本設計に明記がなく、本書はレビュー運用のみを前提とした。実装時に自動比較テストの追加を検討したい | `batch/tests/`、[../infra/05_ci_workflow.md](../infra/05_ci_workflow.md) |
 | 要検討 | `batch/app/models/` に置くモデルの範囲（読み取り専用の `tasks` を `Mapped` の一部列のみで定義するか、全列定義するか）は実装時の裁量とする | `batch/app/models/task.py` |
 | 不明 | `batch` コンテナの将来的なジョブ追加（例：他の定期処理）時に `jobs/` をどう分割するかは要件書スコープ外であり本設計では触れない | 将来のジョブ追加時の設計 |
+
+## 11. 必須章の追跡情報
+
+本書はbatch全体の責務と依存方向を定義する文書であり、ジョブ単位の実行詳細を重複記載しない。必須章に対応する実体は次の詳細設計へ委譲する。
+
+| 章 | 入力・責務・例外・データ遷移の追跡先 |
+|----|--------------------------------------|
+| 全体の出入力 | 本書§1・§6・§8。起動引数／環境変数からジョブ・履歴・ログへ渡る値を定義 |
+| 処理シーケンス／処理フロー | [01_scheduler.md](./01_scheduler.md) §3〜§6、[02_due_notification_job.md](./02_due_notification_job.md) §3〜§6 |
+| 関数詳細／関数相関図 | 本書§2〜§3、[01_scheduler.md](./01_scheduler.md) §11、[02_due_notification_job.md](./02_due_notification_job.md) §7 |
+| データ遷移図 | [02_due_notification_job.md](./02_due_notification_job.md) §10。通知作成・履歴更新・パージを追跡 |
+| テスト設計 | 本書§9、[01_scheduler.md](./01_scheduler.md) §10、[02_due_notification_job.md](./02_due_notification_job.md) §8 |
+| 不明点・要検討事項 | 本書§10および委譲先各ファイル末尾 |

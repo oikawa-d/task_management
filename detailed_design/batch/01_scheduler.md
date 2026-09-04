@@ -190,3 +190,34 @@ flowchart TB
 | 要検討 | ヘルスチェックが「プロセス生存」のみで「直近ジョブの成功」を見ない点について、運用上十分か（[../infra/07_operation.md](../infra/07_operation.md) の手動確認手順に依存する）は要検討 | [../infra/01_docker_compose.md](../infra/01_docker_compose.md) §8.2 |
 | 要検討 | ロック取得後に失敗した当日・同一枠を自動リトライする仕組み（例：一定時間後に再試行）を持たせるかは基本設計に明記がなく、本書は失敗時のロック削除後に手動 `--run-once` で再実行する前提とした | [02_due_notification_job.md](./02_due_notification_job.md) §5〜§6 |
 | 不明 | Docker停止時のSIGTERMグレースピリオド（既定10秒）が、チャンク処理中のジョブの安全な中断に十分かは実測が必要 | `docker-compose.yml` の `stop_grace_period` 設定要否（[../infra/01_docker_compose.md](../infra/01_docker_compose.md)） |
+
+## 13. 関数相関図
+
+```mermaid
+flowchart LR
+    M["main"] --> AM["async_main"]
+    AM --> BS["build_scheduler"]
+    AM -->|"--run-once"| JOB["run_due_notification_job"]
+    BS --> SCH["AsyncIOScheduler"]
+    SCH --> JOB
+    AM --> CFG["get_settings"]
+    AM --> POOL["DB/Redis pool"]
+    AM --> SIG["handle_sigterm"]
+```
+
+`main`は引数解析、`async_main`はライフサイクル、`build_scheduler`は実行枠の登録、ジョブ本体は通知処理を担当する。スケジューラからrepositoryを直接呼び出さない。
+
+## 14. データ遷移図
+
+```mermaid
+flowchart LR
+    A["Settings・CLI引数"] --> B["async_main"]
+    B -->|"常駐"| C["10時/17時のscheduler登録"]
+    B -->|"--run-once"| D["due_notification_job 1回実行"]
+    C --> E["ジョブ実行"]
+    D --> E
+    E --> F["batch_history / notifications / ログ"]
+    F --> G["shutdownでpool close"]
+```
+
+設定不備は起動失敗、ジョブ例外は履歴とログへ記録して常駐プロセスを継続する。scheduler自体の失敗とジョブ本体の失敗を混同しない。

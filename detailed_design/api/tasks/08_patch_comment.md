@@ -204,7 +204,7 @@ flowchart TB
 | 引数 | `comment_id`：対象コメントID／`db`：DBセッション |
 | 戻り値 | `task`（`project_id` を含む）と `author` をロード済みの `Comment`、存在しなければ `None` |
 | 送出例外 | なし |
-| 処理内容 | 1. `SELECT * FROM task_comments WHERE id = :comment_id` を `selectinload(Comment.task)` と `selectinload(Comment.author)` 付きで実行 |
+| 処理内容 | 1. `task_comments`を主クエリで1回取得 2. `selectinload(Comment.task)` と `selectinload(Comment.author)` の追加SELECTを各1回実行（最大3クエリ） |
 | 副作用 | なし |
 
 ### 6.5 `repository/task_repository.py :: update_comment_body`
@@ -253,7 +253,7 @@ stateDiagram-v2
 
 | テーブル | 操作 | 条件・TTL | 備考 |
 |----------|------|-----------|------|
-| task_comments | SELECT | `id = :comment_id`（`tasks`をJOIN/selectinload） | 存在確認・project_id特定 |
+| task_comments | SELECT | `id = :comment_id` | 存在確認・project_id特定。`tasks`取得は`selectinload`の追加SELECT |
 | project_members | SELECT | `project_id = :pid AND user_id = :uid` | admin以外の所属確認 |
 | task_comments | UPDATE | `id = :comment_id` | `body` を更新、`updated_at` はトリガで自動更新 |
 

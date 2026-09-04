@@ -8,7 +8,7 @@
 - [`../../basic_design/04_api.md`](../../basic_design/04_api.md)（§2.6/§3.3 通知API、§6.3 バッチシーケンス、§7.3 `notification_service`）
 - [`../../basic_design/06_infra_cicd.md`](../../basic_design/06_infra_cicd.md)（§4 環境変数：`NOTIFY_DUE_*` / `NOTIFICATION_RETENTION_DAYS` / `APP_TIMEZONE`）
 - 本テーブルを操作するAPI詳細設計
-  - `../api/notifications/01_get_notifications.md` GET /api/notifications（未作成。他担当割当。本書からは未リンク）
+  - `../api/notifications/01_get_notifications.md` GET /api/notifications（通知一覧APIの詳細設計）
   - `../api/notifications/02_get_unread_count.md` GET /api/notifications/unread-count（同上）
   - `../api/notifications/03_patch_notification_read.md` PATCH /api/notifications/{id}/read（同上）
   - `../api/notifications/04_post_notifications_read_all.md` POST /api/notifications/read-all（同上）

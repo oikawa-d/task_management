@@ -200,7 +200,7 @@ stateDiagram-v2
 
 | テーブル | 操作 | 条件・TTL | 備考 |
 |----------|------|-----------|------|
-| task_comments | SELECT | `id = :comment_id`（`tasks`をJOIN/selectinload） | 存在確認・project_id特定 |
+| task_comments | SELECT | `id = :comment_id` | 存在確認・project_id特定。`tasks`取得は`selectinload`の追加SELECT |
 | project_members | SELECT | `project_id = :pid AND user_id = :uid` | admin以外の所属確認 |
 | task_comments | DELETE | `id = :comment_id` | 物理削除。他行への波及なし |
 

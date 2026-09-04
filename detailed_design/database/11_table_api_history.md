@@ -124,3 +124,50 @@ flowchart LR
 - `X-Forwarded-For`を信頼できるproxyのCIDR範囲はインフラ環境ごとに異なるため、実装前に確定が必要。
 - bodyのマスキング項目と上限値は環境変数で変更可能にするが、秘匿項目の既定値を削除できない仕様にするかは要検討。
 - API履歴を管理者画面や公開APIで閲覧する機能は今回のスコープに含めない。
+
+## 8. 全体の出入力
+
+| 区分 | 内容 |
+|------|------|
+| 入力 | APIミドルウェアが確定したrequest_id、HTTPメソッド・ルート、status、user_id、マスキング済みbody、処理時間 |
+| 出力 | `api_history` への1行INSERT、保存失敗時の構造化ERRORログ |
+| 責務 | API本体のトランザクションと分離して、レスポンス確定後の履歴を追記する |
+| 例外 | 履歴保存のDB例外はAPIレスポンスへ伝播させず、ログに記録する |
+
+## 9. 処理シーケンス
+
+```mermaid
+sequenceDiagram
+    participant MW as API履歴ミドルウェア
+    participant DB as 専用DBセッション
+    participant T as api_history
+    participant LOG as 構造化ログ
+    MW->>MW: レスポンス確定・入力をマスキング
+    MW->>DB: INSERT（1行）
+    DB->>T: commit
+    T-->>MW: 保存完了
+    alt INSERT/commit失敗
+        DB-->>MW: DB例外
+        MW->>LOG: request_id付きERROR
+        MW-->>MW: APIレスポンスは変更しない
+    end
+```
+
+## 10. 関数相関図
+
+```mermaid
+flowchart LR
+    MW["history_middleware"] --> C["ApiHistoryRepository.create"]
+    C --> T[("api_history")]
+    P["purge_expired"] --> SP["sp_purge_api_history"]
+    SP --> T
+    C -.-> LOG["structured ERROR log"]
+```
+
+## 11. クエリ・トランザクション
+
+| 処理 | 発行クエリ | 境界 |
+|------|------------|------|
+| API 1件の記録 | `INSERT` 1回 | 専用セッションで1トランザクション。API本体とは分離 |
+| 保持期間パージ | `CALL sp_purge_api_history` 1回 | ジョブ本体とは分離した1トランザクション |
+| 履歴保存失敗 | 再試行クエリなし | API本体の結果を変更せずERRORログのみ |
