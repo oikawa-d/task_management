@@ -65,7 +65,7 @@
         "title": "設計書をレビューする",
         "description": null,
         "assignee": { "id": "9a1b...", "username": "taro", "display_name": "山田 太郎" },
-        "due_date": null,
+        "due_at": null,
         "position": 0,
         "version": 1,
         "comment_count": 2,
@@ -87,7 +87,7 @@
 | TaskSummary.title | string | 不可 | タイトル |
 | TaskSummary.description | string | 可 | 説明（カンバンカードでは省略表示） |
 | TaskSummary.assignee | object | 可（未アサイン時 `null`） | `{id, username, display_name}` |
-| TaskSummary.due_date | string(date) | 可 | 期限日 |
+| TaskSummary.due_at | string(date-time) | 可 | 期限日時。ISO 8601 UTC |
 | TaskSummary.position | integer | 不可 | 列内の並び順（0始まり） |
 | TaskSummary.version | integer | 不可 | 楽観ロック用バージョン。以後の `PATCH` で必須 |
 | TaskSummary.comment_count | integer | 不可 | `task_comments` の件数集計 |

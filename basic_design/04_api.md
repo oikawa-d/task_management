@@ -6,7 +6,7 @@
 |------|------|
 | ベースURL | 同一オリジンの `/api`（開発時も `VITE_API_BASE_URL=/api` を基本とし、Vite/Nginxのproxyでbackendへ転送）。別オリジン構成は例外としてCORSを明示設定する |
 | 形式 | JSON（`application/json`、UTF-8） |
-| 日時形式 | ISO 8601 / UTC（例：`2026-09-03T04:05:06Z`） |
+| 日時形式 | ISO 8601 / UTC（例：`2026-09-03T04:05:06Z`）。リクエストでオフセット付きの日時（例：`2026-09-05T18:00:00+09:00`）を受け取った場合はUTCへ正規化して保存する。オフセットなしの日時は `APP_TIMEZONE`（既定 `Asia/Tokyo`）として解釈する |
 | ID形式 | UUID v4 文字列 |
 | 認証 | session モード：`cerberus_sid` Cookie ／ jwt モード：`Authorization: Bearer {access_token}` |
 | CSRF | session モードの更新系リクエストは `X-CSRF-Token` ヘッダ必須 |
@@ -66,7 +66,7 @@
 | GET | `/projects/{project_id}/tasks` | タスク一覧（カンバン用。status別にソート済み） | プロジェクトメンバー |
 | POST | `/projects/{project_id}/tasks` | タスク作成 | プロジェクトメンバー |
 | GET | `/tasks/{task_id}` | タスク詳細 | プロジェクトメンバー |
-| PATCH | `/tasks/{task_id}` | タスク更新（title/description/status/assignee/position/due_date/version） | プロジェクトメンバー |
+| PATCH | `/tasks/{task_id}` | タスク更新（title/description/status/assignee/position/due_at/version） | プロジェクトメンバー |
 | DELETE | `/tasks/{task_id}` | タスク削除 | プロジェクトメンバー |
 | GET | `/tasks/{task_id}/comments` | コメント一覧 | プロジェクトメンバー |
 | POST | `/tasks/{task_id}/comments` | コメント投稿 | プロジェクトメンバー |
@@ -87,7 +87,20 @@
 
 ロール変更・無効化では、自分自身の変更を拒否し、最後の有効adminを0人にする操作も拒否する（`409 SELF_MODIFICATION_NOT_ALLOWED` / `409 LAST_ADMIN_REQUIRED`）。無効化時はDB更新とRedisの全セッション・refresh失効を同一サービス処理で完了させる。JWTの既発行access tokenは、DBの `is_active` を毎回確認するため無効化直後から拒否される。強制ログアウトだけの場合はaccess tokenが最大15分有効なままになり得る。
 
-### 2.6 その他
+### 2.6 通知（`/api/notifications`）
+
+| メソッド | パス | 概要 | 認可 |
+|----------|------|------|------|
+| GET | `/notifications` | 自分の通知一覧（`?page` `?per_page` `?unread_only`） | 本人のみ |
+| GET | `/notifications/unread-count` | 未読件数のみを返す軽量エンドポイント（ポーリング用） | 本人のみ |
+| PATCH | `/notifications/{notification_id}/read` | 通知を既読にする | 本人のみ |
+| POST | `/notifications/read-all` | 自分の未読通知をすべて既読にする | 本人のみ |
+
+いずれも「自分宛ての通知」だけを対象とし、他人の通知は admin であっても参照・更新できない（通知は監査対象ではなく個人の作業支援情報であるため）。他ユーザーの `notification_id` を指定した場合は存在を隠して `404 NOT_FOUND` を返す。
+
+更新系（`PATCH /notifications/{id}/read`、`POST /notifications/read-all`）は session モードでCSRFトークンの検証対象となる。
+
+### 2.7 その他
 
 | メソッド | パス | 概要 | 認証 |
 |----------|------|------|------|
@@ -204,7 +217,7 @@ OAuthコールバックはブラウザの直接リダイレクトを受けるた
   "description": null,
   "status": "todo",
   "assignee_id": null,
-  "due_date": null
+  "due_at": null
 }
 ```
 
@@ -238,7 +251,7 @@ OAuth新規ユーザーではプロフィール5項目が `null` になり得る
 {
   "project_id": "…",
   "columns": {
-    "todo": [ { "id": "…", "title": "…", "assignee": null, "position": 0, "version": 1, "due_date": null, "comment_count": 0 } ],
+    "todo": [ { "id": "…", "title": "…", "assignee": null, "position": 0, "version": 1, "due_at": null, "comment_count": 0 } ],
     "in_progress": [],
     "done": []
   }
@@ -256,7 +269,7 @@ status 別にグルーピングして返すことで、フロント側のカン�
 | status | string | `todo` / `in_progress` / `done` |
 | assignee_id | string(uuid) \| null | 有効なプロジェクトメンバーであること |
 | position | integer | 0以上。status変更時に省略した場合は移動先列の末尾。同じstatusの通常更新で省略した場合は現在位置を維持 |
-| due_date | string(date) \| null | |
+| due_at | string(date-time) \| null | ISO 8601。オフセットなしは `APP_TIMEZONE` として解釈しUTCへ正規化。値が変化し、担当者があり、変更後が当日であれば通知を作成する |
 | version | integer | **必須**。取得時の値と一致した場合だけ更新し、成功時にサーバーが1加算 |
 
 `version` が一致しない場合は `409 TASK_CONFLICT` を返す。status/position変更はDBトランザクション内で列の並べ替えと同時に行い、競合時はフロントがボードを再取得して再操作を促す。
@@ -266,6 +279,56 @@ status 別にグルーピングして返すことで、フロント側のカン�
 `current_password` は既存パスワードがあるユーザーでは必須、OAuthのみで登録され `has_password=false` のユーザーでは省略可。成功時は全セッション・リフレッシュトークンを失効し、`204` を返す。
 
 **`PATCH /users/me`** は、`last_name` / `first_name` / `last_name_kana` / `first_name_kana` / `birth_date` のうち指定された項目だけを更新する。各文字列は1〜30文字、フリガナはひらがな・カタカナ・数字のみ、生年月日は未来日不可とし、値の `null` への変更は許可しない。OAuth新規ユーザーは未設定項目をこのAPIで補完し、5項目がすべて設定された時点で `profile_completed=true` になる。
+
+### 3.3 通知
+
+**`GET /notifications`** レスポンス `200`
+
+```json
+{
+  "items": [
+    {
+      "id": "…",
+      "type": "due_soon_batch",
+      "title": "設計書をレビューする",
+      "body": "期限が近いタスクです",
+      "task": { "id": "…", "project_id": "…", "title": "設計書をレビューする" },
+      "due_at": "2026-09-05T09:00:00Z",
+      "read_at": null,
+      "created_at": "2026-09-04T01:00:00Z"
+    }
+  ],
+  "meta": { "page": 1, "per_page": 20, "total": 1, "total_pages": 1 },
+  "unread_count": 1
+}
+```
+
+- `type` は `due_soon_batch`（毎日10時・17時の定期通知） / `due_today_created`（当日期限のタスクを作成） / `due_today_updated`（終了時刻を当日へ変更）の3種
+- `task` は対象タスクが削除済みの場合 `null`。フロントは `null` のとき遷移リンクを描画しない
+- `unread_count` を一覧にも含め、一覧を開いた直後のバッジ表示に追加リクエストを要さないようにする
+- `?unread_only=true` を指定した場合は未読のみを返す（`meta.total` も未読件数になる）
+
+**`GET /notifications/unread-count`** レスポンス `200`：`{ "unread_count": 3 }`
+
+ポーリングで最も高頻度に呼ばれるため、`ix_notifications_user_unread` による件数取得のみを行い、通知本体は返さない。
+
+**`PATCH /notifications/{id}/read`** レスポンス `200`：`{ "id": "…", "read_at": "2026-09-04T02:00:00Z", "unread_count": 2 }`
+
+既読済みの通知に対しても `200` を返し、`read_at` は上書きしない（冪等）。
+
+**`POST /notifications/read-all`** リクエストボディなし。レスポンス `200`：`{ "updated_count": 3, "unread_count": 0 }`
+
+`WHERE user_id = :me AND read_at IS NULL` に限定して更新するため、未読が0件でも `200`（`updated_count: 0`）を返す。
+
+**通知の自動作成契機**
+
+| 契機 | 条件 | 作成される `type` |
+|------|------|------------------|
+| `POST /projects/{id}/tasks` | `assignee_id` があり、`due_at` が `APP_TIMEZONE` における**当日**の範囲内 | `due_today_created` |
+| `PATCH /tasks/{id}` | `due_at` が変更され、`assignee_id` があり、変更後の `due_at` が**当日**の範囲内 | `due_today_updated` |
+| `batch` の日次ジョブ | 毎日10時・17時。未完了かつ担当者ありで `due_at <= 翌日10:00` | `due_soon_batch` |
+
+通知の作成はタスク作成／更新と**同一トランザクション**で行う（通知だけが残る・通知だけが欠けるという不整合を避けるため）。`UNIQUE (user_id, dedupe_key)` に競合した場合は `DO NOTHING` とし、タスク側の処理は成功させる。担当者が操作者自身であっても通知を作成する（要件書§3.4 N-6 に例外規定がないため）。
 
 ## 4. エラー設計
 
@@ -361,6 +424,7 @@ flowchart TB
 | `PATCH /projects/{id}` `DELETE /projects/{id}` | × | ×（404） | ×（403） | ○ | ○ |
 | `GET /projects/{id}/members/candidates`、`POST/DELETE /projects/{id}/members` | × | ×（404） | ×（403） | ○ | ○ |
 | `PATCH /comments/{id}` `DELETE /comments/{id}` | × | ×（404） | 投稿者本人のみ○ | 投稿者本人のみ○ | ○ |
+| `/notifications*` | × | ○（自分宛てのみ） | ○（自分宛てのみ） | ○（自分宛てのみ） | ○（自分宛てのみ。他人の通知は×） |
 | `/admin/*` | × | ×（403） | ×（403） | ×（403） | ○ |
 
 ## 6. 主要処理のシーケンス
@@ -374,6 +438,7 @@ sequenceDiagram
     participant R as tasks_router
     participant D as deps.require_project_member
     participant S as task_service
+    participant NS as notification_service
     participant TR as task_repository
     participant PG as PostgreSQL
 
@@ -389,6 +454,13 @@ sequenceDiagram
     TR->>PG: INSERT tasks
     PG-->>TR: task行
     TR-->>S: Task
+    alt assignee_id あり かつ due_at が APP_TIMEZONE の当日
+        S->>NS: create_due_today_notification(task, 'due_today_created')
+        NS->>PG: INSERT notifications ... ON CONFLICT DO NOTHING
+        PG-->>NS: 作成件数（0 or 1）
+        NS-->>S: bool
+    end
+    S->>PG: COMMIT（タスクと通知を同一トランザクションで確定）
     S-->>R: TaskResponse
     R-->>FE: 201 {task}
 ```
@@ -422,6 +494,42 @@ sequenceDiagram
     end
 ```
 
+### 6.3 毎日10時・17時の期限通知バッチ
+
+`batch` コンテナはAPIを経由せず、DB / Redis へ直接アクセスする（詳細は [06_infra_cicd.md §2](./06_infra_cicd.md#2-docker-compose-構成)）。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant SC as batch: APScheduler
+    participant J as due_notification_job
+    participant RD as Redis
+    participant PG as PostgreSQL
+    participant FE as React SPA（ポーリング）
+
+    SC->>J: cron_10(hour=10, minute=0, tz=APP_TIMEZONE) 発火
+    SC->>J: cron_17(hour=17, minute=0, tz=APP_TIMEZONE) 発火
+    J->>RD: SET lock:notify_due:{当日}:{slot} NX EX 82800
+    alt ロック取得失敗（当日・同一枠実行済み）
+        RD-->>J: nil
+        J-->>SC: WARNログを出して終了
+    else ロック取得成功
+        RD-->>J: OK
+        J->>J: threshold = 翌日10:00（APP_TIMEZONE）→ UTC
+        J->>PG: SELECT tasks WHERE status<>'done'<br/>AND assignee_id IS NOT NULL<br/>AND due_at IS NOT NULL AND due_at <= threshold
+        PG-->>J: 対象タスク（担当者付き）
+        loop チャンク単位（NOTIFY_DUE_BATCH_CHUNK_SIZE 件ずつ）
+            J->>PG: INSERT notifications (type='due_soon_batch',<br/>dedupe_key='batch:{当日}:{slot}:{task_id}')<br/>ON CONFLICT DO NOTHING
+            PG-->>J: 作成件数
+        end
+        J->>PG: CALL sp_purge_notifications(NOTIFICATION_RETENTION_DAYS)
+        J-->>SC: 対象件数・作成件数をINFOログ出力
+    end
+    FE->>FE: 次のポーリングで GET /api/notifications/unread-count<br/>→ バッジ更新
+```
+
+抽出条件に**下限を設けない**ため、期限を過ぎた未完了タスクは10時・17時に各1回リマインドされる。`dedupe_key` に実行日と実行枠を含めるため、同じタスクでも枠が変われば再通知され、同じ枠の再実行では重複しない。両枠の対象期限は共通して翌日10時までとする。
+
 ## 7. サービス層の関数一覧
 
 ### 7.1 `service/auth_service.py`
@@ -454,6 +562,17 @@ sequenceDiagram
 | `delete_task` | `task` | `None` | 対象列の後続positionを詰めるため列のadvisory lockを取得し、コメントはCASCADE |
 | `add_comment` / `update_comment` / `delete_comment` | `task` / `comment`, `payload`, `user` | `Comment` / `None` | 編集・削除は投稿者本人または admin |
 
+### 7.3 `service/notification_service.py`
+
+| 関数 | 引数 | 戻り値 | 備考 |
+|------|------|--------|------|
+| `list_notifications` | `user`, `page`, `per_page`, `unread_only` | `Page[NotificationItem]` | 自分宛てのみ。`unread_count` を併せて返す |
+| `count_unread` | `user` | `int` | 未読件数のみ |
+| `mark_read` | `user`, `notification_id` | `NotificationItem` | 他人の通知は `404`。既読済みは `read_at` を上書きしない |
+| `mark_all_read` | `user` | `int`（更新件数） | `WHERE user_id AND read_at IS NULL` に限定 |
+| `create_due_today_notification` | `task`, `type`, `session` | `bool`（作成したか） | タスク作成・更新の**呼び出し元トランザクションを引き継ぐ**。`ON CONFLICT DO NOTHING` により冪等 |
+| `is_due_today` | `due_at` | `bool` | `APP_TIMEZONE` における当日 00:00〜翌日00:00 の範囲判定 |
+
 ## 8. テスト方針
 
 | 区分 | 内容 |
@@ -462,5 +581,6 @@ sequenceDiagram
 | 結合 | `httpx.AsyncClient` + 実 PostgreSQL / Redis。主要エンドポイントを正常系・異常系（401/403/404/409/422）で検証 |
 | パラメータ化 | 認証必須APIは `AUTH_MODE=session` / `jwt` の両方で実行するフィクスチャを用意 |
 | 競合・認可 | task version不一致が409、非所属の候補検索が404、メンバー削除時に担当タスクがNULL化されること、最後のadmin保護を検証 |
+| 通知 | 当日期限のタスク作成・終了時刻変更で通知が1件だけ作成されること、同一 `dedupe_key` の再実行で増えないこと、他人の通知への既読操作が404になること、`APP_TIMEZONE` の日付境界（当日23:59 / 翌日00:00）で判定が切り替わることを検証 |
 | カバレッジ | `pytest --cov=app`。`omit` には自動生成物（`alembic/versions`）のみを指定し、実装コードは除外しない |
 | 網羅できない範囲 | 外部（Google）の実通信、実SMTP送信はモックで代替し、実通信は手動確認とする |

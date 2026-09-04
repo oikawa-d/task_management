@@ -2,11 +2,11 @@
 
 `requirements/task_management_requirements.md`（要件定義書）と [basic_design/](../basic_design/README.md)（基本設計書）を入力とし、実装に着手できる粒度まで具体化した詳細設計書。
 
-- **APIは1エンドポイントにつき1ファイル**（全43エンドポイント）
+- **APIは1エンドポイントにつき1ファイル**（全47エンドポイント）
 - **画面は1画面につき1ファイル**（全11画面）
 - DB・認証・インフラは対象単位（テーブル／認証方式／コンテナ・ワークフロー）で分割
 
-全81ファイル。各ファイルは「関連ドキュメント／概要／全体の出入力／シーケンス図／処理フロー／関数詳細／関数相関図／データ遷移図／テスト設計／不明点・要検討事項」を共通の章立てで持つ。図はすべて Mermaid 記法。
+全90ファイル。各ファイルは「関連ドキュメント／概要／全体の出入力／シーケンス図／処理フロー／関数詳細／関数相関図／データ遷移図／テスト設計／不明点・要検討事項」を共通の章立てで持つ。図はすべて Mermaid 記法。
 
 ## 読む順番
 
@@ -18,11 +18,13 @@ flowchart LR
     D --> E["api/auth/*"]
     E --> F["api/projects・tasks・admin/*"]
     F --> G["screen/*"]
+    F --> N["api/notifications/*"]
+    N --> G
     B --> H["infra/04_env_config"]
-    H --> I["infra/01〜03, 05〜07"]
+    H --> I["infra/01〜08 / batch/*"]
 ```
 
-## 1. API（43エンドポイント）
+## 1. API（47エンドポイント）
 
 ### 1.1 認証 `api/auth/`
 | ファイル | エンドポイント |
@@ -87,6 +89,14 @@ flowchart LR
 | [06_delete_admin_project.md](./api/admin/06_delete_admin_project.md) | DELETE /api/admin/projects/{project_id} |
 | [07_get_admin_login_history.md](./api/admin/07_get_admin_login_history.md) | GET /api/admin/login-history |
 
+### 1.6 通知 `api/notifications/`
+| ファイル | エンドポイント |
+|----------|----------------|
+| [01_get_notifications.md](./api/notifications/01_get_notifications.md) | GET /api/notifications |
+| [02_get_notifications_unread_count.md](./api/notifications/02_get_notifications_unread_count.md) | GET /api/notifications/unread-count |
+| [03_patch_notification_read.md](./api/notifications/03_patch_notification_read.md) | PATCH /api/notifications/{notification_id}/read |
+| [04_post_notifications_read_all.md](./api/notifications/04_post_notifications_read_all.md) | POST /api/notifications/read-all |
+
 ## 2. 画面（11画面）`screen/`
 
 | ファイル | 画面 / パス |
@@ -117,8 +127,17 @@ flowchart LR
 | [07_table_task_comments.md](./database/07_table_task_comments.md) | task_comments |
 | [08_db_functions.md](./database/08_db_functions.md) | DB関数・ストアドプロシージャ |
 | [09_migration.md](./database/09_migration.md) | Alembicマイグレーション運用・シードデータ |
+| [10_table_notifications.md](./database/10_table_notifications.md) | notifications（通知・重複防止・既読） |
 
-## 4. 認証・認可 `auth/`
+## 4. batch `batch/`
+
+| ファイル | 対象 |
+|----------|------|
+| [00_overview.md](./batch/00_overview.md) | batch全体・依存方向・手動実行 |
+| [01_scheduler.md](./batch/01_scheduler.md) | APScheduler常駐プロセス |
+| [02_due_notification_job.md](./batch/02_due_notification_job.md) | 毎日10時・17時の期限通知・保持期間パージ |
+
+## 5. 認証・認可 `auth/`
 
 | ファイル | 対象 |
 |----------|------|
@@ -132,19 +151,20 @@ flowchart LR
 | [07_password_security.md](./auth/07_password_security.md) | argon2idハッシュ・ログイン失敗レート制限 |
 | [08_redis_store.md](./auth/08_redis_store.md) | Redisキー操作層とTTL設計（全キー網羅） |
 
-## 5. インフラ・CI/CD `infra/`
+## 6. インフラ・CI/CD `infra/`
 
 | ファイル | 対象 |
 |----------|------|
-| [01_docker_compose.md](./infra/01_docker_compose.md) | Docker Compose構成（5サービス） |
+| [01_docker_compose.md](./infra/01_docker_compose.md) | Docker Compose構成（6サービス） |
 | [02_dockerfile_api.md](./infra/02_dockerfile_api.md) | backend Dockerfile（Python 3.14） |
 | [03_dockerfile_frontend.md](./infra/03_dockerfile_frontend.md) | frontend Dockerfile（Node v26 + Nginx） |
 | [04_env_config.md](./infra/04_env_config.md) | **環境変数の全一覧**・config.py設計・Secrets管理 |
 | [05_ci_workflow.md](./infra/05_ci_workflow.md) | ci.yml（Lint・型チェック・テスト・buildのみ） |
 | [06_cd_workflow.md](./infra/06_cd_workflow.md) | cd.yml（GHCR push・self-hosted runner） |
 | [07_operation.md](./infra/07_operation.md) | 運用（監視・ログ・バックアップ・障害切り分け） |
+| [08_dockerfile_batch.md](./infra/08_dockerfile_batch.md) | batch Dockerfile（常駐スケジューラ） |
 
-## 6. 基本設計へのフィードバック（実装着手前に確定が必要な事項）
+## 7. 基本設計へのフィードバック（実装着手前に確定が必要な事項）
 
 各詳細設計書の「不明点・要検討事項」節から、**基本設計側の修正・追記が必要**なものを抜粋する。詳細は各リンク先を参照。
 
@@ -162,7 +182,7 @@ flowchart LR
 | 仕様差 | `task_comments` に楽観ロック用 `version` 列がなく、コメントの同時編集は後勝ちになる（`tasks` との仕様差） | [api/tasks/08](./api/tasks/08_patch_comment.md) |
 | 運用制約 | jwtモードのaccess tokenは即時失効できず、強制ログアウト後も最大 `ACCESS_TOKEN_TTL_SECONDS`（15分）有効なまま残る。無効化（status変更）はDBの `is_active` 再確認により即時遮断される | [api/admin/04](./api/admin/04_post_admin_user_force_logout.md), [auth/02](./auth/02_jwt_auth.md) |
 
-## 7. 記述上の取り決め
+## 8. 記述上の取り決め
 
 | 項目 | 内容 |
 |------|------|

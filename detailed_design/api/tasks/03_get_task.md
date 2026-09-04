@@ -58,7 +58,7 @@
   "created_by": { "id": "9a1b...", "username": "taro", "display_name": "山田 太郎" },
   "position": 0,
   "version": 1,
-  "due_date": null,
+  "due_at": null,
   "comment_count": 2,
   "created_at": "2026-09-01T00:00:00Z",
   "updated_at": "2026-09-01T00:00:00Z"
@@ -76,7 +76,7 @@
 | created_by | object | 不可 | `{id, username, display_name}` |
 | position | integer | 不可 | 列内位置 |
 | version | integer | 不可 | 楽観ロック用。以後の `PATCH` で必須 |
-| due_date | string(date) | 可 | |
+| due_at | string(date-time) | 可 | ISO 8601 UTC。表示時は `APP_TIMEZONE` へ変換 |
 | comment_count | integer | 不可 | `task_comments` の件数 |
 | created_at / updated_at | string(datetime) | 不可 | ISO 8601 UTC |
 

@@ -3,7 +3,7 @@
 ## 0. 関連ドキュメント
 
 - 基本設計：[../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md)（§8 運用時の確認事項）、[../../basic_design/02_redis.md](../../basic_design/02_redis.md)（§6 障害・運用時の挙動）
-- 詳細設計：[01_docker_compose.md](./01_docker_compose.md)、[04_env_config.md](./04_env_config.md)、[06_cd_workflow.md](./06_cd_workflow.md)、[../api/system/01_get_health.md](../api/system/01_get_health.md)、[../database/08_db_functions.md](../database/08_db_functions.md)（`sp_purge_login_history`）、[../database/09_migration.md](../database/09_migration.md)、[../auth/00_strategy_base.md](../auth/00_strategy_base.md)（`AUTH_MODE`切替）
+- 詳細設計：[01_docker_compose.md](./01_docker_compose.md)、[04_env_config.md](./04_env_config.md)、[06_cd_workflow.md](./06_cd_workflow.md)、[../batch/02_due_notification_job.md](../batch/02_due_notification_job.md)、[../api/system/01_get_health.md](../api/system/01_get_health.md)、[../database/08_db_functions.md](../database/08_db_functions.md)（`sp_purge_login_history` / `sp_purge_notifications`）、[../database/09_migration.md](../database/09_migration.md)、[../auth/00_strategy_base.md](../auth/00_strategy_base.md)（`AUTH_MODE`切替）
 
 ## 1. 概要
 
@@ -12,7 +12,7 @@
 | 対象 | 稼働中システムの監視・ログ・バックアップ・障害対応・`AUTH_MODE`切替に関する運用手順 |
 | 責務 | 要件書§11でスコープ外とされた自動監視・アラートを除き、手動で実施可能な運用作業を定義する |
 | 適用条件 | ローカル/自宅サーバーでの本番相当稼働時（CD後） |
-| 依存先 | `GET /api/health`、`docker compose logs`、`pg_dump`、`sp_purge_login_history`、Redis（永続化なし） |
+| 依存先 | `GET /api/health`、`docker compose logs`、`pg_dump`、`sp_purge_login_history`、`sp_purge_notifications`、batch、Redis（永続化なし） |
 | 実装ファイル | 運用手順書のため実装ファイルなし（`docker compose`コマンド・`psql`コマンドの実行手順として記載） |
 
 ## 2. 構成要素
@@ -24,6 +24,8 @@
 | `docker compose logs` | ログ確認手段 | コンテナ標準出力の閲覧・集約 | 集約基盤（ELK等）はスコープ外 |
 | `pg_dump` | バックアップ手段 | `pgdata`のスナップショット取得（手動） | 自動化はスコープ外（要件書§11） |
 | `sp_purge_login_history` | 保守用プロシージャ | `login_history`の保持期間超過行削除 | [../database/08_db_functions.md](../database/08_db_functions.md) §3.4 |
+| `batch` | 常駐スケジューラ | 毎日10時・17時の期限通知作成と通知保持期間パージ | [../batch/02_due_notification_job.md](../batch/02_due_notification_job.md) |
+| `sp_purge_notifications` | batch用プロシージャ | `notifications`の保持期間超過行削除 | [../database/08_db_functions.md](../database/08_db_functions.md) §3.5 |
 | Redis再起動時の全ログアウト | 既知の挙動 | volumeなしのため再起動でセッション/リフレッシュトークンが消失 | [../../basic_design/02_redis.md](../../basic_design/02_redis.md) §6 |
 | `AUTH_MODE`切替手順 | 運用手順 | `session`⇔`jwt`の切り替え | [../auth/00_strategy_base.md](../auth/00_strategy_base.md) |
 
@@ -45,8 +47,8 @@
 | 区分 | 内容 |
 |------|------|
 | 入力 | 運用者による手動コマンド実行（`docker compose logs`、`pg_dump`、`psql -c "CALL sp_purge_login_history(...)"`、`docker compose restart` 等）、`GET /api/health`の定期的な手動確認 |
-| 出力 | ログファイル/標準出力、`pg_dump`によるダンプファイル、`sp_purge_login_history`による`login_history`削除結果、ヘルスチェック結果 |
-| 副作用 | Redis再起動時の全ログアウト、`sp_purge_login_history`実行によるDB行削除、`AUTH_MODE`切替に伴う既存セッション/トークンの意味的な無効化（後述§6） |
+| 出力 | ログファイル/標準出力、`pg_dump`によるダンプファイル、保持期間パージの削除結果、期限通知ジョブの作成件数、ヘルスチェック結果 |
+| 副作用 | Redis再起動時の全ログアウト、`sp_purge_login_history` / `sp_purge_notifications`実行によるDB行削除、batch再起動時のスケジューラ再登録、`AUTH_MODE`切替に伴う既存セッション/トークンの意味的な無効化（後述§6） |
 
 ## 5. シーケンス図
 
@@ -252,6 +254,17 @@ stateDiagram-v2
 | 処理内容 | 1. `.env`の`AUTH_MODE`を書き換え 2. `docker compose up -d backend`でbackendのみ再作成 3. 旧方式でログイン中だったユーザーは、旧方式のCookie（例：`session`方式の`cerberus_sid`）を新方式（`jwt`）のStrategyが解釈できないため次回リクエストで401となり再ログインが必要になる（明示的なセッション一括失効処理は行わない。Redis側の旧キーはTTL経過で自然消滅する） 4. `GET /api/auth/config`で`auth_mode`が意図した値に切り替わったことを確認 |
 | 副作用 | 旧方式でログイン中の全ユーザーが実質的に再ログイン要求となる（利用者への事前周知を推奨） |
 
+### 8.9 期限通知ジョブの確認・手動実行
+
+| 項目 | 内容 |
+|------|------|
+| 手順定義 | 毎日10時・17時の`batch`ログを確認し、必要時だけ対象枠を指定して手動実行する |
+| 通常確認 | `docker compose logs --since=24h batch`で`run_due_notification_job`の成功、対象件数、作成件数、パージ結果を確認する |
+| 手動実行 | `docker compose run --rm batch python -m app.main --run-once due_notification --slot 10`（17時枠は`--slot 17`）。`BATCH_ENABLED=false`でも実行可能 |
+| 二重実行 | Redis `lock:notify_due:{APP_TIMEZONEの実行日}:{slot}`と通知の一意制約で同一実行枠の重複を防止する。ロック取得失敗時は正常終了として扱う |
+| 障害時 | Redis/DBエラーはERRORログとし、原因復旧後に`--run-once`で再実行する。通知作成済み分は`dedupe_key`で重複しない |
+| 注意 | 手動実行も本番DBへ書き込むため、実行者・対象環境・実行日を確認してから行う |
+
 ## 9. 関数・要素相関図
 
 ```mermaid
@@ -260,6 +273,7 @@ flowchart LR
     OPS --> LOGS["docker compose logs"]
     OPS --> DUMP["pg_dump / psql restore"]
     OPS --> PURGE["CALL sp_purge_login_history"]
+    OPS --> BATCH["docker compose logs/run batch"]
     OPS --> AUTHSW["AUTH_MODE切替<br/>(.env編集 + backend再作成)"]
 
     HC --> DBCHK["database.status"]
@@ -268,6 +282,8 @@ flowchart LR
     RDCHK --> RD[("redis<br/>volumeなし")]
     LOGS --> REQID["X-Request-ID相関"]
     PURGE --> LH[("login_history")]
+    BATCH --> DUE["due_notification_job"]
+    DUE --> NTF[("notifications")]
     AUTHSW --> STRATEGY["auth/factory.py<br/>get_auth_strategy"]
     RD -.->|"再起動で全キー消失"| SESSIONS["session/refreshキー"]
 ```

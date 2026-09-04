@@ -10,7 +10,7 @@
 | 項目 | 内容 |
 |------|------|
 | 対象 | `docker-compose.yml`（本体）と `compose.dev.yml`（開発差分オーバーレイ） |
-| 責務 | `backend` / `frontend` / `postgres` / `redis` / `mailpit` の5サービスを1つの Docker Compose ネットワークで起動し、依存順序とヘルスチェックを保証する |
+| 責務 | `backend` / `frontend` / `batch` / `postgres` / `redis` / `mailpit` の6サービスを1つの Docker Compose ネットワークで起動し、依存順序とヘルスチェックを保証する |
 | 適用条件 | ローカル / 自宅サーバーの Docker Compose（クラウド不使用）。`mailpit` は `profiles: [dev]` の場合のみ起動 |
 | 依存先 | Docker Engine / Docker Compose v2（`docker compose` コマンド。ハイフン付き `docker-compose` は使用しない） |
 | 実装ファイル | `docker-compose.yml`、`compose.dev.yml`、`.env` / `.env.example` |
@@ -23,8 +23,9 @@
 | `redis` | サービス | セッション／トークンの一時ストア | イメージ `redis:8-alpine`。volumeなし（永続化しない） |
 | `backend` | サービス（自ビルド） | FastAPI + Uvicorn。起動時に `alembic upgrade head` | [02_dockerfile_api.md](./02_dockerfile_api.md) |
 | `frontend` | サービス（自ビルド） | ビルド成果物を nginx で配信、`/api` を backend へ proxy | [03_dockerfile_frontend.md](./03_dockerfile_frontend.md) |
+| `batch` | サービス（自ビルド） | 毎日10時・17時の期限通知ジョブを2つのcronジョブとして常駐スケジューラで実行 | [08_dockerfile_batch.md](./08_dockerfile_batch.md)。HTTPポートなし |
 | `mailpit` | サービス | 開発用SMTPモック | イメージ `axllent/mailpit`。`profiles: [dev]` |
-| `cerberus_net` | ネットワーク | bridge。5サービスを内部DNS名（サービス名）で疎通 | 外部公開は `frontend` の1ポートのみが原則 |
+| `cerberus_net` | ネットワーク | bridge。6サービスを内部DNS名（サービス名）で疎通 | 外部公開は `frontend` の1ポートのみが原則 |
 | `pgdata` | volume | PostgreSQLデータ永続化 | named volume |
 | `compose.dev.yml` | オーバーレイファイル | バインドマウント・ホットリロード・追加ポート公開を開発時だけ有効化 | `docker compose -f docker-compose.yml -f compose.dev.yml up` |
 
@@ -40,6 +41,12 @@
 | `REDIS_PORT` | int | `6379` | 開発時のみ`compose.dev.yml`で`127.0.0.1`に公開 | 否 |
 | `MAILPIT_SMTP_PORT` | int | `1025` | 開発時のみ`compose.dev.yml`で`127.0.0.1`に公開 | 否 |
 | `MAILPIT_UI_PORT` | int | `8025` | 開発時のみ`compose.dev.yml`で`127.0.0.1`に公開 | 否 |
+| `APP_TIMEZONE` | str | `Asia/Tokyo` | backend / batchの日次境界・表示基準 | 否 |
+| `NOTIFY_DUE_RUN_HOURS` / `NOTIFY_DUE_CRON_MINUTE` | str / int | `10,17` / `0` | 期限通知ジョブを登録する実行時刻（`APP_TIMEZONE`基準）。値ごとに別cronジョブを登録 | 否 |
+| `NOTIFY_DUE_TARGET_HOUR` | int | `10` | 10時・17時の両実行枠で共通して使う対象期限の翌日境界 | 否 |
+| `NOTIFY_DUE_LOCK_TTL_SECONDS` | int | `82800` | Redisの日付・実行枠別ロックのTTL | 否 |
+| `NOTIFY_DUE_BATCH_CHUNK_SIZE` | int | `500` | 通知INSERTを分割する件数 | 否 |
+| `NOTIFICATION_RETENTION_DAYS` | int | `90` | 通知保持期間 | 否 |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | str | `cerberus` / *** / `cerberus` | `postgres` イメージの初期化変数 | `POSTGRES_PASSWORD`のみ**Secret** |
 | `DATABASE_URL` | str | `postgresql+asyncpg://...@postgres:5432/cerberus` | backendのDB接続文字列（コンテナ内部ポート固定`5432`） | **Secret**（資格情報を含む） |
 | `REDIS_URL` | str | `redis://redis:6379/0` | backendのRedis接続文字列（コンテナ内部ポート固定`6379`） | 否 |
@@ -67,6 +74,7 @@ sequenceDiagram
     participant PG as postgres
     participant RD as redis
     participant BE as backend
+    participant BA as batch
     participant FE as frontend
 
     DEV->>DC: docker compose up -d
@@ -83,6 +91,8 @@ sequenceDiagram
     PG-->>BE: マイグレーション適用完了
     BE->>BE: uvicorn 起動
     BE-->>DC: GET /health 200（healthy）
+    DC->>BA: コンテナ起動（postgres / redis healthy後。backendには依存しない）
+    BA->>BA: python -m app.main（常駐スケジューラ）
     DC->>FE: コンテナ起動（depends_on: backend healthy）
     FE-->>DC: GET / 200（healthy）
     DC-->>DEV: 全サービスUp
@@ -150,11 +160,11 @@ stateDiagram-v2
 
 | 項目 | 内容 |
 |------|------|
-| 定義対象 | `services.postgres` / `services.redis` / `services.backend` / `services.frontend` / `services.mailpit`、`networks.cerberus_net`、`volumes.pgdata` |
+| 定義対象 | `services.postgres` / `services.redis` / `services.backend` / `services.batch` / `services.frontend` / `services.mailpit`、`networks.cerberus_net`、`volumes.pgdata` |
 | 入力 | `.env` の各変数（`env_file: .env` または `environment:` 個別指定） |
 | 出力 | コンテナ群、named volume `pgdata` |
 | 失敗条件 | 必須環境変数未設定時、`docker compose config` で警告（未定義変数は空文字扱い）。`backend` の `core/config.py` 起動時バリデーションで実質的に失敗させる（[04_env_config.md](./04_env_config.md)参照） |
-| 処理内容 | 1. `postgres`/`redis` を healthcheck 付きで起動 2. `depends_on.condition: service_healthy` で `backend` を待機起動 3. `backend` の healthcheck 成功後に `depends_on` で `frontend` を起動 4. `APP_ENV=local` かつ `--profile dev` 指定時のみ `mailpit` を起動 |
+| 処理内容 | 1. `postgres`/`redis` を healthcheck 付きで起動 2. `depends_on.condition: service_healthy` で `backend` と `batch` を待機起動 3. `backend` の healthcheck 成功後に `frontend` を起動 4. `APP_ENV=local` かつ `--profile dev` 指定時のみ `mailpit` を起動 |
 | 副作用 | `pgdata` volumeへの書き込み、`cerberus_net` へのコンテナ参加 |
 
 ### 8.2 各サービスの healthcheck 仕様
@@ -165,6 +175,7 @@ stateDiagram-v2
 | `redis` | `redis-cli ping` | 5s / 5s / 5回 |
 | `backend` | `curl -f http://localhost:8000/health \|\| exit 1`（コンテナ内部ポート固定） | 10s / 5s / 5回、`start_period`でマイグレーション時間を確保 |
 | `frontend` | `curl -f http://localhost:80/ \|\| exit 1`（コンテナ内部ポート固定） | 10s / 5s / 5回 |
+| `batch` | `pgrep -f 'python -m app.main'`（プロセス生存監視） | 10s / 5s / 3回 |
 | `mailpit` | なし（`dev` profile専用の補助サービスのため必須としない） | - |
 
 ### 8.3 `compose.dev.yml` :: 開発オーバーレイ
@@ -186,6 +197,7 @@ flowchart LR
     COMPOSE --> PG["postgres"]
     COMPOSE --> RD["redis"]
     COMPOSE --> BE["backend"]
+    COMPOSE --> BA["batch"]
     COMPOSE --> FE["frontend"]
     COMPOSE -->|"profiles: dev"| MP["mailpit"]
     DEVOVERLAY -.->|"上書き/追記"| BE
@@ -196,6 +208,8 @@ flowchart LR
     BE -->|"alembic upgrade head"| PG
     BE -->|"redis-py"| RD
     BE -->|"SMTP"| MP
+    BA -->|"SQLAlchemy"| PG
+    BA -->|"redis-py lock"| RD
     FE -->|"/api proxy"| BE
 ```
 
@@ -215,7 +229,7 @@ flowchart LR
 | No | 区分 | ケース | 前提 | 期待結果 | テスト名案 |
 |----|------|--------|------|----------|-----------|
 | 1 | 結合 | `docker compose config` で構文検証 | `.env.example` をコピーして `.env` 生成 | エラーなく解決される | `test_compose_config_valid`（CIのシェルステップ） |
-| 2 | 結合 | `docker compose up -d` 後に全サービスhealthy | ローカル/CI環境 | 5サービス（dev profile込み）が `healthy` または起動継続 | `test_compose_up_all_healthy` |
+| 2 | 結合 | `docker compose up -d` 後に全サービスhealthy | ローカル/CI環境 | 6サービス（dev profile込み）が `healthy` または起動継続 | `test_compose_up_all_healthy` |
 | 3 | 結合 | backend起動時にAlembicマイグレーションが適用される | 空のpostgresボリューム | `alembic_version`テーブルが最新headと一致 | `test_backend_migration_on_start` |
 | 4 | 結合 | redisコンテナ再起動でセッションが消える | session方式でログイン後 `docker compose restart redis` | `/auth/me`が401になる | `test_redis_restart_invalidates_session` |
 | 5 | 結合 | backend/postgres/redisのポートが本体Composeで非公開 | `docker-compose.yml`単体起動 | `docker compose port backend 8000`等が失敗、またはホストから疎通不可 | `test_no_unintended_port_exposure` |

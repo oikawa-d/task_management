@@ -20,7 +20,7 @@
 | テーブル名 / 論理名 | `tasks` / タスク |
 | 役割 | プロジェクト配下のタスク。カンバンの3列（`todo`/`in_progress`/`done`）に `status` で分類され、列内の並び順を `position` で保持する |
 | 想定件数・増加傾向 | プロジェクト数 × 平均タスク数。学習用途のため小〜中規模 |
-| ライフサイクル | 作成契機：`POST /api/projects/{project_id}/tasks`。更新契機：`PATCH /api/tasks/{task_id}`（title/description/status/assignee/position/due_date、`version` 必須）。削除契機：`DELETE /api/tasks/{task_id}`、またはプロジェクト削除時のCASCADE。物理削除のみ |
+| ライフサイクル | 作成契機：`POST /api/projects/{project_id}/tasks`。更新契機：`PATCH /api/tasks/{task_id}`（title/description/status/assignee/position/due_at、`version` 必須）。削除契機：`DELETE /api/tasks/{task_id}`、またはプロジェクト削除時のCASCADE。物理削除のみ |
 | 関連ORMモデル | `models/task.py :: Task` |
 
 ## 2. カラム定義
@@ -36,7 +36,7 @@
 | 作成者 | `created_by` | UUID | NO | - | FK → `users.id` | `ON DELETE RESTRICT` |
 | 並び順 | `position` | INTEGER | NO | `0` | 一意（`project_id, status` 内） | `CHECK (position >= 0)`。`UNIQUE (project_id, status, position) DEFERRABLE INITIALLY DEFERRED` |
 | バージョン | `version` | INTEGER | NO | `1` | - | 楽観的排他制御用。`CHECK (version > 0)`。更新成功時に+1 |
-| 期限日 | `due_date` | DATE | YES | - | - | |
+| 期限日時 | `due_at` | TIMESTAMPTZ | YES | - | - | UTC保存。表示・日次境界の判定は`APP_TIMEZONE` |
 | 作成日時 | `created_at` | TIMESTAMPTZ | NO | `now()` | - | |
 | 更新日時 | `updated_at` | TIMESTAMPTZ | NO | `now()` | - | `trg_set_updated_at` トリガで自動更新 |
 
@@ -58,7 +58,7 @@ CREATE TABLE tasks (
                  CONSTRAINT ck_tasks_position_non_negative CHECK (position >= 0),
     version      INTEGER NOT NULL DEFAULT 1
                  CONSTRAINT ck_tasks_version_positive CHECK (version > 0),
-    due_date     DATE,
+    due_at       TIMESTAMPTZ,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT uq_tasks_project_status_position
@@ -135,7 +135,7 @@ class Task(Base):
     )
     position: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
-    due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    due_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
@@ -174,7 +174,7 @@ erDiagram
         uuid created_by FK
         integer position
         integer version
-        date due_date "NULL可"
+        timestamptz due_at "期限日時。UTC保存、NULL可"
         timestamptz created_at
         timestamptz updated_at
     }
@@ -213,7 +213,7 @@ flowchart LR
     I --> J["移動対象へ最終position設定<br/>UPDATE version=version+1"]
     J --> K["COMMIT（DEFERRED制約検証）"]
 
-    F -->|"status/position変更なし"| L["UPDATE title/description/assignee/due_date<br/>version=version+1"]
+    F -->|"status/position変更なし"| L["UPDATE title/description/assignee/due_at<br/>version=version+1"]
 
     E --> M["DELETE /tasks/:id"]
     M --> N["advisory lock 取得<br/>(project_id, status)"]
@@ -252,7 +252,7 @@ flowchart LR
 |------|------|
 | シグネチャ | `async def insert(session: AsyncSession, task: Task) -> Task` |
 | 引数 / 戻り値 | 未永続化の `Task` エンティティ → 採番済み `Task` |
-| 発行SQL | ```sql\nINSERT INTO tasks\n  (project_id, title, description, status, assignee_id, created_by, position, due_date)\nVALUES\n  (:project_id, :title, :description, :status, :assignee_id, :created_by, :position, :due_date)\nRETURNING id, version, created_at, updated_at;\n``` |
+| 発行SQL | ```sql\nINSERT INTO tasks\n  (project_id, title, description, status, assignee_id, created_by, position, due_at)\nVALUES\n  (:project_id, :title, :description, :status, :assignee_id, :created_by, :position, :due_at)\nRETURNING id, version, created_at, updated_at;\n``` |
 | 使用インデックス | `uq_tasks_project_status_position`（制約検証） |
 | 送出例外 | `ConflictError`（`uq_tasks_project_status_position` 違反時。advisory lock内で `next_position` を呼んでいれば通常発生しない） |
 | 処理内容 | `session.add()` + `flush()`。`version` はDB既定値 `1` を使用 |
@@ -263,7 +263,7 @@ flowchart LR
 |------|------|
 | シグネチャ | `async def get_by_id_for_update(session: AsyncSession, task_id: UUID) -> Task \| None` |
 | 引数 / 戻り値 | タスクID → `Task`（存在しなければ `None`） |
-| 発行SQL | ```sql\nSELECT id, project_id, title, description, status, assignee_id,\n       created_by, position, version, due_date, created_at, updated_at\nFROM tasks WHERE id = :task_id\nFOR UPDATE;\n``` |
+| 発行SQL | ```sql\nSELECT id, project_id, title, description, status, assignee_id,\n       created_by, position, version, due_at, created_at, updated_at\nFROM tasks WHERE id = :task_id\nFOR UPDATE;\n``` |
 | 使用インデックス | PK |
 | 送出例外 | なし |
 | 処理内容 | 1. `PATCH /tasks/{id}` の直前に行ロック（`FOR UPDATE`）を取得し、`version` チェックとUPDATEの間の競合を防ぐ（advisory lockは「列全体」、本ロックは「この1行」が対象という違いに注意） |
@@ -274,7 +274,7 @@ flowchart LR
 |------|------|
 | シグネチャ | `async def update_with_optimistic_lock(session: AsyncSession, task: Task, *, expected_version: int, changes: dict) -> Task` |
 | 引数 / 戻り値 | 対象エンティティ・期待バージョン・更新差分 → 更新後 `Task` |
-| 発行SQL | ```sql\nUPDATE tasks\nSET title = COALESCE(:title, title),\n    description = CASE WHEN :description_set THEN :description ELSE description END,\n    status = COALESCE(:status, status),\n    assignee_id = CASE WHEN :assignee_set THEN :assignee_id ELSE assignee_id END,\n    position = COALESCE(:position, position),\n    due_date = CASE WHEN :due_date_set THEN :due_date ELSE due_date END,\n    version = version + 1\nWHERE id = :id AND version = :expected_version\nRETURNING id, status, position, version, updated_at;\n``` |
+| 発行SQL | ```sql\nUPDATE tasks\nSET title = COALESCE(:title, title),\n    description = CASE WHEN :description_set THEN :description ELSE description END,\n    status = COALESCE(:status, status),\n    assignee_id = CASE WHEN :assignee_set THEN :assignee_id ELSE assignee_id END,\n    position = COALESCE(:position, position),\n    due_at = CASE WHEN :due_at_set THEN :due_at ELSE due_at END,\n    version = version + 1\nWHERE id = :id AND version = :expected_version\nRETURNING id, status, position, version, updated_at;\n``` |
 | 使用インデックス | PK。`WHERE` 句の `version` 一致条件はPK取得後のフィルタ |
 | 送出例外 | `ConflictError("TASK_CONFLICT")`（`RETURNING` が0行、すなわち `version` 不一致） |
 | 処理内容 | 1. `UPDATE ... WHERE id=:id AND version=:expected_version` で行を絞り込む<br/>2. 影響行数0件なら `version` 不一致とみなし `409 TASK_CONFLICT` に変換<br/>3. status/position が変わる場合は事前に §8.6〜8.7 の再採番処理を同一トランザクションで実施してから本UPDATEを発行する |
@@ -318,7 +318,7 @@ flowchart LR
 |------|------|
 | シグネチャ | `async def list_by_project_grouped(session: AsyncSession, project_id: UUID) -> dict[str, list[Task]]` |
 | 引数 / 戻り値 | プロジェクトID → `{"todo": [...], "in_progress": [...], "done": [...]}` |
-| 発行SQL | ```sql\nSELECT id, title, description, status, assignee_id, position, version, due_date\nFROM tasks WHERE project_id = :project_id\nORDER BY status, position ASC;\n``` |
+| 発行SQL | ```sql\nSELECT id, title, description, status, assignee_id, position, version, due_at\nFROM tasks WHERE project_id = :project_id\nORDER BY status, position ASC;\n``` |
 | 使用インデックス | `uq_tasks_project_status_position` |
 | 送出例外 | なし |
 | 処理内容 | 1クエリで取得しアプリ側で `status` ごとにグルーピング。コメント件数は `task_comment_repository.count_by_task_ids()` で別クエリ集計しN+1を回避 |

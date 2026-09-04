@@ -8,7 +8,7 @@
 | 保存対象 | 永続的に残す必要のあるデータのみ（ログイン有効性の判定は Redis 側で行う） |
 | 主キー | `UUID`（`gen_random_uuid()` / pgcrypto）。URLに露出しても連番推測されないため |
 | 文字列型 | `VARCHAR(n)` は入力上限がある項目、それ以外は `TEXT` |
-| 日時型 | `TIMESTAMPTZ`（UTC保存）。アプリ側でタイムゾーン変換 |
+| 日時型 | `TIMESTAMPTZ`（UTC保存）。アプリ側で `APP_TIMEZONE`（既定 `Asia/Tokyo`）へ変換する。「当日」「翌日10時」などの業務上の日次境界の判定もこのタイムゾーンで行う |
 | 列挙 | PostgreSQL の `ENUM` 型ではなく `VARCHAR + CHECK制約`（Alembic での値追加が容易なため） |
 | 論理削除 | 行わない（学習用途のため物理削除）。ただし `users` のみ `is_active` で無効化を表現 |
 | ORM | SQLAlchemy 2.x（`Mapped` / `mapped_column` の宣言的スタイル） |
@@ -30,6 +30,8 @@ erDiagram
     tasks ||--o{ task_comments : "コメント"
     users ||--o{ task_comments : "投稿者"
     users |o--o{ login_history : "ログイン試行"
+    users ||--o{ notifications : "受信者"
+    tasks |o--o{ notifications : "対象タスク"
 
     users {
         uuid id PK
@@ -79,7 +81,7 @@ erDiagram
         uuid created_by FK
         integer position "列内の並び順"
         integer version "楽観的ロック用"
-        date due_date "NULL可"
+        timestamptz due_at "期限（日付＋終了時刻）。NULL可"
         timestamptz created_at
         timestamptz updated_at
     }
@@ -100,6 +102,18 @@ erDiagram
         text user_agent
         boolean success
         varchar_50 failure_reason "NULL可"
+        timestamptz created_at
+    }
+    notifications {
+        uuid id PK
+        uuid user_id FK "通知の受信者"
+        uuid task_id FK "対象タスク。NULL可（タスク削除時にNULL化）"
+        varchar_30 type "due_soon_batch / due_today_created / due_today_updated"
+        varchar_200 title "通知見出し（タスク名のスナップショット）"
+        text body "本文。NULL可"
+        timestamptz due_at "通知時点の期限スナップショット。NULL可"
+        varchar_120 dedupe_key "重複作成の防止キー"
+        timestamptz read_at "NULL可（未読）"
         timestamptz created_at
     }
 ```
@@ -199,7 +213,7 @@ erDiagram
 | created_by | UUID | NO | - | FK → users.id `ON DELETE RESTRICT` |
 | position | INTEGER | NO | `0` | 同一 status 列内の並び順。`CHECK (position >= 0)`、`UNIQUE (project_id, status, position) DEFERRABLE INITIALLY DEFERRED` |
 | version | INTEGER | NO | `1` | 楽観的排他制御用。更新成功時に1加算、`CHECK (version > 0)` |
-| due_date | DATE | YES | - | |
+| due_at | TIMESTAMPTZ | YES | - | タスクの期限（日付＋終了時刻）。UTC保存し、表示・判定は `APP_TIMEZONE` に変換して行う。期限通知（§3.8）の抽出条件に使う |
 | created_at | TIMESTAMPTZ | NO | `now()` | |
 | updated_at | TIMESTAMPTZ | NO | `now()` | トリガで自動更新 |
 
@@ -209,6 +223,7 @@ erDiagram
 |------|------|------|
 | `uq_tasks_project_status_position` | UNIQUE (project_id, status, position) | 列内の重複防止とカンバン表示の主クエリを兼ねる |
 | `ix_tasks_assignee_id` | (assignee_id) | 担当タスク絞り込み |
+| `ix_tasks_due_at_open` | (due_at) WHERE status <> 'done' AND due_at IS NOT NULL AND assignee_id IS NOT NULL | 期限通知バッチの抽出（未完了・担当者ありの行だけを対象にする部分インデックス） |
 
 **同時更新制御**：`UNIQUE (project_id, status, position)` で列内の重複を防ぐ。タスクの作成・削除・status/position変更では、サービス層が同一トランザクション内でプロジェクト・statusごとの advisory lock を取得してから採番・再並べ替えを行う。再並べ替え中は移動対象を一時的な非負の退避値（現在の最大値 + 件数 + 1）へ置き、他の行を詰めた後に最終位置を設定する（制約は `DEFERRABLE INITIALLY DEFERRED`）。通常更新を含む `PATCH /tasks/{id}` は `version` が一致した場合だけ更新し、成功時に `version + 1` とする。削除時も同じ列の後続positionを詰める。
 
@@ -245,6 +260,45 @@ Redis の失効状況とは独立して、設定した保持期間（既定365�
 
 > パスワードリセットの実行履歴はこのテーブルに含めない（`login_method` の CHECK 制約を汚さないため）。本基本設計のスコープでは `security_events` テーブルも追加しない。
 
+### 3.8 notifications
+
+アプリ内通知（要件書§3.4）。ユーザー1人あたり1行＝1通知とし、既読状態は `read_at` の有無で表す。
+
+| カラム | 型 | NULL | 既定値 | 備考 |
+|--------|----|------|--------|------|
+| id | UUID | NO | `gen_random_uuid()` | PK |
+| user_id | UUID | NO | - | FK → users.id `ON DELETE CASCADE`。通知の受信者 |
+| task_id | UUID | YES | - | FK → tasks.id `ON DELETE SET NULL`。対象タスク。タスクが削除されても通知履歴は残す |
+| type | VARCHAR(30) | NO | - | `CHECK (type IN ('due_soon_batch','due_today_created','due_today_updated'))` |
+| title | VARCHAR(200) | NO | - | 通知見出し。作成時点のタスク名をスナップショットする（タスク削除後も内容が分かるようにするため） |
+| body | TEXT | YES | - | 補足本文 |
+| due_at | TIMESTAMPTZ | YES | - | 通知作成時点の `tasks.due_at` のスナップショット |
+| dedupe_key | VARCHAR(120) | NO | - | 重複作成の防止キー。`UNIQUE (user_id, dedupe_key)` |
+| read_at | TIMESTAMPTZ | YES | `NULL` | 既読日時。`NULL` は未読 |
+| created_at | TIMESTAMPTZ | NO | `now()` | |
+
+`updated_at` は持たない。通知は作成後に `read_at` 以外を書き換えないため。
+
+**インデックス**
+
+| 名称 | 定義 | 用途 |
+|------|------|------|
+| `uq_notifications_user_dedupe` | UNIQUE (user_id, dedupe_key) | 重複通知の防止。`INSERT ... ON CONFLICT DO NOTHING` の競合対象 |
+| `ix_notifications_user_created` | (user_id, created_at DESC) | 通知一覧の取得 |
+| `ix_notifications_user_unread` | (user_id) WHERE read_at IS NULL | 未読件数の取得（ポーリングで最も高頻度に叩かれる） |
+
+**`dedupe_key` の採番規則**
+
+| type | 発生契機 | `dedupe_key` | 意図 |
+|------|----------|--------------|------|
+| `due_soon_batch` | 毎日10時・17時のバッチ | `batch:{実行日 YYYY-MM-DD}:{slot}:{task_id}` | 同じ実行枠が再実行されても1タスク1通知に収め、10時と17時は別通知として扱う |
+| `due_today_created` | タスク新規作成（期限が当日） | `created:{task_id}` | 作成は1タスク1回だけ |
+| `due_today_updated` | 終了時刻の変更（変更後の期限が当日） | `updated:{task_id}:{変更後 due_at のISO8601(UTC)}` | 同じ日時へ設定し直した場合は増やさず、別の日時へ変えた場合は新たに通知する |
+
+`INSERT` は必ず `ON CONFLICT (user_id, dedupe_key) DO NOTHING` とし、競合時は「作成0件」として正常終了させる。
+
+**保持期間**：`NOTIFICATION_RETENTION_DAYS`（既定90）を超えた行は `sp_purge_notifications`（§5.5）で削除する。
+
 ## 4. データ遷移図
 
 ### 4.1 タスクのステータス遷移
@@ -263,6 +317,21 @@ stateDiagram-v2
 ```
 
 遷移制限は設けず、任意の status 間の変更を許可する（カンバンのD&Dを素直に反映するため）。
+
+### 4.1.1 通知の状態遷移
+
+```mermaid
+stateDiagram-v2
+    [*] --> unread: 通知作成（read_at=NULL）
+    unread --> unread: 同一 dedupe_key の再作成<br/>（ON CONFLICT DO NOTHING で無視）
+    unread --> read: 個別既読 PATCH /notifications/{id}/read
+    unread --> read: 全既読 POST /notifications/read-all
+    read --> read: 再度の既読操作（read_at は上書きしない）
+    read --> [*]: 保持期間超過で削除（sp_purge_notifications）
+    unread --> [*]: 受信者ユーザー削除でCASCADE
+```
+
+既読は不可逆とし、未読へ戻す操作は提供しない。全既読は `WHERE user_id = :me AND read_at IS NULL` に限定して更新するため、既に既読の通知の `read_at` は変化しない。
 
 ### 4.2 ユーザーの状態遷移
 
@@ -337,6 +406,16 @@ flowchart LR
 | 用途 | 監査ログの保持期間管理。保持日数は環境変数 `LOGIN_HISTORY_RETENTION_DAYS` から渡す |
 | 実行方法 | 運用者が月次で手動実行する。アプリ内cronは設けない（学習範囲外） |
 
+### 5.5 `db/procedures/sp_purge_notifications.sql`
+
+| 項目 | 内容 |
+|------|------|
+| 引数 | `p_retention_days INTEGER` |
+| 戻り値 | なし（`PROCEDURE`） |
+| 処理 | `DELETE FROM notifications WHERE created_at < now() - (p_retention_days \|\| ' days')::interval` |
+| 用途 | 通知の保持期間管理。保持日数は環境変数 `NOTIFICATION_RETENTION_DAYS` から渡す |
+| 実行方法 | `batch` コンテナの日次ジョブから期限通知ジョブの後に実行する（[06_infra_cicd.md §2](./06_infra_cicd.md#2-docker-compose-構成)） |
+
 ## 6. マイグレーション方針
 
 ```mermaid
@@ -365,5 +444,8 @@ flowchart LR
 | Q-4 | タスク詳細 | tasks + assignee + comments（コメントは別クエリで取得しN+1を回避） | `ix_task_comments_task_created` |
 | Q-5 | 管理者ユーザー一覧 | `ORDER BY created_at DESC LIMIT/OFFSET` | `ix_users_created_at` |
 | Q-6 | ログイン履歴 | `WHERE user_id=:uid ORDER BY created_at DESC LIMIT 50` | `ix_login_history_user_created` |
+| Q-7 | 期限通知バッチ | `WHERE status <> 'done' AND assignee_id IS NOT NULL AND due_at IS NOT NULL AND due_at <= :threshold`（`:threshold` = 翌日10:00 JST をUTCへ変換した値） | `ix_tasks_due_at_open` |
+| Q-8 | 未読通知件数 | `SELECT count(*) FROM notifications WHERE user_id=:me AND read_at IS NULL` | `ix_notifications_user_unread` |
+| Q-9 | 通知一覧 | `WHERE user_id=:me ORDER BY created_at DESC LIMIT/OFFSET` | `ix_notifications_user_created` |
 
 > Q-2 / Q-3 では SQLAlchemy の `selectinload` を用い、N+1 クエリを避ける。

@@ -69,7 +69,7 @@
 | ⑨ | メンバーアバター群 | avatar list | `board.project` のメンバー | - | 常時 | クリックで簡易ツールチップ（氏名表示のみ） |
 | ⑩ | TaskCreateModal / title | text input | `""` | 1〜150文字必須（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） | - | 入力反映 |
 | ⑪ | TaskCreateModal / assignee | select | `null` | プロジェクトメンバーから選択、未選択可 | - | 選択反映 |
-| ⑫ | TaskCreateModal / due_date | date input | `null` | 任意 | - | 選択反映 |
+| ⑫ | TaskCreateModal / due_at | datetime-local input | `null` | 任意 | - | `APP_TIMEZONE`の日時として入力し、UTCへ正規化して送信 |
 | ⑬ | TaskCreateModal / status | select | `todo` | `todo`/`in_progress`/`done` | - | 選択反映 |
 | ⑭ | TaskCreateModal / 作成ボタン | button | - | - | `isValid && !isSubmitting` | `POST /tasks` |
 
@@ -80,7 +80,7 @@
 | 1 | マウント時 | `GET /api/projects/{projectId}` | パスパラメータのみ | プロジェクト名・メンバー一覧を描画 | 404はプロジェクトエラー画面（非所属/不存在を区別しない） | `queryKey: ['project', projectId]` |
 | 2 | マウント時 | `GET /api/projects/{projectId}/tasks` | パスパラメータのみ | `columns` を3列に描画 | 404は同上、401はAuthAdapterが処理 | `queryKey: ['board', projectId]` |
 | 3 | カードD&Dドロップ時 | `PATCH /api/tasks/{taskId}` | `{status, position, version}` | 楽観的更新済みキャッシュを確定（§5.2/§7参照） | `409 TASK_CONFLICT` は `invalidateQueries(['board', projectId])` で再取得、その他はロールバック | `mutationKey: ['updateTask', taskId]` |
-| 4 | タスク作成送信 | `POST /api/projects/{projectId}/tasks` | `{title, description, status, assignee_id, due_date}` | `201` → `invalidateQueries(['board', projectId])`、モーダルを閉じる | 422はフィールドエラー、`ASSIGNEE_INACTIVE`はトースト | `mutationKey: ['createTask']` |
+| 4 | タスク作成送信 | `POST /api/projects/{projectId}/tasks` | `{title, description, status, assignee_id, due_at}` | `201` → `invalidateQueries(['board', projectId])`、モーダルを閉じる | 422はフィールドエラー、`ASSIGNEE_INACTIVE`はトースト | `mutationKey: ['createTask']` |
 | 5 | URLに `taskId` が付与された時 | （[08_task_detail_modal.md](./08_task_detail_modal.md)参照） | - | - | - | `queryKey: ['task', taskId]` |
 
 ## 5. 状態管理
@@ -314,7 +314,7 @@ flowchart TB
 | `title`（タスク作成） | `z.string().min(1).max(150)` | 「タイトルを1〜150文字で入力してください」 | `POST /tasks` title（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） |
 | `description`（タスク作成） | `z.string().nullable().optional()` | - | 上限は要検討（基本設計に明記なし） |
 | `assignee_id`（タスク作成） | `z.string().uuid().nullable().optional()` | 「担当者の選択が不正です」 | 有効なプロジェクトメンバーであることはサーバー側で検証（`409 ASSIGNEE_INACTIVE`） |
-| `due_date`（タスク作成） | `z.string().date().nullable().optional()` | 「日付の形式が正しくありません」 | - |
+| `due_at`（タスク作成） | `z.string().datetime({ local: true }).nullable().optional()` | 「期限日時の形式が正しくありません」 | `APP_TIMEZONE`へ変換後、ISO 8601 UTCを送信 |
 | `status`（タスク作成） | `z.enum(['todo','in_progress','done'])` | - | 省略時サーバーは `todo` を既定とする |
 
 D&D操作自体（`PATCH /tasks/{id}` の `status`/`position`/`version`）はユーザー入力フォームを介さないためzod検証の対象外とし、`version` はクライアントが保持する現在値をそのまま送信する。

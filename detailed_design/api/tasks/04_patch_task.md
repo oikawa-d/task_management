@@ -10,6 +10,8 @@
 | [../../auth/03_csrf.md](../../auth/03_csrf.md) | CSRF検証（session モード更新系） |
 | [../../database/06_table_tasks.md](../../database/06_table_tasks.md) | tasks テーブル、`UNIQUE (project_id, status, position) DEFERRABLE` |
 | [../../database/08_db_functions.md](../../database/08_db_functions.md) | `fn_next_task_position` |
+| [../notifications/01_get_notifications.md](../notifications/01_get_notifications.md) | 通知一覧スキーマ |
+| [../../database/10_table_notifications.md](../../database/10_table_notifications.md) | 通知の`dedupe_key`とINSERT制約 |
 | [./03_get_task.md](./03_get_task.md) | 更新前に `version` を取得するGET |
 | [./02_post_project_tasks.md](./02_post_project_tasks.md) | 採番ロジック（`fn_next_task_position`）の共通部分 |
 | [./05_delete_task.md](./05_delete_task.md) | 削除時のposition詰め（本APIと同じadvisory lock方針） |
@@ -20,7 +22,7 @@
 | 項目 | 内容 |
 |------|------|
 | エンドポイント | `PATCH /api/tasks/{task_id}` |
-| 目的 | タスクの部分更新。`title`/`description`/`status`/`assignee_id`/`position`/`due_date` を個別に更新できる。カンバンD&Dの `status`/`position` 変更もこのAPIに統一する |
+| 目的 | タスクの部分更新。`title`/`description`/`status`/`assignee_id`/`position`/`due_at` を個別に更新できる。カンバンD&Dの `status`/`position` 変更もこのAPIに統一する |
 | 認証 | session モード：`cerberus_sid` Cookie ／ jwt モード：`Authorization: Bearer {access_token}` |
 | 認可 | プロジェクトメンバー（`task_id` からプロジェクトを特定し所属確認。admin は無条件許可） |
 | CSRF検証 | 必要（session モードの更新系。`X-CSRF-Token` ヘッダ必須） |
@@ -54,9 +56,9 @@
 | status | string | - | `todo` / `in_progress` / `done` | 変更しない |
 | assignee_id | string(uuid) \| null | - | 有効なプロジェクトメンバーであること。`null` で担当解除 | 変更しない |
 | position | integer | - | 0以上 | 5.1節の規則に従う |
-| due_date | string(date) \| null | - | - | 変更しない |
+| due_at | string(date-time) \| null | - | ISO 8601。オフセットなしは `APP_TIMEZONE` として解釈 | 変更しない |
 
-未指定と `null` 明示を区別するため、スキーマは `pydantic` の `exclude_unset=True` を用いたPATCH方式で実装する（`description` / `assignee_id` / `due_date` は `null` 指定で明示的にクリア可能、フィールド自体を省略すれば変更なし）。
+未指定と `null` 明示を区別するため、スキーマは `pydantic` の `exclude_unset=True` を用いたPATCH方式で実装する（`description` / `assignee_id` / `due_at` は `null` 指定で明示的にクリア可能、フィールド自体を省略すれば変更なし）。
 
 ### 2.2 レスポンス
 
@@ -73,7 +75,7 @@
   "created_by": { "id": "9a1b...", "username": "taro", "display_name": "山田 太郎" },
   "position": 0,
   "version": 2,
-  "due_date": null,
+  "due_at": null,
   "created_at": "2026-09-01T00:00:00Z",
   "updated_at": "2026-09-03T04:10:00Z"
 }
@@ -109,6 +111,7 @@ sequenceDiagram
     participant R as "tasks_router"
     participant D as "deps: get_current_user / verify_csrf"
     participant S as "task_service"
+    participant NS as "notification_service"
     participant TR as "task_repository"
     participant PG as "PostgreSQL"
 
@@ -138,9 +141,11 @@ sequenceDiagram
                     S->>TR: "reorder（退避値へ一時移動→他行を詰める→最終position確定）"
                     TR->>PG: "UPDATE tasks（退避値）→UPDATE 他行→UPDATE 対象行"
                 else "status/position変更なし"
-                    S->>TR: "update_fields（title/description/assignee/due_date）"
+                    S->>TR: "update_fields（title/description/assignee/due_at）"
                     TR->>PG: "UPDATE tasks"
                 end
+                S->>NS: "条件成立時はdue_today_updated通知を作成"
+                NS->>PG: "INSERT notifications ... ON CONFLICT DO NOTHING"
                 S->>TR: "version + 1, updated_at更新"
                 TR->>PG: "COMMIT"
                 PG-->>TR: "更新後の行"
@@ -186,7 +191,7 @@ flowchart TB
     J -->|"無効化ユーザー"| E409b["409 ASSIGNEE_INACTIVE"]
     J -->|"OK"| K
     I -->|"No"| K{"status または position<br/>の変更あり?"}
-    K -->|"No"| L1["単純UPDATE<br/>（title/description/assignee/due_date）"]
+    K -->|"No"| L1["単純UPDATE<br/>（title/description/assignee/due_at）"]
     K -->|"Yes"| L2["advisory lock取得<br/>(project_id, 旧status)<br/>(project_id, 新status)<br/>※statusの文字列昇順でlock取得しデッドロック回避"]
     L2 --> M["対象行を退避値へUPDATE<br/>(現在の最大position + 件数 + 1)"]
     M --> N{"列間移動?"}
@@ -223,8 +228,8 @@ flowchart TB
 | 引数 | task_id：対象タスクID／payload：`version` を含む部分更新内容／user：現在ユーザー |
 | 戻り値 | 更新後の `Task` |
 | 送出例外 | `NotFoundError`、`ConflictError(TASK_CONFLICT)`、`ConflictError(ASSIGNEE_INACTIVE)`、`ValidationError` |
-| 処理内容 | 1. `task_repository.get_for_update(task_id)` で行ロック付き取得。`None` または非所属なら `NotFoundError`<br/>2. `payload.version != task.version` なら `ConflictError(TASK_CONFLICT)`（この時点でROLLBACKし行ロックを解放）<br/>3. `assignee_id` が `exclude_unset` に含まれ値が `None` でない場合、メンバー・`is_active` を検証。非メンバーは `ValidationError`、無効化ユーザーは `ConflictError(ASSIGNEE_INACTIVE)`<br/>4. `status` または `position` が指定内容に含まれる場合、`task_repository.reorder_and_update(task, payload)` を呼び出す。それ以外は `task_repository.update_fields(task, payload)` を呼び出す<br/>5. いずれの経路でも `version = task.version + 1`、`updated_at = now()` をセットしてCOMMIT |
-| 副作用 | DB更新 |
+| 処理内容 | 1. `task_repository.get_for_update(task_id)` で行ロック付き取得。`None` または非所属なら `NotFoundError`<br/>2. `payload.version != task.version` なら `ConflictError(TASK_CONFLICT)`（この時点でROLLBACKし行ロックを解放）<br/>3. `assignee_id` が `exclude_unset` に含まれ値が `None` でない場合、メンバー・`is_active` を検証。非メンバーは `ValidationError`、無効化ユーザーは `ConflictError(ASSIGNEE_INACTIVE)`<br/>4. `status` または `position` が指定内容に含まれる場合、`task_repository.reorder_and_update(task, payload)` を呼び出す。それ以外は `task_repository.update_fields(task, payload)` を呼び出す<br/>5. `due_at`が指定され現在値から変化し、担当者があり、変更後の日時が`APP_TIMEZONE`の当日なら`notification_service.create_due_today_notification`を同じDBセッションで呼ぶ。`dedupe_key=updated:{task_id}:{due_atのUTC ISO}`で同じ日時への再設定は重複させない<br/>6. いずれの経路でも `version = task.version + 1`、`updated_at = now()` をセットしてCOMMIT |
+| 副作用 | DB更新。`due_at`変更後が当日の場合は同一トランザクションでnotifications INSERT |
 
 ### 6.3 `repository/task_repository.py :: get_for_update`
 
@@ -245,7 +250,7 @@ flowchart TB
 | 引数 | db：DBセッション／task：`get_for_update` で取得済みの行（ロック中）／payload：`status`/`position` を含む更新内容 |
 | 戻り値 | 並べ替え・フィールド更新後の `Task`（`version`/`updated_at` の反映前） |
 | 送出例外 | `IntegrityError`（想定外のシフト漏れ時。`db_error_handler` が409へ変換） |
-| 処理内容 | 1. 旧 `status`（`old_status`）・新 `status`（`new_status`、省略時は `old_status`）を確定<br/>2. 影響する `(project_id, status)` の組を **status文字列の昇順**でソートし、`SELECT pg_advisory_xact_lock(hashtext(project_id::text \|\| status))` を順に実行してデッドロックを回避する<br/>3. 対象タスクの `position` を退避値（新列の `MAX(position) + 新列件数 + 1` など、一時的に重複しない大きな値）へ `UPDATE`（`uq_tasks_project_status_position` は `DEFERRABLE INITIALLY DEFERRED` のため、トランザクション内の一時的な重複は許容される）<br/>4. `old_status != new_status` の場合：旧列側で `position > 旧position` の行を `position - 1` に一括UPDATE<br/>5. 新列側：`position` 指定ありなら挿入位置以降（`position >= 新position`）の行を `position + 1` に一括UPDATE。指定なしなら新列の末尾（`fn_next_task_position` 相当の値）を採用しシフト不要<br/>6. `old_status == new_status` かつ `position` 指定ありの場合：旧position と新positionの間の行を1ずつシフト（新position側へ移動なら間の行を-1、逆方向なら+1）<br/>7. 最後に対象タスクの `status` / `position` を最終値に `UPDATE`<br/>8. `title`/`description`/`assignee_id`/`due_date` のうち指定されたフィールドも同一UPDATE文にまとめて反映 |
+| 処理内容 | 1. 旧 `status`（`old_status`）・新 `status`（`new_status`、省略時は `old_status`）を確定<br/>2. 影響する `(project_id, status)` の組を **status文字列の昇順**でソートし、`SELECT pg_advisory_xact_lock(hashtext(project_id::text \|\| status))` を順に実行してデッドロックを回避する<br/>3. 対象タスクの `position` を退避値（新列の `MAX(position) + 新列件数 + 1` など、一時的に重複しない大きな値）へ `UPDATE`（`uq_tasks_project_status_position` は `DEFERRABLE INITIALLY DEFERRED` のため、トランザクション内の一時的な重複は許容される）<br/>4. `old_status != new_status` の場合：旧列側で `position > 旧position` の行を `position - 1` に一括UPDATE<br/>5. 新列側：`position` 指定ありなら挿入位置以降（`position >= 新position`）の行を `position + 1` に一括UPDATE。指定なしなら新列の末尾（`fn_next_task_position` 相当の値）を採用しシフト不要<br/>6. `old_status == new_status` かつ `position` 指定ありの場合：旧position と新positionの間の行を1ずつシフト（新position側へ移動なら間の行を-1、逆方向なら+1）<br/>7. 最後に対象タスクの `status` / `position` を最終値に `UPDATE`<br/>8. `title`/`description`/`assignee_id`/`due_at` のうち指定されたフィールドも同一UPDATE文にまとめて反映 |
 | 副作用 | DB更新（対象タスク行＋同一列内の複数行） |
 
 ### 6.5 `repository/task_repository.py :: update_fields`
@@ -256,7 +261,7 @@ flowchart TB
 | 引数 | db：DBセッション／task：ロック済み行／payload：更新内容（`status`/`position` を含まない） |
 | 戻り値 | 更新後の `Task` |
 | 送出例外 | `IntegrityError`（想定外の一意制約違反時。通常発生しない） |
-| 処理内容 | 1. `payload.model_dump(exclude_unset=True)` から `version` を除いた指定フィールド（`title`/`description`/`assignee_id`/`due_date`）のみを `UPDATE` 文に反映する<br/>2. `status`/`position` は変更しない |
+| 処理内容 | 1. `payload.model_dump(exclude_unset=True)` から `version` を除いた指定フィールド（`title`/`description`/`assignee_id`/`due_at`）のみを `UPDATE` 文に反映する<br/>2. `status`/`position` は変更しない |
 | 副作用 | DB更新（対象タスク行のみ） |
 
 ## 7. 関数相関図
@@ -322,7 +327,7 @@ stateDiagram-v2
 | status | `TaskUpdateRequest.status` | `Literal["todo","in_progress","done"]` | セレクト/D&D列と一致 |
 | assignee_id | `TaskUpdateRequest.assignee_id` | `UUID \| None` | メンバー検証はサービス層 |
 | position | `TaskUpdateRequest.position` | `int`、`ge=0` | D&Dのドロップ先インデックス |
-| due_date | `TaskUpdateRequest.due_date` | `date \| None` | 日付ピッカーと一致 |
+| due_at | `TaskUpdateRequest.due_at` | `datetime \| None` | 日時入力と一致。UTCへ正規化 |
 
 `TaskUpdateRequest` は `exclude_unset=True` を前提に実装し、未送信フィールドと `null` 送信を区別する。
 

@@ -69,7 +69,7 @@
 | ② | タイトル | インライン編集text | `task.title` | 1〜150文字必須 | 常時編集可 | フォーカスアウトで変更検知→`PATCH`（§9.1） |
 | ③ | 説明 | インライン編集textarea | `task.description` | 上限なし（要検討：§15） | 常時編集可 | フォーカスアウトで変更検知→`PATCH` |
 | ④ | 担当者 | select | `task.assignee?.id ?? ''`（空文字＝未割当） | プロジェクトメンバーから選択、`is_active=false`のメンバーは選択肢に表示するが選択不可（グレーアウト） | 常時活性 | 選択変更で即時`PATCH` |
-| ⑤ | 期限 | date input | `task.due_date` | 任意 | 常時活性 | 変更で即時`PATCH` |
+| ⑤ | 期限 | datetime-local input | `task.due_at`を`APP_TIMEZONE`へ変換 | 任意 | 常時活性 | 変更で即時`PATCH`。送信時はUTCへ正規化 |
 | ⑥ | ステータス | select | `task.status` | `todo`/`in_progress`/`done` | 常時活性 | 変更で即時`PATCH`（ボード側の列移動と同一API） |
 | ⑦ | コメント一覧 | list | `useComments()`の結果 | - | 常時 | スクロール表示（ページングなし） |
 | ⑧ | コメント編集ボタン | icon button | - | - | `comment.author.id === currentUser.id \|\| currentUser.role === 'admin'` | クリックで該当コメントをインライン編集モードへ |
@@ -318,7 +318,7 @@ flowchart TB
 | ②title | `taskFieldSchema.title` | `z.string().min(1).max(150)` | 「タイトルは1〜150文字で入力してください」 | pydantic `TaskUpdateRequest.title`（[04_patch_task.md](../api/tasks/04_patch_task.md) §10） |
 | ③description | `taskFieldSchema.description` | `z.string().nullable().optional()`（上限は未設定） | - | 上限は基本設計に明記なし（要検討：§15） |
 | ④assignee_id | `taskFieldSchema.assigneeId` | `z.string().uuid().nullable()` | 「担当者の選択が不正です」 | メンバー・`is_active`検証はサーバー側（`409 ASSIGNEE_INACTIVE`） |
-| ⑤due_date | `taskFieldSchema.dueDate` | `z.string().date().nullable()` | 「日付の形式が正しくありません」 | - |
+| ⑤due_at | `taskFieldSchema.dueAt` | `z.string().datetime({ local: true }).nullable()` | 「期限日時の形式が正しくありません」 | `APP_TIMEZONE`へ変換後、ISO 8601 UTCを送信 |
 | ⑥status | `taskFieldSchema.status` | `z.enum(['todo','in_progress','done'])` | - | - |
 | ⑩コメント本文 | `commentSchema.body` | `z.string().trim().min(1).max(2000)` | 「コメントは1〜2000文字で入力してください」 | pydantic `CommentCreateRequest.body`（`TASK_COMMENT_BODY_MAX_LENGTH`。[07_post_task_comments.md](../api/tasks/07_post_task_comments.md) §10。上限値はフロント・バック間の共有方法が未確定のため要検討：§15） |
 
@@ -340,7 +340,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    A["フィールド編集<br/>(title/description/assignee/due_date/status)"] --> B["変更検知（blur／onChange）"]
+    A["フィールド編集<br/>(title/description/assignee/due_at/status)"] --> B["変更検知（blur／onChange）"]
     B --> C["queryCache['task', tid]からversion取得"]
     C --> D["PATCH /api/tasks/:id<br/>{field, version}"]
     D -->|"200"| E["レスポンス{task, version+1}"]

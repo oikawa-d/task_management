@@ -5,7 +5,7 @@
 | 項目 | 方針 |
 |------|------|
 | バージョン | Redis 8（単一ノード） |
-| 役割 | 「ログイン状態が有効か」を判定するための揮発ストア。永続データは持たない |
+| 役割 | 「ログイン状態が有効か」を判定するための揮発ストア、および定期実行バッチの実行ロック置き場。永続データは持たない |
 | 永続化 | RDB / AOF いずれも**無効**。再起動で全ログイン状態が失われることを許容（要件書§4） |
 | 失効方式 | 全キーに TTL を設定し、期限切れで自動失効。ログアウト時は `DEL` で即時失効 |
 | 値の形式 | JSON文字列（`SET` + TTL）。構造の把握が容易でCLIから確認しやすいため |
@@ -30,6 +30,7 @@
 | `emailverify:{token_hash}` | `{user_id, requested_at}` | `EMAIL_VERIFY_TTL_SECONDS`（既定86400 = 24時間） | 会員登録・認証メール再送 | メール認証トークンの有効性判定 |
 | `emailverify_current:{user_id}` | 現在のtoken_hash | `EMAIL_VERIFY_TTL_SECONDS` | 会員登録・認証メール再送 | 再送時に旧メール認証トークンを失効させるための逆引き |
 | `emailverify_sent:{user_id}` | 直近の送信時刻（数値） | `EMAIL_VERIFY_RESEND_INTERVAL_SECONDS`（既定60） | 認証メール送信時に `SETEX` | 認証メール再送のレート制限（メール爆撃の防止） |
+| `lock:notify_due:{YYYY-MM-DD}:{slot}` | `{started_at, runner_id}` | `NOTIFY_DUE_LOCK_TTL_SECONDS`（既定82800 = 23時間） | 期限通知バッチの実行開始時に `SET NX` | 同一日の同一実行枠（10時または17時）の二重実行防止。`batch` コンテナの再起動・手動実行が重なっても通知を重複させない |
 | `login_fail:{key_hash}` | 連続失敗回数（数値） | `LOGIN_LOCK_WINDOW_SECONDS`（既定900） | ログイン失敗時に `INCR` | 正規化した識別子と確定済みクライアントIPの組み合わせ。メール/IDをRedisキーへ平文保存しない |
 
 **値に保存しない情報**：パスワード、パスワードハッシュ、アクセストークンそのもの、リフレッシュトークンの平文。
@@ -56,6 +57,7 @@ flowchart TB
 | `session:{sid}` | **する** | 操作中の有効期限を延長するが、`created_at + SESSION_ABSOLUTE_TTL_SECONDS` を超えては延長しない |
 | `refresh:{hash}` | **しない** | ローテーション時に新しいキーを発行するため、TTLは発行時点から固定 |
 | `oauth_state`, `pwreset`, `emailverify` | しない | ワンタイム用途 |
+| `lock:notify_due:{日付}:{slot}` | しない | 日付・実行枠ごとの実行済みマーカーを兼ねるため、当日中は生存させる（TTL 23時間） |
 
 > `session` はアイドルタイムアウト（既定30分）に加え、絶対有効期限（既定8時間）を設ける。`touch_session` はセッション作成時刻を確認し、残り時間が0以下なら延長せず失効扱いにする。
 
@@ -180,6 +182,28 @@ flowchart LR
     AS --> F5
     US --> F6
 ```
+
+### 4.4 期限通知バッチの実行ロック
+
+```mermaid
+sequenceDiagram
+    participant B as batch（スケジューラ）
+    participant R as Redis
+    participant P as PostgreSQL
+
+    B->>R: SET lock:notify_due:2026-09-05:10 {…} NX EX 82800
+    alt 取得成功（10時枠未実行）
+        R-->>B: OK
+        B->>P: 対象タスク抽出 → notifications へ INSERT ... ON CONFLICT DO NOTHING
+        P-->>B: 作成件数
+        Note over B: ロックは削除せずTTLで失効させる<br/>（当日・10時枠の実行済みマーカーを兼ねる）
+    else 取得失敗（10時枠実行済み）
+        R-->>B: nil
+        B-->>B: WARNログを出して即終了（通知は作成しない）
+    end
+```
+
+Redisが停止していてロックを取得できない場合は、バッチを実行せずERRORログを出して終了する。`notifications` 側にも `UNIQUE (user_id, dedupe_key)` があるため、仮にロックなしで二重実行されても通知は重複しない（二重防御）。
 
 ## 6. 障害・運用時の挙動
 

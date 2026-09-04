@@ -43,6 +43,8 @@
 | 10 | メール認証画面 | 会員登録・再送メール内のトークンでメールアドレスを認証 |
 | 11 | OAuthコールバック中継画面 | Google OAuth2完了後の認証状態確定と遷移先中継 |
 
+通知一覧（§3.4）は独立した画面ではなく、認証後の共通ヘッダーに置くベルアイコンから開くパネルとして提供するため、画面数には含めない。
+
 ---
 
 ## 3. 機能要件
@@ -79,6 +81,29 @@
 - 一般ユーザー：自分が所属するプロジェクトのみ閲覧・操作可能
 - 管理者：全ユーザー・全プロジェクトの閲覧、ユーザーの権限変更、プロジェクト削除が可能
 
+### 3.4 タスク期限のアプリ内通知機能
+
+タスクの期限切れ・期限間近をユーザーに気づかせるため、アプリ内（画面内）の通知機能を設ける。メール通知・ブラウザプッシュ通知は対象外とする。
+
+| No | 要件 | 内容 |
+|----|------|------|
+| N-1 | 定期通知 | 毎日10時と17時（`APP_TIMEZONE` 基準）に、**翌日10時までが期限**の未完了タスクを抽出し、そのタスクの担当者へ通知を作成する。17時は同じ対象への再通知とする |
+| N-2 | 通知ボタン | ログイン後の共通ヘッダー（`/dashboard` を含む全画面）にベルアイコンの通知ボタンを配置する |
+| N-3 | 未読バッジ | 未読通知が1件以上ある場合、ベルアイコンにバッジ（未読件数）を表示する |
+| N-4 | 通知一覧 | ベルアイコンのクリックで通知一覧パネルを開く。各通知から対象タスクへ遷移できる |
+| N-5 | 全既読 | 通知一覧に「すべて既読にする」ボタンを設置し、自分の未読通知を一括で既読にする |
+| N-6 | イベント通知 | タスクを新規追加した時、またはタスクの終了時刻を変更した時、その期限が**当日**である場合は即時に通知一覧へ追加する |
+
+**前提となる仕様変更**
+
+| 項目 | 内容 |
+|------|------|
+| タスクの期限 | 「翌日10時まで」「終了時刻の変更」を表現するため、期限を**日時**（`due_at`）で保持する |
+| 基準タイムゾーン | 「10時・17時」「当日」の判定基準を `APP_TIMEZONE`（既定 `Asia/Tokyo`）としてサーバー側で統一する。DBはUTC（`TIMESTAMPTZ`）保存のままとする |
+| 通知対象者 | タスクの担当者（`assignee_id`）のみとする。担当者未設定のタスクは通知しない |
+| 定期実行 | 新規に `batch/` を設け、専用の `batch` コンテナ（常駐スケジューラ）として実装する。バックエンドAPIのプロセス内では実行しない |
+| フロントへの反映 | 一定間隔のポーリングで未読件数を取得する（リアルタイム配信は対象外） |
+
 ---
 
 ## 4. 非機能要件
@@ -105,8 +130,9 @@
 | oauth_accounts | id, user_id, provider, provider_user_id | Google等の外部ID紐付け用 |
 | projects | id, name, owner_id, created_at | |
 | project_members | project_id, user_id, joined_at | 複合主キー |
-| tasks | id, project_id, title, status, assignee_id, created_at | statusは`todo`/`in_progress`/`done` |
+| tasks | id, project_id, title, status, assignee_id, due_at, created_at | statusは`todo`/`in_progress`/`done`。`due_at`は期限（日付＋終了時刻） |
 | task_comments | id, task_id, user_id, body, created_at | |
+| notifications | id, user_id, task_id, type, title, read_at, dedupe_key, created_at | アプリ内通知。`type`は`due_soon_batch`/`due_today_created`/`due_today_updated`。`dedupe_key`で重複作成を防ぐ |
 | login_history | id, user_id, login_method, ip_address, success, created_at | ログイン試行の監査ログ。login_methodは`session`/`jwt`/`oauth_google`。Redis側の失効状況とは独立して保持し続ける |
 
 ### 5.2 Redis（ログイン状態の管理）
@@ -139,6 +165,10 @@
 | GET | /projects/{id}/tasks | タスク一覧取得 |
 | POST | /projects/{id}/tasks | タスク作成 |
 | PATCH | /tasks/{id} | タスク更新（ステータス変更含む） |
+| GET | /notifications | 自分の通知一覧取得 |
+| GET | /notifications/unread-count | 未読通知件数取得（ポーリング用） |
+| PATCH | /notifications/{id}/read | 通知を既読にする |
+| POST | /notifications/read-all | 自分の未読通知をすべて既読にする |
 | GET | /admin/users | 全ユーザー一覧（管理者のみ） |
 
 ---
@@ -215,11 +245,19 @@ project-root/
 │   │   └── auth/
 │   ├── tests/
 │   └── Dockerfile
+├── batch/                # 定期実行（常駐スケジューラ）
+│   ├── app/
+│   │   ├── main.py       # スケジューラ起動
+│   │   ├── core/         # config / logger
+│   │   └── jobs/         # due_notification_job.py 等
+│   ├── tests/
+│   ├── Dockerfile
+│   └── requirements.txt
 ├── db
 |   ├── migrations/
 │   ├── functions/        # PostgreSQL関数定義（.sqlファイル）
 │   └── procedures/       # ストアドプロシージャ定義（.sqlファイル）
-└── docker-compose.yml   # backend / frontend / postgres / redis の4コアサービスを定義（Mailpitは開発profile）
+└── docker-compose.yml   # backend / frontend / batch / postgres / redis の5コアサービスを定義（Mailpitは開発profile）
 ```
 
 ---
@@ -233,7 +271,8 @@ project-root/
 5. RBAC（ロールベースアクセス制御）の実装
 6. CI（Lint・型チェック・テスト自動化）の構築
 7. Dockerイメージ化とCD（self-hosted runnerによる自動デプロイ）の構築
-8. 3つの認証方式を比較し、違いを整理してまとめる
+8. タスク期限のアプリ内通知機能（`due_at` 移行 → 通知テーブル・通知API → 通知UI → `batch` コンテナによる毎日10時・17時の定期通知）
+9. 3つの認証方式を比較し、違いを整理してまとめる
 
 ---
 

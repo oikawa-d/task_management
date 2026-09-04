@@ -1,6 +1,6 @@
 <mxfile host="app.diagrams.net" type="device">
   <diagram name="ER図" id="ER図">
-    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1620" pageHeight="1050" math="0" shadow="0">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1620" pageHeight="1280" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
@@ -157,7 +157,7 @@
         <mxCell id="n44" value="position   ·   INTEGER  列内の並び順（列内一意） / version INTEGER" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_tasks">
           <mxGeometry x="0" y="184" width="330" height="22" as="geometry" />
         </mxCell>
-        <mxCell id="n45" value="due_date   ·   DATE  NULL可" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_tasks">
+        <mxCell id="n45" value="due_at   ·   TIMESTAMPTZ  NULL可（期限＝日付＋終了時刻）" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_tasks">
           <mxGeometry x="0" y="206" width="330" height="22" as="geometry" />
         </mxCell>
         <mxCell id="n46" value="created_at / updated_at   ·   TIMESTAMPTZ" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_tasks">
@@ -255,17 +255,68 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="n61" value="Redis（永続化しない・TTLで自動失効）&lt;br&gt;&lt;br&gt;session:{session_id}        → user_id（TTL 30分・操作で延長）&lt;br&gt;csrf:{session_id}           → CSRFトークン（セッションと同一TTL）&lt;br&gt;refresh:{token_hash}        → user_id, family_id（TTL 14日）&lt;br&gt;refresh_used:{token_hash}  → family情報（再利用検知用）&lt;br&gt;refresh_family_revoked:{uid}:{family} → family失効marker&lt;br&gt;user_sessions:{user_id}     → session_id の集合（強制ログアウト用）&lt;br&gt;user_refresh:{user_id}      → token_hash の集合&lt;br&gt;oauth_state:{state}         → PKCE / nonce（TTL 10分・ワンタイム）&lt;br&gt;oauth_handoff:{code}        → OAuth一時コード（TTL 60秒）&lt;br&gt;pwreset:{token_hash}        → user_id（TTL 30分・ワンタイム）&lt;br&gt;emailverify:{token_hash}    → user_id（TTL 24時間・ワンタイム）&lt;br&gt;emailverify_current:{uid}  → 現在のtoken hash&lt;br&gt;emailverify_sent:{uid}     → 再送間隔（TTL 60秒）&lt;br&gt;login_fail:{key_hash}       → 連続失敗回数（TTL 15分）" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#FFEBEE;strokeColor=#C62828;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;align=left;verticalAlign=top;spacingLeft=12;spacingTop=8;fontSize=10;fontFamily=Courier New;" vertex="1" parent="1">
-          <mxGeometry x="1080" y="130" width="460" height="230" as="geometry" />
+        <mxCell id="t_notif" value="notifications" style="swimlane;html=1;startSize=30;horizontal=1;fillColor=#E1F5FE;strokeColor=#0277BD;fontStyle=1;fontSize=13;childLayout=none;swimlaneFillColor=#FFFFFF;" vertex="1" parent="1">
+          <mxGeometry x="60" y="980" width="330" height="250" as="geometry" />
         </mxCell>
-        <mxCell id="n62" value="凡例 / 制約&lt;br&gt;PK（赤太字）: 主キー　UK（青太字）: 一意制約　FK（橙）: 外部キー&lt;br&gt;CASCADE / RESTRICT / SET NULL は ON DELETE の挙動&lt;br&gt;・project_members は (project_id, user_id) の複合主キー&lt;br&gt;・列挙値は ENUM 型ではなく VARCHAR + CHECK 制約で表現&lt;br&gt;・users.username / email は lower() の一意インデックス&lt;br&gt;・tasks は (project_id, status, position) の列内一意制約 + versionで競合検知&lt;br&gt;・login_history は設定した保持期間、Redisの失効状況と独立して保管" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#BDBDBD;align=left;verticalAlign=top;spacingLeft=8;spacingTop=6;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="1080" y="390" width="460" height="160" as="geometry" />
+        <mxCell id="n70" value="PK  id   ·   UUID" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontStyle=1;fontColor=#B71C1C;" vertex="1" parent="t_notif">
+          <mxGeometry x="0" y="30" width="330" height="22" as="geometry" />
         </mxCell>
-        <mxCell id="n63" value="主なインデックス&lt;br&gt;uq_tasks_project_status_position (project_id, status, position)&lt;br&gt;　→ 列内一意 + カンバン表示&lt;br&gt;ix_project_members_user_id (user_id)&lt;br&gt;　→ ダッシュボードの所属プロジェクト一覧&lt;br&gt;ix_task_comments_task_created (task_id, created_at)&lt;br&gt;ix_login_history_user_created (user_id, created_at DESC)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#BDBDBD;align=left;verticalAlign=top;spacingLeft=8;spacingTop=6;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="1080" y="580" width="460" height="150" as="geometry" />
+        <mxCell id="n71" value="FK  user_id   ·   UUID → users.id  CASCADE" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontColor=#EF6C00;" vertex="1" parent="t_notif">
+          <mxGeometry x="0" y="52" width="330" height="22" as="geometry" />
         </mxCell>
-        <mxCell id="n64" value="DB関数 / プロシージャ（db/functions・db/procedures）&lt;br&gt;trg_set_updated_at()        BEFORE UPDATE トリガ&lt;br&gt;fn_is_project_member(pid, uid) → BOOLEAN&lt;br&gt;fn_next_task_position(pid, status) → INTEGER&lt;br&gt;sp_purge_login_history(retention_days)" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;darkOpacity=0.05;fillColor=#FFF9C4;strokeColor=#F9A825;align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;size=14;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="1080" y="760" width="460" height="110" as="geometry" />
+        <mxCell id="n72" value="FK  task_id   ·   UUID → tasks.id  SET NULL" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontColor=#EF6C00;" vertex="1" parent="t_notif">
+          <mxGeometry x="0" y="74" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n73" value="type   ·   due_soon_batch|due_today_created|_updated" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_notif">
+          <mxGeometry x="0" y="96" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n74" value="title   ·   VARCHAR(200)  タスク名のスナップショット" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_notif">
+          <mxGeometry x="0" y="118" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n75" value="body   ·   TEXT  NULL可" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_notif">
+          <mxGeometry x="0" y="140" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n76" value="due_at   ·   TIMESTAMPTZ  期限のスナップショット" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_notif">
+          <mxGeometry x="0" y="162" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n77" value="UK  dedupe_key   ·   VARCHAR(120)  (user_id, dedupe_key)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontStyle=1;fontColor=#1565C0;" vertex="1" parent="t_notif">
+          <mxGeometry x="0" y="184" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n78" value="read_at   ·   TIMESTAMPTZ  NULL可（未読）" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_notif">
+          <mxGeometry x="0" y="206" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="n79" value="created_at   ·   TIMESTAMPTZ（updated_at は持たない）" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_notif">
+          <mxGeometry x="0" y="228" width="330" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="e80" value="1 : N  受信者" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#455A64;strokeWidth=1.5;fontSize=10;labelBackgroundColor=#FFFFFF;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="t_users" target="t_notif">
+          <mxGeometry relative="1" as="geometry" x="0.55">
+            <Array as="points">
+              <mxPoint x="25" y="266" />
+              <mxPoint x="25" y="1105" />
+            </Array>
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e81" value="0..1 : N  対象タスク" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#455A64;strokeWidth=1.5;fontSize=10;labelBackgroundColor=#FFFFFF;startArrow=ERzeroToOne;startFill=0;endArrow=ERmany;endFill=0;exitX=0;exitY=0.8;exitDx=0;exitDy=0;entryX=1;entryY=0.32;entryDx=0;entryDy=0;" edge="1" parent="1" source="t_tasks" target="t_notif">
+          <mxGeometry relative="1" as="geometry" x="0.2">
+            <Array as="points">
+              <mxPoint x="620" y="720" />
+              <mxPoint x="620" y="1060" />
+            </Array>
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="n61" value="Redis（永続化しない・TTLで自動失効）&lt;br&gt;&lt;br&gt;session:{session_id}        → user_id（TTL 30分・操作で延長）&lt;br&gt;csrf:{session_id}           → CSRFトークン（セッションと同一TTL）&lt;br&gt;refresh:{token_hash}        → user_id, family_id（TTL 14日）&lt;br&gt;refresh_used:{token_hash}  → family情報（再利用検知用）&lt;br&gt;refresh_family_revoked:{uid}:{family} → family失効marker&lt;br&gt;user_sessions:{user_id}     → session_id の集合（強制ログアウト用）&lt;br&gt;user_refresh:{user_id}      → token_hash の集合&lt;br&gt;oauth_state:{state}         → PKCE / nonce（TTL 10分・ワンタイム）&lt;br&gt;oauth_handoff:{code}        → OAuth一時コード（TTL 60秒）&lt;br&gt;pwreset:{token_hash}        → user_id（TTL 30分・ワンタイム）&lt;br&gt;emailverify:{token_hash}    → user_id（TTL 24時間・ワンタイム）&lt;br&gt;emailverify_current:{uid}  → 現在のtoken hash&lt;br&gt;emailverify_sent:{uid}     → 再送間隔（TTL 60秒）&lt;br&gt;login_fail:{key_hash}       → 連続失敗回数（TTL 15分）&lt;br&gt;lock:notify_due:{YYYY-MM-DD} → 期限通知バッチの実行ロック（TTL 23時間）" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#FFEBEE;strokeColor=#C62828;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;align=left;verticalAlign=top;spacingLeft=12;spacingTop=8;fontSize=10;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="1080" y="130" width="460" height="245" as="geometry" />
+        </mxCell>
+        <mxCell id="n62" value="凡例 / 制約&lt;br&gt;PK（赤太字）: 主キー　UK（青太字）: 一意制約　FK（橙）: 外部キー&lt;br&gt;CASCADE / RESTRICT / SET NULL は ON DELETE の挙動&lt;br&gt;・project_members は (project_id, user_id) の複合主キー&lt;br&gt;・列挙値は ENUM 型ではなく VARCHAR + CHECK 制約で表現&lt;br&gt;・users.username / email は lower() の一意インデックス&lt;br&gt;・tasks は (project_id, status, position) の列内一意制約 + versionで競合検知&lt;br&gt;・login_history は設定した保持期間、Redisの失効状況と独立して保管&lt;br&gt;・notifications は (user_id, dedupe_key) の一意制約で重複通知を防ぐ&lt;br&gt;・タスク削除時も通知履歴は残す（task_id を SET NULL、title はスナップショット）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#BDBDBD;align=left;verticalAlign=top;spacingLeft=8;spacingTop=6;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1080" y="400" width="460" height="185" as="geometry" />
+        </mxCell>
+        <mxCell id="n63" value="主なインデックス&lt;br&gt;uq_tasks_project_status_position (project_id, status, position)&lt;br&gt;　→ 列内一意 + カンバン表示&lt;br&gt;ix_project_members_user_id (user_id)&lt;br&gt;　→ ダッシュボードの所属プロジェクト一覧&lt;br&gt;ix_task_comments_task_created (task_id, created_at)&lt;br&gt;ix_login_history_user_created (user_id, created_at DESC)&lt;br&gt;ix_tasks_due_at_open (due_at) WHERE 未完了 AND 担当者あり&lt;br&gt;　→ 期限通知バッチの抽出&lt;br&gt;uq_notifications_user_dedupe (user_id, dedupe_key)  重複防止&lt;br&gt;ix_notifications_user_unread (user_id) WHERE read_at IS NULL&lt;br&gt;　→ 未読件数のポーリング" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#BDBDBD;align=left;verticalAlign=top;spacingLeft=8;spacingTop=6;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1080" y="615" width="460" height="215" as="geometry" />
+        </mxCell>
+        <mxCell id="n64" value="DB関数 / プロシージャ（db/functions・db/procedures）&lt;br&gt;trg_set_updated_at()        BEFORE UPDATE トリガ&lt;br&gt;fn_is_project_member(pid, uid) → BOOLEAN&lt;br&gt;fn_next_task_position(pid, status) → INTEGER&lt;br&gt;sp_purge_login_history(retention_days)&lt;br&gt;sp_purge_notifications(retention_days)" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;darkOpacity=0.05;fillColor=#FFF9C4;strokeColor=#F9A825;align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;size=14;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1080" y="860" width="460" height="120" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>
