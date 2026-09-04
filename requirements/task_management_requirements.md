@@ -117,6 +117,7 @@
 - ログインの成否履歴はRedisのTTL失効とは独立してPostgreSQLに記録し、監査目的で参照できるようにする
 - `/api`配下の全APIリクエストは、成功・エラーを問わず`api_history`へ記録する。保持期間は既定30日とする
 - `batch`ジョブは開始時・完了時・失敗時の状態を`batch_history`へ記録する。保持期間は既定30日とする
+- `notifications` / `api_history` / `batch_history` は`batch`が日次パージし、保持期間はそれぞれ既定90日 / 30日 / 30日とする。`notifications`は未読・既読を問わず`created_at`を基準に削除する
 - `login_history`はセキュリティ監査用として既定90日保持する。API・batch履歴のbodyやエラー内容にはパスワード、token、Cookie等の秘匿情報を保存しない
 
 ---

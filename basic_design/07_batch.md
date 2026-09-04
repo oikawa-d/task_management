@@ -152,7 +152,7 @@ sequenceDiagram
 
     SCH->>JOB: 実行日とslot（10/17）を渡して起動
     JOB->>JOB: APP_TIMEZONEの実行日と翌日10時の閾値を算出
-    JOB->>RD: SET lock:notify_due:{日付}:{slot} runner_id NX EX
+        JOB->>RD: SET lock:notify_due:{日付}:{slot} runner_id NX EX
     alt ロック取得失敗
         RD-->>JOB: nil
         JOB-->>SCH: スキップして終了
@@ -164,12 +164,12 @@ sequenceDiagram
             PG-->>JOB: 作成件数
         end
         JOB->>PG: CALL sp_purge_notifications(...)
-        JOB->>RD: 所有者を確認してロック解放
+        JOB->>RD: ロックをTTLまで保持（実行済みマーカー）
         JOB-->>SCH: 結果をログ出力
     end
 ```
 
-処理途中で失敗した場合はエラーを記録し、スケジューラのプロセスは継続する。チャンク単位でトランザクションを完了させるため、完了済みチャンクの通知は維持する。ロックは失敗時に即時解放せず、TTL満了で解放する。
+処理途中で失敗した場合はエラーを記録し、スケジューラのプロセスは継続する。チャンク単位でトランザクションを完了させるため、完了済みチャンクの通知は維持する。成功時はロックをTTLまで保持し、失敗時は所有者確認後に削除して手動再実行を可能にする。
 
 ## 6. 通知データと冪等性
 
@@ -195,8 +195,8 @@ flowchart TB
     B -->|成功| D["対象タスク抽出"]
     D --> E["UNIQUE user_id,dedupe_key<br/>+ ON CONFLICT DO NOTHING"]
     E --> F["実行枠ごとに通知を1件へ収束"]
-    F --> G["成功時のみ所有者確認後にロック解放"]
-    F -.->|例外| H["ロックはTTL満了で解放"]
+    F --> G["成功時はロックをTTLまで保持"]
+    F -.->|例外| H["所有者確認後にロック削除"]
 ```
 
 Redisロックのキーは `lock:notify_due:{APP_TIMEZONEの実行日}:{slot}`、TTLは `NOTIFY_DUE_LOCK_TTL_SECONDS` とする。同一枠の再実行や複数コンテナ起動が発生しても、Redisロックと `UNIQUE (user_id, dedupe_key)` の二重防御で同じ通知を重複登録しない。10時枠と17時枠は `slot` が異なるため、同じタスクにそれぞれ1件ずつ登録できる。
@@ -217,11 +217,16 @@ flowchart LR
     BS --> RUN["run_due_notification_job"]
     RUN --> IT["iter_due_tasks"]
     RUN --> BULK["bulk_create_due_notifications"]
-    RUN --> PURGE["purge_notifications"]
+    RUN --> PURGE["purge_histories"]
+    PURGE --> PN["purge_notifications"]
+    PURGE --> PA["purge_api_history"]
+    PURGE --> PB["purge_batch_history"]
     RUN --> RLOCK["redis_lock.acquire/release"]
     IT --> TR["task_repository"]
     BULK --> NR["notification_repository"]
-    PURGE --> PR["purge_repository"]
+    PN --> PR["purge_repository"]
+    PA --> PR
+    PB --> PR
     RLOCK --> RR["Redis"]
     TR --> DB["PostgreSQL"]
     NR --> DB
@@ -232,15 +237,17 @@ flowchart LR
 |------------|------|--------------|------|
 | `main` | CLI引数 | プロセス起動 | 引数を解析し、非同期処理を開始する |
 | `async_main` | `Namespace`、環境変数 | 常駐または終了 | 接続プールの生成、手動実行/スケジューラ実行の分岐、終了処理 |
-| `build_scheduler` | `Settings` | `AsyncIOScheduler` | `NOTIFY_DUE_RUN_HOURS` の各時刻にcronジョブを登録する |
-| `run_due_notification_job` | 現在時刻、`Settings`、`slot` | `JobResult`、DB/Redis更新 | 期限通知処理全体を制御する |
+| `build_scheduler` | `BatchSettings` | `AsyncIOScheduler` | `NOTIFY_DUE_RUN_HOURS` の各時刻にcronジョブを登録する |
+| `run_due_notification_job` | 現在時刻、`BatchSettings`、`slot` | `JobResult`、DB/Redis更新 | 期限通知処理全体を制御する |
 | `iter_due_tasks` | UTC閾値、チャンクサイズ | 対象タスク列 | 対象タスクをチャンク単位で取得する |
 | `bulk_create_due_notifications` | 対象タスク、実行日、`slot` | 作成件数 | `ON CONFLICT DO NOTHING` 付きで通知を登録する |
-| `purge_notifications` | 保持日数 | 削除件数 | `sp_purge_notifications` を呼び出す |
+| `purge_notifications` | 保持日数 | 削除件数 | `sp_purge_notifications` を呼び出す。対象は `notifications.created_at` |
+| `purge_api_history` | 保持日数 | 削除件数 | `sp_purge_api_history` を呼び出す。対象は `api_history.created_at` |
+| `purge_batch_history` | 保持日数 | 削除件数 | `sp_purge_batch_history` を呼び出す。対象は `batch_history.started_at` |
 
 ## 8. 設定管理
 
-`batch/app/core/config.py` に `pydantic-settings` の `Settings(BaseSettings)` を定義し、環境変数を型付きで受け取る。認証・Cookie・SMTPなど、batchが使用しない設定は渡さない。
+`batch/app/core/config.py` に `pydantic-settings` の `BatchSettings(BaseSettings)` を定義し、環境変数を型付きで受け取る。認証・Cookie・SMTPなど、batchが使用しない設定は渡さない。
 
 | 変数 | 既定値 | 用途 |
 |------|--------|------|
@@ -252,7 +259,7 @@ flowchart LR
 | `NOTIFY_DUE_TARGET_HOUR` | `10` | 共通の翌日境界時刻 |
 | `NOTIFY_DUE_LOCK_TTL_SECONDS` | `82800` | RedisロックTTL |
 | `NOTIFY_DUE_BATCH_CHUNK_SIZE` | `500` | 1トランザクションの処理件数 |
-| `NOTIFICATION_RETENTION_DAYS` | `90` | 通知パージの保持期間 |
+| `NOTIFICATION_RETENTION_DAYS` | `90` | `notifications` の保持期間。`sp_purge_notifications`へ渡す |
 | `API_HISTORY_RETENTION_DAYS` | `30` | API履歴パージの保持期間 |
 | `BATCH_HISTORY_RETENTION_DAYS` | `30` | batch履歴パージの保持期間 |
 | `BATCH_ENABLED` | `true` | 定期ジョブ登録の有効/無効 |
@@ -287,7 +294,7 @@ flowchart TB
     G -->|Yes| I["TTL満了後に再実行可能"]
 ```
 
-Redis接続不能時は二重実行を避けるため通知を作成しない。ジョブ内の例外はERRORログへ記録してプロセスを継続する。ロック取得後・通知作成前後の失敗では、ロックをTTLで自然解放し、必要に応じて `--run-once` で復旧する。
+Redis接続不能時は二重実行を避けるため通知を作成しない。ジョブ内の例外はERRORログへ記録してプロセスを継続する。ロック取得後・通知作成前後の失敗では、所有者確認後にロックを削除し、`--run-once` で復旧できるようにする。成功時はTTL満了まで同一slotを再実行しない。
 
 ## 10. テスト方針
 

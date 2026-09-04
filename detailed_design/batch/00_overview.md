@@ -22,14 +22,15 @@ batch/
 ├── app/
 │   ├── main.py                 # エントリポイント。APScheduler起動 or --run-once実行
 │   ├── core/
-│   │   ├── config.py           # pydantic-settings による Settings
+│   │   ├── config.py           # pydantic-settings による BatchSettings
 │   │   └── logger.py           # logging設定（backendのcore/logger.pyと同等の方針）
 │   ├── jobs/
 │   │   └── due_notification_job.py   # 期限通知ジョブ本体
 │   ├── repository/
 │   │   ├── task_repository.py        # 期限通知対象タスクの抽出
 │   │   ├── notification_repository.py # notificationsへのINSERT
-│   │   ├── purge_repository.py       # sp_purge_notificationsの呼び出し
+│   │   ├── batch_history_repository.py # batch_historyの開始・完了・失敗
+│   │   ├── purge_repository.py       # 3履歴のProcedure呼び出し
 │   │   └── redis_lock.py             # 実行ロックの取得
 │   ├── models/
 │   │   ├── task.py             # tasksのORMモデル（backend側の再定義。§5参照）
@@ -83,7 +84,7 @@ flowchart LR
 
 ## 6. 設定管理（pydantic-settings）
 
-`batch/app/core/config.py` に `Settings(BaseSettings)` を定義し、`api/app/core/config.py`（[../infra/04_env_config.md](../infra/04_env_config.md)）と同じ方針で環境変数を型付きで一元管理する。`batch` が参照する主な変数は `DATABASE_URL` / `REDIS_URL` / `APP_TIMEZONE` / `NOTIFICATION_RETENTION_DAYS` / `NOTIFY_DUE_RUN_HOURS` / `NOTIFY_DUE_CRON_MINUTE` / `NOTIFY_DUE_TARGET_HOUR` / `NOTIFY_DUE_LOCK_TTL_SECONDS` / `NOTIFY_DUE_BATCH_CHUNK_SIZE` / `BATCH_ENABLED` / `LOG_LEVEL`。詳細は [../infra/04_env_config.md](../infra/04_env_config.md) を参照。`batch` は `AUTH_MODE` や Cookie 関連等の認証系変数を持たない（`extra="forbid"` により誤って参照すれば起動時に検知される）。
+`batch/app/core/config.py` に `BatchSettings(BaseSettings)` を定義し、`api/app/core/config.py` の `BackendSettings` とは別の設定モデルとして管理する。両コンテナはリポジトリルートの共有 `.env` を読み込むが、各設定モデルは自サービスの項目だけを参照する。`batch` が参照する主な変数は `DATABASE_URL` / `REDIS_URL` / `APP_TIMEZONE` / `NOTIFICATION_RETENTION_DAYS` / `API_HISTORY_RETENTION_DAYS` / `BATCH_HISTORY_RETENTION_DAYS` / `NOTIFY_DUE_RUN_HOURS` / `NOTIFY_DUE_CRON_MINUTE` / `NOTIFY_DUE_TARGET_HOUR` / `NOTIFY_DUE_LOCK_TTL_SECONDS` / `NOTIFY_DUE_BATCH_CHUNK_SIZE` / `BATCH_ENABLED` / `LOG_LEVEL`。詳細は [../infra/04_env_config.md](../infra/04_env_config.md) を参照。`batch` は `AUTH_MODE` や Cookie 関連等の認証系変数を参照しない。
 
 ## 7. ログ方針
 
@@ -94,6 +95,16 @@ flowchart LR
 | リクエストID | 存在しない（HTTPリクエストを持たないため）。ジョブ実行ごとに一意な `run_id`をログと`batch_history`へ付与し、1回の実行を相関できるようにする |
 | 秘匿情報 | `DATABASE_URL`/`REDIS_URL` の資格情報部分をログへ出力しない |
 | DB履歴 | ジョブ開始時に`inprogress`をINSERTし、正常時は`complete`、失敗時は`error`へUPDATEする。履歴操作失敗はジョブ結果を隠さず標準出力へ記録する |
+
+### 7.1 履歴・保持期間の関数一覧
+
+| 関数 | 対象 | 呼び出し元・契約 |
+|------|------|------------------|
+| `batch_history_repository.start/complete/fail` | `batch_history` | `due_notification_job`の開始・正常終了・失敗時に同一`run_id`を更新 |
+| `purge_repository.purge_notifications` | `notifications` | `NOTIFICATION_RETENTION_DAYS`を`sp_purge_notifications`へ渡す |
+| `purge_repository.purge_api_history` | `api_history` | `API_HISTORY_RETENTION_DAYS`を`sp_purge_api_history`へ渡す |
+| `purge_repository.purge_batch_history` | `batch_history` | `BATCH_HISTORY_RETENTION_DAYS`を`sp_purge_batch_history`へ渡す |
+| `purge_repository.purge_histories` | 上記3履歴 | 日次ジョブ末尾に3つのパージを順に実行。`login_history`は運用者が手動実行 |
 
 ## 8. `--run-once` による手動実行
 

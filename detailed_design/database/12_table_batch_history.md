@@ -84,7 +84,7 @@ CREATE INDEX ix_batch_history_status_started ON batch_history (status, started_a
 
 ## 4. ORMモデル・リポジトリ
 
-モデルは `batch/app/models/batch_history.py :: BatchHistory` とし、API側には同じテーブルを更新できる最小限のモデル定義を置かない。batchが開始・完了・失敗のDB操作を担当する。
+モデルは `batch/app/models/batch_history.py :: BatchHistory`、Repositoryは `batch/app/repository/batch_history_repository.py` とし、API側には同じテーブルを更新できるモデル定義を置かない。batchが開始・完了・失敗のDB操作を担当する。保持期間の削除は `batch/app/repository/purge_repository.py` から `sp_purge_batch_history` を呼び出す。
 
 | 関数 | 入力 | 出力・副作用 |
 |------|------|--------------|

@@ -32,7 +32,7 @@
 
 | 区分 | 内容 |
 |------|------|
-| 入力 | `Settings`、現在時刻、PostgreSQL、Redis |
+| 入力 | `BatchSettings`、現在時刻、PostgreSQL、Redis |
 | 出力 | 作成件数、スキップ件数、`batch_history`の完了・失敗行、ログ。通知・履歴の期限超過行の削除 |
 | 副作用 | Redisロック取得、notifications INSERT、`batch_history`状態更新、各保持期間プロシージャ実行 |
 
@@ -63,7 +63,7 @@ sequenceDiagram
         JOB->>PG: CALL sp_purge_api_history(API_HISTORY_RETENTION_DAYS)
         JOB->>PG: CALL sp_purge_batch_history(BATCH_HISTORY_RETENTION_DAYS)
         JOB->>HIS: complete・終了時刻・件数をUPDATE
-        JOB->>RD: ロック所有者を確認してDEL
+        Note over JOB,RD: 成功時はロックをTTLまで保持（実行済みマーカー）
         JOB-->>SCH: 作成件数をrun_id付きでログ出力
     else ジョブ本体またはパージで失敗
         JOB->>HIS: error・終了時刻・error内容をUPDATE
@@ -113,19 +113,31 @@ SELECT id, project_id, title, assignee_id, due_at
 
 いずれの結果でも、開始時に作成した`batch_history`を可能な限り`complete`または`error`へ更新する。履歴更新自体が失敗した場合はジョブ結果を上書きせず、`run_id`を含むERRORログだけを残す。プロセスが強制終了した場合は`inprogress`が残る。
 
-ロック取得後の失敗でもロックはTTLで自然解放される。成功時のみ所有者確認後に解放する。
+ロック取得後の失敗時は、`runner_id` が自分の値であることを確認してからロックを削除する。成功時はロックを削除せずTTLまで保持する。これにより、成功後の同一slot再実行は抑止し、失敗後の `--run-once` は実行できる。部分成功したチャンクは保持され、再実行時は `UNIQUE (user_id, dedupe_key)` により未作成分だけが追加される。
+
+### 6.1 ロック結果と再実行の期待値
+
+| ケース | ロックの状態 | ジョブの結果 | 次の実行 |
+|--------|--------------|--------------|----------|
+| 正常終了 | TTLまで保持 | `complete`。同一slotの重複通知は作成しない | 同一slotはスキップ。別slotは実行 |
+| タスク抽出・通知INSERT・パージ失敗 | 所有者確認後に削除 | `error`。確定済みチャンクは保持 | 同一slotのcronまたは `--run-once` で再実行。既存通知は重複しない |
+| Redis接続不能 | 取得なし | 通知を作成せずfail-close | Redis復旧後に再実行 |
+| 同一slotの同時実行 | `SET NX` 成功者だけ保持 | 取得敗者は処理せずスキップ | 敗者の通知作成はない |
+| 成功後の手動再実行 | 既存ロックが残る | ロック取得失敗でスキップ | 障害復旧の手動再実行は失敗時に行う |
 
 ## 7. 関数詳細
 
 | 関数 | シグネチャ | 責務 |
 |------|------------|------|
-| `run_due_notification_job` | `async def run_due_notification_job(now: datetime, settings: Settings, notification_slot: str) -> JobResult` | ローカル日付・共通閾値算出、日付・実行枠別ロック、抽出、通知作成、パージ |
+| `run_due_notification_job` | `async def run_due_notification_job(now: datetime, settings: BatchSettings, notification_slot: str) -> JobResult` | ローカル日付・共通閾値算出、日付・実行枠別ロック、抽出、通知作成、パージ |
 | `iter_due_tasks` | `AsyncIterator[DueTask]` | `due_at <= threshold`のタスクをチャンク取得 |
 | `bulk_create_due_notifications` | `async def ...(tasks, run_date, notification_slot) -> int` | `ON CONFLICT DO NOTHING`で一括INSERT |
 | `purge_notifications` | `async def purge_notifications(retention_days: int) -> int` | `CALL sp_purge_notifications(...)` |
+| `purge_api_history` | `async def purge_api_history(retention_days: int) -> int` | `CALL sp_purge_api_history(...)`。対象は `api_history.created_at` |
+| `purge_batch_history` | `async def purge_batch_history(retention_days: int) -> int` | `CALL sp_purge_batch_history(...)`。対象は `batch_history.started_at` |
 | `start_batch_history` | `async def start_batch_history(batch_name: str, trigger_type: str, slot: str | None) -> UUID` | `batch_history`へ`inprogress`をINSERT |
 | `finish_batch_history` | `async def finish_batch_history(run_id: UUID, result: JobResult) -> None` | 成否・終了時刻・件数をUPDATE |
-| `purge_histories` | `async def purge_histories(settings: Settings) -> None` | API・batch・通知の各保持期間プロシージャを実行。ログイン履歴は運用者が手動実行 |
+| `purge_histories` | `async def purge_histories(settings: BatchSettings) -> None` | `purge_notifications`、`purge_api_history`、`purge_batch_history` を各設定値で実行。ログイン履歴は運用者が手動実行 |
 
 batchのrepositoryはAPIのrouter/serviceをimportしない。接続・ORMモデル・通知INSERTをbatch内で完結させる。
 

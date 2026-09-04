@@ -29,7 +29,7 @@
 | APIパス | `path` | VARCHAR(255) | NO | - | クエリ文字列を除いたFastAPIのルートテンプレート |
 | API状態 | `status` | VARCHAR(20) | NO | - | `success` / `error` |
 | HTTPステータス | `status_code` | SMALLINT | NO | - | 100〜599。2xx/3xxはsuccess、4xx/5xxはerror |
-| エラーコード | `error_code` | VARCHAR(80) | YES | - | エラー時のみ。アプリ定義コード。未定義の例外は`INTERNAL_SERVER_ERROR` |
+| エラーコード | `error_code` | VARCHAR(80) | YES | - | エラー時のみ。basic_design/04_api.md §4.2 のアプリ定義コード。未定義の例外は`INTERNAL_ERROR` |
 | エラー内容 | `error_detail` | TEXT | YES | - | エラー時のみ。スタックトレースや秘密情報は保存しない |
 | リクエストbody | `body` | JSONB | YES | - | JSON bodyのみ。秘匿項目をマスキングし、上限超過時はNULL |
 | ユーザーID | `user_id` | UUID | YES | - | FK → `users.id` `ON DELETE SET NULL`。未認証はNULL |
@@ -80,7 +80,7 @@ CREATE INDEX ix_api_history_status_created ON api_history (status, created_at DE
 
 ## 4. ORMモデル・リポジトリ
 
-モデルは `api/app/models/api_history.py :: ApiHistory` とし、`body`はPostgreSQL方言のSQLAlchemy `JSONB`、`ip_address`はPostgreSQLの`INET`で定義する。`user`リレーションは `lazy="noload"` とし、一覧検索で意図しないユーザー情報取得を行わない。
+モデルは `api/app/models/api_history.py :: ApiHistory`、Repositoryは `api/app/repository/api_history_repository.py` とし、`body`はPostgreSQL方言のSQLAlchemy `JSONB`、`ip_address`はPostgreSQLの`INET`で定義する。`user`リレーションは `lazy="noload"` とし、一覧検索で意図しないユーザー情報取得を行わない。
 
 `created_at`はAPI受付時にミドルウェアが取得した時刻を明示的に設定する。DDLの`DEFAULT now()`は、履歴保存処理側で時刻を渡せない異常時のフォールバックとして使用する。
 

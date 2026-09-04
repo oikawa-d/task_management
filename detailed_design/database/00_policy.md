@@ -11,7 +11,7 @@
 
 `basic_design/01_database.md` の設計方針・命名規約・型方針・共通カラム・列挙表現・削除方針・ER図を、実装（DDL・SQLAlchemyモデル・マイグレーション）に落とし込めるレベルまで詳細化する。テーブル個別の定義（カラム定義・DDL・インデックス・リポジトリ関数）は `01_table_*.md` 以降で扱い、本書では全テーブルに共通する方針のみを扱う。
 
-`users` / `oauth_accounts` / `login_history` / `api_history` / `batch_history` の詳細は本書とあわせて各テーブル設計書を参照する。`projects` 以降のテーブルおよび DB関数・マイグレーション運用は別担当ファイル（`04_table_projects.md` 〜 `12_table_batch_history.md`）で扱うため本書では個別定義を繰り返さない。
+`users` / `oauth_accounts` / `login_history` / `notifications` / `api_history` / `batch_history` の詳細は本書とあわせて各テーブル設計書を参照する。`projects` 以降のテーブルおよび DB関数・マイグレーション運用は別担当ファイル（`04_table_projects.md` 〜 `12_table_batch_history.md`）で扱うため本書では個別定義を繰り返さない。
 
 ## 2. 基本方針（`basic_design/01_database.md` §1 の再掲・詳細化）
 
@@ -74,10 +74,11 @@
 
 ## 6. UUID採番方針
 
-- 採番は **DB側**（`gen_random_uuid()`）で行い、アプリ層でUUIDを生成してINSERTすることはしない。理由：採番責務をDBに一元化し、複数の挿入経路（API・マイグレーションのseed）で採番ロジックが分岐しないようにするため。
+- 主キーの採番は **DB側**（`gen_random_uuid()`）で行い、アプリ層でUUIDを生成してINSERTすることはしない。理由：採番責務をDBに一元化し、複数の挿入経路（API・マイグレーションのseed）で採番ロジックが分岐しないようにするため。例外として `api_history.request_id` は主キーではない相関IDのため、API履歴ミドルウェアが `uuid.uuid4()` で生成してレスポンス・ログ・DBへ同じ値を渡す。
 - `pgcrypto` 拡張を初期マイグレーションで `CREATE EXTENSION IF NOT EXISTS pgcrypto` により有効化する（`09_migration.md` の初期リビジョンで実施。本書では前提のみ記載）。
 - SQLAlchemyモデル側では `mapped_column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))` とし、Python側で `default=uuid4` は設定しない（DBの既定値と二重管理にしないため）。
 - UUIDのバージョンはPostgreSQLの `gen_random_uuid()` が生成する v4 に従う。
+- `request_id` の生成元は API の履歴ミドルウェア、形式は UUID v4 文字列とする（例：`550e8400-e29b-41d4-a716-446655440000`）。DBの `api_history.id` は `gen_random_uuid()`、`request_id` はアプリから必須値としてINSERTする。
 
 ## 7. CHECK制約による列挙表現
 

@@ -16,7 +16,7 @@
   - [`../api/tasks/04_patch_task.md`](../api/tasks/04_patch_task.md)（`due_at` 変更時の通知作成連携）
 - 関連テーブル：[`06_table_tasks.md`](./06_table_tasks.md)（`task_id` FK、`due_at`）、[`01_table_users.md`](./01_table_users.md)（`user_id` FK）
 - 設計方針：[`00_policy.md`](./00_policy.md)（`APP_TIMEZONE`、命名規約、共通カラム方針）
-- DB関数：[`08_db_functions.md`](./08_db_functions.md)（`sp_purge_notifications` は他担当ファイル。§9・§13で参照）
+- DB関数：[`08_db_functions.md`](./08_db_functions.md)（`sp_purge_notifications`）
 
 ## 1. 概要
 
@@ -258,6 +258,16 @@ stateDiagram-v2
 | 使用インデックス | `uq_notifications_user_dedupe` |
 | 送出例外 | なし |
 | 処理内容 | 1. `batch/jobs/due_notification_job.py` から `NOTIFY_DUE_BATCH_CHUNK_SIZE`（既定500）件単位で呼ばれ、1トランザクションが長時間化しないようにする<br/>2. `unnest` による複数行一括 `INSERT` で、行ごとの往復（N回の `INSERT`）を避ける<br/>3. `len(RETURNING)` を作成件数としてINFOログに出す（`04_api.md` §6.3） |
+
+### 8.8 `repository/notification_repository.py :: purge_expired`
+
+| 項目 | 内容 |
+|------|------|
+| 配置 | `batch/app/repository/notification_repository.py` |
+| 引数 / 戻り値 | `retention_days: int` → 削除件数 |
+| 呼び出し元 | `batch/app/repository/purge_repository.py` の `purge_histories` |
+| 処理内容 | `CALL sp_purge_notifications(:retention_days)`。`notifications.created_at` が保持期限より前の行を未読・既読を問わず削除 |
+| 設定 | `NOTIFICATION_RETENTION_DAYS`（既定90日） |
 
 ## 9. 関数相関図
 

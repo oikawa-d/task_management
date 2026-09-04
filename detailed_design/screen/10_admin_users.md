@@ -49,6 +49,7 @@
 ││        ││ ├──────────────────────────────────────────────┤   ││
 ││        ││ │⑪Cerberus開発 │taro   │3        │⑫[削除]     │   ││
 ││        ││ └──────────────────────────────────────────────┘   ││
+││        ││ [⑬プロジェクトページネーション]                    ││
 │└────────┘└────────────────────────────────────────────────────┘│
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -73,6 +74,7 @@
 | ⑩ | ページネーション | pagination | `meta.page`等 | - | `meta.total_pages > 1` | ページ番号クリックで該当ページを再取得 |
 | ⑪ | プロジェクト行 | table row | `items[i]` | - | 常時 | - |
 | ⑫ | プロジェクト削除ボタン | button | - | - | 常時活性 | クリックで確認ダイアログ→確定で`DELETE /admin/projects/{id}` |
+| ⑬ | プロジェクトページネーション | pagination | `meta.page`等 | - | `meta.total_pages > 1` | ページ番号クリックで該当ページを再取得 |
 
 ## 4. 使用API
 
@@ -82,7 +84,7 @@
 | 2 | ⑦変更確定 | PATCH `/admin/users/{id}/role` | `{role}` | `invalidateQueries(['admin','users'])`、確認ダイアログを閉じる | `409 SELF_MODIFICATION_NOT_ALLOWED`／`409 LAST_ADMIN_REQUIRED`はダイアログ内にエラー表示し確定させない | `mutationKey: ['admin','changeRole', userId]` |
 | 3 | ⑧トグル操作確定 | PATCH `/admin/users/{id}/status` | `{is_active}` | `invalidateQueries(['admin','users'])` | ⑦と同様の409、404は一覧再取得 | `mutationKey: ['admin','changeStatus', userId]` |
 | 4 | ⑨確認ダイアログ確定 | POST `/admin/users/{id}/force-logout` | パスパラメータのみ | トースト「対象ユーザーを強制ログアウトしました」 | 404は一覧再取得＋トースト | `mutationKey: ['admin','forceLogout', userId]` |
-| 5 | プロジェクトタブ表示時 | GET `/admin/projects` | クエリなし（要検討：§15、ページング要否） | `items`を⑪へ描画 | 5xxはトースト＋再試行ボタン | `queryKey: ['admin','projects']` |
+| 5 | プロジェクトタブ表示時／⑬ページ切替 | GET `/admin/projects` | `?page&per_page&q` | `items`を⑪へ、`meta`を⑬へ描画 | 5xxはトースト＋再試行ボタン | `queryKey: ['admin','projects',{page,perPage,q}]` |
 | 6 | ⑫確認ダイアログ確定 | DELETE `/admin/projects/{id}` | パスパラメータのみ | `invalidateQueries(['admin','projects'])`、確認ダイアログを閉じる | 404は一覧再取得、5xxはトースト | `mutationKey: ['admin','deleteProject', projectId]` |
 
 ## 5. 状態管理
@@ -91,10 +93,11 @@
 |------|------|----|--------|----------|--------|
 | ローカルstate | `activeTab` | `'users' \| 'projects'` | `'users'` | ②クリック | なし |
 | ローカルstate | `filters` | `{page, perPage, q, role, isActive}` | `{page:1, perPage:20, q:'', role:'', isActive:''}` | ③④⑤⑩操作 | なし |
+| ローカルstate | `projectFilters` | `{page, perPage, q}` | `{page:1, perPage:20, q:''}` | プロジェクトタブの検索・⑬操作 | なし |
 | ローカルstate | `confirmDialog` | `{type:'role'\|'status'\|'forceLogout'\|'deleteProject'; targetId:string; payload?:unknown} \| null` | `null` | ⑦⑧⑨⑫クリック、確定／キャンセル | なし |
 | Zustand `authStore` | `user`（`id`, `role`） | - | §5.1参照（[05_frontend.md §5](../../basic_design/05_frontend.md#5-状態管理)） | ログイン時 | しない |
 | TanStack Query | `['admin','users', filters]` | `AdminUserListResponse` | 未取得 | `filters`変更時にfetch、ロール変更／状態変更成功時に`invalidate` | しない |
-| TanStack Query | `['admin','projects']` | `AdminProjectListResponse` | 未取得 | プロジェクトタブ表示時にfetch、削除成功時に`invalidate` | しない |
+| TanStack Query | `['admin','projects', projectFilters]` | `AdminProjectListResponse` | 未取得 | `projectFilters`変更時にfetch、削除成功時に`invalidate` | しない |
 
 ## 6. 画面状態遷移図
 
@@ -219,6 +222,10 @@ sequenceDiagram
         Q-->>UT: "トースト「最後の管理者を無効化することはできません」、⑧の表示を元に戻す"
     end
 ```
+
+### 7.4 プロジェクト一覧の検索・ページング
+
+プロジェクトタブでは `projectFilters` を使い、`GET /api/admin/projects?page={page}&per_page={perPage}&q={q}` を取得する。検索語を変更した場合は `page=1` に戻し、レスポンスの `meta.page` / `meta.total_pages` を⑬へ反映する。ページ切替中は `keepPreviousData: true` とする。
 
 ## 8. コンポーネント構成・相関図
 
@@ -357,12 +364,13 @@ flowchart LR
 | 12 | 結合 | `role=member`ユーザーが`/admin/users`へ直接アクセス | `authStore.user.role='member'` | `/dashboard`へリダイレクトされる | `RequireAdmin redirects non-admin user away from /admin/users` |
 | 13 | 結合 | サイドバーの「管理」タブがmemberには表示されない | `role='member'` | Sidebarに「管理」リンクが描画されない | `Sidebar hides admin link for member role`（[05_frontend.md §3](../../basic_design/05_frontend.md#3-共通レイアウト)参照。実装は`Sidebar`側だが本画面へのアクセス経路として検証） |
 | 14 | 結合 | ページネーション操作 | ユーザー25件（1ページ20件） | 2ページ目クリックで残り5件が表示される | `UserTable paginates through GET /admin/users` |
+| 15 | 結合 | プロジェクトページネーション操作 | プロジェクト25件（1ページ20件） | ⑬の2ページ目クリックで残り5件が表示される | `ProjectTable paginates through GET /admin/projects` |
 
 ## 15. 不明点・要検討事項
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
 | 要検討 | タブの選択状態（②）をURLクエリ（例：`?tab=projects`）に同期させ、リロード・共有時にタブ状態を保持すべきかは基本設計（[05_frontend.md §7.7](../../basic_design/05_frontend.md#77-管理者ユーザー管理)）に明記がない。本設計ではローカルstateのみとし同期させない方針とした | リロード時に常にユーザータブへ戻る点のUX確認が必要 |
-| 要検討 | `GET /admin/projects`のページング・検索要否（[admin/05_get_admin_projects.md](../api/admin/05_get_admin_projects.md)側の設計）が未確定のため、本画面のプロジェクトタブはページングなしの全件表示として設計した。同APIがページングを採用する場合は⑩相当のページネーションをプロジェクトタブにも追加する必要がある | プロジェクト件数が多い場合の表示性能・UI追加要否 |
+| なし | プロジェクトタブも`page` / `per_page` / `q`と⑬ページネーションを使用する | - |
 | 要検討 | プロジェクト削除（⑫）にタスク・コメントもCASCADE削除される旨の警告文言を確認ダイアログに含めるべきかは画面設計側の裁量とした（基本設計にはCASCADEの事実のみ記載） | 誤削除時の影響範囲をユーザーが認識できるかどうか |
 | なし | 上記以外 | - |

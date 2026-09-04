@@ -3,27 +3,39 @@
 ## 0. 関連ドキュメント
 
 - [../../basic_design/00_overview.md](../../basic_design/00_overview.md)（ログ方針・データ全体像）
-- [../../basic_design/01_database.md](../../basic_design/01_database.md)（`api_history`・`batch_history`）
+- [../../basic_design/01_database.md](../../basic_design/01_database.md)（`notifications`・`api_history`・`batch_history`）
 - [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md)（環境変数・運用）
 - [../database/11_table_api_history.md](../database/11_table_api_history.md)
 - [../database/12_table_batch_history.md](../database/12_table_batch_history.md)
+- [../database/10_table_notifications.md](../database/10_table_notifications.md)
 - [../batch/00_overview.md](../batch/00_overview.md)
 
 ## 1. 目的と記録対象
 
-ログを「標準出力の構造化ログ」と「PostgreSQLの検索可能な履歴」に分ける。標準出力は直近の詳細な障害調査、履歴テーブルは30日以内のAPI・batch実行の検索と結果確認に使用する。認証イベントは既存の `login_history` に保存する。
+ログを「標準出力の構造化ログ」と「PostgreSQLの検索可能な履歴」に分ける。ここではbatchが保持期間を管理する通知・API・batchの3履歴を定義する。認証イベントは既存の `login_history` に保存し、別の保持方針とする。
 
 | 履歴 | 記録対象 | 保持期間 | 主な用途 |
 |------|----------|----------|----------|
 | `api_history` | 全APIリクエスト（成功・エラー） | 30日 | API別の障害・遅延調査 |
 | `batch_history` | 全batchジョブの開始・完了・失敗 | 30日 | 実行状況・件数・失敗確認 |
+| `notifications` | 作成されたアプリ内通知（未読・既読） | 90日 | ユーザーへの通知表示 |
 | `login_history` | ログイン試行 | 90日 | セキュリティ監査・不正調査 |
 
-API履歴とbatch履歴はデータ量が大きくなりやすいため30日、ログイン履歴は不正調査の確認期間を確保するため90日とする。保持期限は環境変数で変更できるが、既定値は上表から変更しない。
+API履歴とbatch履歴は `API_HISTORY_RETENTION_DAYS` / `BATCH_HISTORY_RETENTION_DAYS`（既定30日）、通知は `NOTIFICATION_RETENTION_DAYS`（既定90日）、ログイン履歴は `LOGIN_HISTORY_RETENTION_DAYS`（既定90日）で管理する。
+
+### 1.1 batchが管理する3履歴の契約台帳
+
+| テーブル | Model | Repository | Procedure | batch設定 | 保持期間・削除対象 |
+|----------|-------|------------|-----------|-----------|------------------|
+| `notifications` | `api/app/models/notification.py :: Notification` / `batch/app/models/notification.py :: Notification` | `api/app/repository/notification_repository.py` / `batch/app/repository/notification_repository.py` | `sp_purge_notifications(p_retention_days)` | `NOTIFICATION_RETENTION_DAYS` | 既定90日。`notifications.created_at` が期限より前の行（未読・既読を問わない） |
+| `api_history` | `api/app/models/api_history.py :: ApiHistory` | `api/app/repository/api_history_repository.py` | `sp_purge_api_history(p_retention_days)` | `API_HISTORY_RETENTION_DAYS` | 既定30日。`api_history.created_at` が期限より前の行 |
+| `batch_history` | `batch/app/models/batch_history.py :: BatchHistory` | `batch/app/repository/batch_history_repository.py` | `sp_purge_batch_history(p_retention_days)` | `BATCH_HISTORY_RETENTION_DAYS` | 既定30日。`batch_history.started_at` が期限より前の行 |
+
+`batch/app/repository/purge_repository.py` は上記3つのProcedureを呼び出す薄いアクセス層とする。Model・Repositoryの配置はコンテナ境界を越えて共有せず、テーブル名、Procedure名、保持設定名、削除基準列だけを一致させる。
 
 ## 2. API記録方式
 
-`api/app/core/history_middleware.py`相当のHTTPミドルウェアを、認証ミドルウェアとルータの外側に登録する。受信時にサーバー生成の `request_id` を採番し、レスポンスの `X-Request-ID` と構造化ログ・DB履歴に同じ値を設定する。
+`api/app/core/history_middleware.py`相当のHTTPミドルウェアを、認証ミドルウェアとルータの外側に登録する。受信時にミドルウェアが Python の `uuid.uuid4()`（UUID v4）で `request_id` を生成し、レスポンスの `X-Request-ID` と構造化ログ・DB履歴に同じ値を設定する。例：`550e8400-e29b-41d4-a716-446655440000`。
 
 | タイミング | 処理 |
 |------------|------|
@@ -93,12 +105,13 @@ flowchart TB
 
 ## 5. 保持期間パージ
 
-`batch`の各定期ジョブ終了処理で、同じDBトランザクションとは分離してAPI・batch・通知の保持期間プロシージャを実行する。`login_history`のパージは既存方針どおり運用者が手動実行する。
+`batch`の各定期ジョブ終了処理で、同じDBトランザクションとは分離して通知・API・batchの3プロシージャを実行する。`login_history`のパージは既存方針どおり運用者が手動実行する。
 
 | プロシージャ | 引数 | 対象 | 設定 |
 |--------------|------|------|------|
 | `sp_purge_api_history` | `p_retention_days INTEGER` | `api_history.created_at` | `API_HISTORY_RETENTION_DAYS`（既定30） |
 | `sp_purge_batch_history` | `p_retention_days INTEGER` | `batch_history.started_at` | `BATCH_HISTORY_RETENTION_DAYS`（既定30） |
+| `sp_purge_notifications` | `p_retention_days INTEGER` | `notifications.created_at` | `NOTIFICATION_RETENTION_DAYS`（既定90） |
 | `sp_purge_login_history` | `p_retention_days INTEGER` | `login_history.created_at` | `LOGIN_HISTORY_RETENTION_DAYS`（既定90） |
 
 パージ失敗は対象ジョブの通知処理失敗とは分けて記録する。ただし運用上、保持期限を超えたデータが残るためbatchの標準出力と `batch_history`のerror情報で確認できるようにする。大量データ時はロック時間を短くする分割削除への変更を要検討とする。
@@ -113,7 +126,8 @@ flowchart LR
     JOB["batch job wrapper"] --> BR["batch_history_repository"]
     BR --> BH[("batch_history")]
     JOB --> PURGE["history retention purge"]
-    PURGE --> SP["sp_purge_*_history"]
+    PURGE --> SP["sp_purge_notifications / sp_purge_api_history / sp_purge_batch_history"]
+    SP --> NOTIF["notifications"]
     SP --> AH
     SP --> BH
     SP --> LH[("login_history")]

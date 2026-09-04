@@ -177,7 +177,6 @@ Revision ID: 0010
 Revises: 0009
 """
 import os
-import uuid
 from alembic import op
 import sqlalchemy as sa
 
@@ -188,14 +187,13 @@ def upgrade() -> None:
     op.execute(
         sa.text(
             """
-            INSERT INTO users (id, username, email, password_hash, role,
+            INSERT INTO users (username, email, password_hash, role,
                                 is_active, email_verified_at, created_at, updated_at)
-            VALUES (:id, :username, :email, :password_hash, 'admin',
+            VALUES (:username, :email, :password_hash, 'admin',
                     true, now(), now(), now())
             ON CONFLICT (lower(username)) DO NOTHING
             """
-        ).bindparams(id=str(uuid.uuid4()), username=username, email=email,
-                      password_hash=password_hash)
+        ).bindparams(username=username, email=email, password_hash=password_hash)
     )
 
 def downgrade() -> None:

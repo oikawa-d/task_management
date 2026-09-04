@@ -354,7 +354,7 @@ status 別にグルーピングして返すことで、フロント側のカン�
     "code": "PROJECT_FORBIDDEN",
     "message": "このプロジェクトへのアクセス権がありません",
     "details": null,
-    "request_id": "01J…"
+    "request_id": "550e8400-e29b-41d4-a716-446655440000"
   }
 }
 ```
@@ -369,7 +369,7 @@ status 別にグルーピングして返すことで、フロント側のカン�
     "details": [
       { "field": "password", "message": "8文字以上で、2種類以上の文字種を含めてください" }
     ],
-    "request_id": "01J…"
+    "request_id": "550e8400-e29b-41d4-a716-446655440000"
   }
 }
 ```

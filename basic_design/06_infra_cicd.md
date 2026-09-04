@@ -198,7 +198,7 @@ flowchart TB
 | `VITE_API_BASE_URL` | `/api` | フロントのAPIベースURL（ビルド時埋め込み）。認証モード等は `/auth/config` で実行時取得 |
 | `VITE_NOTIFICATION_POLL_INTERVAL_MS` | `60000` | 未読通知件数のポーリング間隔（ミリ秒。ビルド時埋め込み） |
 
-**pydantic-settings による定義**：`api/app/core/config.py` および `batch/app/core/config.py` に `Settings(BaseSettings)` を定義し、上記を型付きで受け取る。既定値はコード側に持たせるが、URL・ポート・秘密情報は必ず環境変数から取得する（ハードコード禁止）。
+**pydantic-settings による定義**：`api/app/core/config.py` に `BackendSettings(BaseSettings)`、`batch/app/core/config.py` に `BatchSettings(BaseSettings)` を定義し、各サービスの項目を型付きで受け取る。既定値はコード側に持たせるが、URL・ポート・秘密情報は必ず環境変数から取得する（ハードコード禁止）。
 
 ## 5. CI設計（`.github/workflows/ci.yml`）
 
