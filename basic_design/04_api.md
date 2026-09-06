@@ -436,7 +436,7 @@ status 別にグルーピングして返すことで、フロント側のカン�
 | 409 | `SELF_MODIFICATION_NOT_ALLOWED` | 管理者が自分自身を降格・無効化しようとした |
 | 409 | `LAST_ADMIN_REQUIRED` | 最後の有効adminを降格・無効化しようとした |
 | 409 | `ASSIGNEE_INACTIVE` | 無効化されたユーザーを担当者に指定した |
-| 400 | `INVALID_STATE` | DBのSPが期間・status・保持日数などの業務状態不正を `P0009` で返した |
+| 400 | `DB_INVALID_STATE` | DBのSPが期間・status・保持日数などの業務状態不正を `P0009` で返した |
 | 422 | `VALIDATION_ERROR` | pydantic バリデーション失敗 |
 | 429 | `TOO_MANY_ATTEMPTS` | ログインその他のRate Limit上限超過。`Retry-After`を付与 |
 | 500 | `INTERNAL_ERROR` | 未捕捉例外（詳細はレスポンスに含めずログのみ） |
