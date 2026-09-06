@@ -95,6 +95,7 @@
 - SQLAlchemyモデル側では `mapped_column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))` とし、Python側で `default=uuid4` は設定しない（DBの既定値と二重管理にしないため）。
 - UUIDのバージョンはPostgreSQLの `gen_random_uuid()` が生成する v4 に従う。
 - `request_id` の生成元は API の履歴ミドルウェア、形式は UUID v4 文字列とする（例：`550e8400-e29b-41d4-a716-446655440000`）。DBの `api_history.id` は `gen_random_uuid()`、`request_id` はアプリから必須値としてINSERTする。
+- `08_db_functions.md` の新規作成系SP（`sp_create_project` / `sp_create_task` / `sp_add_task_comment` / `sp_register_user` 等）は本方針（DB側採番）に従い、主キーをAPI側から引数で受け取らずSP内部で採番してOUTパラメータで返す。
 
 ## 7. CHECK制約による列挙表現
 

@@ -17,9 +17,11 @@
 | 配置場所（手動DDL置き場） | `db/functions/*.sql`（トリガ関数・通常関数）、`db/procedures/*.sql`（プロシージャ） |
 | 実行される正 | `api/alembic/versions/` 配下のリビジョンファイル。上記 `.sql` は `op.execute()` で読み込んで適用する（詳細は [09_migration.md](./09_migration.md) §2） |
 | 前提拡張 | `pgcrypto`（`gen_random_uuid()` 用。関数自体はこの拡張に依存しない） |
-| 命名規約 | トリガ関数 `trg_*` / 値を返す関数 `fn_*` / 副作用のみのプロシージャ `sp_*`。SPにOUT/INOUT引数は設けない |
+| 命名規約 | トリガ関数 `trg_*` / 値を返す関数 `fn_*` / 副作用を伴うプロシージャ `sp_*`。新規作成系SP（主キーを新規採番するもの）はOUTパラメータで採番したUUIDを返す。それ以外のSPにOUT/INOUT引数は設けない |
 
 repository層は `CALL sp_xxx(...)` または `SELECT fn_xxx(...)` と戻り値のDTO写像だけを担当し、テーブルへの直接SELECT/INSERT/UPDATE/DELETE、業務判定、複数テーブルの整合性制御を行わない。例外は `/api/health` の `SELECT 1`、AlembicのDDL/seed、テストfixtureのみとする。
+
+主キーのUUID採番方針は `00_policy.md` §6（DB側 `gen_random_uuid()` による一元採番）に従う。新規作成系SP（`sp_create_project` / `sp_create_task` / `sp_add_task_comment` / `sp_register_user`）はAPI側でIDを生成してINSERTすることをせず、SP内部で `gen_random_uuid()` により採番し、生成したIDをOUTパラメータとして呼び出し元へ返す。
 
 ## 2. 関数一覧
 
@@ -42,7 +44,7 @@ repository層は `CALL sp_xxx(...)` または `SELECT fn_xxx(...)` と戻り値�
 | 9 | 関数 | `fn_list_projects` | `p_user_id UUID`, `p_include_inactive BOOLEAN`, `p_limit INTEGER`, `p_offset INTEGER` | `SETOF projects` | 所属/admin向け一覧 |
 | 10 | 関数 | `fn_search_member_candidates` | `p_project_id UUID`, `p_query VARCHAR`, `p_limit INTEGER`, `p_offset INTEGER` | `SETOF users` | 有効かつ未所属の候補検索 |
 | 11 | 関数 | `fn_list_project_members` | `p_project_id UUID` | `SETOF project_members` | メンバー一覧 |
-| 12 | プロシージャ | `sp_create_project` | `p_project_id UUID`, `p_owner_id UUID`, `p_name VARCHAR`, `p_description TEXT`, `p_start_at TIMESTAMPTZ`, `p_end_at TIMESTAMPTZ` | なし | API生成IDによるproject作成とowner登録を一体実行 |
+| 12 | プロシージャ | `sp_create_project` | `p_owner_id UUID`, `p_name VARCHAR`, `p_description TEXT`, `p_start_at TIMESTAMPTZ`, `p_end_at TIMESTAMPTZ`, `OUT p_project_id UUID` | `p_project_id UUID`（OUT） | project作成とowner登録を一体実行し、DB側で採番したproject_idをOUTで返す |
 | 13 | プロシージャ | `sp_update_project` | `p_project_id UUID`, `p_name VARCHAR`, `p_description TEXT`, `p_start_at TIMESTAMPTZ`, `p_end_at TIMESTAMPTZ` | なし | project更新・期間整合性検証 |
 | 14 | プロシージャ | `sp_deactivate_project` | `p_project_id UUID`, `p_is_active BOOLEAN` | なし | projectの有効/無効切替 |
 | 15 | プロシージャ | `sp_add_project_member` | `p_project_id UUID`, `p_user_id UUID`, `p_invited_by UUID` | なし | 重複防止付き所属追加 |
@@ -52,10 +54,10 @@ repository層は `CALL sp_xxx(...)` または `SELECT fn_xxx(...)` と戻り値�
 | 19 | 関数 | `fn_list_tasks` | `p_user_id UUID`, `p_project_id UUID`, `p_status VARCHAR`, `p_include_inactive BOOLEAN`, `p_limit INTEGER`, `p_offset INTEGER` | `SETOF tasks` | 権限スコープ付き一覧 |
 | 20 | 関数 | `fn_list_task_comments` | `p_task_id UUID` | `SETOF task_comments` | コメント一覧 |
 | 21 | 関数 | `fn_get_comment_with_task` | `p_comment_id UUID` | `SETOF task_comments` | コメント・所属判定用取得 |
-| 22 | プロシージャ | `sp_create_task` | `p_task_id UUID`, `p_project_id UUID`, `p_created_by UUID`, `p_assignee_id UUID`, `p_title VARCHAR`, `p_body TEXT`, `p_status VARCHAR`, `p_due_at TIMESTAMPTZ`, `p_position INTEGER` | なし | API生成IDによるtask・position・条件付き通知を一体実行 |
+| 22 | プロシージャ | `sp_create_task` | `p_project_id UUID`, `p_created_by UUID`, `p_assignee_id UUID`, `p_title VARCHAR`, `p_body TEXT`, `p_status VARCHAR`, `p_due_at TIMESTAMPTZ`, `p_position INTEGER`, `OUT p_task_id UUID` | `p_task_id UUID`（OUT） | task作成・position採番・条件付き通知を一体実行し、DB側で採番したtask_idをOUTで返す |
 | 23 | プロシージャ | `sp_update_task` | `p_task_id UUID`, `p_editor_id UUID`, `p_version INTEGER`, `p_title VARCHAR`, `p_body TEXT`, `p_status VARCHAR`, `p_assignee_id UUID`, `p_due_at TIMESTAMPTZ`, `p_position INTEGER` | なし | version・再採番・通知を一体実行 |
 | 24 | プロシージャ | `sp_deactivate_task` | `p_task_id UUID`, `p_is_active BOOLEAN` | なし | taskの有効/無効切替 |
-| 25 | プロシージャ | `sp_add_task_comment` | `p_comment_id UUID`, `p_task_id UUID`, `p_user_id UUID`, `p_body TEXT` | なし | API生成IDによるコメント追加 |
+| 25 | プロシージャ | `sp_add_task_comment` | `p_task_id UUID`, `p_user_id UUID`, `p_body TEXT`, `OUT p_comment_id UUID` | `p_comment_id UUID`（OUT） | コメント追加。DB側で採番したcomment_idをOUTで返す |
 | 26 | プロシージャ | `sp_update_task_comment` | `p_comment_id UUID`, `p_user_id UUID`, `p_body TEXT` | なし | コメント更新 |
 | 27 | プロシージャ | `sp_delete_task_comment` | `p_comment_id UUID`, `p_user_id UUID` | なし | コメント削除 |
 | 28 | 関数 | `fn_list_notifications` | `p_user_id UUID`, `p_unread_only BOOLEAN`, `p_limit INTEGER`, `p_offset INTEGER` | `SETOF notifications` | 本人の通知一覧 |
@@ -69,7 +71,7 @@ repository層は `CALL sp_xxx(...)` または `SELECT fn_xxx(...)` と戻り値�
 | 35 | プロシージャ | `sp_admin_update_user_role` | `p_actor_id UUID`, `p_target_id UUID`, `p_new_role VARCHAR` | なし | 自己変更・最後のadmin保護付きrole更新 |
 | 36 | プロシージャ | `sp_admin_update_user_status` | `p_actor_id UUID`, `p_target_id UUID`, `p_is_active BOOLEAN` | なし | 自己変更・最後のadmin保護付きstatus更新 |
 | 37 | プロシージャ | `sp_admin_deactivate_project` | `p_project_id UUID`, `p_is_active BOOLEAN` | なし | adminによるproject無効化 |
-| 38 | プロシージャ | `sp_register_user` | `p_user_id UUID`, `p_username VARCHAR`, `p_email VARCHAR`, `p_password_hash TEXT` | なし | API生成IDによるuser登録と一意性検証 |
+| 38 | プロシージャ | `sp_register_user` | `p_username VARCHAR`, `p_email VARCHAR`, `p_password_hash TEXT`, `OUT p_user_id UUID` | `p_user_id UUID`（OUT） | user登録と一意性検証。DB側で採番したuser_idをOUTで返す |
 | 39 | プロシージャ | `sp_verify_user_email` | `p_user_id UUID` | なし | email_verified_at更新 |
 | 40 | プロシージャ | `sp_update_user_password` | `p_user_id UUID`, `p_password_hash TEXT` | なし | password更新 |
 | 41 | プロシージャ | `sp_update_user_profile` | `p_user_id UUID`, `p_last_name VARCHAR`, `p_first_name VARCHAR`, `p_last_name_kana VARCHAR`, `p_first_name_kana VARCHAR`, `p_birth_date DATE` | なし | profile更新 |
@@ -328,7 +330,7 @@ $$;
 | `fn_list_projects` | `project_members`と`projects`を結合し、adminは全件、それ以外は所属を抽出 | `LIMIT/OFFSET`、参照のみ |
 | `fn_search_member_candidates` | 有効usersからquery前方一致を検索し、対象projectのmembershipを除外 | 参照のみ |
 | `fn_list_project_members` | `project_members`とusersを結合し、joined_at昇順で返す | 参照のみ |
-| `sp_create_project` | APIから受け取ったIDで`projects` INSERT後にownerの`project_members`をINSERT | 1トランザクション。期間不正はP0009 |
+| `sp_create_project` | `gen_random_uuid()`で採番したidで`projects` INSERT後にownerの`project_members`をINSERTし、採番したidをOUTで返す | 1トランザクション。期間不正はP0009 |
 | `sp_update_project` | 指定フィールドを`projects`へUPDATE | 行ロック。期間不正はP0009 |
 | `sp_deactivate_project` | `projects.is_active`だけをUPDATE | 関連行は変更しない |
 | `sp_add_project_member` | membership存在を確認し、無ければINSERT | 重複はP0003 |
@@ -338,10 +340,10 @@ $$;
 | `fn_list_tasks` | user role・所属・未所属作成者条件を適用してtasksをページング | 参照のみ |
 | `fn_list_task_comments` | task_commentsと表示用usersを結合しcreated_at昇順で返す | 参照のみ |
 | `fn_get_comment_with_task` | comment、task、project owner、投稿者の判定材料を一括取得 | 参照のみ |
-| `sp_create_task` | advisory lock→末尾position→APIから受け取ったIDでtasks INSERT→条件付きnotifications INSERT | lock保持中の1トランザクション |
+| `sp_create_task` | advisory lock→末尾position→`gen_random_uuid()`で採番したidでtasks INSERT（採番したidをOUTで返す）→条件付きnotifications INSERT | lock保持中の1トランザクション |
 | `sp_update_task` | versionを検証し、status/positionを再採番してtasks UPDATE。期限通知も同一SPでINSERT | 不一致はP0005、担当者無効はP0006 |
 | `sp_deactivate_task` | `tasks.is_active`をUPDATE | position詰めなし |
-| `sp_add_task_comment` | APIから受け取ったIDでtask_comments INSERT | task不存在等はAPIへ事実結果を返す |
+| `sp_add_task_comment` | `gen_random_uuid()`で採番したidでtask_comments INSERTし、採番したidをOUTで返す | task不存在等はAPIへ事実結果を返す |
 | `sp_update_task_comment` | comment本文をUPDATE | 投稿者比較はAPIで実施 |
 | `sp_delete_task_comment` | commentをDELETE | 投稿者比較はAPIで実施 |
 | `fn_list_notifications` | user_id必須、未読条件、task情報、created_at順を一括返却 | 他人の通知は結果に含めない |
@@ -360,7 +362,7 @@ $$;
 | `fn_find_oauth_account` | providerとprovider_user_idでoauth_accountsを参照 | 参照のみ |
 | `fn_list_user_login_history` | login_historyをuser_id・created_at順で参照 | 参照のみ |
 | `fn_list_user_oauth_accounts` | oauth_accountsをuser_idで参照 | 参照のみ |
-| `sp_register_user` | APIから受け取ったIDでusersをINSERT | 一意性はP0001/P0002 |
+| `sp_register_user` | `gen_random_uuid()`で採番したidでusersをINSERTし、採番したidをOUTで返す | 一意性はP0001/P0002 |
 | `sp_verify_user_email` | users.email_verified_atをUPDATE | 対象なしはAPIで400/404へ変換 |
 | `sp_update_user_password` | users.password_hashをUPDATE | 全認証失効はAPIのRedis処理 |
 | `sp_update_user_profile` | usersのprofile列をUPDATE | 指定値の検証はAPI、更新はSP |
@@ -383,7 +385,7 @@ DBが業務エラーを返す場合は `RAISE EXCEPTION ... USING ERRCODE = 'P0x
 | `P0006` | `ASSIGNEE_INACTIVE` | 409 | task作成・更新時の担当者検証 |
 | `P0007` | `SELF_MODIFICATION_NOT_ALLOWED` | 409 | admin role/status変更 |
 | `P0008` | `LAST_ADMIN_REQUIRED` | 409 | 最後の有効adminの降格・無効化 |
-| `P0009` | `INVALID_STATE` | 400 | 期間・status・保持日数などDB業務状態の不正 |
+| `P0009` | `DB_INVALID_STATE` | 400 | 期間・status・保持日数などDB業務状態の不正 |
 
 `P0001`〜`P0009`は重複・欠番なしで予約する。ドライバのSQLSTATEをマッピングテーブルへ渡し、未定義のSQLSTATEは `INTERNAL_ERROR`、接続・タイムアウトは `SERVICE_UNAVAILABLE` とする。API側の一覧は [basic_design/04_api.md](../../basic_design/04_api.md) §4.2に反映する。
 
@@ -407,6 +409,7 @@ flowchart LR
     AF --> AT[("users / projects / login_history")]
     TF --> FN1["fn_next_task_position<br/>（SP内部）"]
     TF --> LOCK["advisory lock<br/>（SP内部）"]
+    PR --> FN2["fn_is_project_member<br/>（実運用RBAC中核）"]
 
     subgraph batch["batch / 運用"]
         JOB["due notification job"] --> SNP["sp_purge_notifications"]
@@ -418,7 +421,7 @@ flowchart LR
     SAP --> APIH[("api_history")]
     SBH --> BATH[("batch_history")]
     SP --> LH[("login_history")]
-    TEST["SQL結合テスト"] --> FN2["fn_is_project_member"]
+    TEST["SQL結合テスト"] --> FN2
     FN2 --> PT
 ```
 
