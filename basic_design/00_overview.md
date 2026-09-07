@@ -136,8 +136,8 @@ stateDiagram-v2
     Google --> Dashboard: コールバック成功（Google側で検証済みのメールのみ）
     Register --> Login: 登録成功（確認メール送信・自動ログインしない）
     Login --> Login: メール未認証のためログイン拒否（認証メール再送）
-    [*] --> VerifyEmail: 確認メール内のリンク
-    VerifyEmail --> Login: メール認証完了
+    [*] --> VerifyEmail: 確認メール内のリンク（別タブで開く）
+    VerifyEmail --> [*]: 認証完了（自動遷移なし。タブを閉じてよい）
     PasswordForgot --> PasswordReset: メール内リンク
     PasswordReset --> Login: リセット完了
     Dashboard --> ProjectBoard: プロジェクト選択

@@ -61,8 +61,8 @@
         <mxCell id="n18" value="⑩ 管理者ユーザー管理&lt;br&gt;/admin/users&lt;br&gt;&lt;br&gt;全ユーザー / 全プロジェクト&lt;br&gt;ロール変更・無効化・強制ログアウト&lt;br&gt;※ role=admin のみ" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#FFEBEE;strokeColor=#C62828;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="1470" y="500" width="240" height="140" as="geometry" />
         </mxCell>
-        <mxCell id="n40" value="⑤ メール認証&lt;br&gt;/verify-email#token=xxx&lt;br&gt;&lt;br&gt;マウント時に POST /auth/verify-email&lt;br&gt;失敗時は認証メールの再送フォームを表示" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="270" y="500" width="340" height="90" as="geometry" />
+        <mxCell id="n40" value="⑤ メール認証&lt;br&gt;/verify-email#token=xxx&lt;br&gt;（メール内リンクは別タブで開く）&lt;br&gt;&lt;br&gt;マウント時に POST /auth/verify-email&lt;br&gt;成功時：完了メッセージのみ表示（自動遷移なし。このタブは閉じてよい）&lt;br&gt;失敗時は認証メールの再送フォームを表示" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="270" y="490" width="340" height="110" as="geometry" />
         </mxCell>
         <mxCell id="n41" value="確認メール&lt;br&gt;（Mailpit / SMTP）" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#6A1B9A;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="800" y="480" width="220" height="80" as="geometry" />
@@ -175,14 +175,6 @@
             <Array as="points">
               <mxPoint x="690" y="520" />
               <mxPoint x="690" y="545" />
-            </Array>
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="e42" value="メール認証完了" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;jettySize=auto;orthogonalLoop=1;strokeColor=#1565C0;strokeWidth=1.5;fontSize=10;fontColor=#1565C0;labelBackgroundColor=#FFFFFF;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.6;entryDx=0;entryDy=0;" edge="1" parent="1" source="n40" target="n5">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="250" y="545" />
-              <mxPoint x="250" y="226" />
             </Array>
           </mxGeometry>
         </mxCell>

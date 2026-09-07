@@ -66,7 +66,7 @@ frontend/
 | 2 | 会員登録 | `/register` | AuthLayout | 未認証のみ | 要件書§2-2 |
 | 3 | パスワード再設定要求 | `/password/forgot` | AuthLayout | 公開（認証不要） | - |
 | 4 | パスワード再設定 | `/password/reset#token=` | AuthLayout | 公開（認証不要） | - |
-| 5 | メール認証 | `/verify-email#token=` | AuthLayout | 公開（認証不要） | - |
+| 5 | メール認証 | `/verify-email#token=` | AuthLayout | 公開（認証不要） | 確認メール内リンクは別タブで開く想定。認証完了後の自動遷移は行わない |
 | 6 | ダッシュボード | `/dashboard` | AppLayout | 認証必須 | 要件書§2-3 |
 | 7 | プロジェクト詳細（カンバン） | `/projects/:projectId` | AppLayout | 認証必須 | 要件書§2-4 |
 | 8 | タスク詳細/編集 | `/projects/:projectId/tasks/:taskId`（モーダル） | AppLayout | 認証必須 | 要件書§2-5 |
@@ -81,7 +81,7 @@ flowchart TB
         R["/register"]
         PF["/password/forgot"]
         PR["/password/reset"]
-        VE["/verify-email"]
+        VE["/verify-email<br/>（別タブで開く）"]
     end
     ROOT["/"]
     subgraph private["認証必須（AppLayout）"]
@@ -105,7 +105,6 @@ flowchart TB
     MAIL -->|"fragmentのメール内リンク"| VE
     PF -->|"リセットURL送信"| MAIL
     MAIL -->|"fragmentのメール内リンク"| PR
-    VE -->|"メール認証完了"| L
     L -->|"403 EMAIL_NOT_VERIFIED → 認証メール再送"| L
     D --> B
     B --> T
@@ -399,9 +398,9 @@ flowchart TB
 
 | 要素 | 仕様 |
 |------|------|
-| 到達経路 | 確認メール内のリンク `{FRONTEND_BASE_URL}/verify-email#token=xxx` |
+| 到達経路 | 確認メール内のリンク `{FRONTEND_BASE_URL}/verify-email#token=xxx`。メールクライアントの挙動により別タブ（別ウィンドウ）で開かれる前提とする |
 | 初期処理 | マウント時にfragmentの `token` で `POST /auth/verify-email` を1回だけ実行（`StrictMode` の二重実行を避けるため実行済みフラグで抑止する）。送信後は `history.replaceState` でtokenをURLから消す |
-| 成功時 | 「メール認証が完了しました」を表示し、`/login` へ遷移（3秒後の自動遷移＋即時遷移リンク） |
+| 成功時 | 「メール認証が完了しました。このタブは閉じて問題ありません」を表示する。元のタブ（ログイン画面等）は別に開いたままのため、`/login` への自動遷移・遷移リンクは設けない |
 | 失敗時（400） | 「リンクの有効期限が切れているか、既に使用済みです」と表示し、メールアドレス入力による再送フォームを出す |
 | token 欠落 | APIを呼ばず、再送フォームのみを表示する |
 
