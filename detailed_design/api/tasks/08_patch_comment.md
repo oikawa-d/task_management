@@ -193,7 +193,7 @@ flowchart TB
 | 引数 | `comment`：所属確認済みコメント／`payload`：更新内容／`user`：操作者／`db`：DBセッション |
 | 戻り値 | 更新後の `Comment` |
 | 送出例外 | `ForbiddenError`（投稿者本人でもadminでもない場合、403） |
-| 処理内容 | 1. `user.id == comment.user_id or user.role == 'admin'` を判定し、Falseなら `ForbiddenError` 2. `sp_update_task_comment(comment.id, payload.body, db)` を呼ぶ 3. 結果に `author` をセットして返す |
+| 処理内容 | 1. `user.id == comment.user_id or user.role == 'admin'` を判定し、Falseなら `ForbiddenError` 2. `task_repository.sp_update_task_comment(comment.id, user.id, payload.body, db)`（`CALL sp_update_task_comment(...)`）を呼ぶ 3. 結果に `author` をセットして返す |
 | 副作用 | `task_comments` の1行UPDATE |
 
 ### 6.4 `repository/task_repository.py :: fn_get_comment_with_task`
@@ -211,12 +211,12 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def sp_update_task_comment(comment_id: UUID, body: str, db: AsyncSession) -> Comment` |
-| 引数 | `comment_id` / `body`：更新後の本文／`db`：DBセッション |
+| シグネチャ | `async def sp_update_task_comment(comment_id: UUID, user_id: UUID, body: str, db: AsyncSession) -> Comment` |
+| 引数 | `comment_id` / `user_id` / `body`：更新後の本文／`db`：DBセッション |
 | 戻り値 | 更新後の `Comment` |
 | 送出例外 | なし（呼び出し時点で存在確認済み） |
-| 処理内容 | 1. 対象行の `body` を更新し `updated_at` はトリガ（`trg_set_updated_at`）で自動更新 2. `flush` して最新値を取得 |
-| 副作用 | `task_comments` の1行UPDATE |
+| 処理内容 | `CALL sp_update_task_comment(:comment_id, :user_id, :body)` を発行する。対象行の `body` UPDATEと`updated_at`のトリガ（`trg_set_updated_at`）による自動更新はSP内部で実行される。成功後に`SELECT fn_get_comment_with_task(:comment_id)`等で更新後の行を取得する |
+| 副作用 | `task_comments` の1行UPDATE（SP内部） |
 
 ## 7. 関数相関図
 

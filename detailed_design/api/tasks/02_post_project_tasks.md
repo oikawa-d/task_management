@@ -129,7 +129,6 @@ sequenceDiagram
     participant R as "tasks_router"
     participant D as "deps: require_project_member /<br/>verify_csrf"
     participant S as "task_service"
-    participant NS as "notification_service"
     participant TR as "task_repository"
     participant PG as "PostgreSQL"
 
@@ -142,19 +141,12 @@ sequenceDiagram
         S-->>R: "ValidationError"
         R-->>FE: "422 VALIDATION_ERROR"
     else "検証OK"
-        S->>TR: "next_position(project_id, status)"
-        TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-        TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-        PG-->>TR: "position"
-        S->>TR: "insert(task)"
-        TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
+        S->>TR: "create(project_id, payload, created_by)"
+        TR->>PG: "CALL sp_create_task(...)（advisory lock取得・position採番・tasks INSERT・当日期限通知のdedupe INSERTまでSP内部で一体実行）"
+        PG-->>TR: "p_task_id（OUT）"
+        TR->>PG: "SELECT fn_get_task(p_task_id)"
         PG-->>TR: "task行"
         TR-->>S: "Task"
-        alt "assigneeあり かつ due_atがAPP_TIMEZONEの当日"
-            S->>NS: "create_due_today_notification(task, 'due_today_created')"
-            NS->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-        end
-        S->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         S-->>R: "TaskResponse"
         R-->>FE: "201 {task}"
     end
@@ -208,10 +200,10 @@ flowchart TB
 | 引数 | project: 認可済みProject／payload: 作成内容／user: 作成者（`created_by` に記録） |
 | 戻り値 | `Task`（ORMモデルまたはDTO） |
 | 送出例外 | `ValidationError`（`assignee_id` が非メンバー）、`ConflictError`（`assignee_id` が `is_active=false`） |
-| 処理内容 | 1. `payload.assignee_id` が `None` でない場合、`project_repository.fn_is_project_member(project.id, assignee_id)` で所属確認。非所属なら `ValidationError` 2. 所属確認と同時に取得した対象ユーザーの `is_active` を確認。`false` なら `ConflictError(ASSIGNEE_INACTIVE)` 3. API側で`task_id`を生成し、`CALL sp_create_task(task_id, project.id, payload, created_by=user.id)` を呼び出す。position採番・advisory lock・期限通知・dedupeはSP内部で一体実行する 4. 成功後に`SELECT fn_get_task(task_id)`で応答を取得 |
+| 処理内容 | 1. `payload.assignee_id` が `None` でない場合、`project_repository.fn_is_project_member(project.id, assignee_id)` で所属確認。非所属なら `ValidationError` 2. 所属確認と同時に取得した対象ユーザーの `is_active` を確認。`false` なら `ConflictError(ASSIGNEE_INACTIVE)` 3. `task_repository.create(project.id, payload, created_by=user.id)` を呼び出す。`sp_create_task`はDB側で`gen_random_uuid()`により`task_id`を採番しOUTパラメータで返す。position採番・advisory lock・期限判定・notifications INSERT（dedupe）はSP内部で一体実行する 4. 成功後に`SELECT fn_get_task(p_task_id)`で応答を取得 |
 | 副作用 | DB更新（tasks INSERT） |
 
-### 6.3 `repository/task_repository.py :: sp_create_task`
+### 6.3 `repository/task_repository.py :: create`
 
 | 項目 | 内容 |
 |------|------|
@@ -219,16 +211,8 @@ flowchart TB
 | 引数 | db: DBセッション／project_id／payload／created_by: 作成者ID |
 | 戻り値 | 作成された `Task` |
 | 送出例外 | `IntegrityError`（`uq_tasks_project_status_position` 違反等。`db_error_handler` が409へ変換） |
-| 処理内容 | API側で`task_id`を生成し、`CALL sp_create_task(:task_id, :project_id, :created_by, :assignee_id, :title, :body, :status, :due_at, :position)` を1回呼ぶ。advisory lock、`fn_next_task_position`、task INSERT、当日期限通知のdedupe INSERTはSP内部で同一トランザクションとして実行する |
-| 副作用 | DB更新（tasks INSERT） |
-
-### 6.4 `service/notification_service.py :: create_due_today_notification`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def create_due_today_notification(db: AsyncSession, task: Task) -> bool` |
-| 処理内容 | `due_at`を`APP_TIMEZONE`へ変換して当日00:00以上かつ翌日00:00未満を判定し、`user_id=assignee_id`、`type=due_today_created`、`dedupe_key=created:{task_id}`でINSERTする。`ON CONFLICT DO NOTHING`で冪等化する |
-| 副作用 | notificationsへのINSERT（タスク作成と同一トランザクション） |
+| 処理内容 | `CALL sp_create_task(:project_id, :created_by, :assignee_id, :title, :body, :status, :due_at, :position, p_task_id)` を1回呼ぶ。advisory lock、`fn_next_task_position`、task INSERT、当日期限判定と`notifications`のdedupe INSERTはすべてSP内部で同一トランザクションとして実行され、OUTパラメータ`p_task_id`でDB側が採番したIDを受け取る。取得したIDで`SELECT fn_get_task(p_task_id)`を実行し応答用のtask行を取得する |
+| 副作用 | DB更新（tasks INSERT。条件成立時は同一トランザクションでnotifications INSERT） |
 
 ## 7. 関数相関図
 
@@ -265,7 +249,7 @@ stateDiagram-v2
 
 | 種別 | 契約 | 説明 |
 |------|------|------|
-| create_task | `sp_create_task(p_task_id, p_project_id, p_created_by, p_assignee_id, p_title, p_body, p_status, p_due_at, p_position)` | API生成IDでsp_create_taskを呼び出し、`fn_get_task`の結果をレスポンスへ写像する |
+| create_task | `sp_create_task(p_project_id, p_created_by, p_assignee_id, p_title, p_body, p_status, p_due_at, p_position, OUT p_task_id)` | sp_create_taskを呼び出しDB側で採番された`p_task_id`を受け取り、`fn_get_task`の結果をレスポンスへ写像する |
 
 repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
