@@ -1,7 +1,6 @@
 import signal
 
 import pytest
-
 from app.main import _handle_shutdown
 
 

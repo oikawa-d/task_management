@@ -1,7 +1,6 @@
 import pytest
-from pydantic import ValidationError
-
 from app.core.config import BatchSettings
+from pydantic import ValidationError
 
 
 def test_settings_valid_env_ok(monkeypatch: pytest.MonkeyPatch) -> None:

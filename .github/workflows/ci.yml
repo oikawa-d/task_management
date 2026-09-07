@@ -81,16 +81,16 @@ jobs:
       - name: 依存関係のインストール
         working-directory: api
         run: |
-          pip install ruff mypy pytest pytest-cov httpx
+          pip install ruff mypy pytest pytest-cov httpx2
           pip install -r requirements.txt
 
       - name: ruff check
         working-directory: api
-        run: ruff check app
+        run: ruff check app tests
 
       - name: ruff format --check（タブインデント強制）
         working-directory: api
-        run: ruff format --check --diff app
+        run: ruff format --check --diff app tests
 
       - name: mypy
         working-directory: api
@@ -139,11 +139,11 @@ jobs:
 
       - name: ruff check
         working-directory: batch
-        run: ruff check app
+        run: ruff check app tests
 
       - name: ruff format --check（タブインデント強制）
         working-directory: batch
-        run: ruff format --check --diff app
+        run: ruff format --check --diff app tests
 
       - name: mypy
         working-directory: batch

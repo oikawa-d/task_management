@@ -1,12 +1,11 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi.testclient import TestClient
-
 from app.core.config import get_backend_settings
 from app.db import get_db_engine
 from app.main import app
 from app.redis_client import get_redis_client
+from fastapi.testclient import TestClient
 
 
 @pytest.fixture

@@ -1,8 +1,7 @@
+from app.core.exceptions import ForbiddenError, NotFoundError, register_error_handling
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
-
-from app.core.exceptions import ForbiddenError, NotFoundError, register_error_handling
 
 
 class _Payload(BaseModel):
