@@ -163,11 +163,11 @@ flowchart TB
 
 ## 6. 関数詳細
 
-### 6.1 `api/routers/tasks.py :: fn_get_task`
+### 6.1 `api/routers/tasks.py :: get_task`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def fn_get_task(task_id: UUID, current_user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> TaskDetailResponse` |
+| シグネチャ | `async def get_task(task_id: UUID, current_user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> TaskDetailResponse` |
 | 引数 | task_id: 対象タスクID／current_user: 現在ユーザー／db: DBセッション |
 | 戻り値 | `TaskDetailResponse`（200） |
 | 送出例外 | `NotFoundError`（404） |
@@ -185,7 +185,7 @@ flowchart TB
 | 処理内容 | `SELECT fn_get_task(:task_id)` を1回呼び出す。タスクの存在、admin/所属/未所属作成者の認可、コメント件数、プロジェクト有効状態はFN結果またはFN内部で処理し、空集合はAPIで404へ変換する |
 | 副作用 | なし |
 
-### 6.3 `repository/task_repository.py :: fn_get_task`
+### 6.3 `repository/task_repository.py :: get_with_project`
 
 | 項目 | 内容 |
 |------|------|
@@ -200,10 +200,10 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    R["tasks_router.fn_get_task"] --> S["task_service.get_task_detail"]
-    S --> TR["task_repository.fn_get_task"]
+    R["tasks_router.get_task"] --> S["task_service.get_task_detail"]
+    S --> TR["task_repository.get_with_project"]
     S --> PR["project_repository.fn_is_project_member"]
-    S --> CC["task_repository.fn_get_task"]
+    S --> CC["task_repository.count_comments"]
     TR --> DB[("PostgreSQL<br/>tasks / users / projects")]
     PR --> DBM[("PostgreSQL<br/>project_members")]
     CC --> DBC[("PostgreSQL<br/>task_comments")]

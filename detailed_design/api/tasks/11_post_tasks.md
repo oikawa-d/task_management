@@ -206,18 +206,18 @@ flowchart TB
 | 引数 | payload：`project_id`を含む作成内容／user：作成者 |
 | 戻り値 | `Task` |
 | 送出例外 | `NotFoundError`（`project_id`指定時の非所属）、`ValidationError`（未所属タスクへの`assignee_id`指定、または`project_id`指定時の非メンバーassignee）、`ConflictError`（`ASSIGNEE_INACTIVE`） |
-| 処理内容 | 1. `payload.project_id` が非NULLの場合：`user.role != 'admin'` なら `fn_is_project_member(project_id, user.id)` で所属確認（非所属は`NotFoundError`）。以降は`create_task`（[02_post_project_tasks.md](./02_post_project_tasks.md) §6.2）と同一のassignee検証・`sp_create_task`呼び出しに委譲し、position採番・advisory lockロジックを完全に共通化する<br/>2. `payload.project_id` が `None` の場合：`payload.assignee_id` が指定されていれば`ValidationError`（未所属タスクは担当者設定不可）。API側で`task_id`を生成し、検証OKなら `CALL sp_create_task(task_id, NULL, user.id, NULL, ...)` を呼び出す<br/>3. いずれの経路でも作成後は`SELECT fn_get_task(task_id)`で取得し、`project_id`が非NULLなら`project_is_active`を設定し、`NULL`なら`None`とする |
+| 処理内容 | 1. `payload.project_id` が非NULLの場合：`user.role != 'admin'` なら `fn_is_project_member(project_id, user.id)` で所属確認（非所属は`NotFoundError`）。以降は`create_task`（[02_post_project_tasks.md](./02_post_project_tasks.md) §6.2）と同一のassignee検証・`sp_create_task`呼び出しに委譲し、position採番・advisory lockロジックを完全に共通化する<br/>2. `payload.project_id` が `None` の場合：`payload.assignee_id` が指定されていれば`ValidationError`（未所属タスクは担当者設定不可）。検証OKなら `CALL sp_create_task(NULL, user.id, NULL, ...)` を呼び出す。`task_id`はAPI側で生成せず、SP内部で`gen_random_uuid()`により採番されOUTパラメータで返る<br/>3. いずれの経路でも作成後は`SELECT fn_get_task(p_task_id)`で取得し、`project_id`が非NULLなら`project_is_active`を設定し、`NULL`なら`None`とする |
 | 副作用 | `sp_create_task`によるDB更新 |
 
-### 6.3 `repository/task_repository.py :: sp_create_task`
+### 6.3 `repository/task_repository.py :: create`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def sp_create_task(db: AsyncSession, payload: TaskCreateFlatRequest, created_by: UUID) -> Task` |
+| シグネチャ | `async def create(db: AsyncSession, payload: TaskCreateFlatRequest, created_by: UUID) -> Task` |
 | 引数 | db：DBセッション／payload：作成内容（`project_id=None`、`assignee_id=None`確定済み）／created_by：作成者ID |
 | 戻り値 | 作成された `Task`（`project_id=None`） |
 | 送出例外 | `IntegrityError`（`uq_tasks_project_status_position`違反等。`db_error_handler`が409へ変換） |
-| 処理内容 | `project_id=NULL` も `CALL sp_create_task(:task_id, NULL, :created_by, NULL, :title, :body, :status, :due_at, :position)` に統一する。未所属用の固定advisory lockキー、position採番、NULL同士の重複防止、task INSERTはSP内部で実行し、API/service層にSQLを持たせない |
+| 処理内容 | `project_id=NULL` も `CALL sp_create_task(NULL, :created_by, NULL, :title, :body, :status, :due_at, :position, p_task_id)` に統一する。未所属用の固定advisory lockキー、position採番、NULL同士の重複防止、task INSERT、`task_id`の採番（`gen_random_uuid()`・OUTパラメータ）はすべてSP内部で実行し、API/service層にSQLを持たせない |
 | 副作用 | DB更新（tasks INSERT） |
 
 ## 7. 関数相関図
@@ -261,7 +261,7 @@ stateDiagram-v2
 
 | 種別 | 契約 | 説明 |
 |------|------|------|
-| create_task | `sp_create_task(p_task_id, p_project_id, p_created_by, p_assignee_id, p_title, p_body, p_status, p_due_at, p_position)` | API生成IDでsp_create_taskを呼び出し、`fn_get_task`の結果をレスポンスへ写像する |
+| create_task | `sp_create_task(p_project_id, p_created_by, p_assignee_id, p_title, p_body, p_status, p_due_at, p_position, OUT p_task_id)` | sp_create_taskを呼び出しDB側で採番された`p_task_id`を受け取り、`fn_get_task`の結果をレスポンスへ写像する |
 
 repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 

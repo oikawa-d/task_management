@@ -92,14 +92,14 @@ sequenceDiagram
             R-->>FE: "404 NOT_FOUND"
         else "所属確認OK"
             D-->>R: "Comment"
-            R->>S: "sp_delete_task_comment(comment, current_user)"
+            R->>S: "delete_comment(comment, current_user)"
             S->>S: "user.id == comment.user_id または user.role == 'admin' を判定"
             alt "本人でもadminでもない"
                 S-->>R: "ForbiddenError"
                 R-->>FE: "403 FORBIDDEN"
             else "権限あり"
-                S->>TR: "sp_delete_task_comment(comment_id)"
-                TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
+                S->>TR: "delete(comment_id, user_id)"
+                TR->>PG: "CALL sp_delete_task_comment(...)"
                 PG-->>TR: "削除完了"
                 TR-->>S: "None"
                 S-->>R: "None"
@@ -129,38 +129,38 @@ flowchart TB
 
 ## 6. 関数詳細
 
-### 6.1 `api/routers/comments.py :: sp_delete_task_comment`
+### 6.1 `api/routers/comments.py :: delete_comment`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def sp_delete_task_comment(comment: Comment = Depends(get_comment_for_member), user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> Response` |
+| シグネチャ | `async def delete_comment(comment: Comment = Depends(get_comment_for_member), user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> Response` |
 | 引数 | `comment`：プロジェクト所属確認済みのコメント／`user`：現在ユーザー／`db`：DBセッション |
 | 戻り値 | `Response(status_code=204)` |
 | 送出例外 | なし（下位の `ForbiddenError` はハンドラで403に変換） |
-| 処理内容 | 1. `task_service.sp_delete_task_comment(comment, user, db)` を呼ぶ 2. `204` を返す |
+| 処理内容 | 1. `task_service.delete_comment(comment, user, db)` を呼ぶ 2. `204` を返す |
 | 副作用 | `task_comments` の1行DELETE（サービス層経由） |
 
 ### 6.2 `core/deps.py :: get_comment_for_member`
 
 [08_patch_comment.md](./08_patch_comment.md) §6.2 と同一関数を共用する（PATCH/DELETEで重複定義しない）。
 
-### 6.3 `service/task_service.py :: sp_delete_task_comment`
+### 6.3 `service/task_service.py :: delete_comment`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def sp_delete_task_comment(comment: Comment, user: CurrentUser, db: AsyncSession) -> None` |
+| シグネチャ | `async def delete_comment(comment: Comment, user: CurrentUser, db: AsyncSession) -> None` |
 | 引数 | `comment`：所属確認済みコメント／`user`：操作者／`db`：DBセッション |
 | 戻り値 | なし |
 | 送出例外 | `ForbiddenError`（投稿者本人でもadminでもない場合、403） |
-| 処理内容 | 1. `user.id == comment.user_id or user.role == 'admin'` を判定し、Falseなら `ForbiddenError` 2. `sp_delete_task_comment(comment.id, db)` を呼ぶ |
+| 処理内容 | 1. `user.id == comment.user_id or user.role == 'admin'` を判定し、Falseなら `ForbiddenError` 2. `task_repository.delete(comment.id, user.id, db)`（`CALL sp_delete_task_comment(...)`）を呼ぶ |
 | 副作用 | `task_comments` の1行DELETE |
 
-### 6.4 `repository/task_repository.py :: sp_delete_task_comment`
+### 6.4 `repository/task_repository.py :: delete`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def sp_delete_task_comment(comment_id: UUID, db: AsyncSession) -> None` |
-| 引数 | `comment_id`：対象コメントID／`db`：DBセッション |
+| シグネチャ | `async def delete(comment_id: UUID, user_id: UUID, db: AsyncSession) -> None` |
+| 引数 | `comment_id`：対象コメントID／`user_id`：削除実行者ID／`db`：DBセッション |
 | 戻り値 | なし |
 | 送出例外 | なし（呼び出し時点で存在確認済み） |
 | 処理内容 | `CALL sp_delete_task_comment(:comment_id, :user_id)` を実行する。削除本体とトランザクション境界はSP内部 |
@@ -170,13 +170,13 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    R["comments_router.sp_delete_task_comment"] --> D["deps.get_comment_for_member"]
-    R --> S["task_service.sp_delete_task_comment"]
+    R["comments_router.delete_comment"] --> D["deps.get_comment_for_member"]
+    R --> S["task_service.delete_comment"]
     D --> TR1["task_repository.fn_get_comment_with_task"]
     D --> PR["project_repository.fn_is_project_member"]
-    S --> TR2["sp_delete_task_comment"]
-    TR1 --> M["models.Comment"]
-    TR2 --> M
+    S --> TR2["task_repository.delete<br/>（sp_delete_task_comment）"]
+    TR1 --> DB[("PostgreSQL<br/>task_comments / tasks")]
+    TR2 --> DB
     R --> V["deps.verify_origin / verify_csrf"]
 ```
 

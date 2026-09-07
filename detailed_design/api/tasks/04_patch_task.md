@@ -118,7 +118,6 @@ sequenceDiagram
     participant R as "tasks_router"
     participant D as "deps: get_current_user / verify_csrf"
     participant S as "task_service"
-    participant NS as "notification_service"
     participant TR as "task_repository"
     participant PG as "PostgreSQL"
 
@@ -148,18 +147,9 @@ sequenceDiagram
                 S-->>R: "ValidationError"
                 R-->>FE: "422 VALIDATION_ERROR"
             else "OK"
-                S->>TR: "advisory lock取得<br/>(project_id, 影響するstatus群)"
-                alt "status/position変更あり"
-                    S->>TR: "reorder（退避値へ一時移動→他行を詰める→最終position確定）"
-                    TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-                else "status/position変更なし"
-                    S->>TR: "sp_update_task（title/description/assignee/due_at）"
-                    TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-                end
-                S->>NS: "条件成立時はdue_today_updated通知を作成"
-                NS->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-                S->>TR: "version + 1, updated_at更新"
-                TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
+                S->>TR: "update(task_id, editor_id, version, title, body, status, assignee_id, due_at, position)"
+                TR->>PG: "CALL sp_update_task(...)（advisory lock取得・version検証・status/position再採番・フィールド更新・期限判定とnotificationsのdedupe INSERTまでSP内部で一体実行）"
+                TR->>PG: "SELECT fn_get_task(task_id)"
                 PG-->>TR: "更新後の行"
                 TR-->>S: "Task"
                 S-->>R: "TaskResponse"
@@ -245,41 +235,30 @@ flowchart TB
 | 引数 | task_id：対象タスクID／payload：`version` を含む部分更新内容／user：現在ユーザー |
 | 戻り値 | 更新後の `Task` |
 | 送出例外 | `NotFoundError`、`ConflictError(TASK_CONFLICT)`、`ConflictError(ASSIGNEE_INACTIVE)`、`ValidationError` |
-| 処理内容 | 1. `fn_get_task(task_id)` と所属FNで対象の事実を取得し、空集合/falseは404 2. `payload.version` 等を引数にして `CALL sp_update_task(task_id, user.id, version, ...)` を1回呼ぶ 3. SP内部でversion検証、advisory lock、列内再採番、assignee検証、期限判定、通知dedupeを実行 4. SQLSTATE `P0005` / `P0006` はAPIの409へ変換 5. 成功後にFNで更新結果を取得 |
+| 処理内容 | 1. `task_repository.get_with_project(task_id)` と所属FNで対象の事実を取得し、空集合/falseは404 2. `payload.version` 等を引数にして `task_repository.update(task_id, user.id, version, ...)`（`CALL sp_update_task(...)`）を1回呼ぶ 3. SP内部でversion検証、advisory lock、列内・列間再採番、assignee検証、期限判定、notifications dedupe INSERTを一体実行 4. SQLSTATE `P0005` / `P0006` はAPIの409へ変換 5. 成功後に`fn_get_task`で更新結果を取得 |
 | 副作用 | SP内のtasks更新・通知INSERT（同一トランザクション） |
 
-### 6.3 `repository/task_repository.py :: fn_get_task`
+### 6.3 `repository/task_repository.py :: get_with_project`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def sp_update_task(db: AsyncSession, task_id: UUID) -> TaskWithProject \| None` |
+| シグネチャ | `async def get_with_project(db: AsyncSession, task_id: UUID) -> TaskWithProject \| None` |
 | 引数 | db：DBセッション／task_id：対象タスクID |
-| 戻り値 | `TaskWithProject`（行ロック済み）または `None` |
+| 戻り値 | `TaskWithProject`または`None`（不存在時） |
 | 送出例外 | `OperationalError`（503へ変換） |
-| 処理内容 | `SELECT fn_get_task(:task_id)` を発行する。行ロック、所属確認、更新は `sp_update_task` 内部で行う |
+| 処理内容 | `SELECT fn_get_task(:task_id)` を発行し、404判定・所属確認・更新前の`version`取得に用いる。参照FNのため行ロックは伴わない。行ロック・version検証・実際の更新は`update`が呼ぶ`sp_update_task`内部で行う |
 | 副作用 | なし（参照FNのみ） |
 
-### 6.4 `repository/task_repository.py :: sp_update_task`
+### 6.4 `repository/task_repository.py :: update`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def sp_update_task(db: AsyncSession, task: Task, payload: TaskUpdateRequest) -> Task` |
-| 引数 | db：DBセッション／task：`sp_update_task` で取得済みの行（ロック中）／payload：`status`/`position` を含む更新内容 |
-| 戻り値 | 並べ替え・フィールド更新後の `Task`（`version`/`updated_at` の反映前） |
-| 送出例外 | `IntegrityError`（想定外のシフト漏れ時。`db_error_handler` が409へ変換） |
-| 処理内容 | `CALL sp_update_task(:task_id, :editor_id, :version, ...)` を発行する。advisory lock取得、`fn_next_task_position`、version検証、列移動、再採番、通知INSERTはSP内部で実行 |
-| 副作用 | SP内の対象タスク・同一列の複数行・通知更新 |
-
-### 6.5 `repository/task_repository.py :: sp_update_task`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def sp_update_task(db: AsyncSession, task: Task, payload: TaskUpdateRequest) -> Task` |
-| 引数 | db：DBセッション／task：ロック済み行／payload：更新内容（`status`/`position` を含まない） |
+| シグネチャ | `async def update(db: AsyncSession, task_id: UUID, editor_id: UUID, version: int, title: str \| None, body: str \| None, status: str \| None, assignee_id: UUID \| None, due_at: datetime \| None, position: int \| None) -> Task` |
+| 引数 | db：DBセッション／task_id：対象タスクID／editor_id：更新者ID／version：楽観ロック用の現在値／その他：`TaskUpdateRequest`の更新対象フィールド |
 | 戻り値 | 更新後の `Task` |
-| 送出例外 | `IntegrityError`（想定外の一意制約違反時。通常発生しない） |
-| 処理内容 | reorder有無にかかわらず `sp_update_task` を同じシグネチャで呼ぶ。更新差分の組み立てはAPI/service、整合性制御とDB更新はSP内部 |
-| 副作用 | SP内のDB更新 |
+| 送出例外 | `IntegrityError`（想定外の一意制約違反時。`db_error_handler` が409へ変換） |
+| 処理内容 | `CALL sp_update_task(:task_id, :editor_id, :version, :title, :body, :status, :assignee_id, :due_at, :position)` を1回発行する。行ロック、advisory lock取得、`fn_next_task_position`、version検証（不一致はP0005）、assignee検証（無効はP0006）、status/position変更時の列内・列間再採番、期限判定と`notifications`のdedupe INSERTはすべてSP内部で同一トランザクションとして実行される。`sp_update_task`はOUT/戻り値を持たないため、成功後に`SELECT fn_get_task(:task_id)`を実行し応答用のtask行を取得する |
+| 副作用 | SP内のtasks更新（対象行・同一列の複数行）・notifications INSERT（同一トランザクション） |
 
 ## 7. 関数相関図
 
@@ -287,13 +266,11 @@ flowchart TB
 flowchart LR
     R["tasks_router.update_task"] --> DEP["deps.verify_csrf"]
     R --> S["task_service.update_task"]
-    S --> G["task_repository.sp_update_task"]
+    S --> G["task_repository.get_with_project"]
     S --> PR["project_repository.fn_is_project_member"]
-    S --> RO["task_repository.sp_update_task"]
-    S --> UF["task_repository.sp_update_task"]
-    RO --> LOCK["pg_advisory_xact_lock"]
-    RO --> DB[("PostgreSQL<br/>tasks（複数行）")]
-    UF --> DB
+    S --> UP["task_repository.update<br/>（sp_update_task）"]
+    UP --> LOCK["pg_advisory_xact_lock<br/>（SP内部）"]
+    UP --> DB[("PostgreSQL<br/>tasks（複数行）/ notifications")]
     G --> DB
     PR --> DBM[("PostgreSQL<br/>project_members / users")]
 ```
@@ -327,7 +304,7 @@ stateDiagram-v2
 
 | 種別 | 契約 | 説明 |
 |------|------|------|
-| update_task | `sp_update_task(p_task_id, p_editor_id, p_version, p_title, p_body, p_status, p_assignee_id, p_due_at, p_position)` | sp_update_taskを呼び出し、結果をレスポンスへ写像する |
+| update_task | `sp_update_task(p_task_id, p_editor_id, p_version, p_title, p_body, p_status, p_assignee_id, p_due_at, p_position)` | sp_update_taskを呼び出す（戻り値なし）。成功後に`fn_get_task`の結果をレスポンスへ写像する |
 
 repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
@@ -375,7 +352,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 1 | 結合（実DB・実SP） | version不一致 | モックタスクの`version=2`、payload`version=1` | `ConflictError(TASK_CONFLICT)` | `test_update_task_version_conflict` |
 | 2 | 結合（実DB・実SP） | assignee非メンバー | `is_member=False` | `ValidationError` | `test_update_task_assignee_not_member` |
 | 3 | 結合（実DB・実SP） | assignee無効化 | `is_active=False` | `ConflictError(ASSIGNEE_INACTIVE)` | `test_update_task_assignee_inactive` |
-| 4 | 結合（実DB・実SP） | status/position変更なし | title のみ更新 | `sp_update_task` が呼ばれ `sp_update_task` は呼ばれない | `test_update_task_simple_fields_only` |
+| 4 | 結合（実DB・実SP） | status/position変更なし | title のみ更新 | `sp_update_task` が呼ばれ、`position`/`status`は変化しない | `test_update_task_simple_fields_only` |
 | 5 | 結合 | 単純更新（title） | 実DB | 200、`version+1`、`position`不変 | `test_patch_task_title_only` |
 | 6 | 結合 | 同一列内でposition変更 | 実DB、列内3件中の先頭を末尾へ | 200、間の行が-1ずつシフト | `test_patch_task_reorder_same_status` |
 | 7 | 結合 | status変更・position省略 | 実DB | 200、移動先列末尾に配置、移動元列の後続が詰まる | `test_patch_task_move_status_append_end` |

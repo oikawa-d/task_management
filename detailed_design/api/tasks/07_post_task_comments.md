@@ -117,8 +117,10 @@ sequenceDiagram
         else "所属メンバーまたはadmin"
             D-->>R: "Task"
             R->>S: "add_comment(task, payload, current_user)"
-            S->>TR: "sp_add_task_comment(task_id, user_id, body)"
-            TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
+            S->>TR: "add(task_id, user_id, body)"
+            TR->>PG: "CALL sp_add_task_comment(...)（comment_idをOUTパラメータで採番・INSERT）"
+            PG-->>TR: "p_comment_id（OUT）"
+            TR->>PG: "SELECT fn_list_task_comments(task_id)"
             PG-->>TR: "comment行"
             TR-->>S: "Comment"
             S-->>R: "CommentResponse"
@@ -179,19 +181,19 @@ flowchart TB
 | 引数 | `task`：対象タスク／`payload`：検証済み入力／`user`：投稿者／`db`：DBセッション |
 | 戻り値 | 作成された `Comment`（`author` は `user` から構築、追加SELECTなし） |
 | 送出例外 | なし（バリデーションはルーター層のpydanticで完了済み） |
-| 処理内容 | 1. API側で`comment_id`を生成し、`CALL sp_add_task_comment(comment_id, task.id, user.id, payload.body)` を呼ぶ 2. `SELECT fn_list_task_comments(task.id)` の結果から作成行を写像して返す |
-| 副作用 | `task_comments` への1行INSERT |
+| 処理内容 | 1. `task_repository.add(task.id, user.id, payload.body)`（`CALL sp_add_task_comment(...)`）を呼ぶ。SPは`gen_random_uuid()`で採番した`comment_id`をOUTパラメータで返す 2. 採番された`comment_id`をキーに`SELECT fn_list_task_comments(task.id)`から該当行を抽出し、`author`情報付きで写像して返す |
+| 副作用 | `task_comments` への1行INSERT（SP内部） |
 
-### 6.4 `repository/task_repository.py :: sp_add_task_comment`
+### 6.4 `repository/task_repository.py :: add`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def sp_add_task_comment(comment_id: UUID, task_id: UUID, user_id: UUID, body: str, db: AsyncSession) -> None` |
+| シグネチャ | `async def add(db: AsyncSession, task_id: UUID, user_id: UUID, body: str) -> UUID` |
 | 引数 | `task_id` / `user_id` / `body`：保存する値／`db`：DBセッション |
-| 戻り値 | INSERT後の `Comment`（`id`, `created_at`, `updated_at` がDB既定値で採番済み） |
+| 戻り値 | DB側で採番された`comment_id`（OUTパラメータ） |
 | 送出例外 | `IntegrityError`（FK違反時。通常は上位で存在確認済みのため発生しない想定） |
-| 処理内容 | 1. `Comment(task_id=..., user_id=..., body=...)` を生成し `db.add` 2. `flush` してIDと既定値を取得 |
-| 副作用 | `task_comments` テーブルへのINSERT |
+| 処理内容 | `CALL sp_add_task_comment(:task_id, :user_id, :body, p_comment_id)` を発行する。`task_comments` へのINSERTと`comment_id`の採番（`gen_random_uuid()`）はSP内部で実行され、OUTパラメータ`p_comment_id`として返る |
+| 副作用 | `task_comments` テーブルへのINSERT（SP内部） |
 
 ## 7. 関数相関図
 
@@ -200,8 +202,8 @@ flowchart LR
     R["comments_router.create_task_comment"] --> Sch["schemas.CommentCreateRequest"]
     R --> D["deps.get_task_for_member"]
     R --> S["task_service.add_comment"]
-    S --> TR["sp_add_task_comment"]
-    TR --> M["models.Comment"]
+    S --> TR["task_repository.add<br/>（sp_add_task_comment）"]
+    TR --> DB[("PostgreSQL<br/>task_comments")]
     R --> V["deps.verify_origin / verify_csrf"]
 ```
 
@@ -222,7 +224,7 @@ Redisの状態遷移はない（本APIはRedisへアクセスしない）。
 
 | 種別 | 契約 | 説明 |
 |------|------|------|
-| add_task_comment | `sp_add_task_comment(p_comment_id, p_task_id, p_user_id, p_body)` | sp_add_task_commentを呼び出し、結果をレスポンスへ写像する |
+| add_task_comment | `sp_add_task_comment(p_task_id, p_user_id, p_body, OUT p_comment_id)` | sp_add_task_commentを呼び出しDB側で採番された`p_comment_id`を受け取り、`fn_list_task_comments`等の結果をレスポンスへ写像する |
 
 repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
