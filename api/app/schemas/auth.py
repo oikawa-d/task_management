@@ -10,6 +10,24 @@ KANA_PATTERN = r"^[ぁ-んァ-ヶー0-9]+$"
 EMAIL_PATTERN = r"^[A-Za-z0-9_.+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"
 
 
+def _validate_email(value: str) -> str:
+	if re.fullmatch(EMAIL_PATTERN, value) is None:
+		raise ValueError("invalid email format")
+	return value
+
+
+def _validate_password_categories(value: str) -> str:
+	categories = (
+		bool(re.search(r"[A-Z]", value)),
+		bool(re.search(r"[a-z]", value)),
+		bool(re.search(r"[0-9]", value)),
+		bool(re.search(r"[^A-Za-z0-9]", value)),
+	)
+	if sum(categories) < 2:
+		raise ValueError("password must contain at least two character categories")
+	return value
+
+
 class RegisterRequest(BaseModel):
 	username: str = Field(min_length=3, max_length=50, pattern=USERNAME_PATTERN)
 	email: str = Field(max_length=50)
@@ -24,22 +42,12 @@ class RegisterRequest(BaseModel):
 	@field_validator("email")
 	@classmethod
 	def validate_email(cls, value: str) -> str:
-		if re.fullmatch(EMAIL_PATTERN, value) is None:
-			raise ValueError("invalid email format")
-		return value
+		return _validate_email(value)
 
 	@field_validator("password")
 	@classmethod
 	def validate_password_categories(cls, value: str) -> str:
-		categories = (
-			bool(re.search(r"[A-Z]", value)),
-			bool(re.search(r"[a-z]", value)),
-			bool(re.search(r"[0-9]", value)),
-			bool(re.search(r"[^A-Za-z0-9]", value)),
-		)
-		if sum(categories) < 2:
-			raise ValueError("password must contain at least two character categories")
-		return value
+		return _validate_password_categories(value)
 
 	@model_validator(mode="after")
 	def validate_confirmation_and_birth_date(self) -> "RegisterRequest":
@@ -65,6 +73,59 @@ class LoginResponse(BaseModel):
 	access_token: str
 	token_type: Literal["bearer"]
 	expires_in: int
+
+
+class RefreshResponse(BaseModel):
+	access_token: str
+	token_type: Literal["bearer"]
+	expires_in: int
+
+
+class VerifyEmailRequest(BaseModel):
+	token: str = Field(min_length=1)
+
+
+class ResendVerifyEmailRequest(BaseModel):
+	email: str = Field(max_length=50)
+
+	@field_validator("email")
+	@classmethod
+	def validate_email(cls, value: str) -> str:
+		return _validate_email(value)
+
+
+class ResendVerifyEmailResponse(BaseModel):
+	message: str
+
+
+class PasswordForgotRequest(BaseModel):
+	email: str = Field(max_length=50)
+
+	@field_validator("email")
+	@classmethod
+	def validate_email(cls, value: str) -> str:
+		return _validate_email(value)
+
+
+class PasswordForgotResponse(BaseModel):
+	message: str
+
+
+class PasswordResetRequest(BaseModel):
+	token: str = Field(min_length=1)
+	new_password: str = Field(min_length=8)
+	password_confirm: str
+
+	@field_validator("new_password")
+	@classmethod
+	def validate_password_categories(cls, value: str) -> str:
+		return _validate_password_categories(value)
+
+	@model_validator(mode="after")
+	def validate_confirmation(self) -> "PasswordResetRequest":
+		if self.new_password != self.password_confirm:
+			raise ValueError("password confirmation does not match")
+		return self
 
 
 class MeResponse(BaseModel):

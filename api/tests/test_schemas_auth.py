@@ -7,8 +7,15 @@ from app.schemas.auth import (
 	LoginRequest,
 	LoginResponse,
 	MeResponse,
+	PasswordForgotRequest,
+	PasswordForgotResponse,
+	PasswordResetRequest,
+	RefreshResponse,
 	RegisterRequest,
 	RegisterResponse,
+	ResendVerifyEmailRequest,
+	ResendVerifyEmailResponse,
+	VerifyEmailRequest,
 )
 from pydantic import ValidationError
 
@@ -132,3 +139,90 @@ def test_auth_config_response_accepts_supported_auth_mode() -> None:
 def test_auth_config_response_rejects_unknown_auth_mode() -> None:
 	with pytest.raises(ValidationError):
 		AuthConfigResponse(auth_mode="cookie", google_login_enabled=False, csrf_cookie_name="csrf")
+
+
+def test_refresh_response_accepts_bearer_response() -> None:
+	response = RefreshResponse(access_token="rotated-token", token_type="bearer", expires_in=900)
+
+	assert response.access_token == "rotated-token"
+
+
+def test_refresh_response_rejects_non_bearer_token_type() -> None:
+	with pytest.raises(ValidationError):
+		RefreshResponse(access_token="rotated-token", token_type="basic", expires_in=900)
+
+
+def test_verify_email_request_accepts_token() -> None:
+	request = VerifyEmailRequest(token="email-verification-token")
+
+	assert request.token == "email-verification-token"
+
+
+@pytest.mark.parametrize("payload", [{}, {"token": ""}])
+def test_verify_email_request_rejects_missing_or_empty_token(payload: dict[str, object]) -> None:
+	with pytest.raises(ValidationError):
+		VerifyEmailRequest(**payload)
+
+
+def test_resend_verify_email_request_and_response_accept_valid_values() -> None:
+	request = ResendVerifyEmailRequest(email="taro@example.com")
+	response = ResendVerifyEmailResponse(message="確認メールを送信しました。")
+
+	assert request.email == "taro@example.com"
+	assert response.message == "確認メールを送信しました。"
+
+
+@pytest.mark.parametrize("email", ["", "not-an-email", "taro@example.com" + "a" * 40])
+def test_resend_verify_email_request_rejects_invalid_email(email: str) -> None:
+	with pytest.raises(ValidationError):
+		ResendVerifyEmailRequest(email=email)
+
+
+def test_password_forgot_request_and_response_accept_valid_values() -> None:
+	request = PasswordForgotRequest(email="taro@example.com")
+	response = PasswordForgotResponse(message="再設定用メールを送信しました。")
+
+	assert request.email == "taro@example.com"
+	assert response.message == "再設定用メールを送信しました。"
+
+
+@pytest.mark.parametrize("email", ["", "not-an-email", "taro@example.com" + "a" * 40])
+def test_password_forgot_request_rejects_invalid_email(email: str) -> None:
+	with pytest.raises(ValidationError):
+		PasswordForgotRequest(email=email)
+
+
+def _password_reset_payload(**overrides: object) -> dict[str, object]:
+	payload: dict[str, object] = {
+		"token": "password-reset-token",
+		"new_password": "NewPassword1!",
+		"password_confirm": "NewPassword1!",
+	}
+	payload.update(overrides)
+	return payload
+
+
+def test_password_reset_request_accepts_valid_payload() -> None:
+	request = PasswordResetRequest(**_password_reset_payload())
+
+	assert request.token == "password-reset-token"
+
+
+@pytest.mark.parametrize(
+	"payload",
+	[
+		{"token": ""},
+		{"new_password": "password", "password_confirm": "password"},
+		{"new_password": "PASSWORD", "password_confirm": "PASSWORD"},
+		{"new_password": "12345678", "password_confirm": "12345678"},
+		{"new_password": "!!!!!!!!", "password_confirm": "!!!!!!!!"},
+	],
+)
+def test_password_reset_request_rejects_invalid_values(payload: dict[str, object]) -> None:
+	with pytest.raises(ValidationError):
+		PasswordResetRequest(**_password_reset_payload(**payload))
+
+
+def test_password_reset_request_rejects_password_mismatch() -> None:
+	with pytest.raises(ValidationError):
+		PasswordResetRequest(**_password_reset_payload(password_confirm="OtherPassword1!"))
