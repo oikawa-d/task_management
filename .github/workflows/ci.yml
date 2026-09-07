@@ -193,23 +193,43 @@ jobs:
       - name: Docker Buildx セットアップ
         uses: docker/setup-buildx-action@v3
 
+      - name: Pythonセットアップ（Dockerfile検証）
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
       - name: backendイメージビルド
         uses: docker/build-push-action@v6
         with:
           context: .
           file: api/Dockerfile
+          tags: cerberus-review-api:ci
           push: false
+          load: true
 
       - name: frontendイメージビルド
         uses: docker/build-push-action@v6
         with:
           context: frontend
           file: frontend/Dockerfile
+          tags: cerberus-review-frontend:ci
           push: false
+          load: true
 
       - name: batchイメージビルド
         uses: docker/build-push-action@v6
         with:
           context: .
           file: batch/Dockerfile
+          tags: cerberus-review-batch:ci
           push: false
+          load: true
+
+      - name: Dockerfile検証テスト
+        env:
+          DOCKER_TEST_IMAGE_API: cerberus-review-api:ci
+          DOCKER_TEST_IMAGE_FRONTEND: cerberus-review-frontend:ci
+          DOCKER_TEST_IMAGE_BATCH: cerberus-review-batch:ci
+        run: |
+          python -m pip install pytest
+          python -m pytest tests/docker/test_dockerfiles.py
