@@ -41,7 +41,7 @@ repository層は `CALL sp_xxx(...)` または `SELECT fn_xxx(...)` と戻り値�
 | 8d | 関数 | `fn_find_oauth_account` | `p_provider VARCHAR`, `p_provider_user_id TEXT` | `SETOF oauth_accounts` | OAuth紐付け検索 |
 | 8e | 関数 | `fn_list_user_login_history` | `p_user_id UUID`, `p_limit INTEGER`, `p_offset INTEGER` | `SETOF login_history` | 本人のログイン履歴 |
 | 8f | 関数 | `fn_list_user_oauth_accounts` | `p_user_id UUID` | `SETOF oauth_accounts` | 本人のOAuth provider一覧 |
-| 9 | 関数 | `fn_list_projects` | `p_user_id UUID`, `p_include_inactive BOOLEAN`, `p_limit INTEGER`, `p_offset INTEGER` | `SETOF projects` | 所属/admin向け一覧 |
+| 9 | 関数 | `fn_list_projects` | `p_user_id UUID`, `p_include_inactive BOOLEAN`, `p_limit INTEGER`, `p_offset INTEGER` | `TABLE(project projects, member_count BIGINT, task_count_todo BIGINT, task_count_in_progress BIGINT, task_count_done BIGINT, total_count BIGINT)` | 所属/admin向け一覧。メンバー数・status別タスク数・ページング前の総件数を1回の呼び出しで返す |
 | 10 | 関数 | `fn_search_member_candidates` | `p_project_id UUID`, `p_query VARCHAR`, `p_limit INTEGER`, `p_offset INTEGER` | `SETOF users` | 有効かつ未所属の候補検索 |
 | 11 | 関数 | `fn_list_project_members` | `p_project_id UUID` | `SETOF project_members` | メンバー一覧 |
 | 12 | プロシージャ | `sp_create_project` | `p_owner_id UUID`, `p_name VARCHAR`, `p_description TEXT`, `p_start_at TIMESTAMPTZ`, `p_end_at TIMESTAMPTZ`, `OUT p_project_id UUID` | `p_project_id UUID`（OUT） | project作成とowner登録を一体実行し、DB側で採番したproject_idをOUTで返す |
@@ -327,7 +327,7 @@ $$;
 |--------------|---------------|-----------------|
 | `fn_get_user` | `users`を主キーで参照し、存在しなければ空集合 | 参照スナップショット |
 | `fn_get_project` | `projects`を主キーで参照し、存在しなければ空集合 | 参照スナップショット |
-| `fn_list_projects` | `project_members`と`projects`を結合し、adminは全件、それ以外は所属を抽出 | `LIMIT/OFFSET`、参照のみ |
+| `fn_list_projects` | `project_members`と`projects`を結合し、adminは全件、それ以外は所属を抽出。`project_members`を`project_id`単位でCOUNT集計した`member_count`、`tasks`を`project_id`・`status`単位でCOUNT集計した`task_count_todo`/`task_count_in_progress`/`task_count_done`（`is_active=true`のタスクのみ）を同一クエリでLEFT JOINし、`LIMIT/OFFSET`適用前の対象件数を`total_count`として各行に付与する | `LIMIT/OFFSET`、参照のみ |
 | `fn_search_member_candidates` | 有効usersからquery前方一致を検索し、対象projectのmembershipを除外 | 参照のみ |
 | `fn_list_project_members` | `project_members`とusersを結合し、joined_at昇順で返す | 参照のみ |
 | `sp_create_project` | `gen_random_uuid()`で採番したidで`projects` INSERT後にownerの`project_members`をINSERTし、採番したidをOUTで返す | 1トランザクション。期間不正はP0009 |
