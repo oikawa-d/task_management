@@ -1,0 +1,136 @@
+import uuid
+
+import pytest
+from app.repository import admin_repository, login_history_repository, project_repository, user_repository
+from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+
+async def _make_admin(db: AsyncSession, username: str) -> uuid.UUID:
+	user_id = await user_repository.create(db, username, f"{username}@example.com", "hash")
+	await db.execute(text("UPDATE users SET role = 'admin' WHERE id = :id"), {"id": user_id})
+	return user_id
+
+
+async def test_list_users_filters_by_query_role_and_is_active(db_session: AsyncSession) -> None:
+	admin_id = await _make_admin(db_session, "admin-list1")
+	member_id = await user_repository.create(db_session, "member-list1", "member-list1@example.com", "hash")
+	inactive_id = await user_repository.create(db_session, "inactive-list1", "inactive-list1@example.com", "hash")
+	await db_session.execute(text("UPDATE users SET is_active = false WHERE id = :id"), {"id": inactive_id})
+
+	by_query = await admin_repository.list_users(db_session, "member-list1", None, None, 50, 0)
+	by_role = await admin_repository.list_users(db_session, None, "admin", None, 50, 0)
+	by_active = await admin_repository.list_users(db_session, None, None, False, 50, 0)
+
+	assert {u.id for u in by_query} == {member_id}
+	assert admin_id in {u.id for u in by_role}
+	assert member_id not in {u.id for u in by_role}
+	assert {u.id for u in by_active} == {inactive_id}
+
+
+async def test_list_projects_filters_by_query_and_is_active(db_session: AsyncSession) -> None:
+	owner_id = await user_repository.create(db_session, "owner-list1", "owner-list1@example.com", "hash")
+	active_id = await project_repository.create(db_session, owner_id, "Alpha Project", None, None, None)
+	inactive_id = await project_repository.create(db_session, owner_id, "Beta Project", None, None, None)
+	await admin_repository.deactivate_project(db_session, inactive_id, False)
+
+	by_query = await admin_repository.list_projects(db_session, "alpha", None, 50, 0)
+	by_active = await admin_repository.list_projects(db_session, None, False, 50, 0)
+
+	assert {p.id for p in by_query} == {active_id}
+	assert {p.id for p in by_active} == {inactive_id}
+
+
+async def test_list_login_history_filters_by_user_method_and_success(db_session: AsyncSession) -> None:
+	user_id = await user_repository.create(db_session, "hist-user1", "hist-user1@example.com", "hash")
+	other_id = await user_repository.create(db_session, "hist-user2", "hist-user2@example.com", "hash")
+	await login_history_repository.create(db_session, user_id, "hist-user1", "session", None, None, True, None)
+	await login_history_repository.create(
+		db_session, user_id, "hist-user1", "jwt", None, None, False, "invalid_credentials"
+	)
+	await login_history_repository.create(db_session, other_id, "hist-user2", "session", None, None, True, None)
+
+	by_user = await admin_repository.list_login_history(db_session, user_id, None, None, None, 50, 0)
+	by_method = await admin_repository.list_login_history(db_session, None, None, "jwt", None, 50, 0)
+	by_success = await admin_repository.list_login_history(db_session, None, None, None, False, 50, 0)
+	by_query = await admin_repository.list_login_history(db_session, None, "hist-user2", None, None, 50, 0)
+
+	assert {h.user_id for h in by_user} == {user_id}
+	assert len(by_user) == 2
+	assert all(h.login_method == "jwt" for h in by_method)
+	assert all(h.success is False for h in by_success)
+	assert {h.user_id for h in by_query} == {other_id}
+
+
+async def test_update_user_role_self_modification_raises_p0007(db_session: AsyncSession) -> None:
+	admin_id = await _make_admin(db_session, "self-role1")
+
+	with pytest.raises(DBAPIError) as exc_info:
+		await admin_repository.update_user_role(db_session, admin_id, admin_id, "member")
+	assert getattr(exc_info.value.orig, "sqlstate", None) == "P0007"
+
+
+async def test_update_user_role_last_admin_raises_p0008(db_session: AsyncSession) -> None:
+	actor_id = await user_repository.create(db_session, "actor-role1", "actor-role1@example.com", "hash")
+	last_admin_id = await _make_admin(db_session, "last-admin-role1")
+
+	with pytest.raises(DBAPIError) as exc_info:
+		await admin_repository.update_user_role(db_session, actor_id, last_admin_id, "member")
+	assert getattr(exc_info.value.orig, "sqlstate", None) == "P0008"
+
+
+async def test_update_user_role_succeeds_when_another_admin_remains(db_session: AsyncSession) -> None:
+	actor_id = await _make_admin(db_session, "actor-role2")
+	target_id = await _make_admin(db_session, "target-role2")
+
+	await admin_repository.update_user_role(db_session, actor_id, target_id, "member")
+
+	row = (await db_session.execute(text("SELECT role FROM users WHERE id = :id"), {"id": target_id})).mappings().one()
+	assert row["role"] == "member"
+
+
+async def test_update_user_status_self_modification_raises_p0007(db_session: AsyncSession) -> None:
+	admin_id = await _make_admin(db_session, "self-status1")
+
+	with pytest.raises(DBAPIError) as exc_info:
+		await admin_repository.update_user_status(db_session, admin_id, admin_id, False)
+	assert getattr(exc_info.value.orig, "sqlstate", None) == "P0007"
+
+
+async def test_update_user_status_last_admin_raises_p0008(db_session: AsyncSession) -> None:
+	actor_id = await user_repository.create(db_session, "actor-status1", "actor-status1@example.com", "hash")
+	last_admin_id = await _make_admin(db_session, "last-admin-status1")
+
+	with pytest.raises(DBAPIError) as exc_info:
+		await admin_repository.update_user_status(db_session, actor_id, last_admin_id, False)
+	assert getattr(exc_info.value.orig, "sqlstate", None) == "P0008"
+
+
+async def test_update_user_status_succeeds_when_another_admin_remains(db_session: AsyncSession) -> None:
+	actor_id = await _make_admin(db_session, "actor-status2")
+	target_id = await _make_admin(db_session, "target-status2")
+
+	await admin_repository.update_user_status(db_session, actor_id, target_id, False)
+
+	row = (
+		(await db_session.execute(text("SELECT is_active FROM users WHERE id = :id"), {"id": target_id}))
+		.mappings()
+		.one()
+	)
+	assert row["is_active"] is False
+
+
+async def test_deactivate_project_toggles_is_active(db_session: AsyncSession) -> None:
+	owner_id = await user_repository.create(db_session, "owner-deact1", "owner-deact1@example.com", "hash")
+	project_id = await project_repository.create(db_session, owner_id, "P", None, None, None)
+
+	await admin_repository.deactivate_project(db_session, project_id, False)
+	deactivated = await project_repository.get_by_id(db_session, project_id)
+	assert deactivated is not None
+	assert deactivated.is_active is False
+
+	await admin_repository.deactivate_project(db_session, project_id, True)
+	reactivated = await project_repository.get_by_id(db_session, project_id)
+	assert reactivated is not None
+	assert reactivated.is_active is True
