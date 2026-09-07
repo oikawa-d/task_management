@@ -13,6 +13,7 @@
 | [../database/08_db_functions.md](../database/08_db_functions.md) | `sp_purge_notifications` |
 | [../log/00_history.md](../log/00_history.md) | `batch_history`の開始・完了・失敗記録 |
 | [../database/12_table_batch_history.md](../database/12_table_batch_history.md) | `batch_history`のカラム・状態制約 |
+| [./03_integration_test.md](./03_integration_test.md) | Issue #192の結合テスト検証項目・証跡 |
 
 ## 1. 概要
 
