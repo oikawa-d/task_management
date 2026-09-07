@@ -30,10 +30,12 @@ DB責務移管の必須確認対象は、`database/08_db_functions.md`（SP/FN�
 git diff --check
 rg -n -i --glob '*.md' --glob '!quality_check.md' '別担当作成中|通知API.*未作成|通知.*作成中|API.*未作成' detailed_design basic_design requirements
 rg -n --glob '*.md' 'repository.*(SELECT .* FROM|INSERT INTO|UPDATE .* SET|DELETE FROM|FOR UPDATE)|selectinload|is_due_today' detailed_design/api
+rg -n --glob '*.md' 'UPDATE\s+\w+\s+SET|INSERT INTO\s+\w+|DELETE FROM\s+\w+|session\.add\(|db\.flush\(|IntegrityError|S->>PG:\s*"?(UPDATE|INSERT|DELETE)|CALL\s+\w+\s*$' detailed_design/api
 ```
 
 1つ目は出力なしで合格、2つ目は設計書に該当表現がないことを確認する。要件の機能説明に含まれる「実装予定」等を機械的に削除対象とはせず、現行設計の状態を示す文書だけを確認する。
 3つ目は、例外であるhealth以外のrepository直接CRUD、通知のORM遅延ロード、独立した日時判定関数が残っていないことを確認する。検出した場合は `08_db_functions.md` の契約へ置き換える。
+4つ目は、3つ目が「`repository` という語と同一行にあること」を前提としているため検出できない残骸を広く拾うための補完検査である。生SQLの断片（`UPDATE ... SET` 等）、ORMの直接操作（`session.add(` / `db.flush(` / `IntegrityError`）、シーケンス図上でservice/repositoryがPostgreSQLへ生SQLを直接発行しているように読める記述（`S->>PG: "UPDATE...`等）、`CALL sp_xxx` の直後に行末で途切れて後続行に `SET`/`WHERE` が続くような構文的に壊れた記述を検出する。検出した場合は該当箇所を `CALL sp_xxx(:params);` または `SELECT fn_xxx(:params);` のみの記述へ書き換え、`08_db_functions.md` のシグネチャと突き合わせる。
 
 ### 2.2 相対リンク
 
@@ -114,6 +116,7 @@ rg -n '`P0[0-9]{3}`|`(DUPLICATE_USERNAME|DUPLICATE_EMAIL|ALREADY_MEMBER|OWNER_CA
 
 ## 4. 不明点・要検討事項
 
+- 2026-09-04時点の§3検査は、§2.1の3つ目のgrepが「`repository` という語との同一行一致」を前提としていたため、`api/notifications/03_patch_notification_read.md`・`04_post_notifications_read_all.md` に残っていた旧実装の生SQL残骸・構文的に壊れた `CALL` 記述を検出できず「該当なし」と誤判定していた。遡及レビューで発見・修正済み（本ファイルの§2.1に4つ目のgrepを追加）であり、再発防止のため今後の検査は追加後の4条件全てで実施する。
 - Mermaid CLIをCIへ導入するかは、実装リポジトリ化後のCI設計で要検討とする。
 - Markdownアンカーの存在検査は今回の手順では未自動化であり、見出し変更を含むPRのレビューで確認する。
 - エンドポイント・環境変数・エラーコードの完全な重複排除は、正規定義を機械可読な一覧へ分離する段階で自動化する。

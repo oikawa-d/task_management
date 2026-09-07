@@ -105,41 +105,32 @@ sequenceDiagram
     R->>CSRF: Origin/CSRF検証（sessionモードのみCSRF必須）
     CSRF-->>R: OK
     R->>S: change_role(actor=CurrentUser, target_id, new_role)
-    S->>RP: get_by_id(target_id) FOR UPDATE
+    S->>RP: sp_admin_update_user_role(actor.id, target_id, new_role)
     RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     alt 対象が存在しない
-        PG-->>RP: 0件
-        RP-->>S: None
+        PG-->>RP: 対象なし相当
+        RP-->>S: NotFoundError
         S-->>R: NotFoundError
         R-->>FE: 404 NOT_FOUND
-    else 存在する
-        PG-->>RP: user行（行ロック取得）
+    else 自分自身
+        PG-->>RP: P0007 SELF_MODIFICATION_NOT_ALLOWED
+        RP-->>S: SelfModificationError
+        S-->>R: SelfModificationError
+        R-->>FE: 409 SELF_MODIFICATION_NOT_ALLOWED
+    else 最後の有効adminを降格
+        PG-->>RP: P0008 LAST_ADMIN_REQUIRED
+        RP-->>S: LastAdminRequiredError
+        S-->>R: LastAdminRequiredError
+        R-->>FE: 409 LAST_ADMIN_REQUIRED
+    else 正常
+        PG-->>RP: role更新成功（advisory lock取得を含めSP内で一体実行、コミットで解放）
+        RP-->>S: 成功
+        S->>RP: fn_get_user(target_id)
+        RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
+        PG-->>RP: 更新後の行
         RP-->>S: User
-        S->>S: target_id == actor.id ?
-        alt 自分自身
-            S-->>R: SelfModificationError
-            R-->>FE: 409 SELF_MODIFICATION_NOT_ALLOWED
-        else 他ユーザー
-            S->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-            Note over S,PG: 同時実行される複数の降格リクエストを<br/>直列化するための順序ロック
-            S->>S: 降格（admin→member）かつ現在is_active=trueか判定
-            alt 降格に該当
-                S->>RP: sp_admin_update_user_role(target_id)
-                RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-                PG-->>RP: 残る有効admin数
-                alt 残る有効admin数が0
-                    RP-->>S: 0
-                    S-->>R: LastAdminRequiredError
-                    R-->>FE: 409 LAST_ADMIN_REQUIRED
-                end
-            end
-            S->>RP: sp_admin_update_user_role(target_id, role=new_role, is_active=None)
-            RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-            PG-->>RP: 更新後の行
-            RP-->>S: User
-            S-->>R: UserDetail
-            R-->>FE: 200 {user}
-        end
+        S-->>R: UserDetail
+        R-->>FE: 200 {user}
     end
 ```
 
@@ -154,20 +145,15 @@ flowchart TB
     C -->|"role != admin"| C2["403 FORBIDDEN"]
     C -->|"OK"| D["Origin/CSRF検証（sessionモード）"]
     D -->|"不一致"| D1["403 CSRF_INVALID"]
-    D -->|"OK"| E["対象ユーザーをFOR UPDATEで取得"]
-    E -->|"存在しない"| E1["404 NOT_FOUND"]
-    E -->|"存在する"| F{"target_id == actor.id?"}
-    F -->|"Yes"| F1["409 SELF_MODIFICATION_NOT_ALLOWED"]
-    F -->|"No"| G{"降格（admin→member）かつ<br/>現在is_active=true?"}
-    G -->|"No（昇格・現状維持・既に無効）"| I["CALL sp_admin_update_user_role"]
-    G -->|"Yes"| H["advisory lock取得 →<br/>残る有効admin数をCOUNT"]
-    H -->|"0"| H1["409 LAST_ADMIN_REQUIRED"]
-    H -->|"1以上"| I
-    I --> J["200 {user}"]
-    E -.->|"DB接続不能"| K["503 SERVICE_UNAVAILABLE"]
+    D -->|"OK"| I["CALL sp_admin_update_user_role<br/>（存在確認・自己変更禁止・最後のadmin判定・advisory lock・role更新をSP内で一体実行）"]
+    I -->|"対象不存在"| E1["404 NOT_FOUND"]
+    I -->|"P0007"| F1["409 SELF_MODIFICATION_NOT_ALLOWED"]
+    I -->|"P0008"| H1["409 LAST_ADMIN_REQUIRED"]
+    I -->|"成功"| J["fn_get_user(target_id)で応答取得 → 200 {user}"]
+    I -.->|"DB接続不能"| K["503 SERVICE_UNAVAILABLE"]
 ```
 
-**判定順序の理由**：自己変更禁止は対象が誰であっても一定のため、DBへの追加問い合わせ（admin数COUNT）を発生させる前に判定して早期リターンする。最後のadmin判定は「降格の場合のみ」発生する高コストな確認であり、かつ同時実行時の競合を避けるため、対象行の `FOR UPDATE` に加えて `pg_advisory_xact_lock` で「同時に複数の降格処理が発生する」レースを直列化してからCOUNTする。行ロックのみでは新規admin追加や無関係ユーザーの更新とは競合しないため、admin降格処理同士の直列化にはアドバイザリロックが必要となる。
+**判定順序の理由**：自己変更禁止判定・最後のadmin判定・advisory lockによる直列化は、いずれも `sp_admin_update_user_role` 内部で一体的に処理される。SP内部では自己変更を先に判定して早期に例外化し、降格（admin→member）の場合のみ `pg_advisory_xact_lock` を取得したうえで残る有効admin数を判定する。API・service層は追加のSELECTやロック取得を行わず、SPが返すSQLSTATE（`P0007`/`P0008`）をそのままHTTPエラーへ変換するだけである。
 
 ## 6. 関数詳細
 
@@ -204,27 +190,18 @@ flowchart TB
 | 処理内容 | SP内部で対象の存在・自己変更・最後のadminを判定し、必要なadvisory lockとrole更新を一体で行う |
 | 副作用 | SP内のusers更新 |
 
-### 6.4 `repository/user_repository.py :: sp_admin_update_user_role`
+### 6.4 `repository/user_repository.py :: fn_get_user`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def get_admin_role_result(db: AsyncSession, target_id: UUID) -> User \| None` |
+| シグネチャ | `async def fn_get_user(db: AsyncSession, target_id: UUID) -> User \| None` |
 | 引数 / 戻り値 | 対象ID / `SELECT fn_get_user(:target_id)` の結果 |
 | SP/FN呼び出し（内部SQLはSP側） | `SELECT fn_get_user(:target_id)` |
 | 送出例外 | なし。空集合は404へ変換 |
-| 処理内容 | 更新後の応答DTOを取得する。最後のadmin件数のSELECTや判定はSP内部へ置く |
+| 処理内容 | `sp_admin_update_user_role` の成功後、更新後の応答DTOを取得する |
 | 副作用 | なし |
 
-### 6.5 `service/admin_user_service.py :: sp_admin_update_user_role`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def sp_admin_update_user_role(db: AsyncSession) -> None` |
-| 引数 / 戻り値 | `db`: DBセッション / なし |
-| SP/FN呼び出し（内部SQLはSP側） | `SELECT pg_advisory_xact_lock(hashtext('admin_role_change'))` |
-| 送出例外 | なし（取得できるまでブロックする。トランザクションコミット/ロールバックで自動解放） |
-| 処理内容 | 1. 固定キー `'admin_role_change'` に対するトランザクションスコープのアドバイザリロックを取得し、同時に発生する降格判定を直列化する |
-| 副作用 | アドバイザリロック取得（トランザクション終了まで） |
+advisory lockの取得はservice層では行わない。`sp_admin_update_user_role` が内部でadvisory lockを含め、対象存在・自己変更禁止・最後のadmin保護・role更新を一体実行するため、6.5相当の独立したservice層関数は存在しない。
 
 ## 7. 関数相関図
 
@@ -232,12 +209,9 @@ flowchart TB
 flowchart LR
     R["admin_router.patch_admin_user_role"] --> S["admin_user_service.change_role"]
     S --> RP1["user_repository.sp_admin_update_user_role"]
-    S --> L["admin_user_service.sp_admin_update_user_role"]
-    S --> RP2["user_repository.sp_admin_update_user_role"]
-    S --> RP3["user_repository.sp_admin_update_user_role"]
+    S --> RP2["user_repository.fn_get_user"]
     RP1 --> M["models.User"]
     RP2 --> M
-    RP3 --> M
 ```
 
 ## 8. データ遷移図

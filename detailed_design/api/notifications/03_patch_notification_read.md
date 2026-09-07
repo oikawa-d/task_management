@@ -115,14 +115,10 @@ sequenceDiagram
 ### 5.3 `repository/notification_repository.py :: sp_mark_notification_read`
 
 ```sql
-UPDATE notifications
-   SET read_at = COALESCE(read_at, now())
- WHERE id = :notification_id
-   AND user_id = :user_id
-RETURNING id, read_at;
+CALL sp_mark_notification_read(:notification_id, :user_id);
 ```
 
-`user_id` 条件をSQLに含め、サービス層の検証漏れがあっても他人の通知を更新できないようにする。更新0件後の存在確認も同じ `id AND user_id` 条件で行う。
+`p_user_id` をSPへ必ず渡すため、サービス層の検証漏れがあっても他人の通知を更新できない。`id AND user_id` の一致判定、未読・既読双方の対象確認、`COALESCE(read_at, now())` による冪等な既読化はいずれもSP内部の責務であり、repositoryは `CALL` のみを発行する。
 
 ## 6. 処理フロー・分岐
 

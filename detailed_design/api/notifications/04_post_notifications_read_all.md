@@ -88,13 +88,10 @@ sequenceDiagram
 ### 5.3 `repository/notification_repository.py :: sp_mark_all_notifications_read`
 
 ```sql
-CALL sp_mark_all_notifications_read
-   SET read_at = now()
- WHERE user_id = :user_id
-   AND read_at IS NULL;
+CALL sp_mark_all_notifications_read(:user_id);
 ```
 
-更新後に同じ `user_id AND read_at IS NULL` 条件でCOUNTし、レスポンスの`unread_count`を算出する。部分インデックス `ix_notifications_user_unread`を利用する。
+`user_id` 一致かつ未読の行を一括で既読化する条件・更新件数の算出はSP内部の責務であり、repositoryは `CALL` のみを発行する。更新後は `SELECT fn_count_unread_notifications(:user_id)` を呼び、部分インデックス `ix_notifications_user_unread` を利用してレスポンスの `unread_count` を算出する。
 
 ## 6. 並行制御
 

@@ -103,43 +103,31 @@ sequenceDiagram
     R->>CSRF: Origin/CSRF検証（sessionモードのみCSRF必須）
     CSRF-->>R: OK
     R->>S: change_status(actor=CurrentUser, target_id, new_is_active)
-    S->>RP: sp_admin_update_user_status(target_id)
+    S->>RP: sp_admin_update_user_status(actor.id, target_id, new_is_active)
     RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     alt 対象が存在しない
-        PG-->>RP: 0件
+        PG-->>RP: 対象なし相当
         S-->>R: NotFoundError
         R-->>FE: 404 NOT_FOUND
-    else 存在する
-        PG-->>RP: user行（行ロック取得）
-        S->>S: target_id == actor.id ?
-        alt 自分自身
-            S-->>R: SelfModificationError
-            R-->>FE: 409 SELF_MODIFICATION_NOT_ALLOWED
-        else 他ユーザー
-            S->>S: 無効化（is_active: true→false）かつ現在role=adminか判定
-            alt 無効化 かつ admin
-                S->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-                S->>RP: sp_admin_update_user_status(target_id)
-                RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-                alt 残る有効admin数が0
-                    RP-->>S: 0
-                    S-->>R: LastAdminRequiredError
-                    R-->>FE: 409 LAST_ADMIN_REQUIRED
-                end
-            end
-            S->>RP: sp_admin_update_user_status(target_id, role=None, is_active=new_is_active)
-            RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-            PG-->>RP: 更新後の行
-            alt 無効化（new_is_active=false）
-                S->>RD: delete_all_sessions(target_id)
-                RD-->>S: SMEMBERS→各session/csrf DEL→SREM
-                S->>RD: revoke_all_refresh_tokens(target_id)
-                RD-->>S: SMEMBERS→各refresh DEL→SREM
-            end
-            RP-->>S: User
-            S-->>R: UserDetail
-            R-->>FE: 200 {user}
+    else 自分自身
+        PG-->>RP: P0007 SELF_MODIFICATION_NOT_ALLOWED
+        S-->>R: SelfModificationError
+        R-->>FE: 409 SELF_MODIFICATION_NOT_ALLOWED
+    else 最後の有効adminを無効化
+        PG-->>RP: P0008 LAST_ADMIN_REQUIRED
+        S-->>R: LastAdminRequiredError
+        R-->>FE: 409 LAST_ADMIN_REQUIRED
+    else 正常
+        PG-->>RP: is_active更新成功（advisory lock取得を含めSP内で一体実行、コミットで解放）
+        RP-->>S: User
+        alt 無効化（new_is_active=false）
+            S->>RD: delete_all_sessions(target_id)
+            RD-->>S: SMEMBERS→各session/csrf DEL→SREM
+            S->>RD: revoke_all_refresh_tokens(target_id)
+            RD-->>S: SMEMBERS→各refresh DEL→SREM
         end
+        S-->>R: UserDetail
+        R-->>FE: 200 {user}
     end
 ```
 
@@ -154,23 +142,18 @@ flowchart TB
     C -->|"role != admin"| C2["403 FORBIDDEN"]
     C -->|"OK"| D["Origin/CSRF検証（sessionモード）"]
     D -->|"不一致"| D1["403 CSRF_INVALID"]
-    D -->|"OK"| E["対象ユーザーをFOR UPDATEで取得"]
-    E -->|"存在しない"| E1["404 NOT_FOUND"]
-    E -->|"存在する"| F{"target_id == actor.id?"}
-    F -->|"Yes"| F1["409 SELF_MODIFICATION_NOT_ALLOWED"]
-    F -->|"No"| G{"無効化（true→false）かつ<br/>現在role=admin?"}
-    G -->|"No"| I["CALL sp_admin_update_user_status"]
-    G -->|"Yes"| H["advisory lock取得 →<br/>残る有効admin数をCOUNT"]
-    H -->|"0"| H1["409 LAST_ADMIN_REQUIRED"]
-    H -->|"1以上"| I
-    I --> J{"new_is_active == false?"}
+    D -->|"OK"| I["CALL sp_admin_update_user_status<br/>（存在確認・自己変更禁止・最後のadmin判定・advisory lock・is_active更新をSP内で一体実行）"]
+    I -->|"対象不存在"| E1["404 NOT_FOUND"]
+    I -->|"P0007"| F1["409 SELF_MODIFICATION_NOT_ALLOWED"]
+    I -->|"P0008"| H1["409 LAST_ADMIN_REQUIRED"]
+    I -->|"成功"| J{"new_is_active == false?"}
     J -->|"Yes"| K["Redis: delete_all_sessions<br/>+ revoke_all_refresh_tokens"]
     J -->|"No（再有効化）"| L["200 {user}"]
     K --> L
-    E -.->|"DB/Redis接続不能"| M["503 SERVICE_UNAVAILABLE"]
+    I -.->|"DB/Redis接続不能"| M["503 SERVICE_UNAVAILABLE"]
 ```
 
-**判定順序の理由**：[02_patch_admin_user_role.md](./02_patch_admin_user_role.md) と同一の考え方で、自己変更禁止（追加問い合わせ不要）を最後のadmin判定（COUNT + advisory lock）より先に確認する。DB更新後にRedis失効を行う順序とすることで、「DB上は無効化されたがRedisのセッションだけが生き残る」中間状態が発生してもフェイルセーフ側（無効化済み）に倒れる。逆に「Redisは失効したがDB更新前に失敗した」場合はトランザクションがロールバックされDB上は有効なままとなり、この場合はユーザーが再ログインすればセッションが再発行されるため実害はない。
+**判定順序の理由**：[02_patch_admin_user_role.md](./02_patch_admin_user_role.md) と同一の考え方で、自己変更禁止判定・最後のadmin判定・advisory lockによる直列化はいずれも `sp_admin_update_user_status` 内部で一体的に処理される。API/service層は追加のSELECTやロック取得を行わず、SPが返すSQLSTATE（`P0007`/`P0008`）をそのままHTTPエラーへ変換する。DB更新後にRedis失効を行う順序とすることで、「DB上は無効化されたがRedisのセッションだけが生き残る」中間状態が発生してもフェイルセーフ側（無効化済み）に倒れる。逆に「Redisは失効したがDB更新前に失敗した」場合はトランザクションがロールバックされDB上は有効なままとなり、この場合はユーザーが再ログインすればセッションが再発行されるため実害はない。
 
 ## 6. 関数詳細
 
@@ -231,13 +214,9 @@ flowchart TB
 flowchart LR
     R["admin_router.patch_admin_user_status"] --> S["admin_user_service.change_status"]
     S --> RP1["user_repository.sp_admin_update_user_status"]
-    S --> L["admin_user_service.sp_admin_update_user_status"]
-    S --> RP2["user_repository.sp_admin_update_user_status"]
-    S --> RP3["user_repository.sp_admin_update_user_status"]
     S --> RS1["redis_store.delete_all_sessions"]
     S --> RS2["redis_store.revoke_all_refresh_tokens"]
     RP1 --> M["models.User"]
-    RP3 --> M
     RS1 --> RD[("Redis")]
     RS2 --> RD
 ```
