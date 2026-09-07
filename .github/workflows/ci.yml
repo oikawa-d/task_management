@@ -10,7 +10,8 @@ jobs:
   detect:
     runs-on: ubuntu-latest
     outputs:
-      backend: ${{ steps.detect.outputs.backend }}
+      api: ${{ steps.detect.outputs.api }}
+      batch: ${{ steps.detect.outputs.batch }}
       frontend: ${{ steps.detect.outputs.frontend }}
       docker: ${{ steps.detect.outputs.docker }}
     steps:
@@ -18,9 +19,10 @@ jobs:
       - name: 実装ディレクトリの有無を確認
         id: detect
         run: |
-          [ -d src/app ] && echo "backend=true" >> "$GITHUB_OUTPUT" || echo "backend=false" >> "$GITHUB_OUTPUT"
+          [ -d api/app ] && echo "api=true" >> "$GITHUB_OUTPUT" || echo "api=false" >> "$GITHUB_OUTPUT"
+          [ -d batch/app ] && echo "batch=true" >> "$GITHUB_OUTPUT" || echo "batch=false" >> "$GITHUB_OUTPUT"
           [ -f frontend/package.json ] && echo "frontend=true" >> "$GITHUB_OUTPUT" || echo "frontend=false" >> "$GITHUB_OUTPUT"
-          [ -f Dockerfile ] && echo "docker=true" >> "$GITHUB_OUTPUT" || echo "docker=false" >> "$GITHUB_OUTPUT"
+          [ -f api/Dockerfile ] && echo "docker=true" >> "$GITHUB_OUTPUT" || echo "docker=false" >> "$GITHUB_OUTPUT"
 
   docs-check:
     runs-on: ubuntu-latest
@@ -39,10 +41,34 @@ jobs:
             git diff --check "${{ github.event.before }}" "${{ github.sha }}"
           fi
 
-  backend:
+  api:
     needs: detect
-    if: needs.detect.outputs.backend == 'true'
+    if: needs.detect.outputs.api == 'true'
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cerberus_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:8-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 5
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/cerberus_test
+      REDIS_URL: redis://localhost:6379/1
+      JWT_SECRET_KEY: ${{ secrets.CI_JWT_SECRET_KEY || 'ci-dummy-jwt-secret' }}
+      GOOGLE_CLIENT_ID: ci-dummy-google-client-id
+      GOOGLE_CLIENT_SECRET: ci-dummy-google-client-secret
+      INITIAL_ADMIN_EMAIL: admin@example.com
+      INITIAL_ADMIN_USERNAME: admin
+      INITIAL_ADMIN_PASSWORD: ${{ secrets.CI_INITIAL_ADMIN_PASSWORD || 'ci-dummy-admin-password' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -50,23 +76,82 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.14'
+          cache: pip
 
       - name: 依存関係のインストール
+        working-directory: api
         run: |
-          pip install ruff mypy pytest pytest-cov
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install ruff mypy pytest pytest-cov httpx2
+          pip install -r requirements.txt
 
       - name: ruff check
-        run: ruff check src
+        working-directory: api
+        run: ruff check app tests
 
       - name: ruff format --check（タブインデント強制）
-        run: ruff format --check --diff src
+        working-directory: api
+        run: ruff format --check --diff app tests
 
       - name: mypy
-        run: mypy src/app
+        working-directory: api
+        run: mypy app
 
       - name: pytest --cov
-        run: pytest --cov=src/app --cov-report=term-missing
+        working-directory: api
+        run: pytest --cov=app --cov-report=term-missing
+
+  batch:
+    needs: detect
+    if: needs.detect.outputs.batch == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cerberus_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:8-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 5
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/cerberus_test
+      REDIS_URL: redis://localhost:6379/1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+
+      - name: 依存関係のインストール
+        working-directory: batch
+        run: |
+          pip install ruff mypy pytest pytest-cov
+          pip install -r requirements.txt
+
+      - name: ruff check
+        working-directory: batch
+        run: ruff check app tests
+
+      - name: ruff format --check（タブインデント強制）
+        working-directory: batch
+        run: ruff format --check --diff app tests
+
+      - name: mypy
+        working-directory: batch
+        run: mypy app
+
+      - name: pytest --cov
+        working-directory: batch
+        run: pytest --cov=app --cov-report=term-missing
 
   frontend:
     needs: detect
@@ -108,8 +193,23 @@ jobs:
       - name: Docker Buildx セットアップ
         uses: docker/setup-buildx-action@v3
 
-      - name: イメージビルド
+      - name: backendイメージビルド
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: api/Dockerfile
+          push: false
+
+      - name: frontendイメージビルド
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          file: frontend/Dockerfile
+          push: false
+
+      - name: batchイメージビルド
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: batch/Dockerfile
           push: false

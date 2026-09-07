@@ -2,31 +2,33 @@
 
 ## プロジェクト構成
 
-このリポジトリは現在、アプリケーション本体ではなく設計ドキュメントを管理しています。
+このリポジトリは設計ドキュメントと実装コードの両方を管理しています。
 
 - `docs/requirements/`：要件定義書
 - `docs/basic_design/`：システム概要、DB、Redis、認証、API、フロントエンド、インフラ、図
 - `docs/detailed_design/`：`api/`、`auth/`、`database/`、`infra/`、`screen/` 配下の詳細設計
-- `README.md`：リポジトリ概要。設計書に記載された `api/`、`frontend/`、`tests/` は実装予定で、現在は未作成
+- `api/`：バックエンド（FastAPI）。`api/app/`が本体、`api/tests/`がpytest
+- `batch/`：定期実行バッチ（常駐スケジューラ）。`batch/app/`が本体、`batch/tests/`がpytest
+- `frontend/`：フロントエンド（Vite + React + TypeScript）
+- `db/`：DBマイグレーション以外の関数・ストアドプロシージャ
+- `README.md`：リポジトリ概要
 
-要件・基本設計・詳細設計の間で、用語、エンドポイント、エラーコード、環境変数名、Mermaid図を常に一致させてください。
-
-## ビルド・テスト・開発コマンド
-
-現在は実行可能なビルド・テスト設定がないため、ドキュメント変更時は次を実行します。
+要件・基本設計・詳細設計の間で、用語、エンドポイント、エラーコード、環境変数名、Mermaid図を常に一致させてください。ドキュメントのみの変更時は次を実行します。
 
 ```bash
 git diff --check
 ```
 
-実装後のローカル環境ではDocker Composeを使用します。
+## ビルド・テスト・開発コマンド
+
+ローカル環境ではDocker Composeを使用します。
 
 ```bash
 docker compose up -d
 docker compose -f docker-compose.yml -f compose.dev.yml up
 ```
 
-CIでは、`ruff check`、`ruff format --check`（タブインデント強制）、`mypy src/app`、`pytest --cov`、フロントエンドのESLint・TypeScriptチェック・Vitestカバレッジ、Dockerイメージビルドを実施します。実装ディレクトリ作成後は該当するチェックを実行してください。CI定義は`.github/workflows/ci.yml`、Ruff設定は`pyproject.toml`の`[tool.ruff.format]`（`indent-style = "tab"`）を参照してください。
+CIでは、`api/`・`batch/`それぞれに対して`ruff check`、`ruff format --check`（タブインデント強制）、`mypy app`、`pytest --cov`を実行し、フロントエンドのESLint・TypeScriptチェック・Vitestカバレッジ、`api/frontend/batch`各Dockerfileのイメージビルドを実施します。CI定義は`.github/workflows/ci.yml`、Ruff設定は`pyproject.toml`の`[tool.ruff.format]`（`indent-style = "tab"`）を参照してください。
 
 ## コーディング規約・命名
 
