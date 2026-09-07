@@ -2,6 +2,7 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
+from app.models.base import Base
 from sqlalchemy import engine_from_config, pool
 
 config = context.config
@@ -9,7 +10,7 @@ config = context.config
 if config.config_file_name is not None:
 	fileConfig(config.config_file_name)
 
-target_metadata = None
+target_metadata = Base.metadata
 
 
 def _database_url() -> str:
