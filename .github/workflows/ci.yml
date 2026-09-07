@@ -81,7 +81,7 @@ jobs:
       - name: 依存関係のインストール
         working-directory: api
         run: |
-          pip install ruff mypy pytest pytest-cov httpx2
+          pip install ruff mypy pytest pytest-cov pytest-asyncio httpx2
           pip install -r requirements.txt
 
       - name: ruff check
