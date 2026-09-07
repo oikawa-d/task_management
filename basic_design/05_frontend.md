@@ -43,7 +43,7 @@ frontend/
 │   │   └── AuthLayout.tsx          # ログイン系画面のレイアウト
 │   ├── features/
 │   │   ├── auth/                   # ログイン・登録・メール認証・パスワードリセット
-│   │   ├── projects/               # ダッシュボード・プロジェクト
+│   │   ├── projects/               # ダッシュボード（カード表示・カレンダー表示）・プロジェクト
 │   │   ├── board/                  # カンバン・タスク詳細
 │   │   ├── settings/               # アカウント設定
 │   │   ├── notifications/          # 通知ベル・通知パネル
@@ -231,8 +231,14 @@ flowchart TB
 
     RT --> OCP["OAuthCallbackPage<br/>fragment code交換"]
 
+    DP --> DVT["DashboardViewTabs<br/>（カード / カレンダー）"]
     DP --> PCL["ProjectCardList"]
     DP --> PCM["ProjectCreateModal"]
+    DP --> CV["CalendarView<br/>（表示範囲切替・月送り）"]
+    CV --> CG["CalendarGrid"]
+    CG --> CDC["CalendarDayCell x42"]
+    CDC --> CTC["CalendarTaskChip x n"]
+    CTC --> TDM
     BP --> KB["KanbanBoard"]
     KB --> KC["KanbanColumn x3"]
     KC --> TC["TaskCard"]
@@ -249,9 +255,10 @@ flowchart TB
 | ストア | 保持内容 | 永続化 | 備考 |
 |--------|----------|--------|------|
 | `authStore`（Zustand） | `user`, `status`（`loading` / `authenticated` / `unauthenticated`）, `accessToken`（jwtモードのみ）, `authAdapter` | **しない**（メモリのみ） | アクセストークンを localStorage に置かない（XSS対策）。adapterは起動時のbackend設定から選択 |
-| `uiStore`（Zustand + persist） | `fontScale`, `sidebarOpen` | localStorage | 文字サイズ・サイドバー開閉はクライアント側のみで保持 |
+| `uiStore`（Zustand + persist） | `fontScale`, `sidebarOpen`, `dashboardView`（`"cards"` / `"calendar"`） | localStorage | 文字サイズ・サイドバー開閉・ダッシュボードの表示モードはクライアント側のみで保持。次回起動時も選択中の表示モードを復元する |
 | 通知（React Query） | `['notifications','unread-count']` / `['notifications', page, unreadOnly]` | しない | 未読件数はポーリング、一覧はパネルを開いたときに取得。パネルの開閉状態のみコンポーネントのローカルstateで持つ |
 | TanStack Query | プロジェクト一覧・ボード・コメント・ユーザー一覧 | しない | `queryKey` は `['projects']` / `['board', projectId]` / `['comments', taskId]` |
+| カレンダー（React Query） | `['tasks-calendar', scope, projectId, from, to]` | しない | 表示中の月（前後の見切れ週を含む`from`〜`to`）が変わるたびに取得し直す。`scope`/`projectId`の切替時も同様に再取得する |
 
 ### 5.1 認証状態の遷移
 
@@ -417,6 +424,20 @@ flowchart TB
 - 「新規プロジェクトの作成」ボタン → モーダル
 - プロジェクト0件時は空状態メッセージと作成導線を表示
 - ヘッダーの通知ベル（§3.1）から通知一覧を開ける。ベル自体は `AppLayout` の共通要素であり、ダッシュボード固有の実装は持たない
+- 画面上部のタブで「カード表示」「カレンダー表示」を切替できる（§7.4.1）。選択状態は `uiStore.dashboardView` に保持し、次回訪問時も復元する
+
+#### 7.4.1 カレンダー表示（issue #38）
+
+| 要素 | 仕様 |
+|------|------|
+| 表示範囲切替 | 「自分のタスク」「プロジェクト：{選択中プロジェクト名} ▼」の2択。「プロジェクト」選択時はプルダウンで所属プロジェクトから選ぶ（初期値は最初の1件、所属0件なら選択肢自体を出さず「自分のタスク」固定） |
+| 月送り | `‹ {YYYY年M月} ›` で前月・翌月へ移動。初期表示は当月 |
+| グリッド | 月表示（日曜始まり、6週×7列=42セル固定）。当月以外の日付は淡色表示 |
+| セル内表示 | 日付番号＋その日が`due_at`のタスクをチップ表示（タイトル省略表示）。1セルの表示上限（既定4件、超過分は「+N件」を表示しクリックでその日の全件をポップオーバー表示） |
+| タスクの操作 | チップ（またはポップオーバー内の行）をクリックすると`TaskDetailModal`を開く（カンバン §7.5 と同一コンポーネントを再利用）。ドラッグによる`due_at`変更は本機能のスコープ外 |
+| URL同期 | カンバン（§7.5）と異なり、ダッシュボードは特定プロジェクトに紐づく画面ではないため、モーダルを開いてもURLは変更しない（ブラウザの共有・リロードでの復元は対象外） |
+| データ取得 | `GET /tasks/calendar?from=&to=&scope=&project_id=`（[04_api.md](./04_api.md#24-タスクコメント)）。表示中の月に加え前後月の見切れ週分を含めた範囲を1回のリクエストで取得する |
+| 空状態 | 表示範囲内に該当タスクが1件もない月は、グリッドはそのまま表示しつつ全セルにチップなし（専用の空状態メッセージは出さない） |
 
 ### 7.5 カンバンボード
 
@@ -476,6 +497,7 @@ flowchart LR
 | 単体 | `uiStore` | 文字サイズの永続化と復元、localStorage が空の場合の既定値 |
 | コンポーネント | LoginForm / RegisterForm | 入力検証・エラー表示・送信内容 |
 | コンポーネント | KanbanBoard | D&D後の楽観的更新とロールバック（MSWで失敗レスポンスを返す） |
+| コンポーネント | CalendarView | 月送りで表示範囲(`from`/`to`)が再計算されること、`scope`/`project_id`切替で再取得されること、1セル超過分が「+N件」表示になること、チップクリックで`TaskDetailModal`が開くこと |
 | コンポーネント | Sidebar | `role` による「管理」タブの表示/非表示 |
 | コンポーネント | NotificationBell | `unread_count` 0件でバッジ非表示、1件以上で表示、100件以上で `99+` |
 | コンポーネント | NotificationPanel | 一覧描画・空状態・「すべて既読」押下で未読が0になること・`task` が `null` の行が遷移しないこと |

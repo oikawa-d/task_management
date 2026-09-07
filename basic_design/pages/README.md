@@ -4,7 +4,7 @@
 フロントエンドの各画面のUIワイヤーフレーム構成イメージを drawio 形式で保持する。
 いずれも**非圧縮のXML**（`mxfile` / `mxGraphModel`）で保存しているため、差分が git で追える。
 
-対象は全11画面＋共通レイアウト（AppLayout）＝計12ファイル。画面1つにつき1ファイルで分割している。
+対象は全11画面＋共通レイアウト（AppLayout）＋ダッシュボードのカレンダー表示（issue #38）＝計13ファイル。画面1つにつき1ファイルで分割している。
 
 ## ファイル一覧
 
@@ -16,7 +16,8 @@
 | [03_password_forgot.drawio](./03_password_forgot.drawio) | パスワード再設定要求 | `/password/forgot` | [05_frontend.md §2表](../05_frontend.md#2-画面一覧とルーティング)（詳細UIは要確認、図中に明記） |
 | [04_password_reset.drawio](./04_password_reset.drawio) | パスワード再設定 | `/password/reset#token=` | [05_frontend.md §2表](../05_frontend.md#2-画面一覧とルーティング)（詳細UIは要確認、図中に明記） |
 | [05_verify_email.drawio](./05_verify_email.drawio) | メール認証 | `/verify-email#token=` | [05_frontend.md §7.3](../05_frontend.md#73-メール認証) |
-| [06_dashboard.drawio](./06_dashboard.drawio) | ダッシュボード | `/dashboard` | [05_frontend.md §7.4](../05_frontend.md#74-ダッシュボード) |
+| [06_dashboard.drawio](./06_dashboard.drawio) | ダッシュボード（カード表示） | `/dashboard` | [05_frontend.md §7.4](../05_frontend.md#74-ダッシュボード) |
+| [12_dashboard_calendar.drawio](./12_dashboard_calendar.drawio) | ダッシュボード（カレンダー表示） | `/dashboard`（表示切替タブ） | [05_frontend.md §7.4.1](../05_frontend.md#741-カレンダー表示issue-38) |
 | [07_board.drawio](./07_board.drawio) | プロジェクト詳細（カンバン） | `/projects/:projectId` | [05_frontend.md §7.5](../05_frontend.md#75-カンバンボード) |
 | [08_task_detail_modal.drawio](./08_task_detail_modal.drawio) | タスク詳細/編集モーダル | `/projects/:projectId/tasks/:taskId` | [05_frontend.md §7.5](../05_frontend.md#75-カンバンボード) |
 | [09_settings.drawio](./09_settings.drawio) | アカウント設定 | `/settings` | [05_frontend.md §7.6](../05_frontend.md#76-アカウント設定) |
@@ -57,7 +58,7 @@ python3 ~/.claude/skills/architecture-diagram/validate.py out.drawio
 # => OK: レイアウト違反なし
 ```
 
-12ファイルすべてで検証済み（`OK: レイアウト違反なし`）。
+13ファイルすべてで検証済み（`OK: レイアウト違反なし`）。
 
 ## エクスポート
 
