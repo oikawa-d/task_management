@@ -1,10 +1,13 @@
+import asyncio
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
+from app.core.config import get_backend_settings
 from app.repository import admin_repository, login_history_repository, project_repository, user_repository
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
 async def _make_admin(db: AsyncSession, username: str) -> uuid.UUID:
@@ -51,16 +54,40 @@ async def test_list_login_history_filters_by_user_method_and_success(db_session:
 	)
 	await login_history_repository.create(db_session, other_id, "hist-user2", "session", None, None, True, None)
 
-	by_user = await admin_repository.list_login_history(db_session, user_id, None, None, None, 50, 0)
-	by_method = await admin_repository.list_login_history(db_session, None, None, "jwt", None, 50, 0)
-	by_success = await admin_repository.list_login_history(db_session, None, None, None, False, 50, 0)
-	by_query = await admin_repository.list_login_history(db_session, None, "hist-user2", None, None, 50, 0)
+	by_user = await admin_repository.list_login_history(db_session, user_id, None, None, None, None, None, 50, 0)
+	by_method = await admin_repository.list_login_history(db_session, None, None, "jwt", None, None, None, 50, 0)
+	by_success = await admin_repository.list_login_history(db_session, None, None, None, False, None, None, 50, 0)
+	by_query = await admin_repository.list_login_history(db_session, None, "hist-user2", None, None, None, None, 50, 0)
 
 	assert {h.user_id for h in by_user} == {user_id}
 	assert len(by_user) == 2
 	assert all(h.login_method == "jwt" for h in by_method)
 	assert all(h.success is False for h in by_success)
 	assert {h.user_id for h in by_query} == {other_id}
+
+
+async def test_list_login_history_filters_by_created_at_range(db_session: AsyncSession) -> None:
+	user_id = await user_repository.create(db_session, "hist-range1", "hist-range1@example.com", "hash")
+	await login_history_repository.create(db_session, user_id, "hist-range1", "session", None, None, True, None)
+	await db_session.execute(
+		text(
+			"INSERT INTO login_history (user_id, login_identifier, login_method, success, created_at) "
+			"VALUES (:user_id, 'hist-range1', 'session', true, now() - interval '10 days')"
+		),
+		{"user_id": user_id},
+	)
+
+	now = datetime.now(timezone.utc)
+	recent_only = await admin_repository.list_login_history(
+		db_session, user_id, None, None, None, now - timedelta(days=1), None, 50, 0
+	)
+	old_only = await admin_repository.list_login_history(
+		db_session, user_id, None, None, None, None, now - timedelta(days=1), 50, 0
+	)
+
+	assert len(recent_only) == 1
+	assert len(old_only) == 1
+	assert recent_only[0].id != old_only[0].id
 
 
 async def test_update_user_role_self_modification_raises_p0007(db_session: AsyncSession) -> None:
@@ -134,3 +161,91 @@ async def test_deactivate_project_toggles_is_active(db_session: AsyncSession) ->
 	reactivated = await project_repository.get_by_id(db_session, project_id)
 	assert reactivated is not None
 	assert reactivated.is_active is True
+
+
+async def test_concurrent_role_demotion_of_two_admins_only_one_succeeds(db_session: AsyncSession) -> None:
+	admin_a = await _make_admin(db_session, "concurrent-role-a")
+	admin_b = await _make_admin(db_session, "concurrent-role-b")
+	actor_id = await user_repository.create(
+		db_session, "concurrent-role-actor", "concurrent-role-actor@example.com", "hash"
+	)
+	await db_session.commit()
+
+	settings = get_backend_settings()
+	engine = create_async_engine(settings.database_url)
+	session_factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+
+	async def _demote(target_id: uuid.UUID) -> str:
+		async with session_factory() as session:
+			try:
+				await admin_repository.update_user_role(session, actor_id, target_id, "member")
+				await session.commit()
+				return "ok"
+			except DBAPIError as exc:
+				return getattr(exc.orig, "sqlstate", None) or "unknown_error"
+
+	try:
+		results = await asyncio.gather(_demote(admin_a), _demote(admin_b))
+	finally:
+		await engine.dispose()
+
+	# 有効adminが2人しかいない状態で同時に降格を試みた場合、片方のみ成功しもう片方はP0008で拒否される
+	assert sorted(results) == ["P0008", "ok"]
+
+	remaining_admins = (
+		(await db_session.execute(text("SELECT count(*) AS c FROM users WHERE role = 'admin' AND is_active = true")))
+		.mappings()
+		.one()
+	)
+	assert remaining_admins["c"] == 1
+
+	# 別コネクションでのcommitは本fixtureのrollbackで取り消せないため、後続テストへ有効adminを
+	# 残さないよう明示的にクリーンアップしてcommitする
+	await db_session.execute(
+		text("UPDATE users SET role = 'member' WHERE id IN (:a, :b)"), {"a": admin_a, "b": admin_b}
+	)
+	await db_session.commit()
+
+
+async def test_concurrent_status_deactivation_of_two_admins_only_one_succeeds(db_session: AsyncSession) -> None:
+	admin_a = await _make_admin(db_session, "concurrent-status-a")
+	admin_b = await _make_admin(db_session, "concurrent-status-b")
+	actor_id = await user_repository.create(
+		db_session, "concurrent-status-actor", "concurrent-status-actor@example.com", "hash"
+	)
+	await db_session.commit()
+
+	settings = get_backend_settings()
+	engine = create_async_engine(settings.database_url)
+	session_factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+
+	async def _deactivate(target_id: uuid.UUID) -> str:
+		async with session_factory() as session:
+			try:
+				await admin_repository.update_user_status(session, actor_id, target_id, False)
+				await session.commit()
+				return "ok"
+			except DBAPIError as exc:
+				return getattr(exc.orig, "sqlstate", None) or "unknown_error"
+
+	try:
+		results = await asyncio.gather(_deactivate(admin_a), _deactivate(admin_b))
+	finally:
+		await engine.dispose()
+
+	# 有効adminが2人しかいない状態で同時に無効化を試みた場合、片方のみ成功しもう片方はP0008で拒否される
+	assert sorted(results) == ["P0008", "ok"]
+
+	remaining_admins = (
+		(await db_session.execute(text("SELECT count(*) AS c FROM users WHERE role = 'admin' AND is_active = true")))
+		.mappings()
+		.one()
+	)
+	assert remaining_admins["c"] == 1
+
+	# 別コネクションでのcommitは本fixtureのrollbackで取り消せないため、後続テストへ有効adminを
+	# 残さないよう明示的にクリーンアップしてcommitする
+	await db_session.execute(
+		text("UPDATE users SET is_active = false WHERE id IN (:a, :b)"), {"a": admin_a, "b": admin_b}
+	)
+	await db_session.commit()

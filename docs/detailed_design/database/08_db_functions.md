@@ -67,7 +67,7 @@ repository層は `CALL sp_xxx(...)` または `SELECT fn_xxx(...)` と戻り値�
 | 31 | プロシージャ | `sp_mark_all_notifications_read` | `p_user_id UUID` | なし | 本人の未読通知を一括既読化 |
 | 32 | 関数 | `fn_admin_list_users` | `p_query VARCHAR`, `p_role VARCHAR`, `p_is_active BOOLEAN`, `p_limit INTEGER`, `p_offset INTEGER` | `SETOF users` | admin用ユーザー一覧 |
 | 33 | 関数 | `fn_admin_list_projects` | `p_query VARCHAR`, `p_is_active BOOLEAN`, `p_limit INTEGER`, `p_offset INTEGER` | `SETOF projects` | admin用プロジェクト一覧 |
-| 34 | 関数 | `fn_admin_list_login_history` | `p_user_id UUID`, `p_query VARCHAR`, `p_login_method VARCHAR`, `p_success BOOLEAN`, `p_limit INTEGER`, `p_offset INTEGER` | `SETOF login_history` | admin用ログイン履歴一覧 |
+| 34 | 関数 | `fn_admin_list_login_history` | `p_user_id UUID`, `p_query VARCHAR`, `p_login_method VARCHAR`, `p_success BOOLEAN`, `p_from TIMESTAMPTZ`, `p_to TIMESTAMPTZ`, `p_limit INTEGER`, `p_offset INTEGER` | `SETOF login_history` | admin用ログイン履歴一覧 |
 | 35 | プロシージャ | `sp_admin_update_user_role` | `p_actor_id UUID`, `p_target_id UUID`, `p_new_role VARCHAR` | なし | 自己変更・最後のadmin保護付きrole更新 |
 | 36 | プロシージャ | `sp_admin_update_user_status` | `p_actor_id UUID`, `p_target_id UUID`, `p_is_active BOOLEAN` | なし | 自己変更・最後のadmin保護付きstatus更新 |
 | 37 | プロシージャ | `sp_admin_deactivate_project` | `p_project_id UUID`, `p_is_active BOOLEAN` | なし | adminによるproject無効化 |
@@ -356,9 +356,9 @@ $$;
 | `sp_mark_all_notifications_read` | user_id一致かつ未読の行を一括UPDATE | 既読は上書きしない |
 | `fn_admin_list_users` | role/status/queryをusersへ適用して一覧返却 | admin APIからのみ呼ぶ |
 | `fn_admin_list_projects` | query/statusをprojectsへ適用し関連集計を含めて返却 | admin APIからのみ呼ぶ |
-| `fn_admin_list_login_history` | login_historyを条件・created_at降順でページング | admin APIからのみ呼ぶ |
-| `sp_admin_update_user_role` | actor/targetをロックし、自己変更・最後のadminを判定後role UPDATE | P0007/P0008、advisory lock |
-| `sp_admin_update_user_status` | actor/targetをロックし、自己変更・最後のadminを判定後is_active UPDATE | P0007/P0008、advisory lock |
+| `fn_admin_list_login_history` | login_historyを条件（`p_from`/`p_to`によるcreated_at期間絞り込みを含む）・created_at降順でページング | admin APIからのみ呼ぶ。`api/admin/07_get_admin_login_history.md` §2.1のfrom/to確定仕様に対応 |
+| `sp_admin_update_user_role` | 自己変更判定後、admin保護判定専用の固定キーで`pg_advisory_xact_lock`を取得し全体を直列化。最後の有効adminを判定後role UPDATE | P0007/P0008、advisory lock（固定キー。対象ユーザー単位のロックでは異なる2人のadminへの同時降格を直列化できないため） |
+| `sp_admin_update_user_status` | 自己変更判定後、admin保護判定専用の固定キーで`pg_advisory_xact_lock`を取得し全体を直列化。最後の有効adminを判定後is_active UPDATE | P0007/P0008、advisory lock（固定キー。理由は上記と同様） |
 | `sp_admin_deactivate_project` | projects.is_activeをadmin権限前提でUPDATE | 関連行は変更しない |
 | `fn_find_user_by_identifier` | lower(username/email)でusersを参照 | login時の有効状態・verified判定材料 |
 | `fn_find_user_by_email` | lower(email)でusersを参照 | 未存在でも同じ正常応答を許容 |

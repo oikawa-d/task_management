@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,6 +44,8 @@ async def list_login_history(
 	query: str | None,
 	login_method: str | None,
 	success: bool | None,
+	created_from: datetime | None,
+	created_to: datetime | None,
 	limit: int,
 	offset: int,
 ) -> list[LoginHistory]:
@@ -50,10 +53,20 @@ async def list_login_history(
 		select(LoginHistory)
 		.from_statement(
 			text(
-				"SELECT * FROM fn_admin_list_login_history(:user_id, :query, :login_method, :success, :limit, :offset)"
+				"SELECT * FROM fn_admin_list_login_history("
+				":user_id, :query, :login_method, :success, :created_from, :created_to, :limit, :offset)"
 			)
 		)
-		.params(user_id=user_id, query=query, login_method=login_method, success=success, limit=limit, offset=offset)
+		.params(
+			user_id=user_id,
+			query=query,
+			login_method=login_method,
+			success=success,
+			created_from=created_from,
+			created_to=created_to,
+			limit=limit,
+			offset=offset,
+		)
 		.execution_options(populate_existing=True)
 	)
 	return list(result.scalars().all())

@@ -14,8 +14,10 @@ BEGIN
         RAISE EXCEPTION 'self modification is not allowed' USING ERRCODE = 'P0007';
     END IF;
 
-    -- 対象ユーザー単位で直列化し、並行するrole/status変更と最後のadmin判定が競合しないようにする
-    PERFORM pg_advisory_xact_lock(hashtextextended(p_target_id::text, 0));
+    -- 「有効adminが最低1人残る」はusersテーブル全体に対するグローバルな不変条件のため、
+    -- 対象ユーザー単位のロックでは異なる2人のadminへの同時降格を直列化できない。
+    -- admin保護判定専用の固定キーでrole/status変更全体を直列化する。
+    PERFORM pg_advisory_xact_lock(hashtext('admin_protection'));
 
     SELECT role, is_active INTO v_current_role, v_current_is_active
     FROM users WHERE id = p_target_id;

@@ -44,7 +44,8 @@ def downgrade() -> None:
 	op.execute("DROP PROCEDURE IF EXISTS sp_admin_update_user_role(UUID, UUID, VARCHAR)")
 
 	op.execute(
-		"DROP FUNCTION IF EXISTS fn_admin_list_login_history(UUID, VARCHAR, VARCHAR, BOOLEAN, INTEGER, INTEGER)"
+		"DROP FUNCTION IF EXISTS fn_admin_list_login_history("
+		"UUID, VARCHAR, VARCHAR, BOOLEAN, TIMESTAMPTZ, TIMESTAMPTZ, INTEGER, INTEGER)"
 	)
 	op.execute("DROP FUNCTION IF EXISTS fn_admin_list_projects(VARCHAR, BOOLEAN, INTEGER, INTEGER)")
 	op.execute("DROP FUNCTION IF EXISTS fn_admin_list_users(VARCHAR, VARCHAR, BOOLEAN, INTEGER, INTEGER)")
