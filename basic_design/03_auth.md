@@ -355,7 +355,7 @@ sequenceDiagram
     else 有効
         API->>PG: UPDATE users SET email_verified_at = now()
         API-->>FE: 204
-        FE-->>U: ログイン画面へ遷移（認証完了メッセージ）
+        FE-->>U: 「認証完了。このタブは閉じてよい」を表示（自動遷移なし。別タブで開く前提）
     end
 
     U->>FE: ID/メール + パスワード

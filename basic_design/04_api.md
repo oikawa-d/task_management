@@ -73,6 +73,7 @@
 | POST | `/projects/{project_id}/tasks` | タスク作成 | プロジェクトメンバー |
 | GET | `/tasks` | タスク横断一覧（`project_id`で絞込可、`project_id=null`で未所属タスクのみ） | 本人が参照可能な範囲（所属プロジェクト全部＋自分の未所属タスク。adminは全件） |
 | POST | `/tasks` | タスク作成（`project_id`任意。未指定・`null`ならプロジェクト未所属タスクとして作成） | member |
+| GET | `/tasks/calendar?from=&to=&scope=&project_id=` | カレンダー表示用タスク一覧（`due_at`が期間内かつ非NULLのタスクのみ、ページングなし。issue #38で新設） | scope=`me`：ログイン済みなら誰でも（自分担当分のみ）／scope=`project`：プロジェクトメンバー |
 | GET | `/tasks/{task_id}` | タスク詳細 | プロジェクトメンバー（`project_id`がNULLの場合は作成者本人） |
 | PATCH | `/tasks/{task_id}` | タスク更新（title/description/status/assignee/position/due_at/version/`is_active`） | プロジェクトメンバー（`project_id`がNULLの場合は作成者本人）。`is_active`の変更のみ作成者本人/プロジェクトオーナー/adminに限定 |
 | DELETE | `/tasks/{task_id}` | タスク論理削除（`is_active=false`。position詰めは行わない） | プロジェクトメンバー（`project_id`がNULLの場合は作成者本人） |
@@ -84,6 +85,17 @@
 コメント更新はLast Write Winsとし、`task_comments`にversion列を追加しない。同時更新は後からcommitされた本文を最終値とする。
 
 `GET/POST /tasks`（issue #10で新設）はプロジェクトに紐づかない横断的なタスク操作用のフラットエンドポイントである。`GET/POST /projects/{project_id}/tasks` はプロジェクト配下専用として引き続き提供し、`project_id`はパス由来のみ（bodyには含めない）とする。詳細は [../detailed_design/api/tasks/](../detailed_design/api/tasks/) を参照。
+
+`GET /tasks/calendar`（issue #38で新設。ダッシュボードのカレンダー表示専用）のクエリパラメータ：
+
+| パラメータ | 型 | 必須 | 制約 |
+|-----------|----|----|------|
+| from | string(date) | 必須 | `YYYY-MM-DD`。`APP_TIMEZONE`における当日0時として解釈 |
+| to | string(date) | 必須 | `YYYY-MM-DD`。`from`以降であること。`from`との差は62日以内（カレンダー月表示の最大6週間＋前後月の見切れ分を許容する上限） |
+| scope | string | 必須 | `me` / `project` |
+| project_id | string(uuid) | scope=`project`時必須 | 非所属（かつ非admin）は`404 NOT_FOUND` |
+
+`scope=me`：`(project_id IS NULL AND created_by=自分) OR (assignee_id=自分)` に該当するタスク（所属プロジェクトのタスクと、自分が作成した未所属タスクの両方を含む）。`scope=project`：指定`project_id`配下の全タスク（担当者を問わない、プロジェクトメンバー全員分）。いずれも`due_at`が期間内かつ非NULL、`is_active=true`のタスクのみを対象とし、`due_at`昇順でページングなしに全件返す（月表示1画面分の範囲に上限を設けているため）。レスポンス形式は`GET /tasks`の`items[]`要素と同一（`meta`は付与しない）。範囲超過・日付不正は`422 VALIDATION_ERROR`。
 
 ### 2.5 管理者（`/api/admin`）
 
@@ -473,6 +485,8 @@ DBの業務エラーはSPの `RAISE EXCEPTION ... USING ERRCODE = 'P0xxx'` で�
 | `GET /projects/{id}` `/tasks` | × | ×（404） | ○ | ○ | ○ |
 | `POST /projects/{id}/tasks` `PATCH /tasks/{id}` | × | ×（404） | ○ | ○ | ○ |
 | `GET /tasks` `POST /tasks` | × | ○（自分の未所属分＋所属分のみ） | ○ | ○ | ○（全件） |
+| `GET /tasks/calendar?scope=me` | × | ○（自分担当分＋自分の未所属分のみ） | ○ | ○ | ○ |
+| `GET /tasks/calendar?scope=project&project_id=` | × | ×（404） | ○ | ○ | ○ |
 | `PATCH /tasks/{id}` の `is_active` | × | ×（404） | ×（403、非作成者かつ非オーナー） | ○ | ○ |
 | `PATCH /projects/{id}` `DELETE /projects/{id}` | × | ×（404） | ×（403） | ○ | ○ |
 | `GET /projects/{id}/members/candidates`、`POST/DELETE /projects/{id}/members` | × | ×（404） | ×（403） | ○ | ○ |
