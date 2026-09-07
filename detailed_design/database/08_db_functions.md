@@ -161,7 +161,7 @@ $$;
 | 項目 | 内容 |
 |------|------|
 | シグネチャ | `fn_next_task_position(p_project_id UUID, p_status VARCHAR) RETURNS INTEGER` |
-| 引数 | `p_project_id`：対象プロジェクトID。`p_status`：対象カンバン列（`todo` / `in_progress` / `done`） |
+| 引数 | `p_project_id`：対象プロジェクトID。**issue #40でNULL許容に確定**（`NULL`は未所属タスク全体を1つの仮想列として扱う）。`p_status`：対象カンバン列（`todo` / `in_progress` / `done`） |
 | 戻り値 | 当該 `(project_id, status)` の列における次のposition（現在の最大値+1。行が0件なら0） |
 | 呼び出し元 | `sp_create_task` / `sp_update_task` 内部のみ。repositoryから単独で呼び出さない |
 | 前提 | **SPが同一トランザクション内で `pg_advisory_xact_lock` を取得済みであること**。本関数自体はロックを取得しない |
@@ -173,9 +173,12 @@ CREATE OR REPLACE FUNCTION fn_next_task_position(
 ) RETURNS INTEGER
 LANGUAGE sql
 AS $$
+    -- project_id = p_project_id ではp_project_idがNULLの場合に常にNULL（非該当）となり
+    -- 未所属タスク（project_id IS NULL）の採番が常に0を返す不具合になるため、
+    -- IS NOT DISTINCT FROM でNULL同士も一致とみなす
     SELECT COALESCE(MAX(position), -1) + 1
     FROM tasks
-    WHERE project_id = p_project_id
+    WHERE project_id IS NOT DISTINCT FROM p_project_id
       AND status = p_status;
 $$;
 ```
@@ -458,4 +461,4 @@ flowchart LR
 - `sp_purge_login_history` のバッチ削除化（大量データ時のロック長時間化対策）は基本設計のスコープ外であり、想定データ量次第で要検討。
 - `db/functions/` `db/procedures/` の `.sql` をAlembicから読み込むAPIは実装担当が確定する（詳細は [09_migration.md](./09_migration.md) 参照）。
 - `APP_TIMEZONE` はAPIからUTC化した `p_due_at` を渡す方針とし、セッションGUCへ変更する場合は接続プールのリセットを要検証とする。
-- adminのDB更新とRedisセッション失効は同一トランザクションにできないため、順序・再試行・監査ログを要検討とする。
+- ~~adminのDB更新とRedisセッション失効は同一トランザクションにできないため、順序・再試行・監査ログを要検討~~ → issue #40で確認。両方を伴うのは無効化API（`sp_admin_update_user_status`）のみで、「DB先行→成功後Redis失効」で確定済み（[`00_policy.md` §11](./00_policy.md)参照）。role変更・強制ログアウトはDB/Redisいずれか一方のみの更新のため対象外。

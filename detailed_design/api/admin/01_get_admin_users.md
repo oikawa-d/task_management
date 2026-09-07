@@ -175,7 +175,7 @@ flowchart TB
 | 引数 | `q`: username/email部分一致 / `role`, `is_active`: 絞り込み条件 / `page`, `per_page`: ページング |
 | 戻り値 | `User` エンティティのリスト |
 | 送出例外 | `OperationalError`（DB不通） |
-| 処理内容 | 1. `q` が指定されていれば `lower(username) LIKE lower(:q)\|\|'%'` または `lower(email) LIKE lower(:q)\|\|'%'`（前方一致、`uq_users_username`/`uq_users_email` の式インデックスを活用可能な範囲に限定） 2. `role`/`is_active` はそれぞれ等価条件として `AND` 追加 3. `ORDER BY created_at DESC` 4. `OFFSET (page-1)*per_page LIMIT per_page` 5. `oauth_accounts`/`login_history` へのJOINは行わずN+1を発生させない（一覧に表示しないため） |
+| 処理内容 | 1. `q` が指定されていれば `lower(username) LIKE '%' \|\| lower(:q) \|\| '%'` または `lower(email) LIKE '%' \|\| lower(:q) \|\| '%'`（部分一致。issue #40で基本設計 [`04_api.md`](../../../basic_design/04_api.md#25-管理者apiadmin) の定義どおりに確定。全表走査になり得るが管理者一覧のためデータ量は限定的と判断） 2. `role`/`is_active` はそれぞれ等価条件として `AND` 追加 3. `ORDER BY created_at DESC` 4. `OFFSET (page-1)*per_page LIMIT per_page` 5. `oauth_accounts`/`login_history` へのJOINは行わずN+1を発生させない（一覧に表示しないため） |
 | 副作用 | なし |
 
 ### 6.4 `repository/user_repository.py :: fn_admin_list_users`
@@ -276,5 +276,5 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 要検討 | `q` の検索対象（username/emailの部分一致）・大文字小文字区別なし・前方一致か部分一致かは基本設計に明記がなく本書での提案。基本設計側での明文化が望ましい |
+| 確定 | `q` の検索仕様（username/emailに対する部分一致・大文字小文字区別なし）はissue #40で[`basic_design/04_api.md` §2.5](../../../basic_design/04_api.md#25-管理者apiadmin)へ集約定義された |
 | 確定 | `display_name` は姓名が両方そろう場合のみ「姓 名」とし、それ以外は`username`へフォールバックする |

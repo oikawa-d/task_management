@@ -194,7 +194,7 @@ flowchart TB
 | 引数 | `q`: プロジェクト名の部分一致条件（`None` なら全件対象） / `page`, `per_page`: ページング |
 | 戻り値 | 件数 ／ `owner` を eager load 済みの `Project` エンティティのリスト |
 | 送出例外 | `OperationalError`（DB不通） |
-| 処理内容 | 1. [01_get_projects.md §6.3](../projects/01_get_projects.md) で定義済みの `fn_admin_list_projects`（admin向け全件取得）に `q` 引数を追加する形で拡張し、`GET /projects` のadmin分岐と本APIで実装を共有する 2. `q` 指定時は `lower(name) LIKE lower(:q)||'%'`（前方一致）を `WHERE` に追加 3. `ORDER BY created_at DESC` 4. `OFFSET (page-1)*per_page LIMIT per_page`（`fn_admin_list_projects` はページングなし） |
+| 処理内容 | 1. [01_get_projects.md §6.3](../projects/01_get_projects.md) で定義済みの `fn_admin_list_projects`（admin向け全件取得）に `q` 引数を追加する形で拡張し、`GET /projects` のadmin分岐と本APIで実装を共有する 2. `q` 指定時は `lower(name) LIKE '%' || lower(:q) || '%'`（部分一致。issue #40で確定）を `WHERE` に追加 3. `ORDER BY created_at DESC` 4. `OFFSET (page-1)*per_page LIMIT per_page`（`fn_admin_list_projects` はページングなし） |
 | 副作用 | なし |
 
 ### 6.4 service層のDTO写像
@@ -302,6 +302,6 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 要検討 | `q` によるプロジェクト名検索は基本設計に明記がなく、`GET /admin/users` の `q` 検索との一貫性を意図した本書での提案。基本設計側での明文化が望ましい |
+| 確定 | `q` によるプロジェクト名検索仕様（部分一致・大文字小文字区別なし）はissue #40で[`basic_design/04_api.md` §2.5](../../../basic_design/04_api.md#25-管理者apiadmin)へ集約定義された |
 | 要検討 | `fn_admin_list_projects`の検索引数と一般プロジェクト一覧の共有範囲は、DB実装時にシグネチャを正として確定する |
 | 対応済み | issue #10により`is_active`/`start_at`/`end_at`をレスポンスへ追加。管理者一覧は無効化済みプロジェクトを隠す必要がないため`is_active`によるフィルタは行わず常に全件返す（`GET /projects`の`include_inactive`とは異なる設計判断） | - |

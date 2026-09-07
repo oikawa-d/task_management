@@ -109,7 +109,9 @@
 | DELETE | `/admin/projects/{project_id}` | プロジェクト論理削除（`is_active=false`。所属・オーナーシップを問わず対象にできる） | admin |
 | GET | `/admin/login-history` | 全ユーザーのログイン履歴（監査） | admin |
 
-ロール変更・無効化では、自分自身の変更を拒否し、最後の有効adminを0人にする操作も拒否する（`409 SELF_MODIFICATION_NOT_ALLOWED` / `409 LAST_ADMIN_REQUIRED`）。無効化時はRedisの全セッション・refresh失効を先に完了してからDBを更新する。Redis失敗時はDBを更新せず `503 SERVICE_UNAVAILABLE` とし、部分失効は同じ処理を再実行する。JWTの既発行access tokenは、DBの `is_active` を毎回確認するため無効化直後から拒否される。強制ログアウトだけの場合はaccess tokenが最大 `ACCESS_TOKEN_TTL_SECONDS`（既定900秒）有効なままになり得る。
+ロール変更・無効化では、自分自身の変更を拒否し、最後の有効adminを0人にする操作も拒否する（`409 SELF_MODIFICATION_NOT_ALLOWED` / `409 LAST_ADMIN_REQUIRED`）。無効化時はPostgreSQLの`is_active`更新を先にコミットし、成功後にRedisの全セッション・refresh失効を実行する（DB先行・フェイルセーフ側＝無効化済みに倒す）。Redis失効が失敗してもDBの無効化はロールバックせず、`503 SERVICE_UNAVAILABLE`として再試行または運用者による手動失効で補償する。JWTの既発行access tokenは、DBの `is_active` を毎回確認するため無効化直後から拒否される。強制ログアウトだけの場合はaccess tokenが最大 `ACCESS_TOKEN_TTL_SECONDS`（既定900秒）有効なままになり得る。
+
+`/admin/users`・`/admin/projects`・`/admin/login-history`の`q`検索は、対象文字列（username/email/プロジェクト名/ログイン識別子）に対する**部分一致**（`ILIKE '%q%'`相当）とし、大文字小文字を区別しない。プロジェクトメンバー招待候補検索（`/projects/{id}/members/candidates?q=`）は対象ユーザー数が絞られること・インデックス活用によるパフォーマンスを優先するため、本ルールとは別に前方一致のままとする（[../detailed_design/api/projects/08_get_project_member_candidates.md](../detailed_design/api/projects/08_get_project_member_candidates.md)参照）。
 
 ### 2.6 通知（`/api/notifications`）
 
@@ -243,7 +245,7 @@ OAuthコールバックはブラウザの直接リダイレクトを受けるた
 
 ### 3.2 プロジェクト・タスク
 
-**`POST /projects`** リクエスト：`{ "name": "...", "description": "...", "start_at": null, "end_at": null }`（name は1〜100文字。`start_at`/`end_at`は共にISO 8601の任意項目で、両方指定時は`end_at >= start_at`を422で検証）
+**`POST /projects`** リクエスト：`{ "name": "...", "description": "...", "start_at": null, "end_at": null }`（name は1〜100文字。descriptionは0〜2000文字の任意項目。`start_at`/`end_at`は共にISO 8601の任意項目で、両方指定時は`end_at >= start_at`を422で検証）
 
 **`POST /projects/{id}/tasks`** リクエスト
 
@@ -322,7 +324,7 @@ status 別にグルーピングして返すことで、フロント側のカン�
 | フィールド | 型 | 制約 |
 |-----------|----|------|
 | title | string | 1〜150文字 |
-| description | string \| null | |
+| description | string \| null | 0〜2000文字（プロジェクトの`description`も同じ上限を適用する） |
 | status | string | `todo` / `in_progress` / `done` |
 | assignee_id | string(uuid) \| null | 有効なプロジェクトメンバーであること |
 | position | integer | 0以上。status変更時に省略した場合は移動先列の末尾。同じstatusの通常更新で省略した場合は現在位置を維持 |

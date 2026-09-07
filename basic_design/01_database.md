@@ -8,7 +8,7 @@
 | 保存対象 | 永続的に残す必要のあるデータのみ（ログイン有効性の判定は Redis 側で行う） |
 | 主キー | `UUID`（`gen_random_uuid()` / pgcrypto）。URLに露出しても連番推測されないため |
 | 文字列型 | `VARCHAR(n)` は入力上限がある項目、それ以外は `TEXT` |
-| 日時型 | `TIMESTAMPTZ`（UTC保存）。アプリ側で `APP_TIMEZONE`（既定 `Asia/Tokyo`）へ変換する。「当日」「翌日10時」などの業務上の日次境界の判定もこのタイムゾーンで行う |
+| 日時型 | `TIMESTAMPTZ`（UTC保存）。アプリ側で `APP_TIMEZONE`（既定 `Asia/Tokyo`）へ変換する。「当日」「翌日10時」などの業務上の日次境界の判定もこのタイムゾーンで行う。**API応答として返却する日時文字列は、`APP_TIMEZONE`でのオフセット付きISO 8601（例：`2026-09-07T10:00:00+09:00`）へ変換済みの値とし、UTCのまま返却しない**。クライアント側でのタイムゾーン変換は不要とする |
 | 列挙 | PostgreSQL の `ENUM` 型ではなく `VARCHAR + CHECK制約`（Alembic での値追加が容易なため） |
 | 論理削除 | 基本的には行わない（学習用途のため物理削除）。ただし `users` に加え `projects` / `tasks` も `is_active` で無効化（論理削除）を表現する |
 | ORM | SQLAlchemy 2.x（`Mapped` / `mapped_column` の宣言的スタイル） |

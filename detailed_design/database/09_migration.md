@@ -400,7 +400,7 @@ flowchart LR
 ## 9. 不明点・要検討事項
 
 - リビジョンファイルの連番接頭辞（`0001_`等）は本詳細設計での具体化であり、Alembic自動生成のハッシュIDとの命名整合方法（`down_revision` の実運用）は実装担当の裁量とする。
-- `INITIAL_ADMIN_PASSWORD` 等が未設定の場合の挙動（起動失敗 or 警告スキップ）は基本設計に明記がなく、本設計では起動失敗を既定としたが要検討。
+- ~~`INITIAL_ADMIN_PASSWORD` 等が未設定の場合の挙動~~ → [`requirements/security_business_rules.md`](../../requirements/security_business_rules.md)で起動失敗が確定済み。本書§5の記述はこれと一致している。
 - CI上でのupgrade/downgrade往復健全性検証を必須ステップにするかは基本設計に記載がなく要検討（実行時間とのトレードオフ）。
 - `db/migrations/` （手動DDL置き場）と `api/alembic/versions/` の内容をどの頻度・手順で同期させるか（自動生成スクリプトの要否）は基本設計に明記がなく要検討。
 - `0013`のdowngradeで`project_id IS NULL`の行が既に存在する場合の運用対応（強制的にダミー`project_id`を割り当てる、downgrade自体を禁止する等）は基本設計に明記がなく要検討。本設計では「本番ではdowngradeを実施しない」（§5）の方針に委ねる形とした。

@@ -69,7 +69,7 @@
 | ⑦ | タスク件数バッジ | badge×3 | `task_counts.{todo,in_progress,done}` | - | - | - |
 | ⑧ | 空状態メッセージ | text + button | - | - | `items.length===0` の時のみ表示 | 「作成する」ボタンは④と同じモーダルを開く |
 | ⑨ | ProjectCreateModal / name | text input | `""` | 1〜100文字必須（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） | - | 入力毎に `react-hook-form` へ反映 |
-| ⑩ | ProjectCreateModal / description | textarea | `""` | 任意、上限は要検討（基本設計に文字数上限の記載なし） | - | 入力毎に反映 |
+| ⑩ | ProjectCreateModal / description | textarea | `""` | 任意、0〜2000文字（issue #40で確定。[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） | - | 入力毎に反映 |
 | ⑪ | ProjectCreateModal / 作成ボタン | button | - | - | `isValid && !isSubmitting` | クリックで `createProjectMutation.mutate()` |
 | ⑫ | ProjectCreateModal / キャンセル | button | - | - | 常時 | モーダルを閉じ `reset()` |
 | ⑬ | ページネーション | pagination | `meta.page`等 | - | `meta.total_pages > 1` | ページ番号クリックで該当ページを再取得 |
@@ -257,7 +257,7 @@ flowchart TB
 | フィールド | zodルール | エラーメッセージ | バックエンド対応 |
 |-----------|-----------|-------------------|-------------------|
 | `name` | `z.string().min(1).max(100)` | 「プロジェクト名を1〜100文字で入力してください」 | `POST /projects` name（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） |
-| `description` | `z.string().max(2000).optional()`（要検討：上限文字数は基本設計に明記がなく暫定値） | 「説明は2000文字以内で入力してください」 | 基本設計に文字数上限の記載なし。バックエンド側の制約は要確認 |
+| `description` | `z.string().max(2000).optional()` | 「説明は2000文字以内で入力してください」 | `POST/PATCH /projects` description（issue #40で確定。[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） |
 
 ## 11. エラーハンドリング
 
@@ -319,5 +319,5 @@ flowchart LR
 | 区分 | 内容 | 影響 |
 |------|------|------|
 | なし | ページングは`meta.page` / `meta.total_pages`を⑬として定義済み | - |
-| 要検討 | `description` の文字数上限がAPI基本設計（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)）に明記されていない。本書ではフロント側暫定値として2000文字とした | バックエンドの実際の制約と不一致の可能性 |
+| 確定 | `description` の文字数上限はissue #40で0〜2000文字に確定（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） | - |
 | 要検討 | サイドバー開閉の画面幅によるデフォルト値切り替え（狭幅時の自動折りたたみ等）の要否が [05_frontend.md](../../basic_design/05_frontend.md) に明記されていない | レスポンシブ挙動の実装方針 |

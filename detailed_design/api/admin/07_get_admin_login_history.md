@@ -186,7 +186,7 @@ flowchart TB
 | 引数 | 各絞り込み条件（すべて任意） / `page`, `per_page`: ページング（`fn_admin_list_login_history` のみ） |
 | 戻り値 | `LoginHistory` エンティティのリスト ／ 該当件数 |
 | 送出例外 | `OperationalError`（DB不通） |
-| 処理内容 | 1. `user_id` 指定時は等価条件 2. `q` 指定時は `lower(login_identifier) LIKE lower(:q)\|\|'%'`（前方一致） 3. `login_method`/`success` は等価条件 4. `created_from`/`created_to` は `created_at >= :from` / `created_at < :to` 5. `ORDER BY created_at DESC` 6. `OFFSET (page-1)*per_page LIMIT per_page`（`fn_admin_list_login_history` はページングなし） 7. `users` へのJOINは行わずN+1を避ける（ユーザー情報はサービス層でバッチ取得） |
+| 処理内容 | 1. `user_id` 指定時は等価条件 2. `q` 指定時は `lower(login_identifier) LIKE '%' \|\| lower(:q) \|\| '%'`（部分一致。issue #40で確定） 3. `login_method`/`success` は等価条件 4. `created_from`/`created_to` は `created_at >= :from` / `created_at < :to` 5. `ORDER BY created_at DESC` 6. `OFFSET (page-1)*per_page LIMIT per_page`（`fn_admin_list_login_history` はページングなし） 7. `users` へのJOINは行わずN+1を避ける（ユーザー情報はサービス層でバッチ取得） |
 | 副作用 | なし |
 
 [../../database/03_table_login_history.md §8.3](../../database/03_table_login_history.md) の `list_all`（フィルタなし全件版）を、絞り込み条件を持つ本関数で置き換える形で拡張する（既存の呼び出し元がなければ `list_all` は本関数に統合してよい。13章参照）。
@@ -304,5 +304,5 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 |------|------|------|
 | 要検討 | `login_method`/`success` を単独または組み合わせで絞り込む際の専用インデックス（例：部分インデックス）の要否は、基本設計・[03_table_login_history.md](../../database/03_table_login_history.md) のいずれにも規定がない。件数増加時の性能劣化リスクとして11章に記載したが、追加要否はDB担当・運用側との協議が必要 |
 | 要検討 | 本APIの「監査ログの閲覧」自体を別途記録する（誰がいつ閲覧したか）かどうかは基本設計に規定がなく、本書での提案に留めた。個人情報を大量に扱うAPIであるため運用ポリシー次第では要実装 |
-| 要検討 | `q` によるログイン識別子検索・`user_id`完全一致検索は基本設計に明記がなく、[01_get_admin_users.md](./01_get_admin_users.md) の検索設計との一貫性を意図した本書での提案。基本設計側での明文化が望ましい |
+| 確定 | `q` によるログイン識別子検索仕様（部分一致・大文字小文字区別なし）はissue #40で[`basic_design/04_api.md` §2.5](../../../basic_design/04_api.md#25-管理者apiadmin)へ集約定義された |
 | 要検討 | `login_history_repository.list_all`（[03_table_login_history.md §8.3](../../database/03_table_login_history.md)、フィルタなし全件版）と本書の `fn_admin_list_login_history`（フィルタあり）の統合方針は、DB担当ドキュメントとの整合を別途取る必要がある |

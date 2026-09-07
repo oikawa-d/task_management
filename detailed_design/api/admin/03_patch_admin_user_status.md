@@ -24,7 +24,7 @@
 | AUTH_MODE差異 | DB更新自体はモード非依存だが、無効化直後の効果に差がある（3章参照） |
 | 冪等性 | あり（同じ `is_active` 値を再指定しても結果は同じ状態になる。ただしRedis失効処理は無効化のたびに実行される） |
 | レート制限 | 対象外 |
-| トランザクション境界 | Redis：`delete_all_sessions` / `revoke_all_refresh_tokens` を先に実行。成功後にPostgreSQLの`UPDATE users`をcommitする。Redis失敗時はDBを更新せず503とし、部分失効は同じ処理を再実行する |
+| トランザクション境界 | `sp_admin_update_user_status`によるPostgreSQLの`is_active`更新を先にコミットし、成功後にRedisの`delete_all_sessions` / `revoke_all_refresh_tokens`を実行する（§4「判定順序の理由」参照）。Redis失効が失敗してもDBの無効化はロールバックしない。フェイルセーフ側（無効化済み）に倒し、再試行または運用者による手動失効で補償する |
 
 ## 2. 入出力仕様
 

@@ -391,6 +391,6 @@ flowchart LR
 - `position` のDB既定値は `01_database.md` の定義上 `0` だが、実運用では常に `fn_next_task_position` 経由で採番するため素の既定値 `0` が使われる場面は基本的に無い（DBスキーマ上の安全弁としてのみ機能する）。この理解でよいか要確認。
 - advisory lockのキー生成方法（`hashtextextended(project_id || ':' || status, 0)`）は基本設計に具体的な実装が無いため、本書での具体化である。`pg_advisory_xact_lock` は単一bigint引数版を用いる想定だが、2引数版（`(classid, objid)` 形式）を用いるかは実装時に確定すること（要検討）。
 - 列間移動時のロック取得順序（キー文字列の昇順固定によるデッドロック回避）は基本設計に記載がなく、本書での具体化である。
-- **`project_id IS NULL` 行に対するUNIQUE制約の限界**：`uq_tasks_project_status_position` はPostgreSQLの仕様上NULL同士を区別するため、未所属タスク間では機能しない。本書ではadvisory lockキー生成でNULLを固定プレースホルダ（`'00000000-0000-0000-0000-000000000000'`）に変換して直列化する対応方針としたが、これはあくまでアプリ層での直列化であり、advisory lockを経由しない経路（バッチ処理・管理ツール等からの直接INSERTなど）が将来追加された場合は重複を防げない。DB制約側での根本的な解決（例：`project_id` に非NULLの番兵値を用いる設計への変更）を行うかは要検討。
+- **`project_id IS NULL` 行に対するUNIQUE制約の限界**：`uq_tasks_project_status_position` はPostgreSQLの仕様上NULL同士を区別するため、未所属タスク間では機能しない。issue #40で、advisory lockキー生成でNULLを固定プレースホルダ（`'00000000-0000-0000-0000-000000000000'`）に変換して直列化する現行方針（アプリ層での直列化）を維持することで確定した。advisory lockを経由しない経路が将来追加された場合の対応は、そのとき改めて検討する。
 - `start_at`/`end_at` を持つ `projects` の期間外に作成された未所属タスクの扱い（業務ロジック上の制約を設けるか）は基本設計に明記がなく要検討（[`04_table_projects.md`](./04_table_projects.md) §13も参照）。
-- `GET /api/tasks`（横断一覧）における未所属タスクの参照範囲（作成者本人のみ、という方針で確定してよいか）はAPI設計担当の詳細設計で最終確認する。
+- `GET /api/tasks`（横断一覧）における未所属タスクの参照範囲は、issue #40で「作成者本人のみ」の現行方針のまま確定した。

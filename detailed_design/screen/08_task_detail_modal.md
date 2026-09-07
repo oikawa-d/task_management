@@ -67,7 +67,7 @@
 |----|------|------|--------|----------|----------|----------------|
 | ① | 見出し | 静的テキスト | "タスク詳細" | - | 常時 | - |
 | ② | タイトル | インライン編集text | `task.title` | 1〜150文字必須 | 常時編集可 | フォーカスアウトで変更検知→`PATCH`（§9.1） |
-| ③ | 説明 | インライン編集textarea | `task.description` | 上限なし（要検討：§15） | 常時編集可 | フォーカスアウトで変更検知→`PATCH` |
+| ③ | 説明 | インライン編集textarea | `task.description` | 0〜2000文字（issue #40で確定） | 常時編集可 | フォーカスアウトで変更検知→`PATCH` |
 | ④ | 担当者 | select | `task.assignee?.id ?? ''`（空文字＝未割当） | プロジェクトメンバーから選択、`is_active=false`のメンバーは選択肢に表示するが選択不可（グレーアウト） | 常時活性 | 選択変更で即時`PATCH` |
 | ⑤ | 期限 | datetime-local input | `task.due_at`を`APP_TIMEZONE`へ変換 | 任意 | 常時活性 | 変更で即時`PATCH`。送信時はUTCへ正規化 |
 | ⑥ | ステータス | select | `task.status` | `todo`/`in_progress`/`done` | 常時活性 | 変更で即時`PATCH`（ボード側の列移動と同一API） |
@@ -316,11 +316,11 @@ flowchart TB
 | フィールド | zodスキーマ | ルール | エラーメッセージ | バックエンド対応 |
 |-----------|-------------|--------|-------------------|-------------------|
 | ②title | `taskFieldSchema.title` | `z.string().min(1).max(150)` | 「タイトルは1〜150文字で入力してください」 | pydantic `TaskUpdateRequest.title`（[04_patch_task.md](../api/tasks/04_patch_task.md) §10） |
-| ③description | `taskFieldSchema.description` | `z.string().nullable().optional()`（上限は未設定） | - | 上限は基本設計に明記なし（要検討：§15） |
+| ③description | `taskFieldSchema.description` | `z.string().max(2000).nullable().optional()` | 「説明は2000文字以内で入力してください」 | issue #40で0〜2000文字に確定（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） |
 | ④assignee_id | `taskFieldSchema.assigneeId` | `z.string().uuid().nullable()` | 「担当者の選択が不正です」 | メンバー・`is_active`検証はサーバー側（`409 ASSIGNEE_INACTIVE`） |
 | ⑤due_at | `taskFieldSchema.dueAt` | `z.string().datetime({ local: true }).nullable()` | 「期限日時の形式が正しくありません」 | `APP_TIMEZONE`へ変換後、ISO 8601 UTCを送信 |
 | ⑥status | `taskFieldSchema.status` | `z.enum(['todo','in_progress','done'])` | - | - |
-| ⑩コメント本文 | `commentSchema.body` | `z.string().trim().min(1).max(2000)` | 「コメントは1〜2000文字で入力してください」 | pydantic `CommentCreateRequest.body`（`TASK_COMMENT_BODY_MAX_LENGTH`。[07_post_task_comments.md](../api/tasks/07_post_task_comments.md) §10。上限値はフロント・バック間の共有方法が未確定のため要検討：§15） |
+| ⑩コメント本文 | `commentSchema.body` | `z.string().trim().min(1).max(Number(import.meta.env.VITE_TASK_COMMENT_BODY_MAX_LENGTH))` | 「コメントは1〜2000文字で入力してください」 | pydantic `CommentCreateRequest.body`（`TASK_COMMENT_BODY_MAX_LENGTH`。[07_post_task_comments.md](../api/tasks/07_post_task_comments.md) §10）と`VITE_TASK_COMMENT_BODY_MAX_LENGTH`環境変数で値を共有する（issue #40で確定） |
 
 ## 11. エラーハンドリング
 
@@ -386,7 +386,7 @@ flowchart LR
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 要検討 | タスク`description`の文字数上限が基本設計に明記されていない（[04_patch_task.md](../api/tasks/04_patch_task.md) §13でも同様に要検討とされている）。本設計ではフロント側のzodスキーマも上限を設けない方針とした | 極端に長い入力に対するUI崩れ・送信サイズの検証が必要 |
-| 要検討 | `TASK_COMMENT_BODY_MAX_LENGTH`（既定2000）をフロントのzodスキーマへどう共有するか（環境変数経由か共有定数モジュールか）が[07_post_task_comments.md §13](../api/tasks/07_post_task_comments.md)で要検討とされており、本画面のバリデーションも同じ課題を引き継ぐ | フロント・バック間の制約不一致リスク |
+| 確定 | タスク`description`の文字数上限はissue #40で0〜2000文字に確定（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)、[04_patch_task.md §5](../api/tasks/04_patch_task.md)） | - |
+| 確定 | `TASK_COMMENT_BODY_MAX_LENGTH`（既定2000）はissue #40で`VITE_TASK_COMMENT_BODY_MAX_LENGTH`環境変数として共有することに確定（[05_frontend.md §6.2](../../basic_design/05_frontend.md#62-環境変数vite)） | - |
 | 要検討 | フィールド更新を「1回のPATCHにつき1フィールド」とする設計は本書独自の具体化であり、複数フィールドをまとめて1回のPATCHで送信する設計（バックエンドの部分更新自体は複数フィールド対応済み）でも基本設計と矛盾しない。UI応答性とversion競合の起こりやすさのトレードオフのため、実装時に見直す余地がある | フィールドごとのAPI呼び出し回数・体感速度に影響 |
 | なし | 上記以外 | - |
