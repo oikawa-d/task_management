@@ -142,6 +142,7 @@ flowchart LR
 | [00_overview.md](./batch/00_overview.md) | batch全体・依存方向・手動実行 |
 | [01_scheduler.md](./batch/01_scheduler.md) | APScheduler常駐プロセス |
 | [02_due_notification_job.md](./batch/02_due_notification_job.md) | 毎日10時・17時の期限通知・保持期間パージ |
+| [03_scenario_test_plan.md](./batch/03_scenario_test_plan.md) | Issue #189受入シナリオ・現行実装の検証証跡 |
 
 ## 5. ログ・履歴 `log/`
 
