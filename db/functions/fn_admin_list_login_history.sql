@@ -17,7 +17,7 @@ AS $$
       AND (p_login_method IS NULL OR login_method = p_login_method)
       AND (p_success IS NULL OR success = p_success)
       AND (p_from IS NULL OR created_at >= p_from)
-      AND (p_to IS NULL OR created_at <= p_to)
+      AND (p_to IS NULL OR created_at < p_to)
     ORDER BY created_at DESC
     LIMIT p_limit OFFSET p_offset;
 $$;

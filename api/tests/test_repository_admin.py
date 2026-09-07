@@ -78,16 +78,23 @@ async def test_list_login_history_filters_by_created_at_range(db_session: AsyncS
 	)
 
 	now = datetime.now(timezone.utc)
+	boundary = now - timedelta(days=1)
+	await db_session.execute(
+		text(
+			"INSERT INTO login_history "
+			"(user_id, login_identifier, login_method, success, created_at) "
+			"VALUES (:user_id, 'hist-range1', 'session', true, :created_at)"
+		),
+		{"user_id": user_id, "created_at": boundary},
+	)
 	recent_only = await admin_repository.list_login_history(
-		db_session, user_id, None, None, None, now - timedelta(days=1), None, 50, 0
+		db_session, user_id, None, None, None, boundary, None, 50, 0
 	)
-	old_only = await admin_repository.list_login_history(
-		db_session, user_id, None, None, None, None, now - timedelta(days=1), 50, 0
-	)
+	old_only = await admin_repository.list_login_history(db_session, user_id, None, None, None, None, boundary, 50, 0)
 
-	assert len(recent_only) == 1
+	assert len(recent_only) == 2
 	assert len(old_only) == 1
-	assert recent_only[0].id != old_only[0].id
+	assert all(history.id != old_only[0].id for history in recent_only)
 
 
 async def test_update_user_role_self_modification_raises_p0007(db_session: AsyncSession) -> None:

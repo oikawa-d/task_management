@@ -356,7 +356,7 @@ $$;
 | `sp_mark_all_notifications_read` | user_id一致かつ未読の行を一括UPDATE | 既読は上書きしない |
 | `fn_admin_list_users` | role/status/queryをusersへ適用して一覧返却 | admin APIからのみ呼ぶ |
 | `fn_admin_list_projects` | query/statusをprojectsへ適用し関連集計を含めて返却 | admin APIからのみ呼ぶ |
-| `fn_admin_list_login_history` | login_historyを条件（`p_from`/`p_to`によるcreated_at期間絞り込みを含む）・created_at降順でページング | admin APIからのみ呼ぶ。`api/admin/07_get_admin_login_history.md` §2.1のfrom/to確定仕様に対応 |
+| `fn_admin_list_login_history` | login_historyを条件（`created_at >= p_from`、`created_at < p_to`による期間絞り込みを含む）・created_at降順でページング | admin APIからのみ呼ぶ。`api/admin/07_get_admin_login_history.md` §2.1のfrom/to確定仕様に対応 |
 | `sp_admin_update_user_role` | 自己変更判定後、admin保護判定専用の固定キーで`pg_advisory_xact_lock`を取得し全体を直列化。最後の有効adminを判定後role UPDATE | P0007/P0008、advisory lock（固定キー。対象ユーザー単位のロックでは異なる2人のadminへの同時降格を直列化できないため） |
 | `sp_admin_update_user_status` | 自己変更判定後、admin保護判定専用の固定キーで`pg_advisory_xact_lock`を取得し全体を直列化。最後の有効adminを判定後is_active UPDATE | P0007/P0008、advisory lock（固定キー。理由は上記と同様） |
 | `sp_admin_deactivate_project` | projects.is_activeをadmin権限前提でUPDATE | 関連行は変更しない |
