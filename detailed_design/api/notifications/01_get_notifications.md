@@ -112,13 +112,9 @@ sequenceDiagram
     R->>D: "認証（Cookie or Bearer）"
     D-->>R: "CurrentUser"
     R->>S: "list_notifications(user, page, per_page, unread_only)"
-    S->>NR: "fn_list_notifications(user.id, unread_only)"
+    S->>NR: "fn_list_notifications(user.id, unread_only, limit, offset)"
     NR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-    S->>NR: "fn_list_notifications(user.id, page, per_page, unread_only)"
-    NR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-    PG-->>NR: "notification行"
-    NR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-    PG-->>NR: "task行（削除済みIDはなし）"
+    PG-->>NR: "notification行（task情報を含む、削除済みはNULL）"
     NR-->>S: "Notification一覧"
     S->>NR: "fn_count_unread_notifications(user.id)"
     NR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
@@ -174,7 +170,7 @@ flowchart TB
 | 引数 | `user`: 現在ユーザー / `page`, `per_page`: ページング指定 / `unread_only`: 未読絞り込み / `db`: DBセッション |
 | 戻り値 | `(Page[NotificationItem], unread_count)`。`Page` は `items: list[NotificationItem]`, `total: int` |
 | 送出例外 | `ServiceUnavailableError`（PostgreSQL接続不能時）→503 |
-| 処理内容 | 1. `SELECT fn_list_notifications(user.id, unread_only, limit, offset)` を1回呼び出す 2. `unread_only=false` の場合のみ `SELECT fn_count_unread_notifications(user.id)` を追加で呼び出す 3. FNの結果に含まれるtask情報を一括マッピングし、`task_id IS NULL` は `task=null` とする |
+| 処理内容 | 1. `SELECT fn_list_notifications(user.id, unread_only, limit, offset)` を1回呼び出す（戻り値にtask情報を含む） 2. `unread_only=false` の場合のみ `SELECT fn_count_unread_notifications(user.id)` を追加で呼び出す 3. FNの結果に含まれるtask情報をそのままマッピングし、`task_id IS NULL` は `task=null` とする |
 | 副作用 | なし（FN呼び出しのみ） |
 
 ### 6.3 `repository/notification_repository.py :: fn_list_notifications`
@@ -205,11 +201,9 @@ flowchart TB
 flowchart LR
     R["notifications_router.list_notifications"] --> S["notification_service.list_notifications"]
     S --> NR1["notification_repository.fn_list_notifications"]
-    S --> NR2["notification_repository.fn_list_notifications"]
     S --> NR3["notification_repository.fn_count_unread_notifications"]
     NR1 --> M["models.Notification"]
-    NR2 --> M
-    NR2 --> MT["models.Task（task、NULL可）"]
+    NR1 --> MT["models.Task（FN戻り値に含む、NULL可）"]
     NR3 --> M
 ```
 
@@ -219,12 +213,12 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    subgraph PG["PostgreSQL（参照範囲）"]
-        T1["notifications"]
+    subgraph PG["PostgreSQL（参照範囲、fn_list_notifications内部）"]
+        T1["notifications（user_id絞り込み）"]
         T2["tasks（LEFT JOIN、削除済みならNULL）"]
     end
-    S["notification_service.list_notifications"] -->|"SELECT（user_id絞り込み）"| T1
-    S -->|"SELECT（task表示用、削除済みはNULL）"| T2
+    S["notification_service.list_notifications"] -->|"SELECT fn_list_notifications（1回でtask情報も取得）"| T1
+    T1 --> T2
 ```
 
 ## 9. SP/FNデータアクセス一覧
@@ -246,7 +240,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | notifications | SELECT | `user_id = :me` [`AND read_at IS NULL`] | `ix_notifications_user_created (user_id, created_at DESC)` | 一覧取得。`ORDER BY created_at DESC LIMIT/OFFSET` |
 | notifications | SELECT COUNT | 同上 | `ix_notifications_user_created`（`unread_only=false`）／`ix_notifications_user_unread`（`unread_only=true`） | `meta.total` 算出用 |
 | notifications | SELECT COUNT | `user_id = :me AND read_at IS NULL` | `ix_notifications_user_unread (user_id) WHERE read_at IS NULL` | `unread_count` バッジ用 |
-| tasks | SELECT | `notifications.task_id` に対する eager load | （PK） | タスク表示用、N+1回避。`task_id IS NULL` の行は結合されず `task=null` |
+| tasks | SELECT（`fn_list_notifications`内部のLEFT JOIN） | `notifications.task_id` | （PK） | タスク表示用。`fn_list_notifications`の1回の呼び出しで通知本体と同時に返る。`task_id IS NULL` の行は結合されず `task=null` |
 
 **Redis**
 
@@ -271,7 +265,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | タイミング攻撃対策 | 該当なし |
 | レート制限 | user_id + 解決済みIP単位で120回/60秒。フロントのポーリング間隔に依存せずサーバー側で制限する |
 | fail-close方針 | PostgreSQL接続不能時は `503 SERVICE_UNAVAILABLE`。空配列を返して隠蔽しない |
-| N+1対策・クエリ回数 | `fn_list_notifications` 1回 + 通知本体SELECT 1回 + taskの`FN結果の一括マッピング`追加SELECT 1回（taskを持つ通知行がある場合）。`unread_only=false` の場合は `fn_count_unread_notifications` 1回を加える。`unread_only=true` は `fn_list_notifications` の結果を再利用するため追加しない。関連取得は通知件数に比例して増えないが、同一ラウンドトリップではない |
+| N+1対策・クエリ回数 | `fn_list_notifications` 1回のみ（内部でtask情報までLEFT JOIN済みのため、通知件数に応じた追加SELECTは発生しない）。`unread_only=false` の場合は `fn_count_unread_notifications` 1回を加える。`unread_only=true` は `fn_list_notifications` の結果を再利用するため追加しない |
 | 個人情報の取り扱い | `title`/`body` はタスク作成者・担当者にのみ関わる業務情報であり、本人以外には返さない（本APIの認可自体がその境界を保証する） |
 
 ## 12. テスト設計
