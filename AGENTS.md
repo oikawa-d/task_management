@@ -4,9 +4,9 @@
 
 このリポジトリは現在、アプリケーション本体ではなく設計ドキュメントを管理しています。
 
-- `requirements/`：要件定義書
-- `basic_design/`：システム概要、DB、Redis、認証、API、フロントエンド、インフラ、図
-- `detailed_design/`：`api/`、`auth/`、`database/`、`infra/`、`screen/` 配下の詳細設計
+- `docs/requirements/`：要件定義書
+- `docs/basic_design/`：システム概要、DB、Redis、認証、API、フロントエンド、インフラ、図
+- `docs/detailed_design/`：`api/`、`auth/`、`database/`、`infra/`、`screen/` 配下の詳細設計
 - `README.md`：リポジトリ概要。設計書に記載された `api/`、`frontend/`、`tests/` は実装予定で、現在は未作成
 
 要件・基本設計・詳細設計の間で、用語、エンドポイント、エラーコード、環境変数名、Mermaid図を常に一致させてください。
