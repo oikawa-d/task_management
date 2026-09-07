@@ -26,11 +26,11 @@ docker compose up -d
 docker compose -f docker-compose.yml -f compose.dev.yml up
 ```
 
-CIでは、`ruff check`、`ruff format --check`、`mypy app`、`pytest --cov`、フロントエンドのESLint・TypeScriptチェック・Vitestカバレッジ、Dockerイメージビルドを実施します。実装ディレクトリ作成後は該当するチェックを実行してください。
+CIでは、`ruff check`、`ruff format --check`（タブインデント強制）、`mypy app`、`pytest --cov`、フロントエンドのESLint・TypeScriptチェック・Vitestカバレッジ、Dockerイメージビルドを実施します。実装ディレクトリ作成後は該当するチェックを実行してください。CI定義は`.github/workflows/ci.yml`、Ruff設定は`pyproject.toml`の`[tool.ruff.format]`（`indent-style = "tab"`）を参照してください。
 
 ## コーディング規約・命名
 
-設計書はMarkdown見出しと簡潔な日本語で記述し、文書間のリンクは相対リンク、図はMermaidを使用します。Pythonは4スペース、関数・変数は`snake_case`、クラスは`PascalCase`とします。TypeScript/Reactのコンポーネントは`PascalCase`、フックは`useXxx`、定数は`UPPER_SNAKE_CASE`とします。PythonはRuff、フロントエンドはESLintで検査します。
+設計書はMarkdown見出しと簡潔な日本語で記述し、文書間のリンクは相対リンク、図はMermaidを使用します。Pythonは**タブ**インデント、関数・変数は`snake_case`、クラスは`PascalCase`とします。TypeScript/Reactのコンポーネントは`PascalCase`、フックは`useXxx`、定数は`UPPER_SNAKE_CASE`とします。PythonはRuff（`ruff format`でタブインデントを強制）、フロントエンドはESLintで検査します。
 
 ## テスト方針
 
@@ -38,7 +38,9 @@ CIでは、`ruff check`、`ruff format --check`、`mypy app`、`pytest --cov`、
 
 ## コミット・プルリクエスト
 
-既存の`<type>: <description>`形式に従います。例：`docs: 要件・基本・詳細設計の整合性を修正`、`fix: ...`。コミットは目的ごとに分けてください。プルリクエストには変更対象の文書、関連Issue、他文書への影響を記載し、図やUIを変更した場合は描画結果のスクリーンショットを添付してください。
+既存の`<type>: <description>`形式に従います。例：`docs: 要件・基本・詳細設計の整合性を修正`、`fix: ...`、`ci: ...`。コミットは目的ごとに分けてください。プルリクエストには変更対象の文書、関連Issue、他文書への影響を記載し、図やUIを変更した場合は描画結果のスクリーンショットを添付してください。
+
+エージェント（Claude Code等）によるコードレビューが完了したPRには`reviewed-by-agent`ラベルを付与してください。`.github/workflows/pr-agent-review-check.yml`がこのラベルの有無をCIでチェックし、未付与の場合はチェックを失敗させます。PRに新規コミットがpushされると、このラベルは自動的に剥がされます（レビュー内容の陳腐化防止）。再レビュー後に再度ラベルを付与してください。
 
 ## セキュリティ・設定
 
