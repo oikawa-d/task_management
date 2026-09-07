@@ -120,28 +120,11 @@ sequenceDiagram
     R->>D: 認証（Cookie or Bearer）
     D-->>R: CurrentUser
     R->>S: list_projects(user, page, per_page, include_inactive)
-    alt user.role == admin
-        S->>RP: fn_list_projects(include_inactive)
-        RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-        S->>RP: fn_list_projects(page, per_page, include_inactive)
-        RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-    else member
-        S->>RP: count_by_member(user.id, include_inactive)
-        RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-        S->>RP: list_by_member(user.id, page, per_page, include_inactive)
-        RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-    end
-    PG-->>RP: project行
-    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-    PG-->>RP: owner行
+    S->>RP: fn_list_projects(user.id, include_inactive, per_page, offset)
+    RP->>PG: "SELECT * FROM fn_list_projects(:user_id, :include_inactive, :limit, :offset)"
+    PG-->>RP: project行（admin/member判定・無効化条件・ページングはFN内部で適用済み）
     RP-->>S: Project一覧
-    S->>RP: aggregate_member_counts(project_ids)
-    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-    PG-->>RP: {project_id: count}
-    S->>RP: aggregate_task_counts(project_ids)
-    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-    PG-->>RP: {project_id: {status: count}}
-    S->>S: 集計結果をProjectSummaryへマージ
+    Note over S: member_count/task_countsの集計方法は<br/>fn_list_projectsの戻り値に含まれないため要検討（§13参照）
     S-->>R: Page[ProjectSummary]
     R-->>FE: 200 {items, meta}
     alt DB/Redis 不通
@@ -160,14 +143,10 @@ flowchart TB
     B -->|"OK"| C["deps.get_current_user"]
     C -->|"認証情報なし/不正"| C1["401 UNAUTHENTICATED / SESSION_EXPIRED / TOKEN_EXPIRED"]
     C -->|"ユーザーis_active=false"| C2["403 USER_INACTIVE"]
-    C -->|"OK"| D{"user.role == admin?"}
-    D -->|"Yes"| E["include_inactive次第でprojects.is_activeを絞り込みCOUNT・一覧取得"]
-    D -->|"No"| F["project_members経由で所属分のみ対象に、\ninclude_inactive=trueなら自分がオーナーの無効化分も追加してCOUNT・一覧取得"]
-    E --> G["project_idsで member_count / task_counts をバッチ集計"]
-    F --> G
-    G --> H["ProjectSummaryへマージ・is_owner算出"]
+    C -->|"OK"| D["fn_list_projects(user_id, include_inactive, limit, offset)を1回呼び出し\n（admin/member判定・無効化条件・ページングはFN内部で処理）"]
+    D --> H["ProjectSummaryへ写像・is_owner算出\n（member_count/task_countsの集計方法は要検討、§13参照）"]
     H --> I["200 {items, meta}"]
-    G -.->|"DB接続不能"| J["503 SERVICE_UNAVAILABLE"]
+    D -.->|"DB接続不能"| J["503 SERVICE_UNAVAILABLE"]
 ```
 
 ## 6. 関数詳細
@@ -191,7 +170,7 @@ flowchart TB
 | 引数 | `user`: 現在ユーザー / `page`, `per_page`: ページング指定 / `include_inactive`: 無効化プロジェクトを含めるか / `db`: DBセッション |
 | 戻り値 | `Page[ProjectSummary]`（`items: list[ProjectSummary]`, `total: int`） |
 | 送出例外 | `ServiceUnavailableError`（PostgreSQL接続不能時）→503 |
-| 処理内容 | `SELECT fn_list_projects(:user_id, :include_inactive, :limit, :offset)` を1回呼び出し、プロジェクト本体・所属数・タスク件数を含むFN結果を`ProjectSummary`へ写像する。権限スコープ、無効化条件、集計、ページングはFN内部で処理する |
+| 処理内容 | `SELECT fn_list_projects(:user_id, :include_inactive, :limit, :offset)` を1回呼び出し、戻り値の`projects`行を`ProjectSummary`へ写像する。権限スコープ、無効化条件、ページングはFN内部で処理する。**要検討**：`08_db_functions.md`の`fn_list_projects`は`SETOF projects`のみを返し、`member_count`/`task_counts`の集計は含まれない。これらの集計をFN内部へ追加するか、別途SP/FNを新設するかは未確定であり、現時点の設計では確定していない |
 | 副作用 | なし（読み取りのみ） |
 
 ### 6.3 `repository/project_repository.py :: fn_list_projects`
@@ -202,7 +181,7 @@ flowchart TB
 | 引数 | `user_id`: 所属確認対象 / `page`, `per_page`: ページング / `include_inactive`: 自分がオーナーの無効化分を含めるか |
 | 戻り値 | `fn_list_projects` の結果を写像した行のリスト |
 | 送出例外 | `OperationalError`（DB不通） |
-| 処理内容 | `SELECT fn_list_projects(:user_id, :include_inactive, :limit, :offset)` のみを発行する。所属/admin・無効化条件、集計、並び順、ページングはFN内部で処理する |
+| 処理内容 | `SELECT fn_list_projects(:user_id, :include_inactive, :limit, :offset)` のみを発行する。所属/admin・無効化条件、並び順、ページングはFN内部で処理する |
 | 副作用 | なし |
 
 ### 6.4 service層のDTO写像
@@ -210,10 +189,10 @@ flowchart TB
 | 項目 | 内容 |
 |------|------|
 | シグネチャ | `ProjectSummary`へのFN結果写像 |
-| 引数 | `project_ids`: 当該ページに含まれるプロジェクトIDの一覧（最大 `per_page` 件） |
-| 戻り値 | `project_id` をキーとした集計結果の辞書 |
-| 送出例外 | `OperationalError` |
-| 処理内容 | FNが返した集計済みの`member_count`・`task_counts`・`is_owner`を追加SQLなしでDTOへ写像する |
+| 引数 | `fn_list_projects`が返した`projects`行 |
+| 戻り値 | `ProjectSummary`（`is_owner`は`owner_id == current_user.id`から算出） |
+| 送出例外 | なし |
+| 処理内容 | FNが返した`projects`行を`ProjectSummary`へ写像し、`is_owner`を算出する。**要検討**：`member_count`/`task_counts`は`fn_list_projects`の戻り値に含まれないため、本設計時点では集計方法・追加呼び出しの要否が未確定（§13参照） |
 | 副作用 | なし |
 
 ## 7. 関数相関図
@@ -222,7 +201,7 @@ flowchart TB
 flowchart LR
     R["projects_router.list_projects"] --> S["project_service.list_projects"]
     S --> RP["project_repository.fn_list_projects"]
-    RP --> M["ProjectSummary DTO（集計済み）"]
+    RP --> M["ProjectSummary DTO（member_count/task_counts集計方法は要検討）"]
 ```
 
 ## 8. データ遷移図
@@ -231,16 +210,14 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    subgraph PG["PostgreSQL（参照範囲）"]
+    subgraph PG["PostgreSQL（fn_list_projects内部で参照。要検討：member_count/task_countsの参照範囲は未確定）"]
         T1["projects"]
-        T2["project_members"]
-        T3["tasks"]
+        T2["project_members（所属判定用）"]
         T4["users（owner）"]
     end
-    S["project_service.list_projects"] -->|"SELECT"| T1
-    S -->|"SELECT（所属判定・件数集計）"| T2
-    S -->|"SELECT（status別集計）"| T3
-    S -->|"SELECT（owner表示名）"| T4
+    S["project_service.list_projects"] -->|"fn_list_projects呼び出し"| T1
+    T1 -.->|"FN内部で所属判定に参照"| T2
+    S -->|"SELECT（owner表示名、N+1回避）"| T4
 ```
 
 ## 9. SP/FNデータアクセス一覧
@@ -259,11 +236,10 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 
 | テーブル | 操作 | 条件 | 備考 |
 |----------|------|------|------|
-| projects | SELECT | admin: `include_inactive`次第で全件 or `is_active=true`のみ / member: `JOIN project_members WHERE user_id=:me` かつ `is_active=true OR (include_inactive AND owner_id=:me)` | `ORDER BY created_at DESC LIMIT/OFFSET` |
-| projects | SELECT COUNT | 同上 | `meta.total` 算出用 |
-| users | SELECT | `projects.owner_id` に対する eager load | owner表示用、N+1回避 |
-| project_members | SELECT + GROUP BY | `project_id = ANY(:ids)` | `member_count` 集計 |
-| tasks | SELECT + GROUP BY | `project_id = ANY(:ids)` | `task_counts` 集計 |
+| projects | `fn_list_projects`内部でSELECT | admin: `include_inactive`次第で全件 or `is_active=true`のみ / member: `project_members`結合で所属分のみ、かつ`is_active=true OR (include_inactive AND owner_id=:me)` | `ORDER BY created_at DESC LIMIT/OFFSET`、`meta.total`算出用の件数もFN呼び出し結果から導出する |
+| users | SELECT | `projects.owner_id` に対する eager load | owner表示用、N+1回避。`fn_list_projects`契約には含まれない補助SELECT |
+
+**要検討**：`member_count`（`project_members`集計）・`task_counts`（`tasks`のstatus別集計）は`fn_list_projects`の戻り値（`SETOF projects`）に含まれない。`08_db_functions.md`にはこれらを賄うSP/FNが定義されておらず、repositoryが`project_members`/`tasks`へ直接SELECTすることは「repositoryはSP/FN呼び出しとDTO写像だけを行う」という方針（`08_db_functions.md` §1）に反する。FN拡張・別FN新設のいずれにするかは未確定であり、本設計時点では確定していない。
 
 **Redis**
 
@@ -288,16 +264,16 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | タイミング攻撃対策 | 該当なし |
 | レート制限 | なし（一般GETは対象外） |
 | fail-close方針 | PostgreSQL接続不能時は `503 SERVICE_UNAVAILABLE`。空配列を返して隠蔽しない |
-| N+1対策・クエリ回数 | 非空ページでは `count` 1回 + 一覧主クエリ1回 + ownerの`FN結果の一括マッピング`追加SELECT 1回 + member/task集計各1回の計5回。owner取得は同一ラウンドトリップではないが、プロジェクト件数に比例しない。空ページでは集計と関連追加SELECTを発行せず、計2回を基本とする |
+| N+1対策・クエリ回数 | `fn_list_projects`呼び出し1回 + ownerの一括eager load用SELECT 1回の計2回。owner取得は同一ラウンドトリップではないが、プロジェクト件数に比例しない。空ページではowner SELECTを発行せず1回のみ。**要検討**：member_count/task_counts集計を追加する場合のクエリ回数は集計方式の確定後に見直す |
 
 ## 12. テスト設計
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 結合（実DB・実SP） | memberは自分の所属分のみ返す | 実DB・実SPで検証し `list_by_member` が呼ばれることを検証 | `count_by_member`/`list_by_member` 呼び出し、`fn_list_projects`未呼び出し | `test_list_projects_member_scope` |
-| 2 | 結合（実DB・実SP） | adminは全件を返す | 実DB・実SPで検証 | `fn_list_projects`/`fn_list_projects` 呼び出し | `test_list_projects_admin_scope` |
-| 3 | 単体 | task_countsの未発生statusは0補完 | 集計辞書に一部statusのみ含む | 全status keyが存在し値0を含む | `test_list_projects_task_counts_zero_fill` |
-| 4 | 結合 | 空一覧時にaggregate系がクエリを発行しない | 所属プロジェクト0件 | `items=[]`, `meta.total=0`、SQLログにaggregateクエリなし | `test_list_projects_empty` |
+| 1 | 結合（実DB・実SP） | memberは自分の所属分のみ返す | 実DB・実SPで検証 | `fn_list_projects`が所属分のみ返す | `test_list_projects_member_scope` |
+| 2 | 結合（実DB・実SP） | adminは全件を返す | 実DB・実SPで検証 | `fn_list_projects`が全件返す | `test_list_projects_admin_scope` |
+| 3 | 単体 | task_countsの未発生statusは0補完（要検討：集計方法確定後に実装） | 集計辞書に一部statusのみ含む | 全status keyが存在し値0を含む | `test_list_projects_task_counts_zero_fill` |
+| 4 | 結合 | 空一覧時に不要な追加SELECTを発行しない | 所属プロジェクト0件 | `items=[]`, `meta.total=0`、SQLログにowner取得クエリなし | `test_list_projects_empty` |
 | 5 | 結合 | ページングが正しく機能する | プロジェクト25件を作成し `per_page=20` | 1ページ目20件・2ページ目5件、`total_pages=2` | `test_list_projects_pagination` |
 | 6 | 結合 | 未認証は401 | Cookie/Bearerなし | `401 UNAUTHENTICATED` | `test_list_projects_unauthenticated` |
 | 7 | 結合 | per_page=101は422 | クエリ不正 | `422 VALIDATION_ERROR` | `test_list_projects_invalid_per_page` |
@@ -315,3 +291,4 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 |------|------|------|
 | 確定 | `owner.display_name` は`last_name`と`first_name`がともに空でない場合に結合し、それ以外は`username`へフォールバックする | OAuth新規ユーザーなど姓名未設定でも表示名を必ず返す |
 | 確定 | `include_inactive` の可視範囲は「admin: 全件」「member: 自分がオーナーの無効化分のみ追加」とした（issue #10のブリーフで詳細判断を委譲されたため設計として確定） | 非オーナーメンバーは他人が無効化した履歴を一覧から閲覧できない |
+| 要検討 | `08_db_functions.md`の`fn_list_projects`は`SETOF projects`のみを返し、レスポンスに必要な`member_count`（`project_members`集計）・`task_counts`（`tasks`のstatus別集計）を含まない。集計をFN内部へ追加するか、別途集計用SP/FNを新設するかは未確定 | 確定するまでrepositoryが`project_members`/`tasks`へ直接SELECTすることになり、「repositoryはSP/FN呼び出しのみ」という方針（`08_db_functions.md` §1）に反する状態が残る |

@@ -137,7 +137,7 @@ flowchart TB
     C -->|Yes| D{"require_project_member<br/>admin または所属あり"}
     D -->|No（非所属 or 不存在）| E4["404 NOT_FOUND"]
     D -->|Yes| F["project_service.fn_list_project_members呼び出し"]
-    F --> G["fn_list_project_members<br/>FN結果の一括マッピングでusersを一括取得"]
+    F --> G["fn_list_project_membersを1回呼び出し<br/>（project_membersとusersのJOINはFN内部で完結、N+1なし）"]
     G --> H["MemberListResponseへ変換"]
     H --> I["200 レスポンス返却"]
 ```
@@ -178,7 +178,7 @@ flowchart TB
 | 引数 | db：`AsyncSession`、project_id：対象プロジェクトID |
 | 戻り値 | `project_members` と `users` を JOIN した行のリスト（`joined_at` 昇順） |
 | 送出例外 | なし（DB例外は `db_error_handler` / `infra_error_handler` に委譲） |
-| 処理内容 | 1. `project_members`の主クエリを1回実行 2. `FN結果の一括マッピング`の追加SELECTを1回実行してusersをまとめて取得しN+1を回避 3. `ORDER BY project_members.joined_at ASC` |
+| 処理内容 | `SELECT fn_list_project_members(:project_id)` を1回発行する。`project_members`と`users`のJOIN、`ORDER BY joined_at ASC`はFN内部で処理するため、repository側で別途usersへ追加SELECTを発行せずN+1を回避する |
 | 副作用 | なし |
 
 ## 7. 関数相関図
@@ -190,7 +190,7 @@ flowchart LR
     D --> RP1["project_repository.fn_is_project_member"]
     D --> URP["user_repository.get"]
     S --> RP2["fn_list_project_members"]
-    RP2 --> PG[("PostgreSQL<br/>project_members + users（追加SELECT）")]
+    RP2 --> PG[("PostgreSQL<br/>fn_list_project_members内部でproject_members + usersをJOIN")]
     RP1 --> PG
 ```
 
@@ -200,14 +200,14 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    subgraph PG["PostgreSQL"]
+    subgraph PG["PostgreSQL（fn_list_project_members内部で参照）"]
         PM["project_members<br/>WHERE project_id=:pid"]
-        U["users<br/>FN結果の一括マッピングの追加SELECT"]
+        U["users<br/>FN内部でJOIN（追加SELECTなし）"]
         P["projects<br/>所属チェック用に1行参照"]
     end
-    API["GET /members"] -->|"SELECT"| PM
-    API -->|"SELECT"| U
-    API -->|"SELECT"| P
+    API["GET /members"] -->|"fn_list_project_members呼び出し"| PM
+    PM -.->|"FN内部JOIN"| U
+    API -->|"SELECT（require_project_member）"| P
 ```
 
 ## 9. SP/FNデータアクセス一覧
@@ -224,9 +224,9 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 
 | ストア | テーブル／キー | 操作 | 条件・TTL | 備考 |
 |--------|----------------|------|-----------|------|
-| PostgreSQL | `project_members` | SELECT | `WHERE project_id = :pid ORDER BY joined_at` | `ix_project_members_user_id` は使用しない（本クエリは project_id 主軸のため `PK` を使用） |
-| PostgreSQL | `users` | SELECT（`FN結果の一括マッピング`の追加SELECT） | `id IN (user_ids)` | `display_name` / `role` / `is_active` 取得用。主クエリとは別ラウンドトリップ |
-| PostgreSQL | `projects` | SELECT | `require_project_member` 内での存在・所属確認用に1行 | |
+| PostgreSQL | `project_members` | SELECT（`fn_list_project_members`内部） | `WHERE project_id = :pid ORDER BY joined_at` | `ix_project_members_user_id` は使用しない（本クエリは project_id 主軸のため `PK` を使用） |
+| PostgreSQL | `users` | SELECT（`fn_list_project_members`内部でJOIN） | `project_members.user_id = users.id` | `display_name` / `role` / `is_active` 取得用。FN内部のJOINのため repository からの追加SELECTは発生しない |
+| PostgreSQL | `projects` | SELECT（`fn_is_project_member`等、`require_project_member`内部） | `require_project_member` 内での存在・所属確認用に1行 | |
 | Redis | ー | ー | ー | 本APIはRedisを使用しない |
 
 ## 10. バリデーション規則

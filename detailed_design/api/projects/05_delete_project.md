@@ -76,8 +76,8 @@ sequenceDiagram
     R->>D: 認証 + 所属チェック + オーナー判定（04_patch_project.mdと同一処理）
     D-->>R: Project（NotFoundError/ForbiddenErrorは404/403として応答）
     R->>S: deactivate_project(project)
-    S->>RP: sp_deactivate_project.id)
-    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
+    S->>RP: sp_deactivate_project(project.id, false)
+    RP->>PG: "CALL sp_deactivate_project(:project_id, false);"
     PG-->>RP: 更新後の行（トリガでupdated_at更新。project_members/tasks/task_commentsは無変更）
     RP-->>S: OK
     S-->>R: None
@@ -224,7 +224,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 結合（実DB・実SP） | serviceがrepository.deactivateを1回呼び出す | 実DB・実SPで検証 | `sp_deactivate_project.id)` 呼び出しを検証 | `test_deactivate_project_calls_repository` |
+| 1 | 結合（実DB・実SP） | serviceがrepository.deactivateを1回呼び出す | 実DB・実SPで検証 | `CALL sp_deactivate_project(:project_id, false);` 呼び出しを検証 | `test_deactivate_project_calls_repository` |
 | 2 | 結合 | オーナーが204で無効化できる | 実PostgreSQLにタスク・コメントを含むプロジェクトを用意 | `204`、`projects.is_active=false`に更新、`project_members`/`tasks`/`task_comments`は行数・内容とも変化なし | `test_delete_project_deactivates_without_deleting_related_rows` |
 | 3 | 結合 | 無効化後も配下タスクは有効なまま一覧に表示される | 無効化したプロジェクトの配下タスクをタスク一覧APIで取得 | タスクの`is_active=true`が維持され、`project_is_active=false`が返る | `test_delete_project_tasks_remain_active_with_project_is_active_false` |
 | 4 | 結合 | 所属memberだが非オーナーは403 | 一般メンバーでDELETE | `403 FORBIDDEN`、`is_active`は変化しない | `test_delete_project_forbidden_as_non_owner_member` |
