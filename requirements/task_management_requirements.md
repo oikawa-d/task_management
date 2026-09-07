@@ -35,7 +35,7 @@
 |----|--------|------|
 | 1 | ログイン画面 | メールアドレスまたはユーザー名・パスワードログイン、Googleログインボタンを配置 |
 | 2 | 会員登録画面 | ユーザー名・メールアドレス・パスワードでの新規登録 |
-| 3 | ダッシュボード | 自分が所属するプロジェクトの一覧表示 |
+| 3 | ダッシュボード | 自分が所属するプロジェクトの一覧表示。カード表示とカレンダー表示をタブで切替可能 |
 | 4 | プロジェクト詳細（カンバンボード） | タスクをステータス別に表示、ドラッグ&ドロップで状態変更 |
 | 5 | タスク詳細/編集 | タスクの内容編集、担当者アサイン、コメント |
 | 6 | アカウント設定画面 | プロフィール編集、パスワード変更 |
@@ -75,10 +75,14 @@ Issue #8で、ログイン以外のRate Limit、パスワード再設定トー�
 
 ### 3.2 プロジェクト・タスク管理機能
 
-- プロジェクトのCRUD（作成・閲覧・更新・削除）
+- プロジェクトのCRUD（作成・閲覧・更新・論理削除）
+  - プロジェクトは`is_active`による論理削除とし、無効化後も配下タスクは有効なまま維持する（タスク一覧・カンバンには`project_is_active`を添えて表示する）
+  - プロジェクトには任意で開始日時・終了日時（`start_at`/`end_at`）を設定できる
 - プロジェクトへのメンバー招待
-- タスクのCRUD、ステータス変更（未着手／進行中／完了）
+- タスクのCRUD、ステータス変更（未着手／進行中／完了）、論理削除
+  - タスクはプロジェクトへの所属を任意（`project_id`はNULL許容）とし、プロジェクト未所属のタスクも作成・一覧取得できる
 - タスクへのコメント機能
+- ダッシュボードでは自分の担当タスクをカレンダー形式でも表示できる（§2参照）
 
 ### 3.3 ロール管理（RBAC）
 
@@ -136,9 +140,9 @@ Issue #8で、ログイン以外のRate Limit、パスワード再設定トー�
 |----------|-----------|------|
 | users | id, email, password_hash, role, created_at | roleは`member`/`admin` |
 | oauth_accounts | id, user_id, provider, provider_user_id | Google等の外部ID紐付け用 |
-| projects | id, name, owner_id, created_at | |
+| projects | id, name, owner_id, is_active, start_at, end_at, created_at | `is_active`で論理削除。`start_at`/`end_at`は任意（両方設定時は`end_at >= start_at`） |
 | project_members | project_id, user_id, joined_at | 複合主キー |
-| tasks | id, project_id, title, status, assignee_id, due_at, created_at | statusは`todo`/`in_progress`/`done`。`due_at`は期限（日付＋終了時刻） |
+| tasks | id, project_id, title, status, assignee_id, due_at, is_active, created_at | statusは`todo`/`in_progress`/`done`。`due_at`は期限（日付＋終了時刻）。`project_id`はNULL許容（未所属タスク）。`is_active`で論理削除 |
 | task_comments | id, task_id, user_id, body, created_at | |
 | notifications | id, user_id, task_id, type, title, read_at, dedupe_key, created_at | アプリ内通知。`type`は`due_soon_batch`/`due_today_created`/`due_today_updated`。`dedupe_key`で重複作成を防ぐ |
 | login_history | id, user_id, login_method, ip_address, success, created_at | ログイン試行の監査ログ。login_methodは`session`/`jwt`/`oauth_google`。Redis側の失効状況とは独立して保持し、INSERT失敗時はログインを成立させない |
@@ -175,7 +179,12 @@ Issue #8で、ログイン以外のRate Limit、パスワード再設定トー�
 | POST | /projects | プロジェクト作成 |
 | GET | /projects/{id}/tasks | タスク一覧取得 |
 | POST | /projects/{id}/tasks | タスク作成 |
+| GET | /tasks | タスク横断一覧取得（プロジェクト未所属分を含む） |
+| POST | /tasks | タスク作成（`project_id`任意指定） |
+| GET | /tasks/calendar | ダッシュボードのカレンダー表示用タスク取得 |
 | PATCH | /tasks/{id} | タスク更新（ステータス変更含む） |
+| DELETE | /tasks/{id} | タスク論理削除 |
+| DELETE | /projects/{id} | プロジェクト論理削除 |
 | GET | /notifications | 自分の通知一覧取得 |
 | GET | /notifications/unread-count | 未読通知件数取得（ポーリング用） |
 | PATCH | /notifications/{id}/read | 通知を既読にする |
