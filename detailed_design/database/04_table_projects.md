@@ -172,7 +172,7 @@ flowchart LR
 
 作成時は `projects` INSERT と `project_members` INSERT を同一トランザクションで行う（[`../../basic_design/01_database.md#43-プロジェクト作成時のデータ生成`](../../basic_design/01_database.md#43-プロジェクト作成時のデータ生成)）。
 
-削除時は `UPDATE projects SET is_active=false` のみを発行する論理削除であり、`projects` 行そのものは物理削除されない。そのため `project_members` / `tasks`（さらに `task_comments`）への `ON DELETE CASCADE` は、通常運用では発火しない。本設計にユーザー物理削除APIが存在しない場合と同様、DB制約としては維持しつつ「実運用では到達しない防御的制約」という位置づけに変わる（§11参照）。無効化されたプロジェクトの `tasks` は削除されず、タスク自体は有効なまま一覧・カンバンに残り続ける（`tasks.project_is_active` 相当の情報でフロントにバッジ表示する。[`06_table_tasks.md`](./06_table_tasks.md) §1・§8.10参照）。
+削除時は `UPDATE projects SET is_active=false` のみを発行する論理削除であり、`projects` 行そのものは物理削除されない。そのため `project_members` / `tasks`（さらに `task_comments`）への `ON DELETE CASCADE` は、通常運用では発火しない。本設計にユーザー物理削除APIが存在しない場合と同様、DB制約としては維持しつつ「実運用では到達しない防御的制約」という位置づけに変わる（§11参照）。無効化されたプロジェクトの `tasks` は削除されず、タスク自体は有効なまま一覧・カンバンに残り続ける（`tasks.project_is_active` 相当の情報でフロントにバッジ表示する。[`06_table_tasks.md`](./06_table_tasks.md) §1・§8.6参照）。
 
 ## 8. SP/FNリポジトリ契約
 
@@ -180,72 +180,17 @@ repositoryは下表の呼び出しと戻り値のDTO写像だけを行う。テ�
 
 | repository契約 | DB呼び出し | 戻り値・エラー |
 |----------------|------------|----------------|
-| `create` | `CALL sp_create_project(:owner_id, :name, :description, :start_at, :end_at)` | `fn_get_project(:project_id)`。owner membershipも同一SPで作成 |
+| `create` | `CALL sp_create_project(:owner_id, :name, :description, :start_at, :end_at, :project_id)`（`:project_id` はOUTパラメータ。DB側で `gen_random_uuid()` により採番される） | `fn_get_project(:project_id)`（OUTで受け取ったIDで再取得）。owner membershipも同一SPで作成 |
 | `get_by_id` | `SELECT fn_get_project(:project_id)` | 空集合は404へ変換 |
 | `list_for_user` | `SELECT fn_list_projects(:user_id, :include_inactive, :limit, :offset)` | FN結果をページDTOへ写像 |
 | `update` | `CALL sp_update_project(:project_id, :name, :description, :start_at, :end_at)` | `P0009 INVALID_STATE`等をAppErrorへ伝播 |
 | `delete` | `CALL sp_deactivate_project(:project_id, false)` | project_members/tasksは変更しない |
 
-### 8.1 SQL実装参考（SP/FN内部）
+### 8.1 SP/FN実装の参照
 
-以下の既存小節に記載するSQLはSP/FN本体の実装参考であり、repositoryから直接発行しない。実装時の正は[08_db_functions.md](./08_db_functions.md) §2のシグネチャである。
+`sp_create_project` / `sp_update_project` / `sp_deactivate_project` / `fn_get_project` / `fn_list_projects` の内部SQL・ロック方針・エラーコードは本ファイルに重複記載せず、[08_db_functions.md](./08_db_functions.md) §3.8（業務SP/FNの内部処理契約）を正とする。repositoryはこれらSP/FNの呼び出しと戻り値のDTO写像のみを実装し、`projects` テーブルへの直接SELECT/INSERT/UPDATE/DELETEは行わない。
 
-### 8.2 `repository/project_repository.py :: create`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def create(session: AsyncSession, *, name: str, description: str \| None, owner_id: UUID) -> Project` |
-| 引数 / 戻り値 | 引数：プロジェクト名・説明・オーナーID。戻り値：作成された `Project`（`id`/`created_at` 採番済み） |
-| 発行SQL | ```sql\nINSERT INTO projects (name, description, owner_id)\nVALUES (:name, :description, :owner_id)\nRETURNING id, name, description, owner_id, created_at, updated_at;\n``` |
-| 使用インデックス | PK（RETURNING のみ） |
-| 送出例外 | なし（FK違反は呼び出し元 `owner_id` が現在ユーザーのため通常発生しない） |
-| 処理内容 | 1. `Project` エンティティを構築<br/>2. `session.add()` して `flush()`<br/>3. サービス層が同一トランザクションで `project_member_repository.create()` を呼び、オーナーをメンバー登録する |
-
-### 8.3 `repository/project_repository.py :: get_by_id`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def get_by_id(session: AsyncSession, project_id: UUID) -> Project \| None` |
-| 引数 / 戻り値 | プロジェクトID → `Project`（存在しなければ `None`） |
-| 発行SQL | ```sql\nSELECT id, name, description, owner_id, created_at, updated_at\nFROM projects WHERE id = :project_id;\n``` |
-| 使用インデックス | PK |
-| 送出例外 | なし（`None` を返し、サービス層で `NotFoundError` に変換） |
-| 処理内容 | 1. PKで単一行取得<br/>2. 呼び出し元（`deps.require_project_member` 等）が所属確認に利用 |
-
-### 8.4 `repository/project_repository.py :: list_for_user`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def list_for_user(session: AsyncSession, *, user_id: UUID, is_admin: bool, page: int, per_page: int) -> tuple[list[Project], int]` |
-| 引数 / 戻り値 | ページング条件 → `(該当ページの Project 一覧, 総件数)` |
-| 発行SQL | ```sql\n-- is_admin=false の場合\nSELECT p.id, p.name, p.description, p.owner_id, p.created_at, p.updated_at\nFROM projects p\nJOIN project_members pm ON pm.project_id = p.id\nWHERE pm.user_id = :user_id\nORDER BY p.created_at DESC\nLIMIT :limit OFFSET :offset;\n-- is_admin=true の場合は JOIN/WHERE を省略し全件を対象にする\n``` |
-| 使用インデックス | `ix_project_members_user_id`（[`05_table_project_members.md`](./05_table_project_members.md)） |
-| 送出例外 | なし |
-| 処理内容 | 1. `is_admin` により全件/所属分岐<br/>2. 件数取得は `COUNT(*)` を同条件で別途発行<br/>3. `per_page` は環境変数 `PAGINATION_DEFAULT_PER_PAGE`（既定20）/ `PAGINATION_MAX_PER_PAGE`（上限100）で検証し、上限超過は `422 VALIDATION_ERROR` とする |
-
-### 8.5 `repository/project_repository.py :: update`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def update(session: AsyncSession, project: Project, *, name: str \| None, description: str \| None, start_at: datetime \| None, end_at: datetime \| None, is_active: bool \| None) -> Project` |
-| 引数 / 戻り値 | 更新対象エンティティと部分更新値 → 更新後 `Project` |
-| 発行SQL | ```sql\nUPDATE projects\nSET name = COALESCE(:name, name),\n    description = COALESCE(:description, description),\n    start_at = CASE WHEN :start_at_set THEN :start_at ELSE start_at END,\n    end_at = CASE WHEN :end_at_set THEN :end_at ELSE end_at END,\n    is_active = COALESCE(:is_active, is_active)\nWHERE id = :id\nRETURNING id, name, description, owner_id, is_active, start_at, end_at, created_at, updated_at;\n``` |
-| 使用インデックス | PK |
-| 送出例外 | `ConstraintViolationError`（`ck_projects_period` 違反時。アプリ層でも事前バリデーションする） |
-| 処理内容 | 1. ORMエンティティの属性を更新し `flush()`（`trg_set_updated_at` が `updated_at` を更新）<br/>2. `description`/`start_at`/`end_at` を明示的に `null` にするケースは pydantic の `exclude_unset` で区別する<br/>3. `is_active=true` を指定する呼び出しが再有効化（reactivate）に相当し、認可はルータ側 `deps.require_project_owner_or_admin` で事前判定する |
-
-### 8.6 `repository/project_repository.py :: delete`（論理削除）
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def delete(session: AsyncSession, project: Project) -> None` |
-| 引数 / 戻り値 | 削除対象エンティティ → なし |
-| 発行SQL | ```sql\nUPDATE projects SET is_active = false WHERE id = :id;\n``` |
-| 使用インデックス | PK |
-| 送出例外 | なし |
-| 処理内容 | 1. `project.is_active = False` としてORMエンティティを更新し `flush()`（`trg_set_updated_at` により `updated_at` も更新される）<br/>2. `projects` 行・`project_members`・`tasks` は物理削除されない。`DELETE FROM projects` は発行しないため `ON DELETE CASCADE` は発火しない |
-
-再有効化は `update()`（8.4）に `is_active=True` を渡す形で提供し、専用の `reactivate` 関数は設けない（内部実装は同一UPDATE文のため関数を分けるメリットが薄いと判断。関数を分離するかは実装時の裁量とする）。
+再有効化は `update`（§8）に `is_active=true` を渡す形で提供し、専用の `reactivate` 契約は設けない。
 
 ## 9. 関数相関図
 
