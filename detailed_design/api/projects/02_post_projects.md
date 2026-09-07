@@ -110,18 +110,19 @@ sequenceDiagram
     R->>R: pydanticでリクエストボディを検証（end_at>=start_atを含む）
     R->>S: create_project(user, payload)
     S->>PG: BEGIN
-    S->>RP: sp_create_project(name, description, start_at, end_at, owner_id=user.id)
-    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
+    S->>RP: sp_create_project(owner_id=user.id, name, description, start_at, end_at)
+    RP->>PG: "CALL sp_create_project(:p_owner_id, :p_name, :p_description, :p_start_at, :p_end_at, OUT :p_project_id)"
+    Note over RP,PG: SP内部でproject INSERTとownerのproject_members INSERTを一体実行し、\n採番したproject_idをOUTパラメータで返す
+    PG-->>RP: OUT p_project_id
+    RP-->>S: project_id
+    S->>RP: fn_get_project(project_id)
+    RP->>PG: "SELECT * FROM fn_get_project(:project_id)"
     PG-->>RP: project行
     RP-->>S: Project
-    S->>RP: sp_create_project(project_id, user_id=user.id, invited_by=NULL)
-    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-    PG-->>RP: OK
-    S->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-    alt INSERTのいずれかが失敗
+    alt SPが例外を送出（例：P0009 期間不正）
         S->>PG: ROLLBACK
-        S-->>R: InternalError
-        R-->>FE: 500 INTERNAL_ERROR
+        S-->>R: AppError（P0009等をエラーコード対応表で変換）
+        R-->>FE: 対応するHTTPステータス
     end
     S-->>R: ProjectSummary（member_count=1, task_counts=全0, is_owner=true）
     R-->>FE: 201 {project}
@@ -141,12 +142,11 @@ flowchart TB
     D -->|"OK"| E["pydanticでname/description/start_at/end_atを検証（end_at>=start_atを含む）"]
     E -->|"制約外"| E1["422 VALIDATION_ERROR"]
     E -->|"OK"| F["BEGIN"]
-    F --> G["INSERT projects (owner_id=current_user.id, is_active=true, start_at, end_at)"]
-    G --> H["INSERT project_members (project_id, user_id=current_user.id)"]
+    F --> G["CALL sp_create_project(owner_id, name, description, start_at, end_at, OUT project_id)\n（project INSERTとownerのproject_members INSERTを一体実行）"]
+    G --> H["SELECT fn_get_project(project_id)"]
     H --> I["COMMIT"]
     I --> J["201 {project}"]
-    G -.->|"失敗"| K["ROLLBACK → 500 INTERNAL_ERROR"]
-    H -.->|"失敗"| K
+    G -.->|"P0009（期間不正）等"| K["ROLLBACK → エラーコード対応表に従いHTTPへ変換"]
 ```
 
 ## 6. 関数詳細
@@ -170,19 +170,30 @@ flowchart TB
 | 引数 | `user`: 作成者 / `payload`: `name`, `description`, `start_at`, `end_at` / `db`: DBセッション |
 | 戻り値 | `ProjectSummary`（`member_count=1`, `task_counts`全0, `is_owner=True`, `is_active=True` を固定値として組み立てる） |
 | 送出例外 | `ValidationError`（`end_at < start_at`）→422、`InternalError`（INSERT失敗）→500、`ServiceUnavailableError`（DB接続不能）→503 |
-| 処理内容 | 1. 入力形式をpydanticで検証し、API側で`project_id`を生成 2. repositoryが `CALL sp_create_project(project_id, user.id, name, description, start_at, end_at)` を1回呼ぶ 3. 成功後に `SELECT fn_get_project(project_id)` で応答を取得 4. SQLSTATE P0009等はAPIのAppErrorへ変換し、SP失敗時は全体をrollback |
+| 処理内容 | 1. 入力形式をpydanticで検証する（`project_id`はAPI側で生成しない） 2. repositoryが `CALL sp_create_project(:p_owner_id, :p_name, :p_description, :p_start_at, :p_end_at, OUT :p_project_id)` を1回呼び、SP内部で採番された`project_id`をOUTパラメータで受け取る 3. `SELECT fn_get_project(project_id)` で応答表示用の行を取得 4. SQLSTATE P0009等はAPIのAppErrorへ変換し、SP失敗時は全体をrollback |
 | 副作用 | SP内部で `projects` とownerの `project_members` を更新 |
 
 ### 6.3 `repository/project_repository.py :: sp_create_project`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def sp_create_project(db: AsyncSession, project_id: UUID, owner_id: UUID, name: str, description: str \| None, start_at: datetime \| None, end_at: datetime \| None) -> None` |
-| 引数 | 上記の通り |
-| 戻り値 | なし。`project_id` は呼び出し元が生成済みの値を使用する |
+| シグネチャ | `async def sp_create_project(db: AsyncSession, owner_id: UUID, name: str, description: str \| None, start_at: datetime \| None, end_at: datetime \| None) -> UUID` |
+| 引数 | `owner_id`: 作成者 / `name`, `description`, `start_at`, `end_at`: リクエスト値 |
+| 戻り値 | SP内部で`gen_random_uuid()`により採番され、OUTパラメータとして返された`project_id`（`UUID`） |
 | 送出例外 | SQLSTATE `P0009`（期間不正）等。APIの対応表でAppErrorへ変換 |
-| 処理内容 | `CALL sp_create_project(:project_id, :owner_id, :name, :description, :start_at, :end_at)` のみを発行する。DB更新本体とowner登録はSP内部 |
+| 処理内容 | `CALL sp_create_project(:p_owner_id, :p_name, :p_description, :p_start_at, :p_end_at, OUT :p_project_id)` のみを発行し、OUTパラメータを戻り値として返す。DB更新本体とowner登録はSP内部で一体実行される |
 | 副作用 | SP内のDB更新。repositoryは直接CRUDを持たない |
+
+### 6.4 `repository/project_repository.py :: fn_get_project`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `async def fn_get_project(db: AsyncSession, project_id: UUID) -> ProjectRow \| None` |
+| 引数 | `project_id`: `sp_create_project`が返した採番済みID |
+| 戻り値 | `fn_get_project`の結果を写像した行。存在しない場合は`None`（作成直後のため通常は発生しない） |
+| 送出例外 | `OperationalError`（DB不通） |
+| 処理内容 | `SELECT fn_get_project(:project_id)` のみを発行する |
+| 副作用 | なし |
 
 ## 7. 関数相関図
 
@@ -191,21 +202,22 @@ flowchart LR
     R["projects_router.create_project"] --> D1["deps.verify_origin"]
     R --> D2["deps.verify_csrf"]
     R --> S["project_service.create_project"]
-    S --> RP["repository.sp_create_project"]
-    RP --> SP["CALL sp_create_project"]
-    SP --> FN["SELECT fn_get_project"]
+    S --> RP1["repository.sp_create_project"]
+    RP1 --> SP["CALL sp_create_project（OUTでproject_idを採番）"]
+    S --> RP2["repository.fn_get_project"]
+    RP2 --> FN["SELECT fn_get_project(project_id)"]
 ```
 
 ## 8. データ遷移図
 
 ```mermaid
 flowchart LR
-    A["POST /api/projects"] --> B["CALL sp_create_project"]
-    B --> C["SP内部: project + owner membership"]
-    C --> D["COMMIT（1業務トランザクション）"]
+    A["POST /api/projects"] --> B["CALL sp_create_project（OUT project_id）"]
+    B --> C["SP内部: project INSERT + ownerのproject_members INSERT"]
+    C --> D["SELECT fn_get_project(project_id)"]
+    D --> E["COMMIT（1業務トランザクション）"]
     E --> F["201 Created"]
-    C -.->|"失敗"| G["ROLLBACK / 500 INTERNAL_ERROR"]
-    D -.->|"失敗"| G
+    C -.->|"P0009等の例外"| G["ROLLBACK / エラーコード対応表に従い変換"]
 ```
 
 ## 9. SP/FNデータアクセス一覧
@@ -216,16 +228,18 @@ flowchart LR
 
 | 種別 | 契約 | 説明 |
 |------|------|------|
-| create_project | `sp_create_project(p_project_id, p_owner_id, p_name, p_description, p_start_at, p_end_at)` | API生成IDでsp_create_projectを呼び出し、fn_get_projectの結果をレスポンスへ写像する |
+| sp_create_project | `sp_create_project(p_owner_id, p_name, p_description, p_start_at, p_end_at, OUT p_project_id)` | project作成とownerのproject_members登録を一体実行し、SP内部で採番した`project_id`をOUTで返す |
+| fn_get_project | `fn_get_project(p_project_id)` | sp_create_projectが返した`project_id`でレスポンス表示用の行を取得する |
 
 repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
-**PostgreSQL**
+**PostgreSQL（SP内部の補足。repositoryが直接発行するSQLではない）**
 
 | テーブル | 操作 | 条件・TTL | 備考 |
 |----------|------|-----------|------|
-| projects | INSERT | `owner_id = current_user.id`、`is_active`はDEFAULT `true`、`start_at`/`end_at`は指定値または`null` | トランザクション内。`ck_projects_period` CHECK制約あり |
-| project_members | INSERT | `project_id`, `user_id = owner_id`, `invited_by = NULL` | 同一トランザクション。所属判定を一箇所に集約するため作成時に自分自身も登録する |
+| projects | INSERT（`sp_create_project`内部） | `owner_id = current_user.id`、`id`はSP内部で`gen_random_uuid()`により採番、`is_active`はDEFAULT `true`、`start_at`/`end_at`は指定値または`null` | 1トランザクション。`ck_projects_period` CHECK制約あり |
+| project_members | INSERT（`sp_create_project`内部） | `project_id`（SPが採番したID）, `user_id = owner_id`, `invited_by = NULL` | 同一トランザクション。所属判定を一箇所に集約するため作成時に自分自身も登録する |
+| projects | SELECT（`fn_get_project`内部） | `id = :project_id` | レスポンス表示用の取得 |
 
 **Redis**
 
@@ -259,8 +273,8 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 結合（実DB・実SP） | 正常作成でsp_create_project→sp_create_projectの順に呼ばれる | 実DB・実SPで検証 | 呼び出し順序とowner_id/user_idの整合を検証 | `test_create_project_calls_repository_in_order` |
-| 2 | 単体 | sp_create_project失敗時にロールバックされる | `sp_create_project`がIntegrityErrorを送出するようモック | `rollback`が呼ばれ例外が再送出される | `test_create_project_rollback_on_member_insert_failure` |
+| 1 | 結合（実DB・実SP） | 正常作成でsp_create_project→fn_get_projectの順に呼ばれる | 実DB・実SPで検証 | sp_create_projectがOUTでproject_idを返し、fn_get_projectがその行を返すことを検証 | `test_create_project_calls_repository_in_order` |
+| 2 | 単体 | sp_create_project失敗時にロールバックされる | `sp_create_project`がP0009等の例外を送出するようモック | `rollback`が呼ばれ例外が再送出される | `test_create_project_rollback_on_sp_failure` |
 | 3 | 結合 | 正常系でprojectsとproject_membersが同一トランザクションで作成される | 実PostgreSQL | 201、`project_members`に自分自身が1行存在 | `test_create_project_success` |
 | 4 | 結合 | nameが101文字で422 | リクエストボディ不正 | `422 VALIDATION_ERROR` | `test_create_project_name_too_long` |
 | 5 | 結合 | sessionモードでCSRFヘッダ欠落時403 | `X-CSRF-Token`を送らない | `403 CSRF_INVALID` | `test_create_project_missing_csrf_session_mode` |
