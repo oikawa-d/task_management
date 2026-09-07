@@ -142,6 +142,7 @@ flowchart LR
 | 非root確認 | `id -u`が0でない | `test_batch_container_runs_non_root` |
 | 起動 | `python -m app.main`が設定を読み常駐する | `test_batch_entrypoint_starts_scheduler` |
 | DB未準備 | depends_on待機後も再起動で復旧できる | `test_batch_restarts_after_database_readiness` |
+| DB/Redis直接接続 | batchイメージ内からComposeサービス名でPostgreSQL/Redisへ接続する | `test_batch_container_connects_to_postgres_and_redis` |
 
 ## 12. 不明点・要検討事項
 

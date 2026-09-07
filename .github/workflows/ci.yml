@@ -153,6 +153,26 @@ jobs:
         working-directory: batch
         run: pytest --cov=app --cov-report=term-missing
 
+  batch-container-integration:
+    needs: detect
+    if: needs.detect.outputs.batch == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: pytestをインストール
+        run: pip install pytest
+
+      - name: batch専用コンテナからDB/Redisへの直接接続を検証
+        env:
+          RUN_BATCH_CONTAINER_INTEGRATION: '1'
+        run: pytest -c batch/pytest.ini batch/tests/integration/test_container_connectivity.py -q
+
   frontend:
     needs: detect
     if: needs.detect.outputs.frontend == 'true'

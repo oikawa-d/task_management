@@ -13,7 +13,7 @@
 | 責務 | `backend` / `frontend` / `batch` / `postgres` / `redis` / `mailpit` の6サービスを1つの Docker Compose ネットワークで起動し、依存順序とヘルスチェックを保証する |
 | 適用条件 | ローカル / 自宅サーバーの Docker Compose（クラウド不使用）。`mailpit` は `profiles: [dev]` の場合のみ起動 |
 | 依存先 | Docker Engine / Docker Compose v2（`docker compose` コマンド。ハイフン付き `docker-compose` は使用しない） |
-| 実装ファイル | `docker-compose.yml`、`compose.dev.yml`、`.env` / `.env.example` |
+| 実装ファイル | `docker-compose.yml`、`compose.dev.yml`、`compose.integration.yml`、`.env` / `.env.example` |
 
 ## 2. 構成要素
 
@@ -28,6 +28,7 @@
 | `cerberus_net` | ネットワーク | bridge。6サービスを内部DNS名（サービス名）で疎通 | 外部公開は `frontend` の1ポートのみが原則 |
 | `pgdata` | volume | PostgreSQLデータ永続化 | named volume |
 | `compose.dev.yml` | オーバーレイファイル | バインドマウント・ホットリロード・追加ポート公開を開発時だけ有効化 | `docker compose -f docker-compose.yml -f compose.dev.yml up` |
+| `compose.integration.yml` | 受入テスト用Compose | `.env.example`を使った最小のPostgreSQL/Redis/batch構成を起動し、実コンテナからの直接接続を検証 | CIの`batch-container-integration`のみで使用 |
 
 ## 3. 設定項目（環境変数）
 
@@ -233,6 +234,7 @@ flowchart LR
 | 3 | 結合 | backend起動時にAlembicマイグレーションが適用される | 空のpostgresボリューム | `alembic_version`テーブルが最新headと一致 | `test_backend_migration_on_start` |
 | 4 | 結合 | redisコンテナ再起動でセッションが消える | session方式でログイン後 `docker compose restart redis` | `/auth/me`が401になる | `test_redis_restart_invalidates_session` |
 | 5 | 結合 | backend/postgres/redisのポートが本体Composeで非公開 | `docker-compose.yml`単体起動 | `docker compose port backend 8000`等が失敗、またはホストから疎通不可 | `test_no_unintended_port_exposure` |
+| 6 | 受入 | batch専用コンテナからPostgreSQL/Redisへ直接接続 | `RUN_BATCH_CONTAINER_INTEGRATION=1`、`.env.example`、Docker Engine | batchイメージ内のSQLAlchemyで`SELECT 1`、redis-pyで`PING`が成功する | `test_batch_container_connects_to_postgres_and_redis` |
 | 網羅できない範囲 | 実機の自宅サーバー環境でのファイアウォール設定 | - | ネットワーク機器依存のため自動テスト対象外。手動確認とする | - |
 
 ## 12. 不明点・要検討事項
