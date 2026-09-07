@@ -36,6 +36,11 @@ BEGIN
         RAISE EXCEPTION 'task version conflict' USING ERRCODE = 'P0005';
     END IF;
 
+    IF p_assignee_id IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM users WHERE id = p_assignee_id AND is_active = true) THEN
+        RAISE EXCEPTION 'assignee is not an active user' USING ERRCODE = 'P0006';
+    END IF;
+
     v_status_changed := (p_status IS DISTINCT FROM v_old_status);
 
     IF v_status_changed THEN

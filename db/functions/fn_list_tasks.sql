@@ -5,12 +5,16 @@ CREATE OR REPLACE FUNCTION fn_list_tasks(
     p_include_inactive BOOLEAN,
     p_limit INTEGER,
     p_offset INTEGER
-) RETURNS SETOF tasks
+) RETURNS TABLE (
+    task tasks,
+    project_is_active BOOLEAN
+)
 LANGUAGE sql
 STABLE
 AS $$
-    SELECT t.*
+    SELECT t, p.is_active
     FROM tasks t
+    LEFT JOIN projects p ON p.id = t.project_id
     WHERE (p_include_inactive OR t.is_active = true)
       AND (p_status IS NULL OR t.status = p_status)
       AND (

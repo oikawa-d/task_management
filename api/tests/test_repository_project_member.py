@@ -55,9 +55,9 @@ async def test_remove_member_nullifies_assigned_tasks(db_session: AsyncSession) 
 
 	await project_member_repository.delete(db_session, project_id, member_id)
 
-	task = await task_repository.get_by_id(db_session, task_id)
-	assert task is not None
-	assert task.assignee_id is None
+	result = await task_repository.get_by_id(db_session, task_id)
+	assert result is not None
+	assert result.task.assignee_id is None
 	assert await project_member_repository.exists(db_session, project_id, member_id) is False
 
 

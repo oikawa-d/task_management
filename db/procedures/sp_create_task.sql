@@ -15,6 +15,11 @@ DECLARE
     v_lock_key TEXT;
     v_position INTEGER;
 BEGIN
+    IF p_assignee_id IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM users WHERE id = p_assignee_id AND is_active = true) THEN
+        RAISE EXCEPTION 'assignee is not an active user' USING ERRCODE = 'P0006';
+    END IF;
+
     v_lock_key := COALESCE(p_project_id::text, '00000000-0000-0000-0000-000000000000') || ':' || p_status;
     PERFORM pg_advisory_xact_lock(hashtextextended(v_lock_key, 0));
 
@@ -22,6 +27,12 @@ BEGIN
         v_position := fn_next_task_position(p_project_id, p_status);
     ELSE
         v_position := p_position;
+        -- 明示的なposition指定時は、既存タスクの挿入位置以降を+1でずらして空きを作る
+        UPDATE tasks
+           SET position = position + 1
+         WHERE project_id IS NOT DISTINCT FROM p_project_id
+           AND status = p_status
+           AND position >= v_position;
     END IF;
 
     INSERT INTO tasks (project_id, created_by, assignee_id, title, description, status, due_at, position)

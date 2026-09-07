@@ -1,10 +1,42 @@
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import select, text
+from sqlalchemy import text
+from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.task import Task
+
+
+@dataclass(frozen=True)
+class TaskWithProjectStatus:
+	"""fn_get_task/fn_get_project_board/fn_list_tasks の1行分（タスク本体＋project_is_active）。"""
+
+	task: Task
+	project_is_active: bool | None
+
+
+def _build_task(row: RowMapping) -> Task:
+	return Task(
+		id=row["id"],
+		project_id=row["project_id"],
+		title=row["title"],
+		description=row["description"],
+		status=row["status"],
+		assignee_id=row["assignee_id"],
+		created_by=row["created_by"],
+		position=row["position"],
+		version=row["version"],
+		due_at=row["due_at"],
+		is_active=row["is_active"],
+		created_at=row["created_at"],
+		updated_at=row["updated_at"],
+	)
+
+
+def _build_task_with_project_status(row: RowMapping) -> TaskWithProjectStatus:
+	return TaskWithProjectStatus(task=_build_task(row), project_is_active=row["project_is_active"])
 
 
 async def create(
@@ -38,24 +70,21 @@ async def create(
 	return task_id
 
 
-async def get_by_id(db: AsyncSession, task_id: uuid.UUID) -> Task | None:
+async def get_by_id(db: AsyncSession, task_id: uuid.UUID) -> TaskWithProjectStatus | None:
 	result = await db.execute(
-		select(Task)
-		.from_statement(text("SELECT * FROM fn_get_task(:task_id)"))
-		.params(task_id=task_id)
-		.execution_options(populate_existing=True)
+		text("SELECT (task).*, project_is_active FROM fn_get_task(:task_id)"),
+		{"task_id": task_id},
 	)
-	return result.scalars().one_or_none()
+	row = result.mappings().one_or_none()
+	return None if row is None else _build_task_with_project_status(row)
 
 
-async def list_board(db: AsyncSession, project_id: uuid.UUID, include_inactive: bool) -> list[Task]:
+async def list_board(db: AsyncSession, project_id: uuid.UUID, include_inactive: bool) -> list[TaskWithProjectStatus]:
 	result = await db.execute(
-		select(Task)
-		.from_statement(text("SELECT * FROM fn_get_project_board(:project_id, :include_inactive)"))
-		.params(project_id=project_id, include_inactive=include_inactive)
-		.execution_options(populate_existing=True)
+		text("SELECT (task).*, project_is_active FROM fn_get_project_board(:project_id, :include_inactive)"),
+		{"project_id": project_id, "include_inactive": include_inactive},
 	)
-	return list(result.scalars().all())
+	return [_build_task_with_project_status(row) for row in result.mappings().all()]
 
 
 async def list_for_user(
@@ -66,23 +95,22 @@ async def list_for_user(
 	include_inactive: bool,
 	limit: int,
 	offset: int,
-) -> list[Task]:
+) -> list[TaskWithProjectStatus]:
 	result = await db.execute(
-		select(Task)
-		.from_statement(
-			text("SELECT * FROM fn_list_tasks(:user_id, :project_id, :status, :include_inactive, :limit, :offset)")
-		)
-		.params(
-			user_id=user_id,
-			project_id=project_id,
-			status=status,
-			include_inactive=include_inactive,
-			limit=limit,
-			offset=offset,
-		)
-		.execution_options(populate_existing=True)
+		text(
+			"SELECT (task).*, project_is_active FROM "
+			"fn_list_tasks(:user_id, :project_id, :status, :include_inactive, :limit, :offset)"
+		),
+		{
+			"user_id": user_id,
+			"project_id": project_id,
+			"status": status,
+			"include_inactive": include_inactive,
+			"limit": limit,
+			"offset": offset,
+		},
 	)
-	return list(result.scalars().all())
+	return [_build_task_with_project_status(row) for row in result.mappings().all()]
 
 
 async def update(

@@ -67,8 +67,8 @@ async def test_fn_list_tasks_unassigned_visible_only_to_creator(db_session: Asyn
 	own = await task_repository.list_for_user(db_session, creator_id, None, None, False, 50, 0)
 	other = await task_repository.list_for_user(db_session, other_id, None, None, False, 50, 0)
 
-	assert task_id in {t.id for t in own}
-	assert task_id not in {t.id for t in other}
+	assert task_id in {r.task.id for r in own}
+	assert task_id not in {r.task.id for r in other}
 
 
 async def test_fn_list_tasks_non_member_cannot_see_project_scoped_tasks(db_session: AsyncSession) -> None:
