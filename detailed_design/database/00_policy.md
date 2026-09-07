@@ -204,10 +204,10 @@ DDLの実適用（Alembicリビジョンの構成・初期データseed・CI/CD�
 
 ## 11. 不明点・要検討事項
 
-- `TIMESTAMPTZ` で保存した日時をアプリ層でどのタイムゾーンに変換して返却するか（`APP_TIMEZONE` 等の環境変数が基本設計に定義されていない）は不明。要検討。
+- ~~`TIMESTAMPTZ` で保存した日時をアプリ層でどのタイムゾーンに変換して返却するか~~ → issue #40で確定。API応答は`APP_TIMEZONE`でのオフセット付きISO 8601文字列に変換して返却する（[`basic_design/01_database.md` §1](../../basic_design/01_database.md#1-設計方針)参照）。
 - CHECK制約の値追加時のAlembic運用（`DROP CONSTRAINT` → `ADD CONSTRAINT` の具体的な手順・ダウングレード時の扱い）は `09_migration.md` 側で詳細化が必要（本書では方針のみ記載）。要検討。
-- エラーコード対応表をDB側（`08_db_functions.md`）とAPI側（`basic_design/04_api.md` §4.2）のどちらを正とするか、SQLSTATEを業務エラーコードごとに個別採番するか `P0001` 共通＋MESSAGE文字列で判定するかは未確定。要検討・本taskでは決定しない（roadmap #12 phase1 の task1.2 で扱う）。
-- admin操作（role変更・強制ログアウト等）でSP/FN層への責務移管が進んだ場合の、Redisセッション失効順序制御（DBの状態変更とRedis側のセッション無効化の順序保証）の扱いは不明。要検討。
+- ~~エラーコード対応表をDB側とAPI側のどちらを正とするか~~ → roadmap #12 phase1（task1.2）にて`P0001`〜`P0009`共通＋MESSAGE文字列方式で確定済み。`08_db_functions.md` §4と`basic_design/04_api.md` §4.2が1対1で対応する（[`quality_check.md` §3](./../quality_check.md)で合格確認済み）。
+- ~~admin操作（role変更・強制ログアウト等）でのRedisセッション失効順序制御~~ → issue #40で確認。実際にDB更新とRedis失効の両方を伴うのは無効化API（`sp_admin_update_user_status`）のみで、既に「DB先行→成功後Redis失効（フェイルセーフ側＝無効化済みに倒す）」で確定・実装済み（[`api/admin/03_patch_admin_user_status.md`](../api/admin/03_patch_admin_user_status.md) §4参照）。role変更はRedisを更新せず、強制ログアウトはDBを更新しないため、これら2操作には順序保証の論点自体が発生しない。今後DB+Redis複合更新を伴うadmin操作を追加する場合は、この確定パターン（DB先行）を踏襲する。
 - 本節§2.1の新方針は roadmap #12 に基づく先行改訂であり、basic_designとdetailed_designの改訂順序が本書冒頭「## 0. 関連ドキュメント」記載の文書間優先順位ルール（矛盾時は基本設計が正）と一時的に矛盾する期間が生じる。当該期間の扱い（basic_design側の追従改訂タイミング・暫定的な優先順位の扱い）は要検討。
 - ヘルスチェック（`GET /api/health`）を例外としてSP/FN化しない方針（本書§2.1に反映済み）が有力だが、roadmap #12 側での最終確定はまだ済んでいない。要検討。
 - `api_history` 記録ミドルウェアをSP化した場合の全リクエストへのレイテンシ影響は未検証。要検討（性能検証が必要）。

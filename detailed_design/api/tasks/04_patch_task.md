@@ -55,7 +55,7 @@
 |-----------|----|----|------|--------------|
 | version | integer | **○** | 取得時点の値と一致必須 | - |
 | title | string | - | 1〜150文字 | 変更しない |
-| description | string \| null | - | 上限なし（`TEXT`） | 変更しない |
+| description | string \| null | - | 0〜2000文字（issue #40で確定。[`basic_design/04_api.md` §3.2](../../../basic_design/04_api.md#32-プロジェクトタスク)参照） | 変更しない |
 | status | string | - | `todo` / `in_progress` / `done` | 変更しない |
 | assignee_id | string(uuid) \| null | - | 有効なプロジェクトメンバーであること。`null` で担当解除 | 変更しない |
 | position | integer | - | 0以上 | 5.1節の規則に従う |

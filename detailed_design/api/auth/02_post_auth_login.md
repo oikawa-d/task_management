@@ -357,7 +357,7 @@ stateDiagram-v2
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 要検討 | `LOGIN_MAX_ATTEMPTS`（許容失敗回数の上限値）が`02_redis.md`に明記されていない（TTLのみ既定900秒と記載） | 実装時に具体的な閾値を別途決定する必要がある |
+| 確定 | `LOGIN_MAX_ATTEMPTS`（許容失敗回数の上限値）はissue #40で`5`に正式確定（[02_redis.md](../../../basic_design/02_redis.md)） | - |
 | 確定 | `client_ip`は接続元が`TRUSTED_PROXY_CIDRS`内の場合だけXFFを右から検証して解決し、`login_history`・レート制限と共通化する | 監査ログには`client_ip`、`proxy_peer_ip`、`ip_source`を記録する |
 
 ## DBアクセス契約

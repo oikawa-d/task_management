@@ -312,7 +312,7 @@ flowchart TB
 | フィールド | zodルール | エラーメッセージ | バックエンド対応 |
 |-----------|-----------|-------------------|-------------------|
 | `title`（タスク作成） | `z.string().min(1).max(150)` | 「タイトルを1〜150文字で入力してください」 | `POST /tasks` title（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） |
-| `description`（タスク作成） | `z.string().nullable().optional()` | - | 上限は要検討（基本設計に明記なし） |
+| `description`（タスク作成） | `z.string().max(2000).nullable().optional()` | 「説明は2000文字以内で入力してください」 | `POST /tasks` description（issue #40で確定。[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） |
 | `assignee_id`（タスク作成） | `z.string().uuid().nullable().optional()` | 「担当者の選択が不正です」 | 有効なプロジェクトメンバーであることはサーバー側で検証（`409 ASSIGNEE_INACTIVE`） |
 | `due_at`（タスク作成） | `z.string().datetime({ local: true }).nullable().optional()` | 「期限日時の形式が正しくありません」 | `APP_TIMEZONE`へ変換後、ISO 8601 UTCを送信 |
 | `status`（タスク作成） | `z.enum(['todo','in_progress','done'])` | - | 省略時サーバーは `todo` を既定とする |
@@ -380,5 +380,5 @@ flowchart LR
 | 区分 | 内容 | 影響 |
 |------|------|------|
 | 要検討 | メンバー招待UIを本画面（③⑨付近）に置くか、独立した導線とするかが基本設計（[05_frontend.md §7.5](../../basic_design/05_frontend.md#75-カンバンボード)）に明記されていない。本書では簡易表示のみとし招待操作は対象外とした | メンバー管理APIの呼び出し元画面の要確認 |
-| 要検討 | タスク作成時の `description` 文字数上限が基本設計に明記されていない | フロント側バリデーション実装の要確認 |
+| 確定 | タスク作成時の `description` 文字数上限はissue #40で0〜2000文字に確定（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） | - |
 | なし | 上記以外 | - |

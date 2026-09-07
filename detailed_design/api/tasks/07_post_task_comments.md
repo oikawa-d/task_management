@@ -242,7 +242,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 
 | 項目 | pydanticスキーマ | 制約 | フロント（zod）一致方針 |
 |------|-------------------|------|--------------------------|
-| body | `CommentCreateRequest.body` | `min_length=1`, `max_length=TASK_COMMENT_BODY_MAX_LENGTH`（既定2000）、trim後判定 | フロントは同じ上限値を `VITE_TASK_COMMENT_BODY_MAX_LENGTH` 等の設定から取得するか、zodスキーマにハードコードせず定数モジュールで一元管理する（要検討、§13参照） |
+| body | `CommentCreateRequest.body` | `min_length=1`, `max_length=TASK_COMMENT_BODY_MAX_LENGTH`（既定2000）、trim後判定 | フロントは同じ上限値を`VITE_TASK_COMMENT_BODY_MAX_LENGTH`環境変数から取得する（issue #40で確定。[basic_design/05_frontend.md §6.2](../../../basic_design/05_frontend.md#62-環境変数vite)） |
 
 ## 11. 非機能・セキュリティ考慮
 
@@ -274,5 +274,5 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 区分 | 内容 | 影響 |
 |------|------|------|
 | 要検討 | コメント投稿のレート制限（連投防止）が基本設計に規定されていない | スパム・大量投稿への耐性 |
-| 要検討 | `TASK_COMMENT_BODY_MAX_LENGTH` をフロント（zod）とどう共有するか（環境変数経由か、共有定数ファイルか）が未確定 | フロント・バック間の制約不一致リスク |
+| 確定 | `TASK_COMMENT_BODY_MAX_LENGTH` はissue #40で`VITE_TASK_COMMENT_BODY_MAX_LENGTH`環境変数によりフロント（zod）と共有することに確定 | - |
 | 不明 | Markdownやリッチテキスト対応の要否。本設計はプレーンテキスト前提とした | 将来のコメント表示仕様変更時の影響 |
