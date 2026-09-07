@@ -62,8 +62,16 @@ async def test_fn_list_due_notification_tasks_returns_only_active_assigned_due_b
 		),
 		{"uid": owner_id},
 	)
+	# 非対象：完了済み（status='done'）
+	await db_session.execute(
+		text(
+			"INSERT INTO tasks (created_by, assignee_id, title, due_at, status) "
+			"VALUES (:uid, :uid, 'done task', now(), 'done')"
+		),
+		{"uid": owner_id},
+	)
 
-	# thresholdはnow()+1分（境界の'due soon'のみ含み、'future'は除外する）
+	# thresholdはnow()+1分（境界の'due soon'のみ含み、'future'・'done task'は除外する）
 	result = await db_session.execute(
 		text("SELECT id FROM fn_list_due_notification_tasks(now() + interval '1 minute')")
 	)

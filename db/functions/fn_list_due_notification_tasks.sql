@@ -8,5 +8,6 @@ AS $$
     FROM tasks
     WHERE due_at < p_threshold
       AND is_active = true
-      AND assignee_id IS NOT NULL;
+      AND assignee_id IS NOT NULL
+      AND status != 'done';
 $$;
