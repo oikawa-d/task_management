@@ -44,7 +44,7 @@
 
 基本設計 `01_database.md` §3.5 の定義から逸脱しない（`project_id` のNULL許容化・`is_active` 追加は issue #10 対応として本改訂で追加）。
 
-タスクのレスポンスには `project_is_active`（boolean、`project_id`がNULLの場合は`null`）を含める。DBに永続カラムとして保持するのではなく、`projects` とのJOINで都度取得する派生値である（§8.10参照）。
+タスクのレスポンスには `project_is_active`（boolean、`project_id`がNULLの場合は`null`）を含める。DBに永続カラムとして保持するのではなく、`projects` とのJOINで都度取得する派生値である（§8.6参照）。
 
 ## 3. DDL
 
@@ -236,7 +236,7 @@ flowchart LR
     R --> S["UPDATE tasks SET is_active=true"]
 ```
 
-論理削除（`is_active=false`）はDELETE時点の `position`/`status` をそのまま保持し、後続タスクの `position` 詰めは行わない。無効化されたタスクは一覧・カンバンから除外されるだけで、`position` にギャップが生じても列内の並び順（`ORDER BY position`）自体は崩れないため実用上問題ない（物理削除時代の詰め直しロジックは廃止する。§8.8参照）。
+論理削除（`is_active=false`）はDELETE時点の `position`/`status` をそのまま保持し、後続タスクの `position` 詰めは行わない。無効化されたタスクは一覧・カンバンから除外されるだけで、`position` にギャップが生じても列内の並び順（`ORDER BY position`）自体は崩れないため実用上問題ない（物理削除時代の詰め直しロジックは廃止する。§8.5参照）。
 
 ## 8. SP/FNリポジトリ契約
 
@@ -245,128 +245,62 @@ repositoryは下表のSP/FN呼び出しとDTO写像だけを行う。advisory lo
 | repository契約 | DB呼び出し | 戻り値・エラー |
 |----------------|------------|----------------|
 | `acquire_status_lock` / `next_position` | 単独公開しない。`sp_create_task` / `sp_update_task` 内でlock→`fn_next_task_position` | SPトランザクション内でのみ有効 |
-| `insert` | `CALL sp_create_task(:project_id, :created_by, :assignee_id, :title, :body, :status, :due_at, :position)` | `fn_get_task`で作成結果を取得 |
+| `insert` | `CALL sp_create_task(:project_id, :created_by, :assignee_id, :title, :body, :status, :due_at, :position, :task_id)`（`:task_id` はOUTパラメータ。DB側で `gen_random_uuid()` により採番される） | `fn_get_task(:task_id)`で作成結果を取得 |
 | `get_by_id_for_update` | `SELECT fn_get_task(:task_id)` | 存在しなければ空集合。行ロックはSP内部 |
 | `update_with_optimistic_lock` / reorder | `CALL sp_update_task(:task_id, :editor_id, :version, ...)` | version不一致は `P0005 TASK_CONFLICT` |
 | `deactivate` / `reactivate` | `CALL sp_deactivate_task(:task_id, :is_active)` | `is_active`だけ変更、position詰めなし |
 | `list_by_project_grouped` | `SELECT fn_get_project_board(:project_id, :include_inactive)` | status/position順のFN結果を3列へ写像 |
 | 横断一覧 | `SELECT fn_list_tasks(:user_id, :project_id, :status, :include_inactive, :limit, :offset)` | 権限スコープはFN内で判定 |
 
-### 8.1 SQL実装参考（SP/FN内部）
+repositoryは上表のSP/FN呼び出しと戻り値のDTO写像のみを実装し、`tasks` テーブルへの直接SELECT/INSERT/UPDATE/DELETEは行わない。`sp_create_task` / `sp_update_task` の内部処理契約は[08_db_functions.md](./08_db_functions.md) §3.8を正とし、以下は advisory lock・position再採番・楽観ロックの具体的なアルゴリズムをSP内部実装の要点として補足するものである（repositoryから直接発行しない）。
 
-以下の既存小節に記載するSQLはSP/FN本体の実装参考であり、repositoryから直接発行しない。`fn_next_task_position` の呼び出し、advisory lock、楽観ロックはSP内へ統合する。
-
-### 8.2 `repository/task_repository.py :: acquire_status_lock`
+### 8.1 `sp_create_task` 内部：advisory lockとposition採番
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def acquire_status_lock(session: AsyncSession, *, project_id: UUID, status: str) -> None` |
-| 引数 / 戻り値 | プロジェクトID・ステータス → なし（ロック取得のみ） |
-| 発行SQL | ```sql\nSELECT pg_advisory_xact_lock(\n  hashtextextended(:project_id::text || ':' || :status, 0)\n);\n``` |
-| 使用インデックス | 該当なし（advisory lockはロックテーブルであり行ロックではない） |
-| 送出例外 | なし（`pg_advisory_xact_lock` はトランザクション終了時に自動解放） |
-| 処理内容 | 1. `project_id` が `NULL`（未所属タスク）の場合は固定プレースホルダ文字列 `'00000000-0000-0000-0000-000000000000'` に変換してからロックキーを生成する（未所属タスク全体を1つの仮想グループとして直列化し、`uq_tasks_project_status_position` がNULL同士の重複を検出できない問題をアプリ層で補う。§13参照）<br/>2. `project_id`（または上記プレースホルダ）と `status` の組み合わせを64bitハッシュ化してロックキーとする<br/>3. 同一列に対する position 採番・再採番を直列化し、同時作成/移動時の一意制約違反やpositionの飛び・重複を防ぐ |
+| ロックキー生成 | `pg_advisory_xact_lock(hashtextextended(:project_id::text || ':' || :status, 0))`。`project_id` が `NULL`（未所属タスク）の場合は固定プレースホルダ文字列 `'00000000-0000-0000-0000-000000000000'` に変換してからロックキーを生成し、未所属タスク全体を1つの仮想グループとして直列化する（`uq_tasks_project_status_position` がNULL同士の重複を検出できない問題をSP内で補う。§13参照） |
+| position採番 | lock取得後に `fn_next_task_position(:project_id, :status)` を呼び、`COALESCE(MAX(position), -1) + 1` を採番する |
+| INSERT | 採番したidと `position` で `tasks` へINSERTする。`version` はDB既定値 `1` を使用する |
 
-### 8.3 `repository/task_repository.py :: next_position`
+### 8.2 `sp_update_task` 内部：行ロックと楽観ロック
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def next_position(session: AsyncSession, *, project_id: UUID, status: str) -> int` |
-| 引数 / 戻り値 | プロジェクトID・ステータス → 末尾に採番すべき `position` |
-| 発行SQL | ```sql\nSELECT fn_next_task_position(:project_id, :status);\n``` |
-| 使用インデックス | `uq_tasks_project_status_position`（関数内部の `MAX(position)` 集計で使用） |
-| 送出例外 | なし |
-| 処理内容 | 1. 呼び出し前に `acquire_status_lock` を同一トランザクションで取得済みであることが前提<br/>2. `fn_next_task_position`（[`08_db_functions.md`](./08_db_functions.md)）が `COALESCE(MAX(position), -1) + 1` を返す |
+| 行ロック | `PATCH /tasks/{id}` に対応するUPDATEの直前に `SELECT ... FROM tasks WHERE id = :task_id FOR UPDATE` 相当の行ロックをSP内で取得し、`version` チェックとUPDATEの間の競合を防ぐ（advisory lockは「列全体」、本ロックは「この1行」が対象という違いに注意） |
+| 楽観ロック | `UPDATE tasks SET ..., version = version + 1 WHERE id = :id AND version = :expected_version` で行を絞り込み、影響行数0件なら `version` 不一致として `P0005 TASK_CONFLICT` を送出する |
+| 実行順序 | status/positionが変わる場合は §8.3〜8.4 の再採番処理を同一トランザクションで実施してから本UPDATEを発行する |
 
-### 8.4 `repository/task_repository.py :: insert`
+### 8.3 `sp_update_task` 内部：同一列内での並べ替え（reorder）
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def insert(session: AsyncSession, task: Task) -> Task` |
-| 引数 / 戻り値 | 未永続化の `Task` エンティティ → 採番済み `Task` |
-| 発行SQL | ```sql\nINSERT INTO tasks\n  (project_id, title, description, status, assignee_id, created_by, position, due_at)\nVALUES\n  (:project_id, :title, :description, :status, :assignee_id, :created_by, :position, :due_at)\nRETURNING id, version, created_at, updated_at;\n``` |
-| 使用インデックス | `uq_tasks_project_status_position`（制約検証） |
-| 送出例外 | `ConflictError`（`uq_tasks_project_status_position` 違反時。advisory lock内で `next_position` を呼んでいれば通常発生しない） |
-| 処理内容 | `session.add()` + `flush()`。`version` はDB既定値 `1` を使用 |
+| 前提 | `acquire_status_lock` 相当のadvisory lockを取得済みであること |
+| 手順 | 1. 移動対象を退避値（`COALESCE(MAX(position), -1) + 1 + COUNT(*)`）へ一時UPDATE<br/>2. 対象位置以降を+1（前方へ移動する場合）または-1（後方へ移動する場合）でずらす<br/>3. 移動対象を最終位置へUPDATE |
+| 一意制約との関係 | `uq_tasks_project_status_position` は `DEFERRABLE INITIALLY DEFERRED` のため、上記3段階の一時的な重複はCOMMITまで許容され、最終検証で解消する |
 
-### 8.5 `repository/task_repository.py :: get_by_id_for_update`
+### 8.4 `sp_update_task` 内部：列間移動（move_to_status_tail）
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def get_by_id_for_update(session: AsyncSession, task_id: UUID) -> Task \| None` |
-| 引数 / 戻り値 | タスクID → `Task`（存在しなければ `None`） |
-| 発行SQL | ```sql\nSELECT id, project_id, title, description, status, assignee_id,\n       created_by, position, version, due_at, created_at, updated_at\nFROM tasks WHERE id = :task_id\nFOR UPDATE;\n``` |
-| 使用インデックス | PK |
-| 送出例外 | なし |
-| 処理内容 | 1. `PATCH /tasks/{id}` の直前に行ロック（`FOR UPDATE`）を取得し、`version` チェックとUPDATEの間の競合を防ぐ（advisory lockは「列全体」、本ロックは「この1行」が対象という違いに注意） |
+| 手順 | 1. 旧列の移動対象より後続の `position` を-1で詰める<br/>2. `fn_next_task_position(:project_id, :new_status)` で新列の末尾positionを取得<br/>3. 移動対象を新列・新positionへUPDATE |
+| ロック順序 | `(project_id, old_status)` と `(project_id, new_status)` のadvisory lockを**キー文字列の昇順**で取得し、デッドロックを防止する |
 
-### 8.6 `repository/task_repository.py :: update_with_optimistic_lock`
+### 8.5 `sp_deactivate_task` 内部：論理削除・再有効化
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def update_with_optimistic_lock(session: AsyncSession, task: Task, *, expected_version: int, changes: dict) -> Task` |
-| 引数 / 戻り値 | 対象エンティティ・期待バージョン・更新差分 → 更新後 `Task` |
-| 発行SQL | ```sql\nUPDATE tasks\nSET title = COALESCE(:title, title),\n    description = CASE WHEN :description_set THEN :description ELSE description END,\n    status = COALESCE(:status, status),\n    assignee_id = CASE WHEN :assignee_set THEN :assignee_id ELSE assignee_id END,\n    position = COALESCE(:position, position),\n    due_at = CASE WHEN :due_at_set THEN :due_at ELSE due_at END,\n    version = version + 1\nWHERE id = :id AND version = :expected_version\nRETURNING id, status, position, version, updated_at;\n``` |
-| 使用インデックス | PK。`WHERE` 句の `version` 一致条件はPK取得後のフィルタ |
-| 送出例外 | `ConflictError("TASK_CONFLICT")`（`RETURNING` が0行、すなわち `version` 不一致） |
-| 処理内容 | 1. `UPDATE ... WHERE id=:id AND version=:expected_version` で行を絞り込む<br/>2. 影響行数0件なら `version` 不一致とみなし `409 TASK_CONFLICT` に変換<br/>3. status/position が変わる場合は事前に §8.6〜8.7 の再採番処理を同一トランザクションで実施してから本UPDATEを発行する |
+| 論理削除 | `UPDATE tasks SET is_active = false, version = version + 1 WHERE id = :id`。**position の詰め（compaction）は行わない**（`status`/`position` は変更しない）。`task_comments` は `tasks` 行自体を物理削除しないため `ON DELETE CASCADE` は発火せず、無効化後もコメント履歴は参照可能なまま残る |
+| 再有効化 | `UPDATE tasks SET is_active = true, version = version + 1 WHERE id = :id`。認可はAPI層（作成者/プロジェクトオーナー/admin）で事前判定する。`position`/`status` はDELETE時点の値のまま復元される |
+| advisory lock | いずれも不要（`position` を変更しないため列内の直列化対象にならない） |
 
-### 8.7 `repository/task_repository.py :: reorder_within_status`
+### 8.6 `fn_get_project_board` 内部：カンバン取得
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def reorder_within_status(session: AsyncSession, *, project_id: UUID, status: str, moving_task_id: UUID, target_position: int) -> None` |
-| 引数 / 戻り値 | 同一列内での移動条件 → なし |
-| 発行SQL | ```sql\n-- 1. 移動対象を退避値へ\nUPDATE tasks SET position = (\n  SELECT COALESCE(MAX(position), -1) + 1 + COUNT(*) FROM tasks\n  WHERE project_id = :project_id AND status = :status\n) WHERE id = :moving_task_id;\n-- 2. 対象位置以降を+1（前方へ移動する場合）または-1（後方へ移動する場合）でずらす\nUPDATE tasks SET position = position + :shift\nWHERE project_id = :project_id AND status = :status\n  AND id <> :moving_task_id\n  AND position BETWEEN :range_start AND :range_end;\n-- 3. 移動対象を最終位置へ\nUPDATE tasks SET position = :target_position WHERE id = :moving_task_id;\n``` |
-| 使用インデックス | `uq_tasks_project_status_position`（`DEFERRABLE INITIALLY DEFERRED` によりCOMMIT時まで違反検査を遅延） |
-| 送出例外 | `ConflictError`（COMMIT時に制約違反が残っていた場合。ロジック上は発生しない想定） |
-| 処理内容 | 1. `acquire_status_lock` 済みであることが前提<br/>2. 退避値へ一時移動 → 間の行をシフト → 最終位置を設定、の3段階UPDATEで一意制約の一時的な重複（`DEFERRABLE INITIALLY DEFERRED` によりCOMMITまで許容）を回避しつつ整合させる |
+| 参照SQL | `tasks` と `projects` を `LEFT JOIN` し、`project_is_active`（`projects.is_active`。`project_id` がNULLの行は `null`）を1クエリで返す。デフォルトは `is_active = true` のみを対象とし、`p_include_inactive=true` で無効化済みタスクも含める。`ORDER BY status, position ASC` |
+| N+1回避 | コメント件数は `task_comment_repository.count_by_task_ids()` で別クエリ集計する |
 
-### 8.8 `repository/task_repository.py :: move_to_status_tail`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def move_to_status_tail(session: AsyncSession, *, project_id: UUID, moving_task_id: UUID, old_status: str, new_status: str) -> int` |
-| 引数 / 戻り値 | 列間移動の条件 → 新列での採番位置 |
-| 発行SQL | ```sql\n-- 旧列の後続を詰める\nUPDATE tasks SET position = position - 1\nWHERE project_id = :project_id AND status = :old_status\n  AND position > (SELECT position FROM tasks WHERE id = :moving_task_id);\n-- 新列の末尾position取得\nSELECT fn_next_task_position(:project_id, :new_status);\n-- 移動対象を新列・新positionへ更新\nUPDATE tasks SET status = :new_status, position = :new_position\nWHERE id = :moving_task_id;\n``` |
-| 使用インデックス | `uq_tasks_project_status_position` |
-| 送出例外 | なし（advisory lockで直列化済み） |
-| 処理内容 | `acquire_status_lock(project_id, old_status)` と `(project_id, new_status)` を**キー文字列の昇順**で取得しデッドロックを防止 → 旧列の詰め → 新列末尾へ挿入、の順で実行。`update_with_optimistic_lock` の直前に呼ばれる |
-
-### 8.9 `repository/task_repository.py :: deactivate`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def deactivate(session: AsyncSession, task: Task) -> None` |
-| 引数 / 戻り値 | 削除（無効化）対象の `Task` → なし |
-| 発行SQL | ```sql\nUPDATE tasks SET is_active = false, version = version + 1\nWHERE id = :id;\n``` |
-| 使用インデックス | PK |
-| 送出例外 | なし |
-| 処理内容 | 1. `task.is_active = False` としてORMエンティティを更新し `flush()`（`trg_set_updated_at` により `updated_at` も更新）<br/>2. **position の詰め（compaction）は行わない**（物理削除時代の `delete_and_compact` とは異なり、`status`/`position` は変更しない）<br/>3. `task_comments` はDBの `ON DELETE CASCADE` を持つが、`tasks` 行自体を物理削除しないため発火しない。無効化後もコメント履歴は参照可能なまま残る<br/>4. advisory lockは不要（`position` を変更しないため列内の直列化対象にならない） |
-
-### 8.10 `repository/task_repository.py :: reactivate`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def reactivate(session: AsyncSession, task: Task) -> None` |
-| 引数 / 戻り値 | 再有効化対象の `Task` → なし |
-| 発行SQL | ```sql\nUPDATE tasks SET is_active = true, version = version + 1\nWHERE id = :id;\n``` |
-| 使用インデックス | PK |
-| 送出例外 | なし |
-| 処理内容 | `PATCH /tasks/{id}` に `is_active=true` を指定した場合に呼ばれる。認可はルータ側（作成者/プロジェクトオーナー/admin）で事前判定する。`position`/`status` はDELETE時点の値のまま復元される |
-
-### 8.11 `repository/task_repository.py :: list_by_project_grouped`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def list_by_project_grouped(session: AsyncSession, project_id: UUID, *, include_inactive: bool = False) -> dict[str, list[Task]]` |
-| 引数 / 戻り値 | プロジェクトID → `{"todo": [...], "in_progress": [...], "done": [...]}` |
-| 発行SQL | ```sql\nSELECT t.id, t.title, t.description, t.status, t.assignee_id, t.position,\n       t.version, t.due_at, t.is_active, p.is_active AS project_is_active\nFROM tasks t\nLEFT JOIN projects p ON p.id = t.project_id\nWHERE t.project_id = :project_id\n  AND (:include_inactive OR t.is_active = true)\nORDER BY t.status, t.position ASC;\n``` |
-| 使用インデックス | `uq_tasks_project_status_position` |
-| 送出例外 | なし |
-| 処理内容 | 1. `projects` を `LEFT JOIN` して `project_is_active` を1クエリで取得し、レスポンスDTOに含める（`project_id` がNULLの行は `project_is_active=null` となる）<br/>2. デフォルトは `t.is_active = true` のみを対象とし、`include_inactive=true` で無効化済みタスクも含める<br/>3. 1クエリで取得しアプリ側で `status` ごとにグルーピング。コメント件数は `task_comment_repository.count_by_task_ids()` で別クエリ集計しN+1を回避 |
-
-`GET /api/tasks`（横断一覧）の `list_all_for_user` 相当のクエリも同様に `projects` を `LEFT JOIN` して `project_is_active` を含める。`project_id IS NULL` を指定した絞り込みは `WHERE t.project_id IS NULL AND t.created_by = :user_id`（未所属タスクは作成者本人のみ参照可）とする。
+`GET /api/tasks`（横断一覧、`fn_list_tasks`）も同様に `projects` を `LEFT JOIN` して `project_is_active` を含める。`project_id IS NULL` を指定した絞り込みは `WHERE t.project_id IS NULL AND t.created_by = :user_id`（未所属タスクは作成者本人のみ参照可）とする。
 
 ## 9. 関数相関図
 

@@ -144,82 +144,18 @@ repositoryは下表のSP/FN呼び出しとDTO写像だけを行い、`task_comme
 
 | repository契約 | DB呼び出し | 戻り値・エラー |
 |----------------|------------|----------------|
-| `create` | `CALL sp_add_task_comment(:task_id, :user_id, :body)` | `fn_get_comment_with_task`で作成結果を取得 |
+| `create` | `CALL sp_add_task_comment(:task_id, :user_id, :body, :comment_id)`（`:comment_id` はOUTパラメータ。DB側で `gen_random_uuid()` により採番される） | `fn_get_comment_with_task(:comment_id)`で作成結果を取得 |
 | `list_by_task` | `SELECT fn_list_task_comments(:task_id)` | コメント一覧 |
 | `count_by_task_ids` | `fn_list_task_comments`の結果または専用FN集約 | N+1を発生させない |
 | `get_by_id` | `SELECT fn_get_comment_with_task(:comment_id)` | 空集合は404へ変換 |
 | `update` | `CALL sp_update_task_comment(:comment_id, :user_id, :body)` | 更新後をFNで取得 |
 | `delete` | `CALL sp_delete_task_comment(:comment_id, :user_id)` | 投稿者事実は事前FN、APIで403変換 |
 
-### 8.1 SQL実装参考（SP/FN内部）
+### 8.1 SP/FN実装の参照
 
-以下の既存小節に記載するSQLはSP/FN本体の実装参考であり、repositoryから直接発行しない。実装時の正は[08_db_functions.md](./08_db_functions.md) §2のシグネチャである。
+`sp_add_task_comment` / `sp_update_task_comment` / `sp_delete_task_comment` / `fn_list_task_comments` / `fn_get_comment_with_task` の内部SQL・ロック方針・エラーコードは本ファイルに重複記載せず、[08_db_functions.md](./08_db_functions.md) §3.8（業務SP/FNの内部処理契約）を正とする。repositoryはこれらSP/FNの呼び出しと戻り値のDTO写像のみを実装し、`task_comments` テーブルへの直接SELECT/INSERT/UPDATE/DELETEは行わない。投稿者本人かどうかの判定とHTTP 403への変換はAPI層で行う。
 
-### 8.2 `repository/task_comment_repository.py :: create`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def create(session: AsyncSession, *, task_id: UUID, user_id: UUID, body: str) -> TaskComment` |
-| 引数 / 戻り値 | タスクID・投稿者ID・本文 → 作成された `TaskComment` |
-| 発行SQL | ```sql\nINSERT INTO task_comments (task_id, user_id, body)\nVALUES (:task_id, :user_id, :body)\nRETURNING id, created_at, updated_at;\n``` |
-| 使用インデックス | なし（INSERTのみ） |
-| 送出例外 | なし（`body` の文字数検証はpydanticスキーマ層で完了済みの前提） |
-| 処理内容 | 1. `session.add()` して `flush()`<br/>2. 呼び出し元 `task_service.add_comment` が事前にプロジェクト所属チェック済み |
-
-### 8.3 `repository/task_comment_repository.py :: list_by_task`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def list_by_task(session: AsyncSession, task_id: UUID) -> list[TaskComment]` |
-| 引数 / 戻り値 | タスクID → 投稿順（古い順）のコメント一覧（`author` を `joined` でロード済み） |
-| 発行SQL | ```sql\nSELECT c.id, c.task_id, c.user_id, c.body, c.created_at, c.updated_at,\n       u.username, u.last_name, u.first_name\nFROM task_comments c\nJOIN users u ON u.id = c.user_id\nWHERE c.task_id = :task_id\nORDER BY c.created_at ASC;\n``` |
-| 使用インデックス | `ix_task_comments_task_created` |
-| 送出例外 | なし |
-| 処理内容 | 1. `GET /tasks/{id}/comments` のレスポンス生成に使用<br/>2. タスク詳細取得（Q-4）とは別クエリとして発行しN+1を回避 |
-
-### 8.4 `repository/task_comment_repository.py :: count_by_task_ids`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def count_by_task_ids(session: AsyncSession, task_ids: list[UUID]) -> dict[UUID, int]` |
-| 引数 / 戻り値 | タスクIDのリスト → `{task_id: コメント件数}` |
-| 発行SQL | ```sql\nSELECT task_id, COUNT(*) AS cnt\nFROM task_comments\nWHERE task_id = ANY(:task_ids)\nGROUP BY task_id;\n``` |
-| 使用インデックス | `ix_task_comments_task_created`（先頭列 `task_id` で絞り込み） |
-| 送出例外 | なし |
-| 処理内容 | 1. カンバン一覧（`GET /projects/{id}/tasks`）の各カードに表示する `comment_count` をタスク一覧と別クエリでまとめて取得し、N+1を回避 |
-
-### 8.5 `repository/task_comment_repository.py :: get_by_id`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def get_by_id(session: AsyncSession, comment_id: UUID) -> TaskComment \| None` |
-| 引数 / 戻り値 | コメントID → `TaskComment`（存在しなければ `None`） |
-| 発行SQL | ```sql\nSELECT id, task_id, user_id, body, created_at, updated_at\nFROM task_comments WHERE id = :comment_id;\n``` |
-| 使用インデックス | PK |
-| 送出例外 | なし（`None` を返し、サービス層で `NotFoundError` に変換） |
-| 処理内容 | 1. `PATCH`/`DELETE /comments/{id}` の対象特定と、投稿者本人チェック（`comment.user_id == current_user.id`）の材料取得に使用 |
-
-### 8.6 `repository/task_comment_repository.py :: update`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def update(session: AsyncSession, comment: TaskComment, *, body: str) -> TaskComment` |
-| 引数 / 戻り値 | 更新対象エンティティ・新本文 → 更新後 `TaskComment` |
-| 発行SQL | ```sql\nUPDATE task_comments SET body = :body\nWHERE id = :id\nRETURNING id, body, updated_at;\n``` |
-| 使用インデックス | PK |
-| 送出例外 | なし（認可はサービス層で事前判定：投稿者本人 or admin） |
-| 処理内容 | 1. ORMエンティティの `body` を更新し `flush()`（`trg_set_updated_at` が `updated_at` を更新） |
-
-### 8.7 `repository/task_comment_repository.py :: delete`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def delete(session: AsyncSession, comment: TaskComment) -> None` |
-| 引数 / 戻り値 | 削除対象エンティティ → なし |
-| 発行SQL | ```sql\nDELETE FROM task_comments WHERE id = :id;\n``` |
-| 使用インデックス | PK |
-| 送出例外 | なし |
-| 処理内容 | 1. `session.delete(comment)` して `flush()`<br/>2. 認可はサービス層で事前判定（投稿者本人 or admin） |
+コメント件数集計（`comment_count`）は `fn_list_task_comments` の結果、または専用の集約FNを用いてN+1を回避する。
 
 ## 9. 関数相関図
 

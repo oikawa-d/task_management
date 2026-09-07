@@ -193,96 +193,20 @@ repositoryは下表のSP/FN呼び出しとDTO写像だけを行い、`notificati
 | `create_if_absent` / `bulk_create_if_absent` | `sp_create_task` / `sp_update_task` / batch内部のdedupe INSERT | `(user_id, dedupe_key)`競合は `ON CONFLICT DO NOTHING` |
 | `purge_expired` | `CALL sp_purge_notifications(:retention_days)` | 未読・既読を問わず期限超過を削除 |
 
-### 8.1 SQL実装参考（SP/FN内部）
+### 8.1 SP/FN実装の参照
 
-以下の既存小節に記載するSQLはSP/FN本体の実装参考であり、repositoryから直接発行しない。実装時の正は[08_db_functions.md](./08_db_functions.md) §2のシグネチャである。
+`fn_list_notifications` / `fn_count_unread_notifications` / `sp_mark_notification_read` / `sp_mark_all_notifications_read` / `sp_purge_notifications` の内部SQL・ロック方針・エラーコードは本ファイルに重複記載せず、[08_db_functions.md](./08_db_functions.md) §3.8（業務SP/FNの内部処理契約）を正とする。repositoryはこれらSP/FNの呼び出しと戻り値のDTO写像のみを実装し、`notifications` テーブルへの直接SELECT/INSERT/UPDATE/DELETEは行わない。
 
-### 8.2 `repository/notification_repository.py :: list_by_user`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def list_by_user(session: AsyncSession, *, user_id: UUID, page: int, per_page: int, unread_only: bool) -> Page[Notification]` |
-| 引数 / 戻り値 | 受信者ID・ページング条件・未読限定フラグ → ページングされた `Notification` 一覧 |
-| 発行SQL | ```sql\nSELECT n.id, n.type, n.title, n.body, n.due_at, n.read_at, n.created_at,\n       t.id AS task_id, t.project_id, t.title AS task_title\nFROM notifications n\nLEFT JOIN tasks t ON t.id = n.task_id\nWHERE n.user_id = :user_id\n  AND (:unread_only = false OR n.read_at IS NULL)\nORDER BY n.created_at DESC\nLIMIT :per_page OFFSET :offset;\n``` |
-| 使用インデックス | `ix_notifications_user_created`（`unread_only=false`）／`ix_notifications_user_unread` と `ix_notifications_user_created` の両方に該当（`unread_only=true`。実行計画はPostgreSQLの選択に委ねる） |
-| 送出例外 | なし |
-| 処理内容 | `LEFT JOIN` によりタスクが削除済み（`task_id IS NULL`）の行も欠落させず取得し、`task` 欄を `null` としてレスポンスに反映する（`04_api.md` §3.3） |
-
-### 8.3 `repository/notification_repository.py :: count_by_user`
+以下は08_db_functions.mdに記載のない実装上の要点を補足するものである。
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def count_by_user(session: AsyncSession, *, user_id: UUID, unread_only: bool) -> int` |
-| 引数 / 戻り値 | 受信者ID・未読限定フラグ → 件数 |
-| 発行SQL | ```sql\nSELECT count(*) FROM notifications\nWHERE user_id = :user_id\n  AND (:unread_only = false OR read_at IS NULL);\n``` |
-| 使用インデックス | `ix_notifications_user_created`（`unread_only=false`）／`ix_notifications_user_unread`（`unread_only=true`） |
-| 送出例外 | なし |
-| 処理内容 | 一覧レスポンスの `meta.total`（`unread_only=true` 時は未読総数）に使用。`list_by_user` とは別クエリで発行し、`COUNT(*) OVER()` は使わない（`04_table_projects.md` 系のページング方針に合わせる） |
-
-### 8.4 `repository/notification_repository.py :: count_unread`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def count_unread(session: AsyncSession, *, user_id: UUID) -> int` |
-| 引数 / 戻り値 | 受信者ID → 未読件数 |
-| 発行SQL | ```sql\nSELECT count(*) FROM notifications\nWHERE user_id = :user_id AND read_at IS NULL;\n``` |
-| 使用インデックス | `ix_notifications_user_unread` |
-| 送出例外 | なし |
-| 処理内容 | `GET /notifications/unread-count`（ポーリングで最高頻度）専用の軽量クエリ。通知本体を返さず件数のみ集計するため `ix_notifications_user_unread` のみで応答できる |
-
-### 8.5 `repository/notification_repository.py :: mark_read`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def mark_read(session: AsyncSession, *, user_id: UUID, notification_id: UUID) -> Notification \| None` |
-| 引数 / 戻り値 | 受信者ID・通知ID → 更新後 `Notification`（自分宛てでない/存在しない場合は `None`） |
-| 発行SQL | ```sql\nUPDATE notifications\nSET read_at = COALESCE(read_at, now())\nWHERE id = :notification_id AND user_id = :user_id\nRETURNING id, read_at;\n``` |
-| 使用インデックス | PK（`WHERE id=...`）。`user_id` はPK取得後の本人確認フィルタ |
-| 送出例外 | なし（呼び出し元の `service/notification_service.py :: mark_read` が `RETURNING` 0行を「他人の通知 or 不存在」として `404 NOT_FOUND` に変換。存在を隠すため他人の通知と不存在を区別しない） |
-| 処理内容 | `COALESCE(read_at, now())` により既読済みでも `read_at` を上書きしない（冪等。2回目以降の `PATCH` も `200` を返す） |
-
-### 8.6 `repository/notification_repository.py :: mark_all_read`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def mark_all_read(session: AsyncSession, *, user_id: UUID) -> int` |
-| 引数 / 戻り値 | 受信者ID → 更新件数 |
-| 発行SQL | ```sql\nUPDATE notifications\nSET read_at = now()\nWHERE user_id = :user_id AND read_at IS NULL;\n``` |
-| 使用インデックス | `ix_notifications_user_unread` |
-| 送出例外 | なし |
-| 処理内容 | `WHERE read_at IS NULL` に限定するため既存の既読行の `read_at` は変化しない。未読が0件でも `0` を返し `200`（`04_api.md` §3.3） |
-
-### 8.7 `repository/notification_repository.py :: create_if_absent`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def create_if_absent(session: AsyncSession, *, user_id: UUID, task_id: UUID \| None, type: str, title: str, body: str \| None, due_at: datetime \| None, dedupe_key: str) -> bool` |
-| 引数 / 戻り値 | 通知内容一式 → 新規作成できたか（`True`＝作成、`False`＝`dedupe_key` 競合で無視） |
-| 発行SQL | ```sql\nINSERT INTO notifications\n  (user_id, task_id, type, title, body, due_at, dedupe_key)\nVALUES\n  (:user_id, :task_id, :type, :title, :body, :due_at, :dedupe_key)\nON CONFLICT (user_id, dedupe_key) DO NOTHING\nRETURNING id;\n``` |
-| 使用インデックス | `uq_notifications_user_dedupe`（`ON CONFLICT` の対象） |
-| 送出例外 | なし（一意制約違反は `ON CONFLICT` で吸収するため `IntegrityError` は発生しない） |
-| 処理内容 | 1. `service/notification_service.py :: create_due_today_notification` から、タスク作成/更新の**呼び出し元トランザクションを引き継いで**呼ばれる（`04_api.md` §7.3）<br/>2. `RETURNING` の行数（0 or 1）から作成の成否を判定して呼び出し元へ返す |
-
-### 8.8 `repository/notification_repository.py :: bulk_create_if_absent`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def bulk_create_if_absent(session: AsyncSession, rows: list[dict]) -> int` |
-| 引数 / 戻り値 | `due_soon_batch` 用の行データ配列（`NOTIFY_DUE_BATCH_CHUNK_SIZE` 件ずつに分割済み） → 実際に作成された件数 |
-| 発行SQL | ```sql\nINSERT INTO notifications\n  (user_id, task_id, type, title, body, due_at, dedupe_key)\nSELECT * FROM unnest(\n  :user_ids::uuid[], :task_ids::uuid[], :types::varchar[],\n  :titles::varchar[], :bodies::text[], :due_ats::timestamptz[], :dedupe_keys::varchar[]\n)\nON CONFLICT (user_id, dedupe_key) DO NOTHING\nRETURNING id;\n``` |
-| 使用インデックス | `uq_notifications_user_dedupe` |
-| 送出例外 | なし |
-| 処理内容 | 1. `batch/jobs/due_notification_job.py` から `NOTIFY_DUE_BATCH_CHUNK_SIZE`（既定500）件単位で呼ばれ、1トランザクションが長時間化しないようにする<br/>2. `unnest` による複数行一括 `INSERT` で、行ごとの往復（N回の `INSERT`）を避ける<br/>3. `len(RETURNING)` を作成件数としてINFOログに出す（`04_api.md` §6.3） |
-
-### 8.9 `repository/notification_repository.py :: purge_expired`
-
-| 項目 | 内容 |
-|------|------|
-| 配置 | `batch/app/repository/notification_repository.py` |
-| 引数 / 戻り値 | `retention_days: int` → 削除件数 |
-| 呼び出し元 | `batch/app/repository/purge_repository.py` の `purge_histories` |
-| 処理内容 | `CALL sp_purge_notifications(:retention_days)`。`notifications.created_at` が保持期限より前の行を未読・既読を問わず削除 |
-| 設定 | `NOTIFICATION_RETENTION_DAYS`（既定90日） |
+| `fn_list_notifications` の欠落タスク考慮 | `tasks` を `LEFT JOIN` し、タスクが削除済み（`task_id IS NULL`）の行も欠落させず返す。`task` 欄はレスポンスDTOで `null` として反映する（`04_api.md` §3.3） |
+| `sp_mark_notification_read` の冪等性 | `read_at = COALESCE(read_at, now())` により既読済みでも `read_at` を上書きしない（2回目以降の `PATCH` も `200` を返す）。他人の通知/不存在は更新0件としてAPI層が `404 NOT_FOUND` に変換し、両者を区別しない |
+| `sp_mark_all_notifications_read` の限定条件 | `WHERE user_id=:me AND read_at IS NULL` に限定するため既存の既読行の `read_at` は変化しない |
+| 通知作成の重複防止 | `sp_create_task` / `sp_update_task` 内の条件付きINSERTは `ON CONFLICT (user_id, dedupe_key) DO NOTHING` によりアトミックに「存在しなければ作る」を実現し、一意制約違反を例外として扱わない（詳細は§5） |
+| batch一括作成 | `batch/app/repository/notification_repository.py :: bulk_create_if_absent` が `NOTIFY_DUE_BATCH_CHUNK_SIZE`（既定500）件単位で `unnest` による複数行一括INSERTを行い、`ON CONFLICT DO NOTHING` で同一実行枠の再実行を無害化する。1チャンク＝1トランザクションとし長時間化を避ける |
+| 保持期間パージ | `batch/app/repository/purge_repository.py :: purge_histories` から `CALL sp_purge_notifications(:retention_days)` を呼び、`NOTIFICATION_RETENTION_DAYS`（既定90日）超過分を未読・既読を問わず削除する |
 
 ## 9. 関数相関図
 
