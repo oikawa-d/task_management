@@ -11,20 +11,20 @@
 
 | 項目 | 内容 |
 |------|------|
-| 対象 | `api/app/repository/redis_store.py`（全Redis操作関数）、`api/app/core/redis_client.py`（接続プール管理） |
+| 対象 | `api/app/repository/redis_store.py`（全Redis操作関数）、`api/app/redis_client.py`（接続プール管理） |
 | 責務 | 認証・認可に関わる全Redisキーの生成・読み書き・TTL管理・原子的操作（Lua/パイプライン）を一元化し、他レイヤーからは本モジュールの関数経由でのみRedisにアクセスさせる |
 | 適用条件 | `AUTH_MODE`に依存しない（session/jwt双方の各Strategy、`auth_service`、`user_service`から共通利用） |
 | 依存先 | Redis 8（単一ノード、永続化無効）、`redis-py`（asyncio版） |
-| 実装ファイル | `api/app/repository/redis_store.py`、`api/app/core/redis_client.py`、`api/app/repository/redis_scripts/rotate_refresh_token.lua` |
+| 実装ファイル | `api/app/repository/redis_store.py`、`api/app/repository/redis_store_session.py`、`api/app/repository/redis_store_auth.py`、`api/app/repository/redis_store_security.py`、`api/app/redis_client.py`、`api/app/repository/redis_scripts/rotate_refresh_token.lua` |
 
 ## 2. 構成要素
 
 | 要素 | 種別 | 責務 | 備考 |
 |------|------|------|------|
-| `redis_client.py :: get_redis_pool` | 関数（`@lru_cache`起動時1回） | `redis.asyncio.ConnectionPool`を`REDIS_URL`から生成 | アプリ起動時に生成し、以後は使い回す |
+| `redis_client.py :: get_redis_client` | 関数（`@lru_cache`起動時1回） | `redis.asyncio.Redis`を`REDIS_URL`から生成 | アプリ起動時に生成し、終了時に`aclose`する |
 | `redis_store.py` | モジュール | 全キー操作関数を集約 | 関数一覧は§8参照 |
 | キー命名関数群（`_session_key`等） | プライベート関数 | `{用途}:{識別子}`形式の文字列を`REDIS_KEY_PREFIX`付きで生成 | プレフィックスの前置をこの層に閉じ込める |
-| `rotate_refresh_token.lua` | Luaスクリプト | リフレッシュトークンローテーションの原子的実行 | `EVALSHA`でキャッシュ利用 |
+| `rotate_refresh_token.lua` | Luaスクリプト | リフレッシュトークンローテーションの原子的実行 | `EVAL`で実行 |
 | `ping` | 関数 | Redis疎通確認 | `/api/health`から利用 |
 
 ## 3. 設定項目（環境変数）
@@ -195,7 +195,7 @@ stateDiagram-v2
 | 操作 | 原子性の担保方法 | 理由 |
 |------|-------------------|------|
 | `GETDEL`（`consume_oauth_state` / `consume_oauth_handoff` / `consume_password_reset_token` / `consume_email_verify_token`） | Redis 6.2以降のネイティブ`GETDEL`コマンドを使用（`GET`→`DEL`を別コマンドで行わない） | 単純な`GET`+`DEL`の2コマンドでは、同時に2リクエストが到達した場合に両方が値を取得してしまい、ワンタイム性が破れる |
-| `rotate_refresh_token` | 専用Luaスクリプト（`EVALSHA`）で「family失効確認 → 旧キー存在確認 → 旧キー削除 → `refresh_used`へtombstone作成 → 新キー`SETEX` → `user_refresh`集合更新」を1回のRedis呼び出し内で実行 | 単純な`GET`→`DEL`→`SET`の複数コマンドでは、同一リフレッシュトークンでの同時複数リクエストが二重に成功し得る（Redisはシングルスレッドで各コマンドを順に実行するが、複数コマンド間には他クライアントの操作が割り込み得る） |
+| `rotate_refresh_token` | 専用Luaスクリプト（`EVAL`）で「family失効確認 → 旧キー存在確認 → 旧キー削除 → `refresh_used`へtombstone作成 → 新キー`SETEX` → `user_refresh`集合更新」を1回のRedis呼び出し内で実行 | 単純な`GET`→`DEL`→`SET`の複数コマンドでは、同一リフレッシュトークンでの同時複数リクエストが二重に成功し得る（Redisはシングルスレッドで各コマンドを順に実行するが、複数コマンド間には他クライアントの操作が割り込み得る） |
 | `mark_email_verify_sent` | `SET ... NX EX`（`SETNX`+`EXPIRE`ではなく単一コマンドの`NX`+`EX`オプション） | `SETNX`と`EXPIRE`を分離すると、`SETNX`成功直後にプロセスが落ちるとTTLが設定されないキーが残り得る |
 | `incr_login_failure`の初回EXPIRE | `INCR`の戻り値が`1`のときのみ`EXPIRE`を実行するパターン（Lua化はしない） | 複数ワーカーからの同時`INCR`はRedis側でアトミックに直列化されるため、戻り値`1`は必ず「このプロセスが最初にキーを作成した」ことを保証する。ごく短い間隔で`EXPIRE`未設定の状態が生じ得るが、実害（TTL無し永続化）はレースの当該ウィンドウでのみ発生しうる低リスクとして許容する（§12で要検討） |
 | `delete_all_sessions` / `revoke_all_refresh_tokens` / `revoke_token_family` | 個別キーの削除後に集合キー自体を削除する順序を固定し、削除漏れが起きた場合でも「集合に存在するが実体キーが無い」状態を安全側（未失効ではなく失効扱い）に倒す | `SMEMBERS`取得後にTTL切れした個別キーは既に不存在のため、`DEL`は冪等に失敗せず処理を継続できる |
@@ -234,7 +234,7 @@ flowchart LR
         F7["delete_all_sessions<br/>revoke_all_refresh_tokens"]
         F8["ping"]
     end
-    CLIENT["redis_client.py::get_redis_pool"] --> store
+    CLIENT["redis_client.py::get_redis_client"] --> store
 
     SESS --> F1
     JWTS --> F2

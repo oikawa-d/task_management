@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from app.core.config import BatchSettings
 from app.db import get_session_factory
-from app.redis_client import create_redis_client
+from app.redis_client import close_redis_client, create_redis_client
 from app.repository import batch_history_repository, redis_lock, task_repository
 from app.service import notification_service, purge_service
 
@@ -51,6 +51,7 @@ async def run_due_notification_job(*, now: datetime, settings: BatchSettings, no
 				notification_slot,
 				runner_id,
 				settings.notify_due_lock_ttl_seconds,
+				settings.redis_key_prefix,
 			)
 			if not lock_acquired:
 				await batch_history_repository.complete(db, run_id, 0, 0, 1)
@@ -91,8 +92,12 @@ async def run_due_notification_job(*, now: datetime, settings: BatchSettings, no
 		if lock_acquired and job_failed:
 			try:
 				await redis_lock.release_due_notification_lock(
-					cast(redis_lock.RedisLockClient, redis), run_date, notification_slot, runner_id
+					cast(redis_lock.RedisLockClient, redis),
+					run_date,
+					notification_slot,
+					runner_id,
+					settings.redis_key_prefix,
 				)
 			except Exception:
 				logger.exception("failed to release due notification lock")
-		await redis.aclose()
+		await close_redis_client(redis)
