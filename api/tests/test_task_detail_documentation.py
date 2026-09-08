@@ -1,7 +1,6 @@
 import re
 from pathlib import Path
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 TASK_DETAIL_DOCUMENT = REPOSITORY_ROOT / "docs/detailed_design/screen/08_task_detail_modal.md"
 MARKDOWN_LINK_PATTERN = re.compile(r"\[[^\]]+\]\(([^)#]+)(?:#[^)]+)?\)")
