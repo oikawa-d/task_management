@@ -110,3 +110,22 @@ def test_oauth_schemas_reject_invalid_required_values(field: str, value: object)
 
 	with pytest.raises(ValidationError):
 		model(**payload)
+
+
+@pytest.mark.parametrize(
+	"model,payload",
+	[
+		(OAuthStartResult, {"authorize_url": "https://example.com", "state": "state"}),
+		(OAuthCallbackResult, {"auth_mode": "session", "redirect_to": "/dashboard"}),
+		(OAuthExchangeRequest, {"code": "handoff"}),
+		(
+			OAuthExchangeResponse,
+			{"access_token": "access", "token_type": "bearer", "expires_in": 900, "redirect_to": "/dashboard"},
+		),
+	],
+)
+def test_oauth_schemas_reject_extra_fields(model: type[object], payload: dict[str, object]) -> None:
+	payload["unexpected"] = "rejected"
+
+	with pytest.raises(ValidationError):
+		model(**payload)  # type: ignore[call-arg]
