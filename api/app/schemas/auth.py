@@ -154,7 +154,7 @@ class AuthConfigResponse(_AuthSchema):
 	csrf_cookie_name: str
 
 
-class CurrentUser(BaseModel):
+class CurrentUser(_AuthSchema):
 	id: UUID
 	username: str
 	role: Literal["member", "admin"]

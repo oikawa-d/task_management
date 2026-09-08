@@ -1,9 +1,10 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
 from app.schemas.auth import (
 	AuthConfigResponse,
+	CurrentUser,
 	LoginRequest,
 	LoginResponse,
 	MeResponse,
@@ -268,3 +269,27 @@ def test_auth_schemas_reject_extra_fields(model: type[object], payload: dict[str
 
 	with pytest.raises(ValidationError):
 		model(**payload)  # type: ignore[call-arg]
+
+
+def test_current_user_accepts_database_authentication_state() -> None:
+	user = CurrentUser(
+		id=uuid4(),
+		username="taro",
+		role="member",
+		is_active=True,
+		email_verified_at=datetime.now(timezone.utc),
+	)
+
+	assert user.is_active is True
+
+
+def test_current_user_rejects_extra_fields() -> None:
+	with pytest.raises(ValidationError):
+		CurrentUser(
+			id=uuid4(),
+			username="taro",
+			role="member",
+			is_active=True,
+			email_verified_at=None,
+			unexpected="rejected",
+		)
