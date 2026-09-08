@@ -4,6 +4,8 @@ from typing import Annotated, Literal
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+AuthMode = Literal["session", "jwt"]
+
 
 class BackendSettings(BaseSettings):
 	model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore")
@@ -26,7 +28,7 @@ class BackendSettings(BaseSettings):
 	api_history_error_detail_max_length: int = 4000
 
 	# 認証共通・session方式
-	auth_mode: Literal["session", "jwt"] = "session"
+	auth_mode: AuthMode = "session"
 	session_ttl_seconds: int = 1800
 	session_absolute_ttl_seconds: int = 28800
 	cookie_name_session: str = "cerberus_sid"

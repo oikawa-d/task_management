@@ -39,6 +39,10 @@ class UnauthenticatedError(AppError):
 	message = "認証が必要です"
 
 
+class UserInactiveError(AppError):
+	code = "USER_INACTIVE"
+	status_code = 403
+	message = "このアカウントは無効化されています"
 def _build_error_body(code: str, message: str, details: Any, request_id: str) -> dict[str, Any]:
 	return {
 		"error": {
