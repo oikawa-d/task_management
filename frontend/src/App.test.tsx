@@ -6,9 +6,9 @@ import { describe, expect, it } from "vitest";
 import App from "./App";
 
 describe("App", () => {
-	it("renders the application heading", () => {
+	it("renders the login page by default via the router", async () => {
 		render(<App />);
 
-		expect(screen.getByRole("heading", { name: "Cerberus" })).toBeInTheDocument();
+		expect(await screen.findByRole("heading", { name: "ログイン" })).toBeInTheDocument();
 	});
 });
