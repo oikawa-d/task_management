@@ -72,6 +72,24 @@ describe("taskDetailStore", () => {
 		expect(getTaskComments).toHaveBeenCalledWith(task.id);
 	});
 
+	it("open時のtask 404はclose要求を立てずnotFoundのみを立てる", async () => {
+		vi.mocked(getTask).mockRejectedValue(apiError(404, "NOT_FOUND"));
+		vi.mocked(getTaskComments).mockResolvedValue({ task_id: task.id, items: [], count: 0 });
+
+		await taskDetailStore.open(task.id);
+
+		expect(taskDetailStore.getSnapshot()).toMatchObject({ notFound: true, closeRequested: false });
+	});
+
+	it("open時のcomments 404はtask 404と揃えclose要求を立てずnotFoundのみを立てる", async () => {
+		vi.mocked(getTask).mockResolvedValue(task);
+		vi.mocked(getTaskComments).mockRejectedValue(apiError(404, "NOT_FOUND"));
+
+		await taskDetailStore.open(task.id);
+
+		expect(taskDetailStore.getSnapshot()).toMatchObject({ notFound: true, closeRequested: false });
+	});
+
 	it("更新時に最新versionを送り、タスクとboard再取得通知を更新する", async () => {
 		vi.mocked(getTask).mockResolvedValue(task);
 		vi.mocked(getTaskComments).mockResolvedValue({ task_id: task.id, items: [], count: 0 });

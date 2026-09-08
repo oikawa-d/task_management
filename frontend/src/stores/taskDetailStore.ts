@@ -107,7 +107,7 @@ class TaskDetailStore {
 			error: taskResult.status === "rejected" ? asError(taskResult.reason) : null,
 			commentsError: commentsResult.status === "rejected" ? asError(commentsResult.reason) : null,
 			notFound: taskMissing || commentsMissing,
-			closeRequested: commentsMissing,
+			closeRequested: false,
 		});
 	}
 

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { TaskDetailApiError, deleteComment, getTask, patchTask } from "./taskDetail";
+import { CSRF_HEADER_NAME, DEFAULT_CSRF_COOKIE_NAME } from "../../api/authAdapter/constants";
+import { TaskDetailApiError, deleteComment, getTask, patchTask, setAuthAdapterMode } from "./taskDetail";
 
 function response(body: unknown, init: { ok: boolean; status: number }) {
 	return {
@@ -10,7 +11,11 @@ function response(body: unknown, init: { ok: boolean; status: number }) {
 }
 
 describe("taskDetail API", () => {
-	afterEach(() => vi.unstubAllGlobals());
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		document.cookie = `${DEFAULT_CSRF_COOKIE_NAME}=; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+		setAuthAdapterMode("session");
+	});
 
 	it("GETでCookieを送信し、タスク詳細を返す", async () => {
 		const task = { id: "task-1" };
@@ -48,5 +53,40 @@ describe("taskDetail API", () => {
 			status: 409,
 			code: "TASK_CONFLICT",
 		}));
+	});
+
+	it("sessionモードのPATCHはCookieのCSRFトークンをヘッダへ付与する", async () => {
+		document.cookie = `${DEFAULT_CSRF_COOKIE_NAME}=csrf-token-value`;
+		const fetchMock = vi.fn().mockResolvedValue(response({ id: "task-1" }, { ok: true, status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await patchTask("task-1", { title: "更新", version: 2 });
+
+		const [, requestInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+		const headers = requestInit.headers as Headers;
+		expect(headers.get(CSRF_HEADER_NAME)).toBe("csrf-token-value");
+	});
+
+	it("sessionモードのGETはCSRFヘッダを付与しない", async () => {
+		document.cookie = `${DEFAULT_CSRF_COOKIE_NAME}=csrf-token-value`;
+		const fetchMock = vi.fn().mockResolvedValue(response({ id: "task-1" }, { ok: true, status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await getTask("task-1");
+
+		const [, requestInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+		const headers = requestInit.headers as Headers;
+		expect(headers.has(CSRF_HEADER_NAME)).toBe(false);
+	});
+
+	it("jwtモードではCookieを送信せずAuthorizationヘッダを付与する", async () => {
+		setAuthAdapterMode("jwt");
+		const fetchMock = vi.fn().mockResolvedValue(response({ id: "task-1" }, { ok: true, status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await getTask("task-1");
+
+		const [, requestInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(requestInit.credentials).toBe("same-origin");
 	});
 });
