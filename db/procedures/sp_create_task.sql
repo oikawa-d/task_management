@@ -38,5 +38,21 @@ BEGIN
     INSERT INTO tasks (project_id, created_by, assignee_id, title, description, status, due_at, position)
     VALUES (p_project_id, p_created_by, p_assignee_id, p_title, p_body, p_status, p_due_at, v_position)
     RETURNING id INTO p_task_id;
+
+    IF p_assignee_id IS NOT NULL
+       AND p_due_at IS NOT NULL
+       AND p_due_at::date = CURRENT_DATE THEN
+        INSERT INTO notifications (user_id, task_id, type, title, body, due_at, dedupe_key)
+        VALUES (
+            p_assignee_id,
+            p_task_id,
+            'due_today_created',
+            p_title,
+            p_body,
+            p_due_at,
+            'created:' || p_task_id::text
+        )
+        ON CONFLICT (user_id, dedupe_key) DO NOTHING;
+    END IF;
 END;
 $$;

@@ -6,6 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_backend_settings
 from app.models.task import Task
 
 
@@ -39,6 +40,13 @@ def _build_task_with_project_status(row: RowMapping) -> TaskWithProjectStatus:
 	return TaskWithProjectStatus(task=_build_task(row), project_is_active=row["project_is_active"])
 
 
+async def _set_app_timezone(db: AsyncSession) -> None:
+	await db.execute(
+		text("SELECT set_config('TimeZone', :app_timezone, true)"),
+		{"app_timezone": get_backend_settings().app_timezone},
+	)
+
+
 async def create(
 	db: AsyncSession,
 	project_id: uuid.UUID | None,
@@ -50,6 +58,7 @@ async def create(
 	due_at: datetime | None,
 	position: int | None,
 ) -> uuid.UUID:
+	await _set_app_timezone(db)
 	result = await db.execute(
 		text(
 			"CALL sp_create_task(:project_id, :created_by, :assignee_id, :title, :body, "
@@ -125,6 +134,7 @@ async def update(
 	due_at: datetime | None,
 	position: int | None,
 ) -> None:
+	await _set_app_timezone(db)
 	await db.execute(
 		text(
 			"CALL sp_update_task(:task_id, :editor_id, :version, :title, :body, "

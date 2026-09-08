@@ -343,8 +343,8 @@ $$;
 | `fn_list_tasks` | user role・所属・未所属作成者条件を適用してtasksをページング | 参照のみ |
 | `fn_list_task_comments` | task_commentsと表示用usersを結合しcreated_at昇順で返す | 参照のみ |
 | `fn_get_comment_with_task` | comment、task、project owner、投稿者の判定材料を一括取得 | 参照のみ |
-| `sp_create_task` | advisory lock→末尾position→`gen_random_uuid()`で採番したidでtasks INSERT（採番したidをOUTで返す）→条件付きnotifications INSERT | lock保持中の1トランザクション |
-| `sp_update_task` | versionを検証し、status/positionを再採番してtasks UPDATE。期限通知も同一SPでINSERT | 不一致はP0005、担当者無効はP0006 |
+| `sp_create_task` | advisory lock→末尾position→`gen_random_uuid()`で採番したidでtasks INSERT（採番したidをOUTで返す）→担当者ありかつ`p_due_at::date = CURRENT_DATE`のとき`due_today_created`をnotificationsへINSERT | lock保持中の1トランザクション |
+| `sp_update_task` | versionを検証し、status/positionを再採番してtasks UPDATE。`p_due_at`が変更され、担当者ありかつ変更後の`p_due_at::date = CURRENT_DATE`のとき`due_today_updated`を同一SPでINSERT | 不一致はP0005、担当者無効はP0006 |
 | `sp_deactivate_task` | `tasks.is_active`をUPDATE | position詰めなし |
 | `sp_add_task_comment` | `gen_random_uuid()`で採番したidでtask_comments INSERTし、採番したidをOUTで返す | task不存在等はAPIへ事実結果を返す |
 | `sp_update_task_comment` | comment本文をUPDATE | 投稿者比較はAPIで実施 |
@@ -372,7 +372,7 @@ $$;
 | `sp_upsert_oauth_account` | users作成/verified更新とoauth_accounts紐付け | 同一トランザクション |
 | `sp_record_login_history` | `login_identifier`・`user_agent`・`failure_reason`を含めてlogin_historyをINSERT | 認証成否を記録。`login_history`のNOT NULL列（`login_identifier`・`login_method`・`success`）はすべて引数で受け取る |
 
-task SPが通知をINSERTする場合は `(user_id, dedupe_key)` の一意制約へ `ON CONFLICT DO NOTHING` を適用する。Pコードを発生させる条件、transaction境界、テストは各行を[§6](#6-テスト設計)の結合テストへ対応付ける。
+task SPが通知をINSERTする場合は `(user_id, dedupe_key)` の一意制約へ `ON CONFLICT (user_id, dedupe_key) DO NOTHING` を適用する。API repositoryはSP呼び出し直前に`set_config('TimeZone', :app_timezone, true)`を実行し、`APP_TIMEZONE`をトランザクションローカルなセッションGUCとして渡す。`p_due_at`はUTCの`TIMESTAMPTZ`で渡し、SP内の`CURRENT_DATE`および`p_due_at::date`が同じ`APP_TIMEZONE`基準になる。Pコードを発生させる条件、transaction境界、テストは各行を[§6](#6-テスト設計)の結合テストへ対応付ける。
 
 ## 4. エラーコード対応表
 
@@ -454,11 +454,12 @@ flowchart LR
 | 20 | 結合 | notification系FN・SP全件 | 他人の通知を返さず、既読済みを上書きしない | `test_notification_db_contracts` |
 | 21 | 結合 | admin系FN・SP全件 | 自己変更禁止、最後のadmin保護、一覧取得を確認 | `test_admin_db_contracts` |
 | 22 | 結合 | SQLSTATE `P0001`〜`P0009` | API code・HTTP statusへ一意に変換 | `test_db_sqlstate_mapping` |
+| 23 | 結合 | task作成・更新時の当日期限通知 | `APP_TIMEZONE`基準で担当者あり・当日期限の作成通知、期限変更時の更新通知を作成し、条件外と重複を無視する | `test_sp_create_task_inserts_due_today_notification_for_assignee` / `test_sp_update_task_inserts_only_when_due_at_changes_to_today_and_deduplicates` |
 
 ## 7. 不明点・要検討事項
 
 - `fn_is_project_member` を将来的にRLSポリシーへ組み込むかは要検討。ただし現行の実運用RBACでは本関数を使用する。
 - `sp_purge_login_history` のバッチ削除化（大量データ時のロック長時間化対策）は基本設計のスコープ外であり、想定データ量次第で要検討。
 - `db/functions/` `db/procedures/` の `.sql` をAlembicから読み込むAPIは実装担当が確定する（詳細は [09_migration.md](./09_migration.md) 参照）。
-- `APP_TIMEZONE` はAPIからUTC化した `p_due_at` を渡す方針とし、セッションGUCへ変更する場合は接続プールのリセットを要検証とする。
+- `APP_TIMEZONE` はAPI repositoryが`set_config('TimeZone', ..., true)`でトランザクションローカルに渡す方式で確定する。`is_local=true`のためcommit/rollback後に接続プールへ設定値は残らない。
 - ~~adminのDB更新とRedisセッション失効は同一トランザクションにできないため、順序・再試行・監査ログを要検討~~ → issue #40で確認。両方を伴うのは無効化API（`sp_admin_update_user_status`）のみで、「DB先行→成功後Redis失効」で確定済み（[`00_policy.md` §11](./00_policy.md)参照）。role変更・強制ログアウトはDB/Redisいずれか一方のみの更新のため対象外。

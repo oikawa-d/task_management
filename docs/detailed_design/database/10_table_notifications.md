@@ -205,6 +205,7 @@ repositoryは下表のSP/FN呼び出しとDTO写像だけを行い、`notificati
 | `sp_mark_notification_read` の冪等性 | `read_at = COALESCE(read_at, now())` により既読済みでも `read_at` を上書きしない（2回目以降の `PATCH` も `200` を返す）。他人の通知/不存在は更新0件としてAPI層が `404 NOT_FOUND` に変換し、両者を区別しない |
 | `sp_mark_all_notifications_read` の限定条件 | `WHERE user_id=:me AND read_at IS NULL` に限定するため既存の既読行の `read_at` は変化しない |
 | 通知作成の重複防止 | `sp_create_task` / `sp_update_task` 内の条件付きINSERTは `ON CONFLICT (user_id, dedupe_key) DO NOTHING` によりアトミックに「存在しなければ作る」を実現し、一意制約違反を例外として扱わない（詳細は§5） |
+| `APP_TIMEZONE` の受け渡し | API repositoryがSP呼び出し直前に `set_config('TimeZone', :app_timezone, true)` を実行する。`p_due_at`はUTCの`TIMESTAMPTZ`で渡し、SPはトランザクションローカルな`CURRENT_DATE`と`p_due_at::date`で当日を判定する。commit/rollback後に接続プールへ設定は残らない |
 | batch一括作成 | `batch/app/repository/notification_repository.py :: bulk_create_if_absent` が `NOTIFY_DUE_BATCH_CHUNK_SIZE`（既定500）件単位で `unnest` による複数行一括INSERTを行い、`ON CONFLICT DO NOTHING` で同一実行枠の再実行を無害化する。1チャンク＝1トランザクションとし長時間化を避ける |
 | 保持期間パージ | `batch/app/repository/purge_repository.py :: purge_histories` から `CALL sp_purge_notifications(:retention_days)` を呼び、`NOTIFICATION_RETENTION_DAYS`（既定90日）超過分を未読・既読を問わず削除する |
 
@@ -213,9 +214,8 @@ repositoryは下表のSP/FN呼び出しとDTO写像だけを行い、`notificati
 ```mermaid
 flowchart LR
     subgraph api["API経由（同一トランザクション連携）"]
-        TS["task_service<br/>create_task / update_task"] -->|"当日期限+担当者あり"| NS1["notification_service<br/>create_due_today_notification"]
-        NS1 --> NR1["notification_repository<br/>create_if_absent"]
-        NR1 --> N1[("notifications")]
+        TS["task_repository<br/>create / update"] -->|"APP_TIMEZONE設定 + SP呼び出し"| SP1["sp_create_task / sp_update_task"]
+        SP1 -->|"当日期限・担当者あり"| N1[("notifications")]
     end
 
     subgraph batch["batchコンテナ（DB直アクセス）"]
@@ -258,7 +258,7 @@ flowchart LR
 | CHECK制約 | `ck_notifications_type`（3値のみ許可） |
 | 一意制約 | `uq_notifications_user_dedupe`。`DEFERRABLE` ではない（`tasks.uq_tasks_project_status_position` のような中間状態を経る再採番が発生しないため、即時検証で問題ない） |
 | 重複防止の実現方法 | `INSERT ... ON CONFLICT (user_id, dedupe_key) DO NOTHING` によるアトミックな冪等INSERT（理由は§5）。加えて `due_soon_batch` はRedisの実行枠別ロック（`lock:notify_due:{YYYY-MM-DD}:{slot}`、`NOTIFY_DUE_LOCK_TTL_SECONDS`）で同一枠のジョブ自体の二重実行を防ぐ二段構え |
-| トランザクション境界 | ①作成時（`due_today_created`/`due_today_updated`）：タスクのINSERT/UPDATEと通知の `create_if_absent` を1トランザクションで実行（`04_api.md` §3.3）。②バッチ：チャンク単位の `bulk_create_if_absent` 1回＝1トランザクション（全対象を1トランザクションにまとめない。長時間トランザクションを避けるため） |
+| トランザクション境界 | ①作成時（`due_today_created`/`due_today_updated`）：task SPが`APP_TIMEZONE`を設定し、タスクのINSERT/UPDATEと通知INSERTを1トランザクションで実行（`04_api.md` §3.3）。②バッチ：チャンク単位の`bulk_create_if_absent` 1回＝1トランザクション（全対象を1トランザクションにまとめない。長時間トランザクションを避けるため） |
 | 既読の冪等性 | `mark_read` は `COALESCE(read_at, now())` で既読済みの `read_at` を保持。楽観ロック（`tasks.version` のような）は不要（既読操作同士は競合しても結果が同じため） |
 
 ## 12. テスト設計
@@ -276,6 +276,9 @@ flowchart LR
 | T-9 | 一覧のタスク削除考慮 | `task_id` が `NULL`（削除済みタスク）の通知を一覧取得 | `task` 欄が `null` として取得できる（例外を出さない） | `test_list_by_user_handles_deleted_task_gracefully` |
 | T-10 | バッチ一括作成 | 同一実行枠で `due_notification_job` を2回実行（Redisロックをすり抜けたと仮定） | 2回目の `bulk_create_if_absent` は全件 `dedupe_key` 競合で0件作成 | `test_bulk_create_if_absent_no_duplicate_on_same_slot_rerun` |
 | T-11 | 保持期間パージ | `NOTIFICATION_RETENTION_DAYS` より古い `created_at` の行がある状態で `sp_purge_notifications` を実行 | 対象行が削除され、期間内の行は残る（未読・既読を問わず削除対象） | `test_sp_purge_notifications_deletes_expired_regardless_of_read_state` |
+| T-12 | task SP連携 | `APP_TIMEZONE`基準で担当者あり・当日期限のタスクを作成 | `due_today_created`がtaskと同一トランザクションで1件作成される | `test_sp_create_task_inserts_due_today_notification_for_assignee` |
+| T-13 | task SP連携 | 担当者なし、当日以外、期限未変更の作成・更新 | 通知が作成されない | `test_sp_create_task_skips_due_today_notification_without_assignee_or_for_future` |
+| T-14 | task SP連携 | 期限を当日に変更後、別日を経由して同じ当日期限へ戻す | `due_today_updated`は一意キー競合により1件だけ残る | `test_sp_update_task_inserts_only_when_due_at_changes_to_today_and_deduplicates` |
 
 ## 13. 不明点・要検討事項
 

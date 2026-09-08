@@ -16,14 +16,15 @@ DECLARE
     v_old_status VARCHAR;
     v_old_position INTEGER;
     v_old_version INTEGER;
+    v_old_due_at TIMESTAMPTZ;
     v_new_position INTEGER;
     v_status_changed BOOLEAN;
     v_old_key TEXT;
     v_new_key TEXT;
     v_placeholder CONSTANT TEXT := '00000000-0000-0000-0000-000000000000';
 BEGIN
-    SELECT project_id, status, position, version
-      INTO v_project_id, v_old_status, v_old_position, v_old_version
+    SELECT project_id, status, position, version, due_at
+      INTO v_project_id, v_old_status, v_old_position, v_old_version, v_old_due_at
       FROM tasks
      WHERE id = p_task_id
      FOR UPDATE;
@@ -112,6 +113,24 @@ BEGIN
 
     IF NOT FOUND THEN
         RAISE EXCEPTION 'task version conflict' USING ERRCODE = 'P0005';
+    END IF;
+
+    IF p_assignee_id IS NOT NULL
+       AND p_due_at IS NOT NULL
+       AND p_due_at IS DISTINCT FROM v_old_due_at
+       AND p_due_at::date = CURRENT_DATE THEN
+        INSERT INTO notifications (user_id, task_id, type, title, body, due_at, dedupe_key)
+        VALUES (
+            p_assignee_id,
+            p_task_id,
+            'due_today_updated',
+            p_title,
+            p_body,
+            p_due_at,
+            'updated:' || p_task_id::text || ':' ||
+                to_char(p_due_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+        )
+        ON CONFLICT (user_id, dedupe_key) DO NOTHING;
     END IF;
 END;
 $$;
