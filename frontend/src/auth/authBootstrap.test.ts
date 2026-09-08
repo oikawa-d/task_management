@@ -11,7 +11,7 @@ function createMockClient(authMode: "session" | "jwt"): AxiosInstance {
 			.mockResolvedValueOnce({
 				data: { auth_mode: authMode, google_login_enabled: false, csrf_cookie_name: "csrf" },
 			})
-			.mockResolvedValueOnce({ data: { id: "u1", role: "admin" } }),
+			.mockResolvedValueOnce({ data: { id: "u1", role: "admin", profile_completed: true } }),
 		post: vi.fn().mockResolvedValue({ data: { access_token: "access-token" } }),
 		interceptors: {
 			request: { use: vi.fn() },
@@ -29,7 +29,7 @@ describe("bootstrapAuth", () => {
 		const client = createMockClient("session");
 		vi.spyOn(axios, "create").mockReturnValue(client);
 
-		expect(await bootstrapAuth()).toEqual({ id: "u1", role: "admin" });
+		expect(await bootstrapAuth()).toEqual({ id: "u1", role: "admin", profileCompleted: true });
 		expect(client.get).toHaveBeenNthCalledWith(1, AUTH_CONFIG_ENDPOINT);
 		expect(client.get).toHaveBeenNthCalledWith(2, AUTH_ME_ENDPOINT);
 		expect(client.interceptors.request.use).toHaveBeenCalledOnce();
@@ -40,7 +40,7 @@ describe("bootstrapAuth", () => {
 		const client = createMockClient("jwt");
 		vi.spyOn(axios, "create").mockReturnValue(client);
 
-		expect(await bootstrapAuth()).toEqual({ id: "u1", role: "admin" });
+		expect(await bootstrapAuth()).toEqual({ id: "u1", role: "admin", profileCompleted: true });
 		expect(client.post).toHaveBeenCalledWith("/auth/refresh", undefined, expect.any(Object));
 		expect(client.get).toHaveBeenNthCalledWith(2, AUTH_ME_ENDPOINT);
 	});

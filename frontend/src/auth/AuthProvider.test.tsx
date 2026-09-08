@@ -19,9 +19,9 @@ describe("AuthProvider", () => {
 	});
 
 	it("keeps the loading state until bootstrap resolves", async () => {
-		let resolveBootstrap: (user: { id: string; role: "member" | "admin" } | null) => void = () => {};
+		let resolveBootstrap: (user: { id: string; role: "member" | "admin"; profileCompleted: boolean } | null) => void = () => {};
 		const bootstrap = vi.fn(
-			() => new Promise<{ id: string; role: "member" | "admin" } | null>((resolve) => (resolveBootstrap = resolve)),
+			() => new Promise<{ id: string; role: "member" | "admin"; profileCompleted: boolean } | null>((resolve) => (resolveBootstrap = resolve)),
 		);
 
 		render(
@@ -33,7 +33,7 @@ describe("AuthProvider", () => {
 		expect(screen.getByTestId("auth-state")).toHaveTextContent("loading:none");
 		expect(bootstrap).toHaveBeenCalledOnce();
 
-		resolveBootstrap({ id: "u1", role: "member" });
+		resolveBootstrap({ id: "u1", role: "member", profileCompleted: false });
 
 		await waitFor(() => expect(screen.getByTestId("auth-state")).toHaveTextContent("authenticated:u1"));
 	});

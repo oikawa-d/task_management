@@ -28,7 +28,7 @@ describe("AppLayout", () => {
 	});
 
 	it("shows the admin link for admin role", () => {
-		useAuthStore.setState({ status: "authenticated", user: { id: "u1", role: "admin" } });
+		useAuthStore.setState({ status: "authenticated", user: { id: "u1", role: "admin", profileCompleted: true } });
 
 		renderAppLayout();
 
@@ -36,7 +36,7 @@ describe("AppLayout", () => {
 	});
 
 	it("hides the admin link for member role", () => {
-		useAuthStore.setState({ status: "authenticated", user: { id: "u2", role: "member" } });
+		useAuthStore.setState({ status: "authenticated", user: { id: "u2", role: "member", profileCompleted: false } });
 
 		renderAppLayout();
 

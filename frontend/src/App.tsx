@@ -1,16 +1,20 @@
 import { RouterProvider } from "react-router-dom";
 
 import { AuthProvider, type AuthBootstrap } from "./auth/AuthProvider";
+import { SettingsFormsProvider, type SettingsFormSlots } from "./features/settings/pages/SettingsPage";
 import { router } from "./router";
 
 type AppProps = {
 	bootstrap?: AuthBootstrap;
+	settingsForms?: SettingsFormSlots;
 };
 
-function App({ bootstrap }: AppProps) {
+function App({ bootstrap, settingsForms }: AppProps) {
 	return (
 		<AuthProvider bootstrap={bootstrap}>
-			<RouterProvider router={router} />
+			<SettingsFormsProvider slots={settingsForms}>
+				<RouterProvider router={router} />
+			</SettingsFormsProvider>
 		</AuthProvider>
 	);
 }

@@ -17,6 +17,7 @@ export type AuthConfigResponse = {
 type AuthMeResponse = {
 	id: string;
 	role: AuthUser["role"];
+	profile_completed: boolean;
 };
 
 function getApiBaseUrl(): string {
@@ -57,5 +58,9 @@ export async function bootstrapAuth(): Promise<AuthUser | null> {
 	}
 
 	const { data: user } = await client.get<AuthMeResponse>(AUTH_ME_ENDPOINT);
-	return { id: user.id, role: user.role };
+	return {
+		id: user.id,
+		role: user.role,
+		profileCompleted: user.profile_completed,
+	};
 }

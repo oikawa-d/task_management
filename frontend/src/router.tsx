@@ -1,12 +1,19 @@
 import { Navigate, createBrowserRouter } from "react-router-dom";
 
 import { RequireAdmin, RequireAuth, RequireGuest } from "./auth/guards";
+import { useAuthStore } from "./auth/authStore";
 import { AdminUsersPage } from "./features/admin/pages/AdminUsersPage";
 import { LoginPage } from "./features/auth/pages/LoginPage";
 import { DashboardPage } from "./features/dashboard/pages/DashboardPage";
 import { SettingsPage } from "./features/settings/pages/SettingsPage";
 import { AppLayout } from "./layouts/AppLayout";
 import { ROUTES } from "./routes";
+
+function SettingsRoute() {
+	const profileCompleted = useAuthStore((state) => state.user?.profileCompleted ?? false);
+
+	return <SettingsPage profileCompleted={profileCompleted} />;
+}
 
 export const appRoutes = [
 	{
@@ -24,7 +31,7 @@ export const appRoutes = [
 				element: <RequireAuth />,
 				children: [
 					{ path: ROUTES.DASHBOARD, element: <DashboardPage /> },
-					{ path: ROUTES.SETTINGS, element: <SettingsPage /> },
+					{ path: ROUTES.SETTINGS, element: <SettingsRoute /> },
 				],
 			},
 			{

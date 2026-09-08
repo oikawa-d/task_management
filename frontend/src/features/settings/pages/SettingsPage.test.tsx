@@ -4,12 +4,28 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 
-import { SettingsPage, type SettingsPageProps } from "./SettingsPage";
+import {
+	SettingsFormsProvider,
+	SettingsPage,
+	type SettingsFormSlots,
+	type SettingsPageProps,
+} from "./SettingsPage";
 
-function renderPage(initialEntry = "/settings", props: SettingsPageProps = {}) {
+const formSlots: SettingsFormSlots = {
+	profile: () => <form aria-label="プロフィール編集フォーム" />,
+	password: () => <form aria-label="パスワード変更フォーム" />,
+};
+
+function renderPage(
+	initialEntry = "/settings",
+	props: SettingsPageProps = {},
+	slots: SettingsFormSlots = formSlots,
+) {
 	return render(
 		<MemoryRouter initialEntries={[initialEntry]}>
-			<SettingsPage {...props} />
+			<SettingsFormsProvider slots={slots}>
+				<SettingsPage {...props} />
+			</SettingsFormsProvider>
 		</MemoryRouter>,
 	);
 }
@@ -39,6 +55,21 @@ describe("SettingsPage", () => {
 		renderPage("/settings?complete_profile=1", { profileCompleted: true });
 
 		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+	});
+
+	it("フォームslotの成功callbackで成功messageを表示し、プロフィール補完バナーを閉じる", () => {
+		renderPage("/settings?complete_profile=1", {}, {
+			profile: ({ onSuccess }) => (
+				<button type="button" onClick={() => onSuccess("プロフィールを更新しました")}>
+					保存
+				</button>
+			),
+		});
+
+		fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+		expect(screen.getByText("プロフィールを更新しました")).toBeInTheDocument();
+		expect(screen.queryByText("プロフィールを入力してください")).not.toBeInTheDocument();
 	});
 
 	it("タブを切り替えると選択中のパネルだけを表示する", () => {
