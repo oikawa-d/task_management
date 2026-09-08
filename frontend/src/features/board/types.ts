@@ -8,21 +8,26 @@ export interface UserSummary {
 
 export interface BoardTask {
 	id: string;
-	project_id: string | null;
 	title: string;
 	description: string | null;
 	status: TaskStatus;
 	assignee: UserSummary | null;
-	created_by: UserSummary;
 	position: number;
 	version: number;
 	due_at: string | null;
+	is_active: boolean;
 	comment_count: number;
 	created_at: string;
 	updated_at: string;
 }
 
 export type BoardColumns = Record<TaskStatus, BoardTask[]>;
+
+export interface BoardResponse {
+	project_id: string;
+	project_is_active: boolean;
+	columns: BoardColumns;
+}
 
 export const TASK_STATUSES: TaskStatus[] = ["todo", "in_progress", "done"];
 
