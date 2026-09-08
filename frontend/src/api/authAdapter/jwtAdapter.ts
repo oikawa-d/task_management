@@ -92,6 +92,13 @@ export class JwtAdapter implements AuthAdapter {
 		return this.refreshPromise;
 	}
 
+	async restoreSession(): Promise<boolean> {
+		if (!this.refreshPromise) {
+			this.refreshPromise = this.refresh();
+		}
+		return this.refreshPromise;
+	}
+
 	onLogout(): void {
 		this.tokenStore.setAccessToken(null);
 	}

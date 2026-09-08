@@ -51,4 +51,10 @@ describe("SessionAdapter", () => {
 
 		expect(result).toBe(false);
 	});
+
+	it("起動時のセッション復元は追加のリクエストを行わず成功する", async () => {
+		const adapter = new SessionAdapter();
+
+		expect(await adapter.restoreSession()).toBe(true);
+	});
 });

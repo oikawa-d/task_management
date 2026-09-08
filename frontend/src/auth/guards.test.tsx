@@ -74,6 +74,15 @@ describe("RequireAuth", () => {
 
 		expect(await screen.findByRole("heading", { name: "ダッシュボード画面" })).toBeInTheDocument();
 	});
+
+	it("renders the loading UI without redirecting while auth status is loading", () => {
+		useAuthStore.setState({ status: "loading", user: null });
+
+		renderDashboardRoute();
+
+		expect(screen.getByRole("status", { name: "認証状態を確認中..." })).toBeInTheDocument();
+		expect(screen.queryByRole("heading", { name: "ログイン画面" })).not.toBeInTheDocument();
+	});
 });
 
 describe("RequireGuest", () => {
@@ -95,6 +104,15 @@ describe("RequireGuest", () => {
 		renderLoginRoute();
 
 		expect(await screen.findByRole("heading", { name: "ログイン画面" })).toBeInTheDocument();
+	});
+
+	it("renders the loading UI without redirecting while auth status is loading", () => {
+		useAuthStore.setState({ status: "loading", user: null });
+
+		renderLoginRoute();
+
+		expect(screen.getByRole("status", { name: "認証状態を確認中..." })).toBeInTheDocument();
+		expect(screen.queryByRole("heading", { name: "ダッシュボード画面" })).not.toBeInTheDocument();
 	});
 });
 
@@ -125,5 +143,14 @@ describe("RequireAdmin", () => {
 		renderAdminUsersRoute();
 
 		expect(await screen.findByRole("heading", { name: "ユーザー管理画面" })).toBeInTheDocument();
+	});
+
+	it("renders the loading UI without redirecting while auth status is loading", () => {
+		useAuthStore.setState({ status: "loading", user: null });
+
+		renderAdminUsersRoute();
+
+		expect(screen.getByRole("status", { name: "認証状態を確認中..." })).toBeInTheDocument();
+		expect(screen.queryByRole("heading", { name: "ログイン画面" })).not.toBeInTheDocument();
 	});
 });
