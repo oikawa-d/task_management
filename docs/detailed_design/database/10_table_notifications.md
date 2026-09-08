@@ -99,6 +99,8 @@ CREATE INDEX ix_notifications_user_unread ON notifications (user_id) WHERE read_
 | `due_today_created` | `POST /projects/{id}/tasks`（担当者あり・`due_at` が `APP_TIMEZONE` の当日） | `created:{task_id}` | タスク作成は1回のみのイベントのため、キーに変動要素を含めない（1タスク1回だけ） |
 | `due_today_updated` | `PATCH /tasks/{id}`（`due_at` 変更・担当者あり・変更後が `APP_TIMEZONE` の当日） | `updated:{task_id}:{変更後due_atのISO8601(UTC)}` | 同じ日時へ設定し直した場合は新規通知を作らず、別の日時へ変更した場合のみ新たに通知する。UTC正規化した文字列をキーに含めることで、タイムゾーン表記の揺れによる意図しない重複/欠落を防ぐ |
 
+当日の判定は、APIの`task_repository`が`APP_TIMEZONE`の現在日を半開区間 `[00:00, 翌日00:00)` として求め、UTCの`p_day_start_utc`・`p_day_end_utc`に変換してtask SPへ渡す。SPは`p_day_start_utc <= p_due_at AND p_due_at < p_day_end_utc`で判定するため、DBセッションのタイムゾーンやDSTの影響を受けない。
+
 **`INSERT ... ON CONFLICT (user_id, dedupe_key) DO NOTHING` を使う理由**
 
 1. 通知作成はタスク作成／更新と**同一トランザクション**で行う（`04_api.md` §3.3）。事前に `SELECT ... FOR UPDATE` で重複有無を確認してから `INSERT` する方式は、確認とINSERTの間に別トランザクションが同じ `dedupe_key` を挿入する競合（TOCTOU）を防げない。`ON CONFLICT DO NOTHING` は1文でアトミックに「存在しなければ作る」を実現する。
@@ -276,6 +278,8 @@ flowchart LR
 | T-9 | 一覧のタスク削除考慮 | `task_id` が `NULL`（削除済みタスク）の通知を一覧取得 | `task` 欄が `null` として取得できる（例外を出さない） | `test_list_by_user_handles_deleted_task_gracefully` |
 | T-10 | バッチ一括作成 | 同一実行枠で `due_notification_job` を2回実行（Redisロックをすり抜けたと仮定） | 2回目の `bulk_create_if_absent` は全件 `dedupe_key` 競合で0件作成 | `test_bulk_create_if_absent_no_duplicate_on_same_slot_rerun` |
 | T-11 | 保持期間パージ | `NOTIFICATION_RETENTION_DAYS` より古い `created_at` の行がある状態で `sp_purge_notifications` を実行 | 対象行が削除され、期間内の行は残る（未読・既読を問わず削除対象） | `test_sp_purge_notifications_deletes_expired_regardless_of_read_state` |
+| T-12 | task作成連携 | 担当者あり・当日期限、担当者なし・翌日期限を作成する | 条件成立時だけ`due_today_created`が作成される | `test_sp_create_task_inserts_due_today_notification_for_assignee` / `test_sp_create_task_skips_notification_without_assignee_or_for_future` |
+| T-13 | task更新連携 | 期限変更なし、当日・翌日への変更、当日への同一再設定を行う | `due_today_updated`が当日変更時だけ作成され、同一dedupe_keyでは増えない | `test_sp_update_task_notifies_only_when_due_at_changes_to_today_and_deduplicates` |
 
 ## 13. 不明点・要検討事項
 

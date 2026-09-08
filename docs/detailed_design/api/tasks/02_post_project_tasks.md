@@ -211,7 +211,7 @@ flowchart TB
 | 引数 | db: DBセッション／project_id／payload／created_by: 作成者ID |
 | 戻り値 | 作成された `Task` |
 | 送出例外 | `IntegrityError`（`uq_tasks_project_status_position` 違反等。`db_error_handler` が409へ変換） |
-| 処理内容 | `CALL sp_create_task(:project_id, :created_by, :assignee_id, :title, :body, :status, :due_at, :position, p_task_id)` を1回呼ぶ。advisory lock、`fn_next_task_position`、task INSERT、当日期限判定と`notifications`のdedupe INSERTはすべてSP内部で同一トランザクションとして実行され、OUTパラメータ`p_task_id`でDB側が採番したIDを受け取る。取得したIDで`SELECT fn_get_task(p_task_id)`を実行し応答用のtask行を取得する |
+| 処理内容 | APIが`APP_TIMEZONE`の当日開始・翌日開始をUTCへ変換し、`p_day_start_utc`・`p_day_end_utc`として`CALL sp_create_task(:project_id, :created_by, :assignee_id, :title, :body, :status, :due_at, :position, :day_start_utc, :day_end_utc, p_task_id)`を1回呼ぶ。advisory lock、`fn_next_task_position`、task INSERT、当日期限判定と`notifications`のdedupe INSERTはすべてSP内部で同一トランザクションとして実行され、OUTパラメータ`p_task_id`でDB側が採番したIDを受け取る。取得したIDで`SELECT fn_get_task(p_task_id)`を実行し応答用のtask行を取得する |
 | 副作用 | DB更新（tasks INSERT。条件成立時は同一トランザクションでnotifications INSERT） |
 
 ## 7. 関数相関図
@@ -249,7 +249,7 @@ stateDiagram-v2
 
 | 種別 | 契約 | 説明 |
 |------|------|------|
-| create_task | `sp_create_task(p_project_id, p_created_by, p_assignee_id, p_title, p_body, p_status, p_due_at, p_position, OUT p_task_id)` | sp_create_taskを呼び出しDB側で採番された`p_task_id`を受け取り、`fn_get_task`の結果をレスポンスへ写像する |
+| create_task | `sp_create_task(p_project_id, p_created_by, p_assignee_id, p_title, p_body, p_status, p_due_at, p_position, p_day_start_utc, p_day_end_utc, OUT p_task_id)` | APIがAPP_TIMEZONEの日境界をUTCへ変換して渡し、sp_create_taskがDB側で採番した`p_task_id`を受け取り、`fn_get_task`の結果をレスポンスへ写像する |
 
 repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 

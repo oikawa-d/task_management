@@ -217,7 +217,7 @@ flowchart TB
 | 引数 | db：DBセッション／payload：作成内容（`project_id=None`、`assignee_id=None`確定済み）／created_by：作成者ID |
 | 戻り値 | 作成された `Task`（`project_id=None`） |
 | 送出例外 | `IntegrityError`（`uq_tasks_project_status_position`違反等。`db_error_handler`が409へ変換） |
-| 処理内容 | `project_id=NULL` も `CALL sp_create_task(NULL, :created_by, NULL, :title, :body, :status, :due_at, :position, p_task_id)` に統一する。未所属用の固定advisory lockキー、position採番、NULL同士の重複防止、task INSERT、`task_id`の採番（`gen_random_uuid()`・OUTパラメータ）はすべてSP内部で実行し、API/service層にSQLを持たせない |
+| 処理内容 | `project_id=NULL` も、APIが計算した`p_day_start_utc`・`p_day_end_utc`を含む`CALL sp_create_task(NULL, :created_by, NULL, :title, :body, :status, :due_at, :position, :day_start_utc, :day_end_utc, p_task_id)` に統一する。未所属用の固定advisory lockキー、position採番、NULL同士の重複防止、task INSERT、`task_id`の採番（`gen_random_uuid()`・OUTパラメータ）はすべてSP内部で実行し、API/service層にSQLを持たせない |
 | 副作用 | DB更新（tasks INSERT） |
 
 ## 7. 関数相関図
@@ -261,7 +261,7 @@ stateDiagram-v2
 
 | 種別 | 契約 | 説明 |
 |------|------|------|
-| create_task | `sp_create_task(p_project_id, p_created_by, p_assignee_id, p_title, p_body, p_status, p_due_at, p_position, OUT p_task_id)` | sp_create_taskを呼び出しDB側で採番された`p_task_id`を受け取り、`fn_get_task`の結果をレスポンスへ写像する |
+| create_task | `sp_create_task(p_project_id, p_created_by, p_assignee_id, p_title, p_body, p_status, p_due_at, p_position, p_day_start_utc, p_day_end_utc, OUT p_task_id)` | APIがAPP_TIMEZONEの日境界をUTCへ変換して渡し、sp_create_taskがDB側で採番した`p_task_id`を受け取り、`fn_get_task`の結果をレスポンスへ写像する |
 
 repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
