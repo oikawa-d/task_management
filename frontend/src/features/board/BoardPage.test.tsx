@@ -47,7 +47,7 @@ describe("BoardPage and TaskDetailModal", () => {
 		render(<RouterProvider router={router} />);
 
 		fireEvent.click(await screen.findByRole("button", { name: /カンバンから開くタスク/ }));
-		expect(router.state.location.pathname).toBe("/projects/project-1/tasks/task-1");
+		await waitFor(() => expect(router.state.location.pathname).toBe("/projects/project-1/tasks/task-1"));
 		expect(await screen.findByRole("dialog", { name: "タスク詳細" })).toBeInTheDocument();
 
 		fireEvent.click(screen.getByRole("button", { name: "閉じる" }));
