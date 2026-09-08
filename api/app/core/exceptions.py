@@ -62,6 +62,24 @@ class TokenRevokedError(AppError):
 	message = "セッションが無効になりました。再度ログインしてください"
 
 
+class CsrfInvalidError(AppError):
+	code = "CSRF_INVALID"
+	status_code = 403
+	message = "不正なリクエストです"
+
+
+class TooManyAttemptsError(AppError):
+	code = "TOO_MANY_ATTEMPTS"
+	status_code = 429
+	message = "ログイン試行回数が上限に達しました。しばらくしてから再度お試しください"
+
+
+class ServiceUnavailableError(AppError):
+	code = "SERVICE_UNAVAILABLE"
+	status_code = 503
+	message = "現在サービスをご利用いただけません"
+
+
 class UserInactiveError(AppError):
 	code = "USER_INACTIVE"
 	status_code = 403
