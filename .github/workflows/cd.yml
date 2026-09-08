@@ -86,11 +86,18 @@ jobs:
 
   deploy:
     needs: build-and-push
+    # workflow_dispatchはmain以外のブランチからも実行できてしまうため、
+    # productionへのデプロイはmainブランチからの実行のみに限定する
+    if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, linux, cerberus]
     environment: production
+    permissions:
+      contents: read
     env:
       DEPLOY_STATE_FILE: ${{ vars.DEPLOY_STATE_FILE || '/var/lib/cerberus/last-successful-deploy.env' }}
       IMAGE_RETENTION_DAYS: ${{ vars.IMAGE_RETENTION_DAYS || '30' }}
+      # 既定値の5173はFRONTEND_PORTの既定値のフォールバックに過ぎない。
+      # FRONTEND_PORTを変更する場合は必ずvars.DEPLOY_HOST_HEALTHCHECK_URLを設定すること
       DEPLOY_HOST_HEALTHCHECK_URL: ${{ vars.DEPLOY_HOST_HEALTHCHECK_URL || 'http://localhost:5173/api/health' }}
       DEPLOY_HEALTHCHECK_RETRIES: ${{ vars.DEPLOY_HEALTHCHECK_RETRIES || '10' }}
       DEPLOY_HEALTHCHECK_INTERVAL_SECONDS: ${{ vars.DEPLOY_HEALTHCHECK_INTERVAL_SECONDS || '5' }}
@@ -213,6 +220,9 @@ jobs:
           CSRF_TRUST_REFERER_ON_HTTPS=${{ secrets.CSRF_TRUST_REFERER_ON_HTTPS }}
           HEALTH_CHECK_TIMEOUT_SECONDS=${{ secrets.HEALTH_CHECK_TIMEOUT_SECONDS }}
           LOGIN_HISTORY_LIST_LIMIT=${{ secrets.LOGIN_HISTORY_LIST_LIMIT }}
+          IMAGE_NAME_BACKEND=ghcr.io/${IMAGE_OWNER}/cerberus-backend
+          IMAGE_NAME_FRONTEND=ghcr.io/${IMAGE_OWNER}/cerberus-frontend
+          IMAGE_NAME_BATCH=ghcr.io/${IMAGE_OWNER}/cerberus-batch
           BACKEND_IMAGE_TAG=${NEW_IMAGE_TAG}
           FRONTEND_IMAGE_TAG=${NEW_IMAGE_TAG}
           BATCH_IMAGE_TAG=${NEW_IMAGE_TAG}
@@ -238,7 +248,8 @@ jobs:
           exit 1
 
       - name: 直前タグへロールバック
-        if: failure() && steps.healthcheck.outcome == 'failure'
+        # pull/up自体の失敗時もhealthcheckはskippedになるため、失敗全般を対象にする
+        if: failure()
         run: |
           if [ "${{ steps.prev.outputs.exists }}" != "true" ]; then
             echo "初回デプロイのため直前成功タグが存在せず、自動ロールバックできません。手動対応が必要です。" >&2
