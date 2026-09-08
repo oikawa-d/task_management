@@ -116,6 +116,27 @@ describe("useUnreadCount", () => {
 		expect(fetchSpy).toHaveBeenCalledTimes(4);
 	});
 
+	it("ネットワークエラー（statusを持たない例外）の場合はリトライしたうえでisErrorになる", async () => {
+		// retryの指数バックオフとrefetchIntervalが同一タイムラインで干渉しないよう、
+		// このテストのみポーリング間隔を十分大きくする。
+		vi.stubEnv("VITE_NOTIFICATION_POLL_INTERVAL_MS", "100000");
+		const fetchSpy = vi
+			.spyOn(unreadCountApi, "fetchUnreadCount")
+			.mockRejectedValue(new TypeError("Failed to fetch"));
+
+		const { result } = renderHook(() => useUnreadCount({ isAuthenticated: true }), {
+			wrapper: createWrapper(),
+		});
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(30000);
+		});
+
+		expect(result.current.isError).toBe(true);
+		// UnreadCountFetchErrorではないため401判定に該当せず、初回 + retry最大3回 = 4回呼ばれる
+		expect(fetchSpy).toHaveBeenCalledTimes(4);
+	});
+
 	it("queryFnにAbortSignalを渡してfetchUnreadCountへ伝搬する", async () => {
 		const fetchSpy = vi
 			.spyOn(unreadCountApi, "fetchUnreadCount")

@@ -31,11 +31,14 @@ export function useUnreadCount({
 		enabled: isAuthenticated,
 		refetchInterval: getNotificationPollIntervalMs(),
 		refetchIntervalInBackground: false,
-		// 401（UNAUTHENTICATED/SESSION_EXPIRED）はリトライしても回復しないため即座に諦める。
-		// 詳細設計 docs/detailed_design/api/notifications/02_get_notifications_unread_count.md §3 は
-		// SESSION_EXPIRED時のポーリング停止（enabled: false化）を規定しているが、
-		// それには authStore との結線が必要で別task（#179/#178）のスコープのため、
-		// 本taskでは最低限のリトライ抑止のみ行う。
+		// 401はリトライしても回復しないため即座に諦める（リトライストーム防止）。
+		// 詳細設計 docs/detailed_design/api/notifications/02_get_notifications_unread_count.md §3 では
+		// 401配下に UNAUTHENTICATED / SESSION_EXPIRED / TOKEN_EXPIRED の3種があり、
+		// 本来は SESSION_EXPIRED でポーリング停止（enabled: false化）、
+		// TOKEN_EXPIRED（jwtモード）でリフレッシュ後の再試行、という分岐が必要だが、
+		// いずれも authStore / 共通APIクライアントとの結線が前提となり別task（#178/#179）のスコープ。
+		// 本taskではエラーコード別の分岐は行わず、HTTPステータスのみで一律リトライ抑止する。
+		// #178/#179 のマージ後にエラーコード別の制御へ差し替えること。
 		retry: (failureCount, error) => {
 			if (error instanceof UnreadCountFetchError && error.status === 401) {
 				return false;

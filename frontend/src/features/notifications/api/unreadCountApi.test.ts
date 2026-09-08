@@ -39,6 +39,19 @@ describe("fetchUnreadCount", () => {
 		expect((error as UnreadCountFetchError).status).toBe(401);
 	});
 
+	it("fetch自体がネットワークエラーでrejectした場合は例外をそのまま伝搬する", async () => {
+		// UnreadCountFetchErrorへは包まないため、呼び出し側のretry判定では
+		// 「statusを持たないエラー」として通常のリトライ対象になる。
+		const networkError = new TypeError("Failed to fetch");
+		const fetchMock = vi.fn().mockRejectedValue(networkError);
+		vi.stubGlobal("fetch", fetchMock);
+
+		const error = await fetchUnreadCount().catch((e: unknown) => e);
+
+		expect(error).toBe(networkError);
+		expect(error).not.toBeInstanceOf(UnreadCountFetchError);
+	});
+
 	it("AbortSignalをfetchへ伝搬する", async () => {
 		const fetchMock = vi.fn().mockResolvedValue({
 			ok: true,
