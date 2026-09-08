@@ -5,6 +5,7 @@ import {
 	AUTH_ME_ENDPOINT,
 	DEFAULT_API_BASE_URL,
 } from "../api/authAdapter/constants";
+import { setAuthAdapter } from "../api/authAdapter/client";
 import { createAuthAdapter, type RetryableRequestConfig } from "../api/authAdapter";
 import type { AuthUser } from "./authStore";
 
@@ -50,6 +51,7 @@ export async function bootstrapAuth(): Promise<AuthUser | null> {
 		csrfCookieName: config.csrf_cookie_name,
 		httpClient: client,
 	});
+	setAuthAdapter(adapter);
 
 	installAuthInterceptors(client, adapter);
 	if (!(await adapter.restoreSession())) {
