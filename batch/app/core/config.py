@@ -10,6 +10,8 @@ class BatchSettings(BaseSettings):
 
 	database_url: str
 	redis_url: str = "redis://redis:6379/0"
+	redis_key_prefix: str = ""
+	redis_test_db: int = 1
 
 	app_timezone: str = "Asia/Tokyo"
 	notify_due_run_hours: str = "10,17"

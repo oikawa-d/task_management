@@ -124,6 +124,13 @@ async def test_due_lock_uses_date_and_slot_as_distinct_keys() -> None:
 	}
 
 
+async def test_due_lock_applies_key_prefix() -> None:
+	redis = _Redis()
+
+	assert await redis_lock.acquire_due_notification_lock(redis, date(2026, 9, 7), "10", "runner", 60, "ci:")
+	assert redis.values == {"ci:lock:notify_due:2026-09-07:10": "runner"}
+
+
 async def test_release_due_lock_does_not_delete_another_runner_lock() -> None:
 	redis = _Redis()
 	await redis_lock.acquire_due_notification_lock(redis, date(2026, 9, 7), "10", "runner-a", 60)
