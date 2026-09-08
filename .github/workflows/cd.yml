@@ -1,0 +1,289 @@
+name: CD
+
+# 設計: docs/detailed_design/infra/06_cd_workflow.md
+# mainマージをトリガーにbackend/frontend/batchイメージをGHCRへpushし、
+# self-hosted runner上でdocker composeにより反映・ヘルスチェックする。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    outputs:
+      image_tag: ${{ steps.vars.outputs.image_tag }}
+      owner: ${{ steps.vars.outputs.owner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: タグ・オーナー名を算出
+        id: vars
+        run: |
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          tag="sha-$(echo "${{ github.sha }}" | cut -c1-12)"
+          echo "owner=${owner}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Docker Buildx セットアップ
+        uses: docker/setup-buildx-action@v3
+
+      - name: GHCRへログイン
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: backendイメージをビルド・push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: api/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ steps.vars.outputs.owner }}/cerberus-backend:latest
+            ghcr.io/${{ steps.vars.outputs.owner }}/cerberus-backend:${{ steps.vars.outputs.image_tag }}
+          labels: |
+            com.cerberus.managed=true
+            com.cerberus.component=backend
+
+      - name: frontendイメージをビルド・push
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          file: frontend/Dockerfile
+          push: true
+          build-args: |
+            VITE_API_BASE_URL=${{ vars.VITE_API_BASE_URL || '/api' }}
+          tags: |
+            ghcr.io/${{ steps.vars.outputs.owner }}/cerberus-frontend:latest
+            ghcr.io/${{ steps.vars.outputs.owner }}/cerberus-frontend:${{ steps.vars.outputs.image_tag }}
+          labels: |
+            com.cerberus.managed=true
+            com.cerberus.component=frontend
+
+      - name: batchイメージをビルド・push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: batch/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ steps.vars.outputs.owner }}/cerberus-batch:latest
+            ghcr.io/${{ steps.vars.outputs.owner }}/cerberus-batch:${{ steps.vars.outputs.image_tag }}
+          labels: |
+            com.cerberus.managed=true
+            com.cerberus.component=batch
+
+  deploy:
+    needs: build-and-push
+    runs-on: [self-hosted, linux, cerberus]
+    environment: production
+    env:
+      DEPLOY_STATE_FILE: ${{ vars.DEPLOY_STATE_FILE || '/var/lib/cerberus/last-successful-deploy.env' }}
+      IMAGE_RETENTION_DAYS: ${{ vars.IMAGE_RETENTION_DAYS || '30' }}
+      DEPLOY_HOST_HEALTHCHECK_URL: ${{ vars.DEPLOY_HOST_HEALTHCHECK_URL || 'http://localhost:5173/api/health' }}
+      DEPLOY_HEALTHCHECK_RETRIES: ${{ vars.DEPLOY_HEALTHCHECK_RETRIES || '10' }}
+      DEPLOY_HEALTHCHECK_INTERVAL_SECONDS: ${{ vars.DEPLOY_HEALTHCHECK_INTERVAL_SECONDS || '5' }}
+      NEW_IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+      IMAGE_OWNER: ${{ needs.build-and-push.outputs.owner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: 直前成功タグを読み込み
+        id: prev
+        run: |
+          if [ -f "${DEPLOY_STATE_FILE}" ]; then
+            # shellcheck source=/dev/null
+            . "${DEPLOY_STATE_FILE}"
+            {
+              echo "exists=true"
+              echo "backend_tag=${PREV_BACKEND_IMAGE_TAG}"
+              echo "frontend_tag=${PREV_FRONTEND_IMAGE_TAG}"
+              echo "batch_tag=${PREV_BATCH_IMAGE_TAG}"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: .envを生成（GitHub Secretsから展開、ログには出力しない）
+        run: |
+          cat <<EOF > .env
+          COMPOSE_PROJECT_NAME=cerberus
+          APP_ENV=production
+          LOG_LEVEL=${{ secrets.LOG_LEVEL }}
+          FRONTEND_PORT=${{ secrets.FRONTEND_PORT }}
+          BACKEND_PORT=${{ secrets.BACKEND_PORT }}
+          POSTGRES_PORT=${{ secrets.POSTGRES_PORT }}
+          REDIS_PORT=${{ secrets.REDIS_PORT }}
+          POSTGRES_USER=${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_DB=${{ secrets.POSTGRES_DB }}
+          DATABASE_URL=${{ secrets.DATABASE_URL }}
+          DATABASE_POOL_SIZE=${{ secrets.DATABASE_POOL_SIZE }}
+          DATABASE_MAX_OVERFLOW=${{ secrets.DATABASE_MAX_OVERFLOW }}
+          REDIS_URL=${{ secrets.REDIS_URL }}
+          REDIS_KEY_PREFIX=${{ secrets.REDIS_KEY_PREFIX }}
+          LOGIN_HISTORY_RETENTION_DAYS=${{ secrets.LOGIN_HISTORY_RETENTION_DAYS }}
+          API_HISTORY_RETENTION_DAYS=${{ secrets.API_HISTORY_RETENTION_DAYS }}
+          BATCH_HISTORY_RETENTION_DAYS=${{ secrets.BATCH_HISTORY_RETENTION_DAYS }}
+          API_HISTORY_BODY_MAX_BYTES=${{ secrets.API_HISTORY_BODY_MAX_BYTES }}
+          API_HISTORY_ERROR_DETAIL_MAX_LENGTH=${{ secrets.API_HISTORY_ERROR_DETAIL_MAX_LENGTH }}
+          AUTH_MODE=${{ secrets.AUTH_MODE }}
+          SESSION_TTL_SECONDS=${{ secrets.SESSION_TTL_SECONDS }}
+          SESSION_ABSOLUTE_TTL_SECONDS=${{ secrets.SESSION_ABSOLUTE_TTL_SECONDS }}
+          COOKIE_NAME_SESSION=${{ secrets.COOKIE_NAME_SESSION }}
+          COOKIE_NAME_CSRF=${{ secrets.COOKIE_NAME_CSRF }}
+          COOKIE_NAME_OAUTH_STATE=${{ secrets.COOKIE_NAME_OAUTH_STATE }}
+          COOKIE_SECURE=${{ secrets.COOKIE_SECURE }}
+          COOKIE_SAMESITE=${{ secrets.COOKIE_SAMESITE }}
+          COOKIE_DOMAIN=${{ secrets.COOKIE_DOMAIN }}
+          LOGIN_MAX_ATTEMPTS=${{ secrets.LOGIN_MAX_ATTEMPTS }}
+          LOGIN_LOCK_WINDOW_SECONDS=${{ secrets.LOGIN_LOCK_WINDOW_SECONDS }}
+          RATE_LIMIT_REGISTER_MAX_REQUESTS=${{ secrets.RATE_LIMIT_REGISTER_MAX_REQUESTS }}
+          RATE_LIMIT_EMAIL_VERIFY_MAX_REQUESTS=${{ secrets.RATE_LIMIT_EMAIL_VERIFY_MAX_REQUESTS }}
+          RATE_LIMIT_EMAIL_VERIFY_RESEND_MAX_REQUESTS=${{ secrets.RATE_LIMIT_EMAIL_VERIFY_RESEND_MAX_REQUESTS }}
+          RATE_LIMIT_PASSWORD_FORGOT_MAX_REQUESTS=${{ secrets.RATE_LIMIT_PASSWORD_FORGOT_MAX_REQUESTS }}
+          RATE_LIMIT_PASSWORD_RESET_MAX_REQUESTS=${{ secrets.RATE_LIMIT_PASSWORD_RESET_MAX_REQUESTS }}
+          RATE_LIMIT_OAUTH_MAX_REQUESTS=${{ secrets.RATE_LIMIT_OAUTH_MAX_REQUESTS }}
+          RATE_LIMIT_OAUTH_WINDOW_SECONDS=${{ secrets.RATE_LIMIT_OAUTH_WINDOW_SECONDS }}
+          RATE_LIMIT_NOTIFICATION_READ_MAX_REQUESTS=${{ secrets.RATE_LIMIT_NOTIFICATION_READ_MAX_REQUESTS }}
+          RATE_LIMIT_NOTIFICATION_WRITE_MAX_REQUESTS=${{ secrets.RATE_LIMIT_NOTIFICATION_WRITE_MAX_REQUESTS }}
+          TRUSTED_PROXY_CIDRS=${{ secrets.TRUSTED_PROXY_CIDRS }}
+          ARGON2_TIME_COST=${{ secrets.ARGON2_TIME_COST }}
+          ARGON2_MEMORY_COST=${{ secrets.ARGON2_MEMORY_COST }}
+          ARGON2_PARALLELISM=${{ secrets.ARGON2_PARALLELISM }}
+          ACCESS_TOKEN_TTL_SECONDS=${{ secrets.ACCESS_TOKEN_TTL_SECONDS }}
+          REFRESH_TTL_SECONDS=${{ secrets.REFRESH_TTL_SECONDS }}
+          JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }}
+          JWT_ALGORITHM=${{ secrets.JWT_ALGORITHM }}
+          COOKIE_NAME_REFRESH=${{ secrets.COOKIE_NAME_REFRESH }}
+          COOKIE_SAMESITE_REFRESH=${{ secrets.COOKIE_SAMESITE_REFRESH }}
+          CORS_ALLOW_ORIGINS=${{ secrets.CORS_ALLOW_ORIGINS }}
+          ENABLE_API_DOCS=${{ secrets.ENABLE_API_DOCS }}
+          PAGINATION_DEFAULT_PER_PAGE=${{ secrets.PAGINATION_DEFAULT_PER_PAGE }}
+          PAGINATION_MAX_PER_PAGE=${{ secrets.PAGINATION_MAX_PER_PAGE }}
+          GOOGLE_LOGIN_ENABLED=${{ secrets.GOOGLE_LOGIN_ENABLED }}
+          GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REDIRECT_URI=${{ secrets.GOOGLE_REDIRECT_URI }}
+          GOOGLE_AUTHORIZE_ENDPOINT=${{ secrets.GOOGLE_AUTHORIZE_ENDPOINT }}
+          GOOGLE_TOKEN_ENDPOINT=${{ secrets.GOOGLE_TOKEN_ENDPOINT }}
+          GOOGLE_USERINFO_ENDPOINT=${{ secrets.GOOGLE_USERINFO_ENDPOINT }}
+          GOOGLE_JWKS_URI=${{ secrets.GOOGLE_JWKS_URI }}
+          GOOGLE_JWKS_CACHE_TTL_SECONDS=${{ secrets.GOOGLE_JWKS_CACHE_TTL_SECONDS }}
+          OAUTH_STATE_TTL_SECONDS=${{ secrets.OAUTH_STATE_TTL_SECONDS }}
+          OAUTH_HANDOFF_TTL_SECONDS=${{ secrets.OAUTH_HANDOFF_TTL_SECONDS }}
+          OAUTH_DEFAULT_REDIRECT_TO=${{ secrets.OAUTH_DEFAULT_REDIRECT_TO }}
+          GOOGLE_OAUTH_PROMPT=${{ secrets.GOOGLE_OAUTH_PROMPT }}
+          SMTP_HOST=${{ secrets.SMTP_HOST }}
+          SMTP_PORT=${{ secrets.SMTP_PORT }}
+          SMTP_USER=${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}
+          SMTP_USE_TLS=${{ secrets.SMTP_USE_TLS }}
+          MAIL_FROM=${{ secrets.MAIL_FROM }}
+          FRONTEND_BASE_URL=${{ secrets.FRONTEND_BASE_URL }}
+          PASSWORD_RESET_TTL_SECONDS=${{ secrets.PASSWORD_RESET_TTL_SECONDS }}
+          EMAIL_VERIFY_TTL_SECONDS=${{ secrets.EMAIL_VERIFY_TTL_SECONDS }}
+          EMAIL_VERIFY_RESEND_INTERVAL_SECONDS=${{ secrets.EMAIL_VERIFY_RESEND_INTERVAL_SECONDS }}
+          INITIAL_ADMIN_EMAIL=${{ secrets.INITIAL_ADMIN_EMAIL }}
+          INITIAL_ADMIN_USERNAME=${{ secrets.INITIAL_ADMIN_USERNAME }}
+          INITIAL_ADMIN_PASSWORD=${{ secrets.INITIAL_ADMIN_PASSWORD }}
+          VITE_API_BASE_URL=${{ vars.VITE_API_BASE_URL || '/api' }}
+          VITE_NOTIFICATION_POLL_INTERVAL_MS=${{ secrets.VITE_NOTIFICATION_POLL_INTERVAL_MS }}
+          APP_TIMEZONE=${{ secrets.APP_TIMEZONE }}
+          NOTIFY_DUE_RUN_HOURS=${{ secrets.NOTIFY_DUE_RUN_HOURS }}
+          NOTIFY_DUE_CRON_MINUTE=${{ secrets.NOTIFY_DUE_CRON_MINUTE }}
+          NOTIFY_DUE_TARGET_HOUR=${{ secrets.NOTIFY_DUE_TARGET_HOUR }}
+          NOTIFY_DUE_LOCK_TTL_SECONDS=${{ secrets.NOTIFY_DUE_LOCK_TTL_SECONDS }}
+          NOTIFY_DUE_BATCH_CHUNK_SIZE=${{ secrets.NOTIFY_DUE_BATCH_CHUNK_SIZE }}
+          NOTIFICATION_RETENTION_DAYS=${{ secrets.NOTIFICATION_RETENTION_DAYS }}
+          BATCH_ENABLED=${{ secrets.BATCH_ENABLED }}
+          CSRF_TRUST_REFERER_ON_HTTPS=${{ secrets.CSRF_TRUST_REFERER_ON_HTTPS }}
+          HEALTH_CHECK_TIMEOUT_SECONDS=${{ secrets.HEALTH_CHECK_TIMEOUT_SECONDS }}
+          LOGIN_HISTORY_LIST_LIMIT=${{ secrets.LOGIN_HISTORY_LIST_LIMIT }}
+          BACKEND_IMAGE_TAG=${NEW_IMAGE_TAG}
+          FRONTEND_IMAGE_TAG=${NEW_IMAGE_TAG}
+          BATCH_IMAGE_TAG=${NEW_IMAGE_TAG}
+          EOF
+
+      - name: docker compose pull
+        run: docker compose pull
+
+      - name: docker compose up -d
+        run: docker compose up -d --remove-orphans
+
+      - name: ヘルスチェックをポーリング
+        id: healthcheck
+        run: |
+          for _ in $(seq 1 "${DEPLOY_HEALTHCHECK_RETRIES}"); do
+            if curl -fsS "${DEPLOY_HOST_HEALTHCHECK_URL}" > /dev/null 2>&1; then
+              echo "healthy=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep "${DEPLOY_HEALTHCHECK_INTERVAL_SECONDS}"
+          done
+          echo "healthy=false" >> "$GITHUB_OUTPUT"
+          exit 1
+
+      - name: 直前タグへロールバック
+        if: failure() && steps.healthcheck.outcome == 'failure'
+        run: |
+          if [ "${{ steps.prev.outputs.exists }}" != "true" ]; then
+            echo "初回デプロイのため直前成功タグが存在せず、自動ロールバックできません。手動対応が必要です。" >&2
+            exit 1
+          fi
+          sed -i \
+            -e "s/^BACKEND_IMAGE_TAG=.*/BACKEND_IMAGE_TAG=${{ steps.prev.outputs.backend_tag }}/" \
+            -e "s/^FRONTEND_IMAGE_TAG=.*/FRONTEND_IMAGE_TAG=${{ steps.prev.outputs.frontend_tag }}/" \
+            -e "s/^BATCH_IMAGE_TAG=.*/BATCH_IMAGE_TAG=${{ steps.prev.outputs.batch_tag }}/" \
+            .env
+          docker compose pull
+          docker compose up -d --remove-orphans
+          for _ in $(seq 1 "${DEPLOY_HEALTHCHECK_RETRIES}"); do
+            if curl -fsS "${DEPLOY_HOST_HEALTHCHECK_URL}" > /dev/null 2>&1; then
+              echo "ロールバック後に復旧しました（新バージョンの反映は失敗のまま終了します）。"
+              exit 1
+            fi
+            sleep "${DEPLOY_HEALTHCHECK_INTERVAL_SECONDS}"
+          done
+          echo "ロールバック後も復旧しませんでした。手動対応が必要です。" >&2
+          exit 1
+
+      - name: 直前成功タグを保存
+        if: steps.healthcheck.outputs.healthy == 'true'
+        run: |
+          mkdir -p "$(dirname "${DEPLOY_STATE_FILE}")"
+          tmp_file="${DEPLOY_STATE_FILE}.tmp"
+          cat <<EOF > "${tmp_file}"
+          PREV_BACKEND_IMAGE_TAG=${NEW_IMAGE_TAG}
+          PREV_FRONTEND_IMAGE_TAG=${NEW_IMAGE_TAG}
+          PREV_BATCH_IMAGE_TAG=${NEW_IMAGE_TAG}
+          EOF
+          mv "${tmp_file}" "${DEPLOY_STATE_FILE}"
+
+      - name: 未使用managedイメージをprune
+        if: steps.healthcheck.outputs.healthy == 'true'
+        run: |
+          cutoff=$(date -d "-${IMAGE_RETENTION_DAYS} days" +%s 2>/dev/null || date -v -"${IMAGE_RETENTION_DAYS}"d +%s)
+          docker images --filter "label=com.cerberus.managed=true" --format '{{.Repository}}:{{.Tag}} {{.ID}} {{.CreatedAt}}' | \
+          while read -r repo_tag id created; do
+            case "${repo_tag}" in
+              *":${NEW_IMAGE_TAG}"|*":latest") continue ;;
+            esac
+            created_ts=$(date -d "${created}" +%s 2>/dev/null || echo "${cutoff}")
+            if [ "${created_ts}" -lt "${cutoff}" ] && ! docker ps -a --format '{{.Image}}' | grep -qx "${repo_tag}"; then
+              docker rmi "${id}" || true
+            fi
+          done
