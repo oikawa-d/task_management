@@ -44,6 +44,10 @@ export class SessionAdapter implements AuthAdapter {
 		return false;
 	}
 
+	async restoreSession(): Promise<boolean> {
+		return true;
+	}
+
 	onLogout(): void {
 		// Cookie破棄はbackendのlogoutに任せる
 	}

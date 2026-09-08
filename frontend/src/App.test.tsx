@@ -7,7 +7,7 @@ import App from "./App";
 
 describe("App", () => {
 	it("renders the login page by default via the router", async () => {
-		render(<App />);
+		render(<App bootstrap={() => Promise.resolve(null)} />);
 
 		expect(await screen.findByRole("heading", { name: "ログイン" })).toBeInTheDocument();
 	});

@@ -22,6 +22,8 @@ export interface AuthAdapter {
 	onLoginSuccess(response: LoginSuccessResponse): void;
 	/** 401時の復帰処理。trueを返した場合のみ元リクエストを再送する */
 	onUnauthorized(error: AxiosError): Promise<boolean>;
+	/** アプリ起動時に既存の認証状態を復元する */
+	restoreSession(): Promise<boolean>;
 	/** クライアント側の後片付け */
 	onLogout(): void;
 }

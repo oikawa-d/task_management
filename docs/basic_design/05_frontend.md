@@ -36,6 +36,7 @@ frontend/
 │   ├── auth/
 │   │   ├── authStore.ts            # Zustand（user / status）
 │   │   ├── AuthProvider.tsx        # /auth/config → 必要ならrefresh → /auth/me
+│   │   ├── AuthLoading.tsx         # 認証状態確定まで表示するローディングUI
 │   │   └── guards.tsx              # RequireAuth / RequireAdmin
 │   ├── components/                 # 汎用UI（Button, Modal, Field, Toast, Avatar…）
 │   ├── layouts/
@@ -272,6 +273,32 @@ stateDiagram-v2
     authenticated --> authenticated: リフレッシュ成功（jwtモード）
 ```
 
+`loading` 中は `RequireAuth` / `RequireAdmin` / `RequireGuest` のいずれもリダイレクトせず、`AuthLoading` を表示する。`AuthLoading` は `role="status"` と「認証状態を確認中...」のラベルを持ち、`AuthProvider` が初期化を完了するまで現在のURLを維持する。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant AP as AuthProvider
+    participant API as 認証API
+    participant S as authStore
+    participant G as ルートガード
+
+    AP->>S: status = loading
+    G-->>G: AuthLoadingを表示（リダイレクトしない）
+    AP->>API: GET /auth/config
+    alt jwtモード
+        AP->>API: POST /auth/refresh（Cookie + CSRF）
+    end
+    AP->>API: GET /auth/me
+    alt 認証成功
+        API-->>AP: ユーザー情報
+        AP->>S: status = authenticated、userを設定
+    else 未認証または初期化失敗
+        API-->>AP: 401 / エラー
+        AP->>S: status = unauthenticated、userを破棄
+    end
+```
+
 ### 5.2 カンバン操作時の楽観的更新
 
 ```mermaid
@@ -311,33 +338,37 @@ classDiagram
         +attach(config) AxiosRequestConfig
         +onLoginSuccess(res) void
         +onUnauthorized(error) Promise~boolean~
+        +restoreSession() Promise~boolean~
         +onLogout() void
     }
     class SessionAdapter {
         +mode "session"
         +attach(config) AxiosRequestConfig
         +onUnauthorized(error) Promise~boolean~
+        +restoreSession() Promise~boolean~
     }
     class JwtAdapter {
         -refreshPromise Promise
         +mode "jwt"
         +attach(config) AxiosRequestConfig
         +onUnauthorized(error) Promise~boolean~
+        +restoreSession() Promise~boolean~
     }
     AuthAdapter <|.. SessionAdapter
     AuthAdapter <|.. JwtAdapter
 ```
 
-| 実装 | `attach` | `onLoginSuccess` | `onUnauthorized` | `onLogout` |
-|------|----------|------------------|------------------|------------|
-| `SessionAdapter` | `withCredentials = true`、更新系には `X-CSRF-Token`（Cookieから読む）を付与 | 何もしない（Cookieはブラウザが保持） | `false`（リトライしない） | authStoreを破棄。Cookie破棄はbackendのlogoutに任せる |
-| `JwtAdapter` | 通常APIには `Authorization: Bearer {accessToken}`、refresh/logoutには `withCredentials=true` と `X-CSRF-Token` を付与 | authStore にaccessTokenを保存。Cookieはbackendが発行 | `/auth/refresh` を1回だけ試行し、成功なら `true` | accessTokenをメモリから破棄。Cookie破棄はbackendのlogoutに任せる |
+| 実装 | `attach` | `onLoginSuccess` | `onUnauthorized` | `restoreSession` | `onLogout` |
+|------|----------|------------------|------------------|------------------|------------|
+| `SessionAdapter` | `withCredentials = true`、更新系には `X-CSRF-Token`（Cookieから読む）を付与 | 何もしない（Cookieはブラウザが保持） | `false`（リトライしない） | 追加処理なしで `true` | authStoreを破棄。Cookie破棄はbackendのlogoutに任せる |
+| `JwtAdapter` | 通常APIには `Authorization: Bearer {accessToken}`、refresh/logoutには `withCredentials=true` と `X-CSRF-Token` を付与 | authStore にaccessTokenを保存。Cookieはbackendが発行 | `/auth/refresh` を1回だけ試行し、成功なら `true` | `/auth/refresh` を実行し、成功時にaccessTokenを保持 | accessTokenをメモリから破棄。Cookie破棄はbackendのlogoutに任せる |
 
 | メソッド | 引数 | 戻り値 | 責務 |
 |----------|------|--------|------|
 | `attach` | `AxiosRequestConfig` | `AxiosRequestConfig` | リクエスト直前の認証情報付与（Cookie送信設定 / CSRFヘッダ / Bearerヘッダ）。CSRF Cookie名は `/auth/config` から取得 |
 | `onLoginSuccess` | `LoginResponse` | `void` | ログインレスポンスから必要な情報を保持 |
 | `onUnauthorized` | `AxiosError` | `Promise<boolean>` | 401 時の復帰処理。`true` を返した場合のみ元リクエストを再送 |
+| `restoreSession` | なし | `Promise<boolean>` | アプリ起動時に既存Cookieから認証状態を復元。jwtではrefreshを実行 |
 | `onLogout` | なし | `void` | クライアント側の後片付け |
 
 ### 6.1 interceptor の流れ
@@ -494,6 +525,8 @@ flowchart LR
 | 区分 | 対象 | 内容 |
 |------|------|------|
 | 単体 | `authAdapter` | session / jwt それぞれで `attach` / `onUnauthorized` の挙動、リフレッシュの多重実行防止 |
+| 単体 | `AuthProvider` | 起動時の認証状態を `loading` に保ち、初期化成功で `authenticated`、未認証・失敗で `unauthenticated` に遷移 |
+| コンポーネント | `RequireAuth` / `RequireAdmin` / `RequireGuest` | `loading` 中はローディングUIを表示し、リダイレクトしない |
 | 単体 | zod スキーマ | パスワードポリシー・フリガナ・50文字制限などの境界値 |
 | 単体 | `uiStore` | 文字サイズの永続化と復元、localStorage が空の場合の既定値 |
 | コンポーネント | LoginForm / RegisterForm | 入力検証・エラー表示・送信内容 |
