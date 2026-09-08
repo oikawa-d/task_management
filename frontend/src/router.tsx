@@ -1,6 +1,6 @@
 import { Navigate, createBrowserRouter } from "react-router-dom";
 
-import { RequireAdmin } from "./auth/guards";
+import { RequireAdmin, RequireAuth, RequireGuest } from "./auth/guards";
 import { AdminUsersPage } from "./features/admin/pages/AdminUsersPage";
 import { LoginPage } from "./features/auth/pages/LoginPage";
 import { DashboardPage } from "./features/dashboard/pages/DashboardPage";
@@ -13,15 +13,25 @@ export const router = createBrowserRouter([
 		element: <Navigate to={ROUTES.LOGIN} replace />,
 	},
 	{
-		path: ROUTES.LOGIN,
-		element: <LoginPage />,
+		element: <RequireGuest />,
+		children: [
+			{
+				path: ROUTES.LOGIN,
+				element: <LoginPage />,
+			},
+		],
 	},
 	{
 		element: <AppLayout />,
 		children: [
 			{
-				path: ROUTES.DASHBOARD,
-				element: <DashboardPage />,
+				element: <RequireAuth />,
+				children: [
+					{
+						path: ROUTES.DASHBOARD,
+						element: <DashboardPage />,
+					},
+				],
 			},
 			{
 				element: <RequireAdmin />,
