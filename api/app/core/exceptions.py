@@ -110,6 +110,18 @@ class ServiceUnavailableError(AppError):
 	message = "現在サービスをご利用いただけません"
 
 
+class InvalidVerifyTokenError(AppError):
+	code = "INVALID_VERIFY_TOKEN"
+	status_code = 400
+	message = "認証リンクが無効か、有効期限が切れています"
+
+
+class InvalidResetTokenError(AppError):
+	code = "INVALID_RESET_TOKEN"
+	status_code = 400
+	message = "リセットリンクが無効か、有効期限が切れています"
+
+
 class UserInactiveError(AppError):
 	code = "USER_INACTIVE"
 	status_code = 403

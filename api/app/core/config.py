@@ -5,6 +5,7 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 AuthMode = Literal["session", "jwt"]
+TOKEN_URLSAFE_BYTES = 32
 
 
 class BackendSettings(BaseSettings):
