@@ -90,6 +90,24 @@ gh pr merge <番号> --squash
 git push origin --delete <branch>
 ```
 
+### ブランチ保護でマージが `BLOCKED` になったとき
+
+`gh pr merge` が「To have the pull request merged after all the requirements have been met」と言って失敗したら、**先に保護設定を確認する**。
+
+```bash
+gh api repos/<owner>/<repo>/branches/<base>/protection \
+  --jq '{strict:.required_status_checks.strict, reviews:.required_pull_request_reviews.required_approving_review_count, admins:.enforce_admins.enabled}'
+```
+
+- `reviews: 1` かつ全PRが同一アカウント作成の場合、**誰も承認できずマージが恒久的に不可能**になる（自分のPRはApproveできない）。`admins: true` なら管理者バイパスも効かない。この状態はユーザーの判断事項なので、勝手に保護を緩めず必ず確認を取る。
+- `strict: true`（base追従必須）の場合、**PRを1件マージするたびに残りのPRが `BEHIND` になる**。次のPRは追従させてからでないとマージできない。
+
+```bash
+gh api -X PUT repos/<owner>/<repo>/pulls/<番号>/update-branch
+```
+
+追従させるとCIが再実行されるので、完了を待ってからマージする。複数PRを連続でマージする場合は「追従 → CI待ち → マージ」を1件ずつ繰り返す。
+
 ### `--delete-branch` は使わない
 
 `gh pr merge --squash --delete-branch` は、ローカルのブランチ切り替えに失敗すると以下で止まり、**リモートブランチが消えないまま終わる**ことがある。
@@ -99,6 +117,13 @@ failed to run git: fatal: 'develop' is already used by worktree at '...'
 ```
 
 マージ自体は成功しているので、`gh pr view <番号> --json state` で `MERGED` を確認したうえで、`git push origin --delete <branch>` で明示的に削除する。
+
+**ブランチ削除は必ず `MERGED` を確認してから行う。** マージが失敗しているのにブランチを消すと、**PRが自動でCLOSEされる**。復旧は次の手順（ローカルにコミットが残っていることが前提）。
+
+```bash
+git -C <worktree> push origin HEAD:refs/heads/<branch>   # ブランチを復元
+gh pr reopen <番号>                                        # PRを再オープン
+```
 
 ### close時の申し送り
 
