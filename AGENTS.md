@@ -6,6 +6,8 @@
 
 Codex・Claude Code共通のレビュー手順は [.agents/review-policy.md](./.agents/review-policy.md) に定義しています。変更をコミットまたはPRにする前に、必ず参照してレビューを完了してください。
 
+依存追加を伴う並行PRは、[依存管理運用ルール](./.agents/dependency-management.md) に従って計画・実施してください。
+
 - `docs/requirements/`：要件定義書
 - `docs/basic_design/`：システム概要、DB、Redis、認証、API、フロントエンド、インフラ、図
 - `docs/detailed_design/`：`api/`、`auth/`、`database/`、`infra/`、`screen/` 配下の詳細設計

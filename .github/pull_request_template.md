@@ -21,7 +21,7 @@
 
 ## レビュー結果
 
-- [ ] `.agent/review-policy.md` に従ったレビューを実施した
+- [ ] [.agents/review-policy.md](../.agents/review-policy.md) に従ったレビューを実施した
 - [ ] `git diff` で意図しない変更がないことを確認した
 - [ ] 要件・基本設計・詳細設計との整合性を確認した
 - [ ] 指摘事項を修正し、再レビューした（該当する場合）
