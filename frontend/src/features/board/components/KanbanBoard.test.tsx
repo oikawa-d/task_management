@@ -7,19 +7,18 @@ import { KanbanBoard, resolveTaskMove } from "./KanbanBoard";
 import type { BoardColumns } from "../types";
 
 const task = (id: string, status: "todo" | "in_progress" | "done", position: number) => ({
-	id,
-	project_id: "project-1",
-	title: `${id}のタスク`,
-	description: null,
-	status,
-	assignee: null,
-	created_by: { id: "user-1", username: "taro", display_name: "山田 太郎" },
-	position,
-	version: 1,
-	due_at: null,
-	comment_count: 0,
-	created_at: "2026-09-01T00:00:00Z",
-	updated_at: "2026-09-01T00:00:00Z",
+		id,
+		title: `${id}のタスク`,
+		description: null,
+		status,
+		assignee: null,
+		position,
+		version: 1,
+		due_at: null,
+		is_active: true,
+		comment_count: 0,
+		created_at: "2026-09-01T00:00:00Z",
+		updated_at: "2026-09-01T00:00:00Z",
 });
 
 const columns: BoardColumns = {
@@ -48,14 +47,14 @@ describe("KanbanBoard", () => {
 	});
 
 	it("カードのEnterで詳細操作を呼び出せる", () => {
-		const onTaskClick = vi.fn();
-		render(<KanbanBoard columns={columns} onTaskMove={vi.fn()} onTaskClick={onTaskClick} />);
+		const onCardClick = vi.fn();
+		render(<KanbanBoard columns={columns} onTaskMove={vi.fn()} onCardClick={onCardClick} />);
 
 		const card = screen.getByRole("listitem", { name: /task-1のタスク/ });
 		card.focus();
 		fireEvent.keyDown(card, { key: "Enter", code: "Enter" });
 
-		expect(onTaskClick).toHaveBeenCalledWith("task-1");
+		expect(onCardClick).toHaveBeenCalledWith("task-1");
 	});
 
 	it("カードをSpaceでキーボードドラッグ状態にできる", () => {

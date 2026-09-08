@@ -26,8 +26,8 @@ export interface TaskMoveInput {
 
 interface KanbanBoardProps {
 	columns: BoardColumns;
-	onTaskMove: (input: TaskMoveInput) => void;
-	onTaskClick?: (taskId: string) => void;
+	onTaskMove?: (input: TaskMoveInput) => void;
+	onCardClick?: (taskId: string) => void;
 	errorMessage?: string | null;
 }
 
@@ -41,7 +41,7 @@ interface TaskDropEvent {
 	over: DropTarget | null;
 }
 
-export function KanbanBoard({ columns, onTaskMove, onTaskClick = () => undefined, errorMessage }: KanbanBoardProps) {
+export function KanbanBoard({ columns, onTaskMove, onCardClick = () => undefined, errorMessage }: KanbanBoardProps) {
 	const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
 	const [statusMessage, setStatusMessage] = useState("カードを選択し、Spaceでドラッグを開始できます。");
 	const sensors = useSensors(
@@ -67,7 +67,7 @@ export function KanbanBoard({ columns, onTaskMove, onTaskClick = () => undefined
 			setStatusMessage("カードの移動先が無効なため、移動をキャンセルしました。");
 			return;
 		}
-		onTaskMove(move);
+		onTaskMove?.(move);
 		setStatusMessage(`${TASK_STATUS_LABELS[move.status]}列の${move.position + 1}番目に移動しました。`);
 	};
 
@@ -85,7 +85,7 @@ export function KanbanBoard({ columns, onTaskMove, onTaskClick = () => undefined
 		>
 				<div className={styles.columns}>
 					{TASK_STATUSES.map((status) => (
-						<KanbanColumn key={status} status={status} tasks={columns[status]} onTaskClick={onTaskClick} />
+						<KanbanColumn key={status} status={status} tasks={columns[status]} onTaskClick={onCardClick} />
 					))}
 				</div>
 			</DndContext>

@@ -7,15 +7,14 @@ import { TaskCard } from "./TaskCard";
 
 const task = {
 	id: "task-1",
-	project_id: "project-1",
 	title: "設計書をレビューする",
 	description: null,
 	status: "todo" as const,
 	assignee: { id: "user-1", username: "taro", display_name: "山田 太郎" },
-	created_by: { id: "user-1", username: "taro", display_name: "山田 太郎" },
 	position: 0,
 	version: 3,
 	due_at: "2026-09-10T10:00:00Z",
+	is_active: true,
 	comment_count: 2,
 	created_at: "2026-09-01T00:00:00Z",
 	updated_at: "2026-09-01T00:00:00Z",

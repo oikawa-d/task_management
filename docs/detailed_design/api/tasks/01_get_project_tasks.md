@@ -107,6 +107,10 @@
 
 `Set-Cookie` の発行なし。共通ヘッダとして `X-Request-ID` を全レスポンスに付与する。
 
+### 2.3 フロントエンド型との対応
+
+フロントエンドの `BoardTask` は、`columns` 内の要素である `TaskSummary` と同じフィールドだけを持つ。`is_active` は必須として扱い、`created_by` と `project_id` はこのAPIの `TaskSummary` 契約にないため `BoardTask` に追加しない。プロジェクトIDはレスポンス最上位の `BoardResponse.project_id` から参照する。作成者情報が必要な詳細APIとは契約を混同せず、board画面のカード・詳細モーダルは `created_by` に依存しない。
+
 ## 3. エラー仕様
 
 | HTTP | code | 発生条件 | メッセージ | 備考 |

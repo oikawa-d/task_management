@@ -4,6 +4,8 @@ import { getProjectTasks } from "../api";
 import type { BoardResponse } from "../types";
 
 const EMPTY_BOARD: BoardResponse = {
+	project_id: "",
+	project_is_active: true,
 	columns: { todo: [], in_progress: [], done: [] },
 };
 
