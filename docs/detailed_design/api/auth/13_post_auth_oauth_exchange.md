@@ -223,11 +223,11 @@ flowchart TB
 | 処理内容 | 1. `family_id = uuid4()`を生成 2. アクセストークン（JWT、`sub=user.id`, `exp`, `jti`, `typ='access'`）を署名生成 3. リフレッシュトークン（`token_urlsafe(48)`）を生成 4. `redis_store.store_refresh_token(refresh_token, user.id, family_id, REFRESH_TTL_SECONDS)`を呼ぶ 5. CSRFトークン（`token_urlsafe(32)`）を生成 6. `response`に`cerberus_rt`（HttpOnly）・`cerberus_csrf`（非HttpOnly）をSet-Cookie |
 | 副作用 | Redis：`refresh:{hash}`/`user_refresh:{uid}`新規作成。Cookie：2件発行 |
 
-### 6.5 `repository/login_history_repository.py :: sp_record_login_history`
+### 6.5 `repository/login_history_repository.py :: create`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def record(user_id: UUID, method: Literal["session", "jwt", "oauth_google"], success: bool, ip_address: str | None = None, failure_reason: str | None = None) -> None` |
+| シグネチャ | `async def create(db: AsyncSession, user_id: uuid.UUID | None, login_identifier: str, login_method: str, ip_address: str | None, user_agent: str | None, success: bool, failure_reason: str | None) -> None` |
 | 引数 | 表の通り |
 | 戻り値 | なし |
 | 送出例外 | なし（DB例外は共通ハンドラに委譲） |
