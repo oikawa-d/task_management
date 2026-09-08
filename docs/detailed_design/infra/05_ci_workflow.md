@@ -10,9 +10,9 @@
 | 項目 | 内容 |
 |------|------|
 | 対象 | `.github/workflows/ci.yml` |
-| 責務 | push/pull_request をトリガーに、backend/frontendのLint・型チェック・テスト・カバレッジ検証、およびbackend/frontend/batch Dockerイメージのビルド確認（push なし）を行う |
+| 責務 | push/pull_request をトリガーに、backend/frontendのLint・型チェック・テスト・カバレッジ検証、batch専用コンテナからDB/Redisへの直接接続検証、およびbackend/frontend/batch Dockerイメージのビルド確認（push なし）を行う |
 | 適用条件 | `push: branches: [main, develop]`、`pull_request: branches: [main, develop]` |
-| 依存先 | GitHub Actions `services`（PostgreSQL・Redis）、GHA組み込みキャッシュ（`actions/setup-python`・`actions/setup-node`）、`docker/build-push-action` |
+| 依存先 | GitHub Actions `services`（PostgreSQL・Redis）、Docker Compose、GHA組み込みキャッシュ（`actions/setup-python`・`actions/setup-node`）、`docker/build-push-action` |
 | 実装ファイル | `.github/workflows/ci.yml` |
 
 ## 2. 構成要素
@@ -23,6 +23,7 @@
 | `backend-test` | ジョブ | `services`でPostgreSQL/Redis起動 → `alembic upgrade head` → `pytest --cov` | `AUTH_MODE`をmatrix化（`session`/`jwt`） |
 | `frontend-lint` | ジョブ | `eslint .` / `tsc --noEmit` | Node v26 |
 | `frontend-test` | ジョブ | `vitest run --coverage` | |
+| `batch-container-integration` | ジョブ | `compose.integration.yml`でPostgreSQL/Redisを起動し、batchコンテナから直接接続 | `RUN_BATCH_CONTAINER_INTEGRATION=1`で受入テストを有効化 |
 | `docker-build` | ジョブ | backend/frontend/batchイメージのビルド確認（`push: false`） | 4ジョブすべての成功後に実行 |
 | `postgres` service | GitHub Actions `services` | `backend-test`用の一時PostgreSQLコンテナ | `postgres:17-alpine` |
 | `redis` service | GitHub Actions `services` | `backend-test`用の一時Redisコンテナ | `redis:8-alpine` |
@@ -47,7 +48,7 @@
 |------|------|
 | 入力 | `push`/`pull_request`イベント（`main`/`develop`）、リポジトリのソース一式、GitHub Secrets（`CI_JWT_SECRET_KEY`等） |
 | 出力 | 各ジョブの成功/失敗ステータス（required status checks）、カバレッジレポート（`coverage.xml`等、アーティファクト保存は任意） |
-| 副作用 | `services`で起動した一時PostgreSQL/Redisへの書き込み（ジョブ終了時に破棄）。永続化なし。イメージはビルドのみでpushしない |
+| 副作用 | `services`またはComposeで起動した一時PostgreSQL/Redisへの接続（ジョブ終了時に破棄）。永続化なし。イメージはビルドのみでpushしない |
 
 ## 5. シーケンス図
 
@@ -62,6 +63,7 @@ sequenceDiagram
     participant BT as backend-test
     participant FL as frontend-lint
     participant FT as frontend-test
+    participant BI as batch-container-integration
     participant DB as docker-build
 
     DEV->>GH: push / pull_request（main, develop）
@@ -69,11 +71,13 @@ sequenceDiagram
     GH->>BT: ジョブ起動（matrix: session, jwt）
     GH->>FL: ジョブ起動
     GH->>FT: ジョブ起動
-    par 4ジョブ並行実行
+    GH->>BI: ジョブ起動
+    par 5ジョブ並行実行
         BL->>BL: ruff check / format --check / mypy app
         BT->>BT: services起動 → alembic upgrade head → pytest --cov
         FL->>FL: eslint . / tsc --noEmit
         FT->>FT: vitest run --coverage
+        BI->>BI: Compose起動 → batchコンテナからDB/Redisへ接続
     end
     BL-->>GH: success
     BT-->>GH: success（2 matrix jobs）
@@ -112,7 +116,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart TB
-    A["push / pull_request<br/>(main, develop)"] --> B["4ジョブを並行起動<br/>backend-lint / backend-test<br/>frontend-lint / frontend-test"]
+    A["push / pull_request<br/>(main, develop)"] --> B["5ジョブを並行起動<br/>backend-lint / backend-test<br/>frontend-lint / frontend-test<br/>batch-container-integration"]
     B --> C{"backend-lint:<br/>ruff/mypyエラー0?"}
     C -->|No| F1["失敗・以降のdocker-buildへ進まない"]
     C -->|Yes| D["backend-test（matrix: session, jwt）"]
@@ -132,6 +136,10 @@ flowchart TB
     N --> O{"カバレッジ70%以上?"}
     O -->|No| F3["ジョブ失敗"]
     O -->|Yes| P["frontend-test成功"]
+    B --> BI["batch-container-integration"]
+    BI --> BJ{"batchコンテナから<br/>DB/Redis接続成功?"}
+    BJ -->|No| F4["受入検証失敗"]
+    BJ -->|Yes| BOK["batch-container-integration成功"]
     C -->|Yes| Q{"backend-lint/test<br/>frontend-lint/test<br/>すべてsuccess?"}
     K --> Q
     P --> Q
@@ -144,7 +152,7 @@ flowchart TB
 
 ## 7. データ遷移図
 
-なし。CIジョブは実行のたびに使い捨てのGitHub-hosted runner上で完結し、`services`のPostgreSQL/Redisもジョブ終了時に破棄される（永続データを持たない）。
+CIジョブは実行のたびに使い捨てのGitHub-hosted runner上で完結し、`services`または`compose.integration.yml`のPostgreSQL/Redisもジョブ終了時に破棄される（永続データを持たない）。
 
 ## 8. 関数・処理詳細
 
@@ -156,7 +164,7 @@ flowchart TB
 | 引数 / 入力 | GitHubイベントペイロード（`push`/`pull_request`）、GitHub Secrets |
 | 戻り値 / 出力 | 各ジョブのconclusion（`success`/`failure`） |
 | 送出例外 / 失敗条件 | いずれかのステップが非ゼロ終了した場合、そのジョブはfailureとなる |
-| 処理内容 | 5ジョブ（`backend-lint`/`backend-test`/`frontend-lint`/`frontend-test`/`docker-build`）を定義し、`docker-build`のみ他4ジョブに`needs`で依存する。Docker buildでは`api`/`frontend`/`batch`の3イメージを作成する |
+| 処理内容 | 6ジョブ（`backend-lint`/`backend-test`/`frontend-lint`/`frontend-test`/`batch-container-integration`/`docker-build`）を定義し、`docker-build`は品質検証4ジョブに`needs`で依存する。`batch-container-integration`はCompose上の実コンテナ検証を独立して行う。Docker buildでは`api`/`frontend`/`batch`の3イメージを作成する |
 | 副作用 | なし（ワークフロー定義自体はGitHub側の実行指示） |
 
 ### 8.2 `backend-lint` ジョブ
@@ -214,6 +222,17 @@ flowchart TB
 | 処理内容 | 1. チェックアウト 2. `docker/setup-buildx-action@v3` 3. `docker/build-push-action@v6`を3回呼び出し（backendはcontext`.`・`api/Dockerfile`、frontendはcontext`frontend`・`frontend/Dockerfile`、batchはcontext`.`・`batch/Dockerfile`）、いずれも `push: false`、`cache-from: type=gha`、`cache-to: type=gha,mode=max` を指定 4. `VITE_API_BASE_URL`等のビルド時`ARG`はCIダミー値（`/api`）で埋める |
 | 副作用 | runner上に一時イメージが生成されるが、レジストリへは送信されない |
 
+### 8.7 `batch-container-integration` ジョブ
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ / 定義 | `runs-on: ubuntu-latest`。`detect`の`batch=true`を条件に実行し、`RUN_BATCH_CONTAINER_INTEGRATION=1`を設定する |
+| 引数 / 入力 | `docker-compose.yml`、`compose.integration.yml`、`.env.example`、`batch/tests/integration/` |
+| 戻り値 / 出力 | `pytest`終了コード |
+| 送出例外 / 失敗条件 | PostgreSQL/Redisの起動失敗、batchイメージのビルド失敗、batchコンテナ内の接続確認失敗 |
+| 処理内容 | 1. Python 3.14を準備 2. `pytest`をインストール 3. PostgreSQL/RedisをComposeで起動 4. batchイメージをビルドしてテスト用probeを読み込み、SQLAlchemyの`SELECT 1`とredis-pyの`PING`をbatchコンテナ内で実行 5. Composeリソースを破棄 |
+| 副作用 | CI専用の一時コンテナ・ネットワークを作成するが、ジョブ終了時に破棄する |
+
 ## 9. 関数・要素相関図
 
 ```mermaid
@@ -223,6 +242,12 @@ flowchart LR
     WF --> BT["backend-test<br/>(matrix: AUTH_MODE)"]
     WF --> FL["frontend-lint"]
     WF --> FT["frontend-test"]
+    WF --> BI["batch-container-integration"]
+    BI --> BPG["Compose: postgres"]
+    BI --> BRD["Compose: redis"]
+    BI --> BATCH["Compose: batch"]
+    BATCH --> BPG
+    BATCH --> BRD
     BT --> PGSVC["services: postgres:17-alpine"]
     BT --> RDSVC["services: redis:8-alpine"]
     BT --> MIG["alembic upgrade head"]
@@ -246,7 +271,7 @@ flowchart LR
 | フォークPRからの実行 | `pull_request`トリガーではフォークPRに対してSecretsが渡されない挙動（GitHub標準仕様）を前提とし、フォークPR経由での不正なSecrets取得を防ぐ | GitHub Actions標準セキュリティモデル |
 | イメージのpush禁止 | `docker-build`ジョブは`push: false`固定とし、CI実行だけでGHCRに意図しないイメージが公開されないようにする | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §5.2 |
 | 依存キャッシュの汚染防止 | `cache-dependency-path`を`requirements*.txt`/`package-lock.json`に限定し、キャッシュキーがロックファイルのハッシュに連動するようにする（`actions/setup-python`/`actions/setup-node`標準機能） | GitHub Actions標準機能 |
-| ブランチ保護 | `backend-lint`/`backend-test`（両matrix）/`frontend-lint`/`frontend-test`/`docker-build`をrequired status checksに設定し、いずれか未成功のPRはmain/developへマージ不可とする | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §5.4 |
+| ブランチ保護 | `backend-lint`/`backend-test`（両matrix）/`frontend-lint`/`frontend-test`/`batch-container-integration`/`docker-build`をrequired status checksに設定し、いずれか未成功のPRはmain/developへマージ不可とする | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §5.4 |
 | CI用ダミーSecrets | `CI_JWT_SECRET_KEY`/`CI_INITIAL_ADMIN_PASSWORD`等は本番用の値と別管理し、CI専用のGitHub Secretsとして登録する | 一般的なCI/CD運用指針 |
 
 ## 11. テスト設計
@@ -259,7 +284,8 @@ flowchart LR
 | 4 | 結合 | `frontend-test`：カバレッジ70%未満 | 意図的にテストを削除したブランチ | `vitest`のカバレッジ閾値未達で失敗 | `test_ci_frontend_coverage_below_threshold_fails` |
 | 5 | 結合 | `docker-build`：4ジョブ成功後にのみ起動 | 4ジョブのいずれかが失敗する状態でpush | `docker-build`が`needs`未達成でskipされる | `test_ci_docker_build_requires_all_jobs_success` |
 | 6 | 結合 | `docker-build`：GHCRへpushされない | 正常なpush | ビルドログに`push: false`相当（レジストリへの送信なし）が確認できる | `test_ci_docker_build_does_not_push` |
-| 7 | 結合 | 依存キャッシュが効くこと | 同一ロックファイルで2回目のCI実行 | 2回目の`pip install`/`npm ci`が短時間で完了（キャッシュhit） | `test_ci_cache_hit_reduces_install_time` |
+| 7 | 受入 | `batch-container-integration`：batch専用コンテナからDB/Redisへ接続 | Docker Engine、`.env.example`、`RUN_BATCH_CONTAINER_INTEGRATION=1` | batchコンテナ内のDB `SELECT 1`とRedis `PING`が成功する | `test_batch_container_connects_to_postgres_and_redis` |
+| 8 | 結合 | 依存キャッシュが効くこと | 同一ロックファイルで2回目のCI実行 | 2回目の`pip install`/`npm ci`が短時間で完了（キャッシュhit） | `test_ci_cache_hit_reduces_install_time` |
 | 網羅できない範囲 | フォークPRでSecretsが渡されないことの実挙動確認 | - | GitHub側のプラットフォーム仕様であり自動テスト不可。ドキュメント記載の前提として扱う | - |
 
 ## 12. 不明点・要検討事項

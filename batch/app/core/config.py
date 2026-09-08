@@ -18,6 +18,8 @@ class BatchSettings(BaseSettings):
 	notify_due_lock_ttl_seconds: int = 82800
 	notify_due_batch_chunk_size: int = 500
 	notification_retention_days: int = 90
+	api_history_retention_days: int = 30
+	batch_history_retention_days: int = 30
 	batch_enabled: bool = True
 
 
