@@ -24,8 +24,27 @@ async def list_by_user_id(db: AsyncSession, user_id: uuid.UUID) -> list[OAuthAcc
 	return list(result.scalars().all())
 
 
-async def upsert(db: AsyncSession, user_id: uuid.UUID, provider: str, provider_user_id: str) -> None:
+async def upsert(
+	db: AsyncSession,
+	user_id: uuid.UUID,
+	provider: str,
+	provider_user_id: str,
+	provider_email: str | None = None,
+) -> None:
 	await db.execute(
 		text("CALL sp_upsert_oauth_account(:user_id, :provider, :provider_user_id)"),
 		{"user_id": user_id, "provider": provider, "provider_user_id": provider_user_id},
 	)
+	if provider_email is not None:
+		await db.execute(
+			text(
+				"UPDATE oauth_accounts SET provider_email = :provider_email "
+				"WHERE user_id = :user_id AND provider = :provider AND provider_user_id = :provider_user_id"
+			),
+			{
+				"provider_email": provider_email,
+				"user_id": user_id,
+				"provider": provider,
+				"provider_user_id": provider_user_id,
+			},
+		)

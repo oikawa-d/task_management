@@ -62,6 +62,36 @@ class TokenRevokedError(AppError):
 	message = "セッションが無効になりました。再度ログインしてください"
 
 
+class InvalidStateError(AppError):
+	code = "INVALID_STATE"
+	status_code = 400
+	message = "OAuth stateが無効です"
+
+
+class OAuthFailedError(AppError):
+	code = "OAUTH_FAILED"
+	status_code = 400
+	message = "OAuth認証に失敗しました"
+
+
+class OAuthEmailUnverifiedError(AppError):
+	code = "OAUTH_EMAIL_UNVERIFIED"
+	status_code = 400
+	message = "Googleアカウントのメールアドレスが検証されていません"
+
+
+class OAuthHandoffInvalidError(AppError):
+	code = "OAUTH_HANDOFF_INVALID"
+	status_code = 400
+	message = "OAuthログインの有効期限が切れています"
+
+
+class NotSupportedInModeError(AppError):
+	code = "NOT_SUPPORTED_IN_MODE"
+	status_code = 405
+	message = "この操作は現在の認証モードでは利用できません"
+
+
 class CsrfInvalidError(AppError):
 	code = "CSRF_INVALID"
 	status_code = 403
