@@ -1,5 +1,5 @@
 import re
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
@@ -152,3 +152,11 @@ class AuthConfigResponse(_AuthSchema):
 	auth_mode: Literal["session", "jwt"]
 	google_login_enabled: bool
 	csrf_cookie_name: str
+
+
+class CurrentUser(_AuthSchema):
+	id: UUID
+	username: str
+	role: Literal["member", "admin"]
+	is_active: bool
+	email_verified_at: datetime | None
