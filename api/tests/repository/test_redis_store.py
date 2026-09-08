@@ -55,6 +55,7 @@ class _FakeRedis:
 		self.values: dict[str, str] = {}
 		self.sets: dict[str, set[str]] = {}
 		self.ttls: dict[str, int] = {}
+		self.binary_members = False
 
 	def pipeline(self, transaction: bool = True) -> _Pipeline:
 		assert transaction
@@ -102,7 +103,8 @@ class _FakeRedis:
 		return removed
 
 	async def smembers(self, name: str) -> set[str]:
-		return set(self.sets.get(name, set()))
+		members = self.sets.get(name, set())
+		return {member.encode() if self.binary_members else member for member in members}  # type: ignore[return-value]
 
 	async def expire(self, name: str, time: int) -> bool:
 		self.ttls[name] = time
@@ -156,6 +158,17 @@ async def test_touch_session_respects_absolute_expiry_and_delete_all(redis: _Fak
 	assert not await redis_store.touch_session(first, user_id, 30, datetime.now(UTC) - timedelta(seconds=1))
 	assert await redis_store.delete_all_sessions(user_id) == 2
 	assert not redis.sets.get(f"test:user_sessions:{user_id}")
+	assert second not in redis.values
+
+
+async def test_user_indexes_support_redis_binary_members(redis: _FakeRedis) -> None:
+	user_id = uuid.uuid4()
+	first, _ = await redis_store.create_session(user_id, None, 60)
+	second, _ = await redis_store.create_session(user_id, None, 60)
+	redis.binary_members = True
+
+	assert await redis_store.delete_all_sessions(user_id) == 2
+	assert first not in redis.values
 	assert second not in redis.values
 
 

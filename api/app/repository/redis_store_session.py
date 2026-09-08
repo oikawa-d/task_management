@@ -78,7 +78,10 @@ async def delete_session(client: Redis, prefix: str, session_id: str, user_id: U
 
 
 async def delete_all_sessions(client: Redis, prefix: str, user_id: UUID) -> int:
-	session_ids = await cast(Any, client.smembers)(key("user_sessions", prefix, user_id))
+	raw_session_ids = await cast(Any, client.smembers)(key("user_sessions", prefix, user_id))
+	session_ids = [
+		session_id.decode() if isinstance(session_id, bytes) else str(session_id) for session_id in raw_session_ids
+	]
 	pipe = client.pipeline(transaction=True)
 	for session_id in session_ids:
 		pipe.delete(key("session", prefix, session_id), key("csrf", prefix, session_id))
