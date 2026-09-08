@@ -1,5 +1,7 @@
 import { useState } from "react";
 
+import { getConfiguredCommentBodyMaxLength, isPromiseLike } from "./formConfig";
+
 export interface CommentAuthor {
 	id: string;
 	username: string;
@@ -25,15 +27,6 @@ export interface CommentListProps {
 	maxBodyLength?: number;
 }
 
-function isPromiseLike(value: void | Promise<void>): value is Promise<void> {
-	return typeof value === "object" && value !== null && "then" in value;
-}
-
-function getConfiguredMaxBodyLength(): number | undefined {
-	const value = Number(import.meta.env.VITE_TASK_COMMENT_BODY_MAX_LENGTH);
-	return Number.isInteger(value) && value > 0 ? value : undefined;
-}
-
 export function CommentList({
 	comments,
 	currentUserId,
@@ -43,7 +36,7 @@ export function CommentList({
 	error,
 	maxBodyLength,
 }: CommentListProps) {
-	const effectiveMaxBodyLength = maxBodyLength ?? getConfiguredMaxBodyLength();
+	const effectiveMaxBodyLength = maxBodyLength ?? getConfiguredCommentBodyMaxLength();
 	const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
 	const [draft, setDraft] = useState("");
 	const [validationError, setValidationError] = useState<string>();
@@ -61,7 +54,7 @@ export function CommentList({
 			setValidationError("コメントを入力してください");
 			return;
 		}
-		if (effectiveMaxBodyLength !== undefined && trimmed.length > effectiveMaxBodyLength) {
+		if (trimmed.length > effectiveMaxBodyLength) {
 			setValidationError(`コメントは1〜${effectiveMaxBodyLength}文字で入力してください`);
 			return;
 		}

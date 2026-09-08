@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import { getConfiguredTaskDescriptionMaxLength, getConfiguredTaskTitleMaxLength } from "./formConfig";
+
 export type TaskStatus = "todo" | "in_progress" | "done";
 export type TaskEditableField = "title" | "description" | "assignee_id" | "due_at" | "status";
 
@@ -31,9 +33,6 @@ const STATUS_LABELS: Record<TaskStatus, string> = {
 	done: "完了",
 };
 
-const TITLE_MAX_LENGTH = 150;
-const DESCRIPTION_MAX_LENGTH = 2000;
-
 export function TaskEditForm({
 	task,
 	members,
@@ -41,6 +40,8 @@ export function TaskEditForm({
 	isSaving = false,
 	onUpdate,
 }: TaskEditFormProps) {
+	const TITLE_MAX_LENGTH = getConfiguredTaskTitleMaxLength();
+	const DESCRIPTION_MAX_LENGTH = getConfiguredTaskDescriptionMaxLength();
 	const [title, setTitle] = useState(task.title);
 	const [description, setDescription] = useState(task.description ?? "");
 	const [localErrors, setLocalErrors] = useState<Partial<Record<TaskEditableField, string>>>({});
@@ -62,8 +63,8 @@ export function TaskEditForm({
 			setError(
 				field,
 				field === "title"
-					? "タイトルは1〜150文字で入力してください"
-					: "説明は2000文字以内で入力してください",
+					? `タイトルは1〜${TITLE_MAX_LENGTH}文字で入力してください`
+					: `説明は${DESCRIPTION_MAX_LENGTH}文字以内で入力してください`,
 			);
 			return false;
 		}

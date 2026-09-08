@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CommentList, type TaskComment } from "./CommentList";
 
@@ -25,6 +25,30 @@ const comments: TaskComment[] = [
 ];
 
 describe("CommentList", () => {
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
+	it("環境変数VITE_TASK_COMMENT_BODY_MAX_LENGTHが未設定・不正値でも既定の2000文字上限を適用する", () => {
+		vi.stubEnv("VITE_TASK_COMMENT_BODY_MAX_LENGTH", "0");
+		const onEdit = vi.fn();
+		render(
+			<CommentList
+				comments={comments}
+				currentUserId="user-1"
+				currentUserRole="member"
+				onEdit={onEdit}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: "編集" }));
+		const editor = screen.getByDisplayValue("最初のコメント");
+		fireEvent.change(editor, { target: { value: "x".repeat(2001) } });
+		fireEvent.click(screen.getByRole("button", { name: "保存" }));
+		expect(screen.getByText("コメントは1〜2000文字で入力してください")).toBeInTheDocument();
+		expect(onEdit).not.toHaveBeenCalled();
+	});
+
 	it("空状態とエラー状態を表示する", () => {
 		const { rerender } = render(<CommentList comments={[]} currentUserId="user-1" currentUserRole="member" />);
 		expect(screen.getByText("コメントはありません")).toBeInTheDocument();

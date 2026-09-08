@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { TaskEditForm, type TaskEditFormValues } from "./TaskEditForm";
 
@@ -20,6 +20,28 @@ const members = [
 ];
 
 describe("TaskEditForm", () => {
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
+	it("環境変数VITE_TASK_TITLE_MAX_LENGTH/VITE_TASK_DESCRIPTION_MAX_LENGTHが未設定・不正値でも既定の150/2000文字上限を適用する", () => {
+		vi.stubEnv("VITE_TASK_TITLE_MAX_LENGTH", "invalid");
+		vi.stubEnv("VITE_TASK_DESCRIPTION_MAX_LENGTH", "-1");
+		const onUpdate = vi.fn();
+		render(<TaskEditForm task={task} members={members} onUpdate={onUpdate} />);
+
+		const title = screen.getByLabelText("タイトル");
+		fireEvent.change(title, { target: { value: "x".repeat(151) } });
+		fireEvent.blur(title);
+		expect(screen.getByText("タイトルは1〜150文字で入力してください")).toBeInTheDocument();
+
+		const description = screen.getByLabelText("説明");
+		fireEvent.change(description, { target: { value: "x".repeat(2001) } });
+		fireEvent.blur(description);
+		expect(screen.getByText("説明は2000文字以内で入力してください")).toBeInTheDocument();
+		expect(onUpdate).not.toHaveBeenCalled();
+	});
+
 	it("タスクの値を表示し、タイトル変更はblur時に通知する", () => {
 		const onUpdate = vi.fn();
 		render(<TaskEditForm task={task} members={members} onUpdate={onUpdate} />);

@@ -1,19 +1,12 @@
 import { useState } from "react";
 
+import { getConfiguredCommentBodyMaxLength, isPromiseLike } from "./formConfig";
+
 export interface CommentFormProps {
 	onSubmit: (body: string) => void | Promise<void>;
 	isSubmitting?: boolean;
 	error?: string;
 	maxBodyLength?: number;
-}
-
-function isPromiseLike(value: void | Promise<void>): value is Promise<void> {
-	return typeof value === "object" && value !== null && "then" in value;
-}
-
-function getConfiguredMaxBodyLength(): number | undefined {
-	const value = Number(import.meta.env.VITE_TASK_COMMENT_BODY_MAX_LENGTH);
-	return Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
 export function CommentForm({
@@ -22,17 +15,17 @@ export function CommentForm({
 	error,
 	maxBodyLength,
 }: CommentFormProps) {
-	const effectiveMaxBodyLength = maxBodyLength ?? getConfiguredMaxBodyLength();
+	const effectiveMaxBodyLength = maxBodyLength ?? getConfiguredCommentBodyMaxLength();
 	const [body, setBody] = useState("");
 	const [validationError, setValidationError] = useState<string>();
 	const hasText = body.trim().length > 0;
-	const isTooLong = effectiveMaxBodyLength !== undefined && body.length > effectiveMaxBodyLength;
+	const isTooLong = body.length > effectiveMaxBodyLength;
 	const isValid = hasText && !isTooLong;
 
 	const submit = () => {
 		if (!isValid) {
 			setValidationError(
-				effectiveMaxBodyLength === undefined || !isTooLong
+				!isTooLong
 					? "コメントを入力してください"
 					: `コメントは1〜${effectiveMaxBodyLength}文字で入力してください`,
 			);
@@ -64,7 +57,7 @@ export function CommentForm({
 						const nextBody = event.target.value;
 						setBody(nextBody);
 						setValidationError(
-							effectiveMaxBodyLength !== undefined && nextBody.length > effectiveMaxBodyLength
+							nextBody.length > effectiveMaxBodyLength
 								? `コメントは1〜${effectiveMaxBodyLength}文字で入力してください`
 								: undefined,
 						);
