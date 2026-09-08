@@ -198,7 +198,7 @@ flowchart TB
 | 引数 | `code`：一時ハンドオフコード。`request`/`response`：Strategy.loginへ引き渡す |
 | 戻り値 | `OAuthExchangeResult`（`access_token`, `expires_in`, `redirect_to`） |
 | 送出例外 | `OAuthHandoffInvalidError`、`UserInactiveError`、`ServiceUnavailableError` |
-| 処理内容 | 1. `redis_store.consume_oauth_handoff(code)`を呼び`None`なら`OAuthHandoffInvalidError` 2. `user_repository.fn_get_user(data.user_id)`で現在の有効ユーザーを取得（Redisに保存されたuser_idのみを信頼し、role等は再取得しない） 3. 取得できなければ`UserInactiveError` 4. `jwt_strategy.login(user, request, response)`を呼び`LoginResult`を得る 5. `login_history_repository.sp_record_login_history(user.id, method='oauth_google', success=True)`を呼ぶ 6. `data.redirect_to`（正規化済み）とともに結果を返す |
+| 処理内容 | 1. `redis_store.consume_oauth_handoff(code)`を呼び`None`なら`OAuthHandoffInvalidError` 2. `user_repository.fn_get_user(data.user_id)`で現在の有効ユーザーを取得（Redisに保存されたuser_idのみを信頼し、role等は再取得しない） 3. 取得できなければ`UserInactiveError` 4. `jwt_strategy.login(user, request, response)`を呼び`LoginResult`を得る 5. `login_history_repository.sp_record_login_history(user.id, login_identifier=user.email, method='oauth_google', success=True)`を呼ぶ 6. `data.redirect_to`（正規化済み）とともに結果を返す |
 | 副作用 | PostgreSQL：`login_history`INSERT。Redis：`refresh:{hash}`/`user_refresh:{uid}`新規作成（`JwtAuthStrategy.login`内）。Cookie：`cerberus_rt`/`cerberus_csrf`発行 |
 
 ### 6.3 `repository/user_repository.py :: fn_get_user`
@@ -231,7 +231,7 @@ flowchart TB
 | 引数 | 表の通り |
 | 戻り値 | なし |
 | 送出例外 | なし（DB例外は共通ハンドラに委譲） |
-| 処理内容 | `CALL sp_record_login_history(:user_id, :login_method, :ip_address, :success)` |
+| 処理内容 | `CALL sp_record_login_history(:user_id, :login_identifier, :login_method, :ip_address, :user_agent, :success, :failure_reason)` |
 | 副作用 | PostgreSQL：`login_history`INSERT |
 
 ## 7. 関数相関図
@@ -329,6 +329,6 @@ PostgreSQLの`users`/`oauth_accounts`は本APIでは更新しない（12番フ�
 
 | 正式な呼び出し | 契約 |
 |----------------|------|
-| fn_get_user(p_user_id), sp_record_login_history(p_user_id, p_login_method, p_ip_address, p_success) | `detailed_design/database/08_db_functions.md` のシグネチャに従う |
+| fn_get_user(p_user_id), sp_record_login_history(p_user_id, p_login_identifier, p_login_method, p_ip_address, p_user_agent, p_success, p_failure_reason) | `detailed_design/database/08_db_functions.md` のシグネチャに従う |
 
 SQLSTATE P0xxxは同文書 §4 の対応表でAPIエラーへ変換し、Redis・メール・JWTの処理はAPI/service層に残す。
