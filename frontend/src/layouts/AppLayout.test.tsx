@@ -46,10 +46,12 @@ function renderAppLayout(props: Parameters<typeof AppLayout>[0] = {}) {
 describe("AppLayout", () => {
 	afterEach(() => {
 		cleanup();
+		vi.unstubAllGlobals();
 		act(() => useAuthStore.getState().reset());
 	});
 
 	it("設定リンク・通知ベル・adminリンクを実アプリ用レイアウトで表示する", async () => {
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ unread_count: 3 }) }));
 		act(() => {
 			useAuthStore.setState({ status: "authenticated", user: { id: "u1", role: "admin" }, authAdapter: createAuthAdapter() });
 		});
@@ -60,8 +62,9 @@ describe("AppLayout", () => {
 		expect(screen.getByRole("link", { name: "設定" })).toHaveAttribute("href", ROUTES.SETTINGS);
 		expect(screen.getByRole("link", { name: "管理" })).toHaveAttribute("href", ROUTES.ADMIN_USERS);
 		expect(screen.getByRole("button", { name: "通知" })).toBeInTheDocument();
+		expect(await screen.findByLabelText("未読 3 件")).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "通知" }));
-		expect(await screen.findByText("通知タイトル")).toBeInTheDocument();
+		expect(await screen.findByText("設計書をレビューする")).toBeInTheDocument();
 	});
 
 	it("memberにはadminリンクを表示しない", () => {
@@ -74,11 +77,13 @@ describe("AppLayout", () => {
 	it("通知操作callbackを注入値へ接続する", async () => {
 		const onItemClick = vi.fn();
 		const onMarkAllRead = vi.fn();
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ unread_count: 1 }) }));
 		act(() => useAuthStore.setState({ status: "authenticated", user: { id: "u1", role: "member" }, authAdapter: createAuthAdapter() }));
 		renderAppLayout({ notifications: [buildNotification()], onNotificationItemClick: onItemClick, onMarkAllNotificationsRead: onMarkAllRead });
 
+		expect(await screen.findByLabelText("未読 1 件")).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "通知" }));
-		fireEvent.click(await screen.findByText("通知タイトル"));
+		fireEvent.click(await screen.findByText("設計書をレビューする"));
 		expect(onItemClick).toHaveBeenCalledOnce();
 		fireEvent.click(screen.getByRole("button", { name: "通知" }));
 		fireEvent.click(screen.getByRole("button", { name: "すべて既読" }));

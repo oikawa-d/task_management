@@ -371,7 +371,7 @@ classDiagram
 | `onUnauthorized` | `AxiosError` | `Promise<boolean>` | 401 時の復帰処理。`true` を返した場合のみ元リクエストを再送 |
 | `restoreSession` | なし | `Promise<boolean>` | アプリ起動時に既存Cookieから認証状態を復元。jwtではrefreshを実行 |
 | `onLogout` | なし | `void` | クライアント側の後片付け |
-| `logout` | なし | `Promise<void>` | `POST /auth/logout`を認証方式固有の設定で実行 |
+| `logout` | なし | `Promise<void>` | `POST /api/auth/logout`を認証方式固有の設定で実行 |
 
 ### 6.1 interceptor の流れ
 

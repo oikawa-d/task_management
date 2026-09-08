@@ -73,6 +73,7 @@ describe("SessionAdapter", () => {
 
 	it("/apiをbaseURLに持つclientではlogoutへprefixを二重付与しない", async () => {
 		const httpClient = axios.create({ baseURL: "/api" });
+		let requestUrl: string | undefined;
 		httpClient.defaults.adapter = async (config) => ({
 			data: undefined,
 			status: 204,
@@ -80,11 +81,15 @@ describe("SessionAdapter", () => {
 			headers: {},
 			config,
 		});
+		httpClient.interceptors.request.use((config) => {
+			requestUrl = config.url;
+			return config;
+		});
 		const adapter = new SessionAdapter("cerberus_csrf", httpClient);
 
 		await adapter.logout();
 
 		expect(httpClient.defaults.baseURL).toBe("/api");
-		expect(httpClient.defaults.baseURL).not.toContain("/api/api");
+		expect(requestUrl).toBe("/auth/logout");
 	});
 });
