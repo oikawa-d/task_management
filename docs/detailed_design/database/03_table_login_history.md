@@ -29,7 +29,7 @@
 |--------|----------|----|------|--------|--------------|------|
 | ID | `id` | UUID | NO | `gen_random_uuid()` | PK | |
 | ユーザーID | `user_id` | UUID | YES | - | FK → `users.id`（`ON DELETE SET NULL`） | 存在しないID/メール入力時はNULL |
-| 入力識別子 | `login_identifier` | VARCHAR(50) | NO | - | - | 入力された username / email（原文。パスワードは記録しない） |
+| ログイン識別子 | `login_identifier` | VARCHAR(50) | NO | - | - | 認証に使用した識別子。通常ログインはリクエストの username / email 原文、Google OAuth は `email_verified=true` を確認した Google email（実装上は解決済み `user.email`）。パスワード・OAuthの `sub`・トークンは記録しない |
 | ログイン方式 | `login_method` | VARCHAR(20) | NO | - | - | `session` / `jwt` / `oauth_google`（CHECK） |
 | IPアドレス | `ip_address` | INET | YES | - | - | `TRUSTED_PROXY_CIDRS`に含まれる直近ProxyからのXFFだけを解決して取得。未信頼時は接続元IP |
 | ユーザーエージェント | `user_agent` | TEXT | YES | - | - | |
@@ -62,7 +62,7 @@ CREATE TABLE login_history (
 );
 
 COMMENT ON TABLE login_history IS 'ログイン試行の監査ログ。Redis側のTTL失効とは独立して保持する';
-COMMENT ON COLUMN login_history.login_identifier IS '入力された username / email の原文。パスワードは記録しない';
+COMMENT ON COLUMN login_history.login_identifier IS '認証に使用した識別子。通常ログインはusername/email原文、Google OAuthは検証済みGoogle email。パスワード・OAuthのsub・トークンは記録しない';
 COMMENT ON COLUMN login_history.user_id IS '未登録ID/メール入力時はNULL';
 
 CREATE INDEX ix_login_history_user_created ON login_history (user_id, created_at DESC);
@@ -132,6 +132,7 @@ erDiagram
     login_history {
         uuid id PK
         uuid user_id FK "NULL可・ON DELETE SET NULL"
+        varchar_50 login_identifier "通常: username/email、OAuth: 検証済みGoogle email"
         varchar_20 login_method
         boolean success
         timestamptz created_at
