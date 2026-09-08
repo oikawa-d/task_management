@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { getConfiguredCommentBodyMaxLength, isPromiseLike } from "./formConfig";
+import { getConfiguredCommentBodyMaxLength, isPromiseLike } from "../formConfig";
 
 export interface CommentAuthor {
 	id: string;

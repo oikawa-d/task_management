@@ -4,8 +4,6 @@ export function isPromiseLike(value: void | Promise<void>): value is Promise<voi
 }
 
 const COMMENT_BODY_MAX_LENGTH_DEFAULT = 2000;
-const TASK_TITLE_MAX_LENGTH_DEFAULT = 150;
-const TASK_DESCRIPTION_MAX_LENGTH_DEFAULT = 2000;
 
 function parseMaxLengthEnv(rawValue: string | undefined, fallback: number): number {
 	const value = Number(rawValue);
@@ -15,14 +13,4 @@ function parseMaxLengthEnv(rawValue: string | undefined, fallback: number): numb
 /** コメント本文の上限文字数。`VITE_TASK_COMMENT_BODY_MAX_LENGTH`未設定・不正値の場合は既定値2000を用いる */
 export function getConfiguredCommentBodyMaxLength(): number {
 	return parseMaxLengthEnv(import.meta.env.VITE_TASK_COMMENT_BODY_MAX_LENGTH, COMMENT_BODY_MAX_LENGTH_DEFAULT);
-}
-
-/** タスクタイトルの上限文字数。`VITE_TASK_TITLE_MAX_LENGTH`未設定・不正値の場合は既定値150を用いる */
-export function getConfiguredTaskTitleMaxLength(): number {
-	return parseMaxLengthEnv(import.meta.env.VITE_TASK_TITLE_MAX_LENGTH, TASK_TITLE_MAX_LENGTH_DEFAULT);
-}
-
-/** タスク説明の上限文字数。`VITE_TASK_DESCRIPTION_MAX_LENGTH`未設定・不正値の場合は既定値2000を用いる */
-export function getConfiguredTaskDescriptionMaxLength(): number {
-	return parseMaxLengthEnv(import.meta.env.VITE_TASK_DESCRIPTION_MAX_LENGTH, TASK_DESCRIPTION_MAX_LENGTH_DEFAULT);
 }
