@@ -108,7 +108,10 @@ async def revoke_token_family(client: Redis, prefix: str, user_id: UUID, family_
 	if ttl is None:
 		ttl = get_backend_settings().refresh_ttl_seconds
 	validate_ttl(ttl)
-	token_hashes = await cast(Any, client.smembers)(key("user_refresh", prefix, user_id))
+	raw_token_hashes = await cast(Any, client.smembers)(key("user_refresh", prefix, user_id))
+	token_hashes = [
+		token_hash.decode() if isinstance(token_hash, bytes) else str(token_hash) for token_hash in raw_token_hashes
+	]
 	to_delete: list[str] = []
 	for token_hash_value in token_hashes:
 		data = parse_json(await cast(Any, client.get)(key("refresh", prefix, token_hash_value)))
@@ -124,7 +127,10 @@ async def revoke_token_family(client: Redis, prefix: str, user_id: UUID, family_
 
 
 async def revoke_all_refresh_tokens(client: Redis, prefix: str, user_id: UUID) -> int:
-	token_hashes = await cast(Any, client.smembers)(key("user_refresh", prefix, user_id))
+	raw_token_hashes = await cast(Any, client.smembers)(key("user_refresh", prefix, user_id))
+	token_hashes = [
+		token_hash.decode() if isinstance(token_hash, bytes) else str(token_hash) for token_hash in raw_token_hashes
+	]
 	pipe = client.pipeline(transaction=True)
 	for token_hash_value in token_hashes:
 		pipe.delete(key("refresh", prefix, token_hash_value))
