@@ -19,7 +19,7 @@ export type AuthAdapterOptions = {
 export function createAuthAdapter(mode: AuthMode, options: AuthAdapterOptions = {}): AuthAdapter {
 	switch (mode) {
 		case "session":
-			return new SessionAdapter(options.csrfCookieName);
+			return new SessionAdapter(options.csrfCookieName, options.httpClient);
 		case "jwt":
 			return new JwtAdapter(options.tokenStore, options.httpClient, options.csrfCookieName);
 		default: {

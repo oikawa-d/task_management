@@ -152,4 +152,21 @@ describe("JwtAdapter", () => {
 
 		expect(tokenStore.getAccessToken()).toBeNull();
 	});
+
+	it("logoutでCookie認証としてPOST /auth/logoutを呼び出す", async () => {
+		document.cookie = "cerberus_csrf=csrf-value";
+		const httpClient = createMockHttpClient(async () => ({ data: {} }));
+		const adapter = new JwtAdapter(createTokenStore("access-token"), httpClient);
+
+		await adapter.logout();
+
+		expect(httpClient.post).toHaveBeenCalledWith(
+			"/auth/logout",
+			undefined,
+			expect.objectContaining({
+				withCredentials: true,
+				headers: { [CSRF_HEADER_NAME]: "csrf-value" },
+			}),
+		);
+	});
 });
