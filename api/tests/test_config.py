@@ -78,3 +78,11 @@ def test_settings_token_ttl_must_be_positive(monkeypatch: pytest.MonkeyPatch, fi
 
 	with pytest.raises(ValidationError):
 		BackendSettings(_env_file=None)
+
+
+def test_settings_rejects_non_positive_password_and_lockout_values(monkeypatch: pytest.MonkeyPatch) -> None:
+	_base_env(monkeypatch)
+	monkeypatch.setenv("ARGON2_MEMORY_COST", "0")
+
+	with pytest.raises(ValidationError):
+		BackendSettings(_env_file=None)

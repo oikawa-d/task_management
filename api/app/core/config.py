@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 AuthMode = Literal["session", "jwt"]
@@ -37,8 +37,8 @@ class BackendSettings(BaseSettings):
 	cookie_secure: bool = False
 	cookie_samesite: Literal["lax", "strict", "none"] = "lax"
 	cookie_domain: str = ""
-	login_max_attempts: int = 5
-	login_lock_window_seconds: int = 900
+	login_max_attempts: int = Field(default=5, ge=1)
+	login_lock_window_seconds: int = Field(default=900, ge=1)
 	rate_limit_register_max_requests: int = 5
 	rate_limit_email_verify_max_requests: int = 10
 	rate_limit_email_verify_resend_max_requests: int = 5
@@ -49,9 +49,9 @@ class BackendSettings(BaseSettings):
 	rate_limit_notification_read_max_requests: int = 120
 	rate_limit_notification_write_max_requests: int = 60
 	trusted_proxy_cidrs: Annotated[list[str], NoDecode] = []
-	argon2_time_cost: int = 3
-	argon2_memory_cost: int = 65536
-	argon2_parallelism: int = 4
+	argon2_time_cost: int = Field(default=3, ge=1)
+	argon2_memory_cost: int = Field(default=65536, ge=8)
+	argon2_parallelism: int = Field(default=4, ge=1)
 
 	# jwt方式
 	access_token_ttl_seconds: int = 900
