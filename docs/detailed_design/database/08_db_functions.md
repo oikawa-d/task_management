@@ -76,7 +76,7 @@ repository層は `CALL sp_xxx(...)` または `SELECT fn_xxx(...)` と戻り値�
 | 40 | プロシージャ | `sp_update_user_password` | `p_user_id UUID`, `p_password_hash TEXT` | なし | password更新 |
 | 41 | プロシージャ | `sp_update_user_profile` | `p_user_id UUID`, `p_last_name VARCHAR`, `p_first_name VARCHAR`, `p_last_name_kana VARCHAR`, `p_first_name_kana VARCHAR`, `p_birth_date DATE` | なし | profile更新 |
 | 42 | プロシージャ | `sp_upsert_oauth_account` | `p_user_id UUID`, `p_provider VARCHAR`, `p_provider_user_id TEXT` | なし | OAuthアカウント紐付け |
-| 43 | プロシージャ | `sp_record_login_history` | `p_user_id UUID`, `p_login_method VARCHAR`, `p_ip_address INET`, `p_success BOOLEAN` | なし | login履歴記録 |
+| 43 | プロシージャ | `sp_record_login_history` | `p_user_id UUID`, `p_login_identifier VARCHAR`, `p_login_method VARCHAR`, `p_ip_address INET`, `p_user_agent TEXT`, `p_success BOOLEAN`, `p_failure_reason VARCHAR` | なし | login履歴記録 |
 
 ## 3. 関数詳細
 
@@ -370,7 +370,7 @@ $$;
 | `sp_update_user_password` | users.password_hashをUPDATE | 全認証失効はAPIのRedis処理 |
 | `sp_update_user_profile` | usersのprofile列をUPDATE | 指定値の検証はAPI、更新はSP |
 | `sp_upsert_oauth_account` | users作成/verified更新とoauth_accounts紐付け | 同一トランザクション |
-| `sp_record_login_history` | login_historyをINSERT | 認証成否を記録 |
+| `sp_record_login_history` | `login_identifier`・`user_agent`・`failure_reason`を含めてlogin_historyをINSERT | 認証成否を記録。`login_history`のNOT NULL列（`login_identifier`・`login_method`・`success`）はすべて引数で受け取る |
 
 task SPが通知をINSERTする場合は `(user_id, dedupe_key)` の一意制約へ `ON CONFLICT DO NOTHING` を適用する。Pコードを発生させる条件、transaction境界、テストは各行を[§6](#6-テスト設計)の結合テストへ対応付ける。
 
