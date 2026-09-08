@@ -54,7 +54,7 @@
 
 | No | 呼び出しタイミング | メソッド／パス | 送信内容 | 成功時処理 | 失敗時処理 | queryKey / mutationKey |
 |----|--------------------|-----------------|----------|------------|------------|--------------------------|
-| 1 | マウント時（jwtモードのみ） | POST `/auth/oauth/exchange` | `{code}`（`location.hash`から取得した一時コード） | `access_token`を`authStore`へ保存。直後に`history.replaceState`でfragmentからcodeを除去 | `400 OAUTH_HANDOFF_INVALID`／`403 USER_INACTIVE`は③表示。**一時codeは失敗時も再送しない**（§7.2参照） | `mutationKey: ['auth','oauthExchange']` |
+| 1 | マウント時（jwtモードのみ） | POST `/auth/oauth/exchange` | `{code}`（`location.hash`から取得した一時コード） | `access_token`をTokenStoreへ保存。直後に`history.replaceState`でfragmentからcodeを除去 | `400 OAUTH_HANDOFF_INVALID`／`403 USER_INACTIVE`は③表示。**一時codeは失敗時も再送しない**（§7.2参照） | `mutationKey: ['auth','oauthExchange']` |
 | 2 | 1の成功後（jwt）、またはマウント時（session、Cookieは既にコールバックで設定済みのため直接） | GET `/auth/me` | - | `authStore`を`authenticated`に更新。`profile_completed`を確認 | 401はセッション確立失敗として③表示 | `queryKey: ['auth','me']` |
 
 ## 5. 状態管理
@@ -63,7 +63,7 @@
 |------|------|----|--------|----------|--------|
 | ローカルstate | `callbackState` | `'processing' \| 'failed'` | `'processing'` | 交換・確認の成否 | なし |
 | ローカルstate | `exchangeRanRef`（`useRef`） | `boolean` | `false` | マウント時に1度だけ実行するためのフラグ（`StrictMode`の二重実行防止） | なし（レンダー間で保持するがstateではない） |
-| Zustand `authStore` | `user`, `status`, `accessToken`, `authAdapter` | - | [05_frontend.md §5](../../basic_design/05_frontend.md#5-状態管理)参照 | 交換・`/auth/me`成功時に更新 | しない |
+| Zustand `authStore` | `user`, `status` | - | [05_frontend.md §5](../../basic_design/05_frontend.md#5-状態管理)参照。JWTのaccessTokenはAuthAdapterへ注入したTokenStoreが保持する | 交換・`/auth/me`成功時に更新 | しない |
 | React Router `location.hash` | `code`, `redirect_to`（sessionモードのみ`redirect_to`をfragmentで受け取る想定） | - | コールバックからのリダイレクト時のみ | 使用後に`history.replaceState`で除去 | なし |
 
 ## 6. 画面状態遷移図
@@ -105,7 +105,7 @@ sequenceDiagram
     API-->>EP: "200 {access_token, expires_in, redirect_to}"
     EP-->>OCP: OAuthExchangeResult
     OCP->>OCP: "history.replaceState でfragmentからcodeを除去"
-    OCP->>OCP: authAdapter.onLoginSuccess(result)（accessTokenをauthStoreへ）
+    OCP->>OCP: authAdapter.onLoginSuccess(result)（JWTのaccessTokenをTokenStoreへ）
     OCP->>EP: getMe()
     EP->>API: GET /api/auth/me
     API-->>EP: "200 {..., profile_completed}"
@@ -196,7 +196,7 @@ flowchart TB
 | シグネチャ | `function useOAuthExchange(): UseMutationResult<OAuthExchangeResult, ApiError, { code: string }>` |
 | 引数 | なし |
 | 戻り値 | `mutation`オブジェクト |
-| 処理内容 | 1. `endpoints/auth.ts#oauthExchange`を呼ぶ 2. 成功時は`authAdapter.onLoginSuccess`相当の処理で`accessToken`を`authStore`へ保存 |
+| 処理内容 | 1. `endpoints/auth.ts#oauthExchange`を呼ぶ 2. 成功時は`authAdapter.onLoginSuccess`相当の処理でJWTの`accessToken`をTokenStoreへ保存 |
 | 副作用 | API呼び出し、`authStore`更新 |
 
 ### 9.2 `pages/OAuthCallbackPage.tsx :: runCallback`
@@ -242,7 +242,7 @@ flowchart LR
     A["location.hash<br/>#code=xxx&redirect_to=/projects/1"] --> B{"AUTH_MODE"}
     B -->|"jwt"| C["POST /api/auth/oauth/exchange {code}"]
     C --> D["access_token取得"]
-    D --> E["authStore.accessToken更新"]
+    D --> E["TokenStore.accessToken更新"]
     B -->|"session"| F["Cookieは設定済み（追加送信なし）"]
     E --> G["history.replaceStateでhash除去"]
     F --> G

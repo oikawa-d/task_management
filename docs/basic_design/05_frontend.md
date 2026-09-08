@@ -254,7 +254,7 @@ flowchart TB
 
 | ストア | 保持内容 | 永続化 | 備考 |
 |--------|----------|--------|------|
-| `authStore`（Zustand） | `user`, `status`（`loading` / `authenticated` / `unauthenticated`）, `accessToken`（jwtモードのみ）, `authAdapter` | **しない**（メモリのみ） | アクセストークンを localStorage に置かない（XSS対策）。adapterは起動時のbackend設定から選択 |
+| `authStore`（Zustand） | `user`, `status`（`loading` / `authenticated` / `unauthenticated`） | **しない**（メモリのみ） | JWTのアクセストークンは`AuthAdapter`へ注入したメモリ上の`TokenStore`が保持し、authStoreには保持しない。adapterは`GET /auth/config`の実行時設定から選択 |
 | `uiStore`（Zustand + persist） | `fontScale`, `sidebarOpen`, `dashboardView`（`"cards"` / `"calendar"`） | localStorage | 文字サイズ・サイドバー開閉・ダッシュボードの表示モードはクライアント側のみで保持。次回起動時も選択中の表示モードを復元する |
 | 通知（React Query） | `['notifications','unread-count']` / `['notifications', page, unreadOnly]` | しない | 未読件数はポーリング、一覧はパネルを開いたときに取得。パネルの開閉状態のみコンポーネントのローカルstateで持つ |
 | TanStack Query | プロジェクト一覧・ボード・コメント・ユーザー一覧 | しない | `queryKey` は `['projects']` / `['board', projectId]` / `['comments', taskId]` |
@@ -303,6 +303,8 @@ sequenceDiagram
 
 **方針**：認証方式の差異は `AuthAdapter` に閉じ込め、画面・feature 層は `api/endpoints/*` の関数を呼ぶだけで方式に依存しない。
 
+API clientは`fetchWithAuth`（共通APIクライアント）を必ず経由する。endpointが直接`fetch`を呼び出したり、`credentials`、`Authorization`、`X-CSRF-Token`を個別に設定したりしてはならない。例外は認証モードを取得する`GET /auth/config`だけとする。`fetchWithAuth`は初回リクエスト時に`/auth/config`を取得し、`auth_mode`に応じたadapterを生成する。AuthProviderは未実装のため、起動時に認証状態を復元しadapterを明示的に初期化する処理は後続Issueで実装する。
+
 ```mermaid
 classDiagram
     class AuthAdapter {
@@ -331,7 +333,7 @@ classDiagram
 | 実装 | `attach` | `onLoginSuccess` | `onUnauthorized` | `onLogout` |
 |------|----------|------------------|------------------|------------|
 | `SessionAdapter` | `withCredentials = true`、更新系には `X-CSRF-Token`（Cookieから読む）を付与 | 何もしない（Cookieはブラウザが保持） | `false`（リトライしない） | authStoreを破棄。Cookie破棄はbackendのlogoutに任せる |
-| `JwtAdapter` | 通常APIには `Authorization: Bearer {accessToken}`、refresh/logoutには `withCredentials=true` と `X-CSRF-Token` を付与 | authStore にaccessTokenを保存。Cookieはbackendが発行 | `/auth/refresh` を1回だけ試行し、成功なら `true` | accessTokenをメモリから破棄。Cookie破棄はbackendのlogoutに任せる |
+| `JwtAdapter` | 通常APIには `Authorization: Bearer {accessToken}`、refresh/logoutには `withCredentials=true` と `X-CSRF-Token` を付与 | 注入された`TokenStore`にaccessTokenを保存。Cookieはbackendが発行 | `/auth/refresh` を1回だけ試行し、成功なら `true` | `TokenStore`のaccessTokenをメモリから破棄。Cookie破棄はbackendのlogoutに任せる |
 
 | メソッド | 引数 | 戻り値 | 責務 |
 |----------|------|--------|------|
@@ -494,6 +496,7 @@ flowchart LR
 | 区分 | 対象 | 内容 |
 |------|------|------|
 | 単体 | `authAdapter` | session / jwt それぞれで `attach` / `onUnauthorized` の挙動、リフレッシュの多重実行防止 |
+| 単体 | `fetchWithAuth` | `/auth/config`の実行時モード選択、jwtのBearer、session更新系のCSRF、GETにCSRFを付けないこと |
 | 単体 | zod スキーマ | パスワードポリシー・フリガナ・50文字制限などの境界値 |
 | 単体 | `uiStore` | 文字サイズの永続化と復元、localStorage が空の場合の既定値 |
 | コンポーネント | LoginForm / RegisterForm | 入力検証・エラー表示・送信内容 |

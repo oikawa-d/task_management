@@ -38,6 +38,8 @@ CIでは、`api/`・`batch/`それぞれに対して`ruff check`、`ruff format 
 
 設計書はMarkdown見出しと簡潔な日本語で記述し、文書間のリンクは相対リンク、図はMermaidを使用します。Pythonは**タブ**インデント、関数・変数は`snake_case`、クラスは`PascalCase`とします。TypeScript/Reactのコンポーネントは`PascalCase`、フックは`useXxx`、定数は`UPPER_SNAKE_CASE`とします。PythonはRuff（`ruff format`でタブインデントを強制）、フロントエンドはESLintで検査します。
 
+フロントエンドのAPI clientは`frontend/src/api/authAdapter/client.ts`の`fetchWithAuth`を必ず経由し、endpointごとに認証ヘッダや`credentials`を設定しません。認証モードは`GET /auth/config`から実行時に取得し、sessionの更新系だけCSRF、jwtの通常APIだけBearerを共通clientに委譲します。
+
 ## テスト方針
 
 バックエンドはpytest、フロントエンドはVitestを使用する予定です。テスト名は`test_login_endpoint_email_not_verified`や`KanbanBoard refetches board on 409 TASK_CONFLICT`のように、対象と期待動作が分かる名前にします。エンドポイントの動作やエラー処理を変更した場合は、設計書のテスト表も更新してください。

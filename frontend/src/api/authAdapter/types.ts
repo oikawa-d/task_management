@@ -34,3 +34,9 @@ export interface TokenStore {
 	getAccessToken(): string | null;
 	setAccessToken(token: string | null): void;
 }
+
+/** 認証アダプタ生成時に実行時設定とトークン保持先を注入するオプション */
+export interface AuthAdapterOptions {
+	csrfCookieName?: string;
+	tokenStore?: TokenStore;
+}
