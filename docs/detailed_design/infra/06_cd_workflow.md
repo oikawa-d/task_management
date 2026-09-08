@@ -33,7 +33,7 @@
 | `IMAGE_NAME_BACKEND` | str | `ghcr.io/{owner}/cerberus-backend` | backendイメージ名（`{owner}`はリポジトリオーナー） | 否 |
 | `IMAGE_NAME_FRONTEND` | str | `ghcr.io/{owner}/cerberus-frontend` | frontendイメージ名 | 否 |
 | `IMAGE_NAME_BATCH` | str | `ghcr.io/{owner}/cerberus-batch` | batchイメージ名 | 否 |
-| `GITHUB_TOKEN` | str | 自動発行 | `docker/login-action`によるGHCR認証（`permissions: packages: write`） | **Secret**（GitHub自動管理） |
+| `GITHUB_TOKEN` | str | 自動発行 | `docker/login-action`によるGHCR認証（`build-and-push`は`permissions: packages: write`、`deploy`はpullのみのため`packages: read`） | **Secret**（GitHub自動管理） |
 | すべての`.env`項目（[04_env_config.md](./04_env_config.md)§3） | - | - | `deploy`ジョブが`GitHub Environment: production`のSecretsから`.env`をヒアドキュメント生成 | **Secret**表記の項目はすべてGitHub Secrets |
 | `DEPLOY_HOST_HEALTHCHECK_URL` | str | `http://localhost:${FRONTEND_PORT}/api/health` | デプロイ後ポーリング先URL | 否（self-hosted runnerローカルの値） |
 | `DEPLOY_HEALTHCHECK_RETRIES` / `DEPLOY_HEALTHCHECK_INTERVAL_SECONDS` | int | `10` / `5` | ヘルスチェックのポーリング回数・間隔 | 否 |
@@ -82,6 +82,7 @@ sequenceDiagram
     RUN->>GHCR: docker push<br/>tag: latest, sha-{短縮SHA}
     RUN-->>GH: 成功
     GH->>SELF: deploy ジョブ開始（needs: build-and-push, environment: production）
+    SELF->>GHCR: docker/login-action（GHCR認証、packages: read）
     SELF->>SELF: .env をヒアドキュメントで生成（GitHub Secretsを展開、ログ非出力）
     SELF->>GHCR: docker compose pull
     SELF->>DC: docker compose up -d --remove-orphans
@@ -210,11 +211,11 @@ stateDiagram-v2
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ / 定義 | `runs-on: [self-hosted, linux, cerberus]`。`needs: build-and-push`。`if: github.ref == 'refs/heads/main'`（`workflow_dispatch`をmain以外のブランチから実行してもproductionへデプロイしないためのガード）。`environment: production`。`permissions: { contents: read }` |
+| シグネチャ / 定義 | `runs-on: [self-hosted, linux, cerberus]`。`needs: build-and-push`。`if: github.ref == 'refs/heads/main'`（`workflow_dispatch`をmain以外のブランチから実行してもproductionへデプロイしないためのガード）。`environment: production`。`permissions: { contents: read, packages: read }`（GHCRからのpullに必要） |
 | 引数 / 入力 | GitHub Environment `production`のSecrets（[04_env_config.md](./04_env_config.md)全一覧）、`${{ github.sha }}` |
 | 戻り値 / 出力 | デプロイ成功可否、ヘルスチェック結果 |
-| 送出例外 / 失敗条件 | `.env`生成失敗（Secrets未設定）、`docker compose pull`失敗、ヘルスチェック未達（リトライ上限到達） |
-| 処理内容 | 1. `actions/checkout@v4`（`clean: true`を明示、self-hostedのワークスペース再利用対策） 2. デプロイ開始前に`DEPLOY_STATE_FILE`から直前成功の3タグを読み込む 3. `.env`をヒアドキュメントで生成（`cat <<EOF > .env` 形式、`${{ secrets.* }}`を展開しログ出力しない）。`IMAGE_NAME_BACKEND`/`IMAGE_NAME_FRONTEND`/`IMAGE_NAME_BATCH`は`ghcr.io/{owner}/cerberus-*`をこのステップで組み立てて書き出す 4. `BACKEND_IMAGE_TAG`/`FRONTEND_IMAGE_TAG`/`BATCH_IMAGE_TAG`へ新規`IMAGE_TAG`を設定 5. `docker compose pull` 6. `docker compose up -d --remove-orphans` 7. `GET ${DEPLOY_HOST_HEALTHCHECK_URL}` を`DEPLOY_HEALTHCHECK_RETRIES`回まで`DEPLOY_HEALTHCHECK_INTERVAL_SECONDS`間隔でポーリング 8. 失敗時は「8.4 ロールバック手順」を実行 9. 成功時は3タグを状態ファイルへ原子的に保存し、保持対象外のmanagedイメージだけを削除する |
+| 送出例外 / 失敗条件 | GHCR認証失敗、`.env`生成失敗（Secrets未設定）、`docker compose pull`失敗、ヘルスチェック未達（リトライ上限到達） |
+| 処理内容 | 1. `actions/checkout@v4`（`clean: true`を明示、self-hostedのワークスペース再利用対策） 2. デプロイ開始前に`DEPLOY_STATE_FILE`から直前成功の3タグを読み込む 2.5. `docker/login-action@v3`でGHCRへログイン（self-hosted runnerに永続的な認証情報を前提とせず、ジョブ内で認証する） 3. `.env`をヒアドキュメントで生成（`cat <<EOF > .env` 形式、`${{ secrets.* }}`を展開しログ出力しない）。`IMAGE_NAME_BACKEND`/`IMAGE_NAME_FRONTEND`/`IMAGE_NAME_BATCH`は`ghcr.io/{owner}/cerberus-*`をこのステップで組み立てて書き出す 4. `BACKEND_IMAGE_TAG`/`FRONTEND_IMAGE_TAG`/`BATCH_IMAGE_TAG`へ新規`IMAGE_TAG`を設定 5. `docker compose pull` 6. `docker compose up -d --remove-orphans` 7. `GET ${DEPLOY_HOST_HEALTHCHECK_URL}` を`DEPLOY_HEALTHCHECK_RETRIES`回まで`DEPLOY_HEALTHCHECK_INTERVAL_SECONDS`間隔でポーリング 8. 失敗時は「8.4 ロールバック手順」を実行 9. 成功時は3タグを状態ファイルへ原子的に保存し、保持対象外のmanagedイメージだけを削除する |
 | 副作用 | self-hosted runnerホスト上のコンテナ・イメージ・`.env`ファイルを変更する |
 
 ### 8.4 ロールバック手順（`deploy`ジョブ内の失敗時ステップ）

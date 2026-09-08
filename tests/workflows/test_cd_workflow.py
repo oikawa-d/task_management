@@ -84,6 +84,20 @@ def test_cd_deploy_restricted_to_main_ref(workflow: dict[str, Any]) -> None:
 def test_cd_deploy_declares_minimal_permissions(workflow: dict[str, Any]) -> None:
 	job = workflow["jobs"]["deploy"]
 	assert job["permissions"]["contents"] == "read"
+	# GHCRからのpullに必要。パッケージが非公開の場合、これが無いとpullが認証エラーになる
+	assert job["permissions"]["packages"] == "read"
+
+
+def test_cd_deploy_logs_in_to_ghcr_before_pull(workflow: dict[str, Any]) -> None:
+	# self-hosted runnerに永続的なdocker loginを前提とせず、ジョブ内でGHCR認証する。
+	# 未認証のままdocker compose pullするとGHCRのパッケージが非公開の場合に失敗する
+	steps = _job_steps(workflow, "deploy")
+	login_index = next(i for i, step in enumerate(steps) if step.get("uses", "").startswith("docker/login-action"))
+	pull_index = next(i for i, step in enumerate(steps) if step.get("run", "").strip() == "docker compose pull")
+	assert login_index < pull_index
+	login_step = steps[login_index]
+	assert login_step["with"]["registry"] == "ghcr.io"
+	assert "secrets.GITHUB_TOKEN" in login_step["with"]["password"]
 
 
 def test_cd_env_generation_includes_image_name_variables(workflow: dict[str, Any]) -> None:

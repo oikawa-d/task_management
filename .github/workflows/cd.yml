@@ -93,6 +93,8 @@ jobs:
     environment: production
     permissions:
       contents: read
+      # GHCRからのpullに必要（パッケージが非公開の場合、未認証のdocker compose pullは失敗する）
+      packages: read
     env:
       DEPLOY_STATE_FILE: ${{ vars.DEPLOY_STATE_FILE || '/var/lib/cerberus/last-successful-deploy.env' }}
       IMAGE_RETENTION_DAYS: ${{ vars.IMAGE_RETENTION_DAYS || '30' }}
@@ -123,6 +125,13 @@ jobs:
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: GHCRへログイン
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: .envを生成（GitHub Secretsから展開、ログには出力しない）
         run: |
