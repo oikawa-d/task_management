@@ -1,6 +1,10 @@
 # 一時ファイル
 tmp/
 
+# エージェント作業用の一時ファイル
+.claude/worktrees/
+.claude/scheduled_tasks.lock
+
 # 環境変数
 .env
 .env.local
