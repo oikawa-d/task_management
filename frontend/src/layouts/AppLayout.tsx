@@ -12,10 +12,10 @@ export function AppLayout() {
 			<header>
 				<span>Cerberus</span>
 			</header>
-			{/* 設定/ログアウト/通知ベルは #224 で追加予定の最小実装 */}
 			<nav aria-label="サイドバー">
 				<Link to={ROUTES.DASHBOARD}>home</Link>
 				{isAdmin ? <Link to={ROUTES.ADMIN_USERS}>管理</Link> : null}
+				<Link to={ROUTES.SETTINGS}>設定</Link>
 			</nav>
 			<main>
 				<Outlet />

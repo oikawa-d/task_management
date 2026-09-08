@@ -8,21 +8,8 @@ import { useAuthStore } from "./authStore";
 import { RequireAdmin, RequireAuth, RequireGuest } from "./guards";
 import { ROUTES } from "../routes";
 
-function renderAdminUsersRoute() {
-	const router = createMemoryRouter(
-		[
-			{ path: ROUTES.LOGIN, element: <h1>ログイン画面</h1> },
-			{ path: ROUTES.DASHBOARD, element: <h1>ダッシュボード画面</h1> },
-			{
-				element: <RequireAdmin />,
-				children: [{ path: ROUTES.ADMIN_USERS, element: <h1>ユーザー管理画面</h1> }],
-			},
-		],
-		{ initialEntries: [ROUTES.ADMIN_USERS] },
-	);
-
-	return render(<RouterProvider router={router} />);
-}
+const member = { id: "u1", role: "member" as const, profileCompleted: false };
+const admin = { id: "u2", role: "admin" as const, profileCompleted: true };
 
 function renderDashboardRoute() {
 	const router = createMemoryRouter(
@@ -54,11 +41,27 @@ function renderLoginRoute() {
 	return render(<RouterProvider router={router} />);
 }
 
-describe("RequireAuth", () => {
-	afterEach(() => {
-		useAuthStore.getState().reset();
-	});
+function renderAdminUsersRoute() {
+	const router = createMemoryRouter(
+		[
+			{ path: ROUTES.LOGIN, element: <h1>ログイン画面</h1> },
+			{ path: ROUTES.DASHBOARD, element: <h1>ダッシュボード画面</h1> },
+			{
+				element: <RequireAdmin />,
+				children: [{ path: ROUTES.ADMIN_USERS, element: <h1>ユーザー管理画面</h1> }],
+			},
+		],
+		{ initialEntries: [ROUTES.ADMIN_USERS] },
+	);
 
+	return render(<RouterProvider router={router} />);
+}
+
+afterEach(() => {
+	useAuthStore.getState().reset();
+});
+
+describe("RequireAuth", () => {
 	it("redirects unauthenticated access from /dashboard to /login", async () => {
 		useAuthStore.setState({ status: "unauthenticated", user: null });
 
@@ -68,7 +71,7 @@ describe("RequireAuth", () => {
 	});
 
 	it("renders the dashboard route content for an authenticated user", async () => {
-		useAuthStore.setState({ status: "authenticated", user: { id: "u1", role: "member" } });
+		useAuthStore.setState({ status: "authenticated", user: member });
 
 		renderDashboardRoute();
 
@@ -86,12 +89,8 @@ describe("RequireAuth", () => {
 });
 
 describe("RequireGuest", () => {
-	afterEach(() => {
-		useAuthStore.getState().reset();
-	});
-
 	it("redirects authenticated access from /login to /dashboard", async () => {
-		useAuthStore.setState({ status: "authenticated", user: { id: "u1", role: "member" } });
+		useAuthStore.setState({ status: "authenticated", user: member });
 
 		renderLoginRoute();
 
@@ -117,10 +116,6 @@ describe("RequireGuest", () => {
 });
 
 describe("RequireAdmin", () => {
-	afterEach(() => {
-		useAuthStore.getState().reset();
-	});
-
 	it("redirects unauthenticated access from /admin/users to /login", async () => {
 		useAuthStore.setState({ status: "unauthenticated", user: null });
 
@@ -130,7 +125,7 @@ describe("RequireAdmin", () => {
 	});
 
 	it("redirects member role access from /admin/users to /dashboard", async () => {
-		useAuthStore.setState({ status: "authenticated", user: { id: "u1", role: "member" } });
+		useAuthStore.setState({ status: "authenticated", user: member });
 
 		renderAdminUsersRoute();
 
@@ -138,7 +133,7 @@ describe("RequireAdmin", () => {
 	});
 
 	it("renders the admin route content for admin role", async () => {
-		useAuthStore.setState({ status: "authenticated", user: { id: "u2", role: "admin" } });
+		useAuthStore.setState({ status: "authenticated", user: admin });
 
 		renderAdminUsersRoute();
 

@@ -5,6 +5,7 @@ export type AuthUserRole = "member" | "admin";
 export type AuthUser = {
 	id: string;
 	role: AuthUserRole;
+	profileCompleted: boolean;
 };
 
 export type AuthStatus = "loading" | "authenticated" | "unauthenticated";
