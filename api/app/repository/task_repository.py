@@ -1,11 +1,13 @@
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_backend_settings
 from app.models.task import Task
 
 
@@ -39,6 +41,15 @@ def _build_task_with_project_status(row: RowMapping) -> TaskWithProjectStatus:
 	return TaskWithProjectStatus(task=_build_task(row), project_is_active=row["project_is_active"])
 
 
+def _app_day_bounds_utc(now: datetime | None = None, app_timezone: str | None = None) -> tuple[datetime, datetime]:
+	zone = ZoneInfo(app_timezone or get_backend_settings().app_timezone)
+	local_now = (now or datetime.now(UTC)).astimezone(zone)
+	local_date = local_now.date()
+	start_local = datetime.combine(local_date, time.min, tzinfo=zone)
+	end_local = datetime.combine(local_date + timedelta(days=1), time.min, tzinfo=zone)
+	return start_local.astimezone(UTC), end_local.astimezone(UTC)
+
+
 async def create(
 	db: AsyncSession,
 	project_id: uuid.UUID | None,
@@ -50,10 +61,11 @@ async def create(
 	due_at: datetime | None,
 	position: int | None,
 ) -> uuid.UUID:
+	day_start_utc, day_end_utc = _app_day_bounds_utc()
 	result = await db.execute(
 		text(
 			"CALL sp_create_task(:project_id, :created_by, :assignee_id, :title, :body, "
-			":status, :due_at, :position, NULL)"
+			":status, :due_at, :position, :day_start_utc, :day_end_utc, NULL)"
 		),
 		{
 			"project_id": project_id,
@@ -64,6 +76,8 @@ async def create(
 			"status": status,
 			"due_at": due_at,
 			"position": position,
+			"day_start_utc": day_start_utc,
+			"day_end_utc": day_end_utc,
 		},
 	)
 	task_id: uuid.UUID = result.mappings().one()["p_task_id"]
@@ -125,10 +139,11 @@ async def update(
 	due_at: datetime | None,
 	position: int | None,
 ) -> None:
+	day_start_utc, day_end_utc = _app_day_bounds_utc()
 	await db.execute(
 		text(
 			"CALL sp_update_task(:task_id, :editor_id, :version, :title, :body, "
-			":status, :assignee_id, :due_at, :position)"
+			":status, :assignee_id, :due_at, :position, :day_start_utc, :day_end_utc)"
 		),
 		{
 			"task_id": task_id,
@@ -140,6 +155,8 @@ async def update(
 			"assignee_id": assignee_id,
 			"due_at": due_at,
 			"position": position,
+			"day_start_utc": day_start_utc,
+			"day_end_utc": day_end_utc,
 		},
 	)
 

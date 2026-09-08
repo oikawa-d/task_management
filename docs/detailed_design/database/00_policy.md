@@ -211,5 +211,5 @@ DDLの実適用（Alembicリビジョンの構成・初期データseed・CI/CD�
 - 本節§2.1の新方針は roadmap #12 に基づく先行改訂であり、basic_designとdetailed_designの改訂順序が本書冒頭「## 0. 関連ドキュメント」記載の文書間優先順位ルール（矛盾時は基本設計が正）と一時的に矛盾する期間が生じる。当該期間の扱い（basic_design側の追従改訂タイミング・暫定的な優先順位の扱い）は要検討。
 - ヘルスチェック（`GET /api/health`）を例外としてSP/FN化しない方針（本書§2.1に反映済み）が有力だが、roadmap #12 側での最終確定はまだ済んでいない。要検討。
 - `api_history` 記録ミドルウェアをSP化した場合の全リクエストへのレイテンシ影響は未検証。要検討（性能検証が必要）。
-- `APP_TIMEZONE` を `sp_create_task` 等のSP/FNへ呼び出しの都度引数として渡すか、DBセッションのカスタムGUC（`SET app.timezone = ...`）として扱うかは未確定。要検討。
+- `APP_TIMEZONE` の日境界判定方式は確定済み。APIの`task_repository`が現在日の開始・翌日開始をUTCへ変換し、`sp_create_task` / `sp_update_task`へ`p_day_start_utc`・`p_day_end_utc`として渡す。DBセッションのタイムゾーンやカスタムGUCは使用しない。
 - repository層がSP/FN呼び出しの薄いラッパーに縮小すること（本書§2.1）に伴い、SQLAlchemy ORMモデル（`api/app/models/`）の存在意義自体が変わる可能性がある（型定義・スキーマ検証用途への縮小等）。要検討。
