@@ -1,73 +1,72 @@
-import type { ApiFieldError, PasswordChangeInput, ProfileFormValues } from "./types";
+import { z } from "zod";
+import type { FieldErrors, FieldValues, Resolver } from "react-hook-form";
 
-const MAX_NAME_LENGTH = 30;
-const MIN_PASSWORD_LENGTH = 8;
+import { getValidationConfig } from "./config/validationConfig";
+import type { ApiFieldError } from "./types";
+
 const KANA_PATTERN = /^[ぁ-んァ-ヶー0-9]+$/;
 
-export type ProfileField = keyof ProfileFormValues;
-export type PasswordField = keyof PasswordChangeInput;
-
-export function validateProfile(values: ProfileFormValues): Partial<Record<ProfileField, string>> {
-	const errors: Partial<Record<ProfileField, string>> = {};
-	const requiredFields: ProfileField[] = [
-		"last_name",
-		"first_name",
-		"last_name_kana",
-		"first_name_kana",
-		"birth_date",
-	];
-
-	for (const field of requiredFields) {
-		if (!values[field]?.trim()) {
-			errors[field] = "入力してください";
+export function createZodResolver<T extends FieldValues>(schema: z.ZodType<T>): Resolver<T> {
+	return async (values) => {
+		const result = schema.safeParse(values);
+		if (result.success) {
+			return { values: result.data, errors: {} };
 		}
-	}
 
-	for (const field of ["last_name", "first_name"] as const) {
-		const value = values[field];
-		if (value && value.length > MAX_NAME_LENGTH) {
-			errors[field] = "30文字以内で入力してください";
+		const errors: FieldErrors<T> = {};
+		for (const issue of result.error.issues) {
+			const field = issue.path[0];
+			if (typeof field === "string") {
+				(errors as Record<string, unknown>)[field] = { type: issue.code, message: issue.message };
+			}
 		}
-	}
-
-	for (const field of ["last_name_kana", "first_name_kana"] as const) {
-		const value = values[field];
-		if (value && (value.length > MAX_NAME_LENGTH || !KANA_PATTERN.test(value))) {
-			errors[field] = "ひらがな・カタカナ・数字のみで入力してください";
-		}
-	}
-
-	if (values.birth_date && values.birth_date > getToday()) {
-		errors.birth_date = "未来の日付は指定できません";
-	}
-
-	return errors;
+		return { values: {}, errors };
+	};
 }
 
-export function validatePassword(
-	values: PasswordChangeInput,
-	hasPassword: boolean,
-): Partial<Record<PasswordField, string>> {
-	const errors: Partial<Record<PasswordField, string>> = {};
-	if (hasPassword && !values.current_password) {
-		errors.current_password = "現在のパスワードを入力してください";
-	}
+export const profileSchema = z.object({
+	last_name: nameSchema(),
+	first_name: nameSchema(),
+	last_name_kana: kanaSchema(),
+	first_name_kana: kanaSchema(),
+	birth_date: z.string().min(1, "入力してください").refine(
+		(value) => value <= getToday(),
+		"未来の日付は指定できません",
+	),
+});
 
-	if (!hasPassword && values.current_password) {
-		errors.current_password = "現在のパスワードは送信できません";
-	}
+export function passwordSchema(hasPassword: boolean) {
+	const minLength = getValidationConfig().passwordMinLength;
+	return z.object({
+		current_password: hasPassword
+			? z.string().min(1, "現在のパスワードを入力してください")
+			: z.string().optional(),
+		new_password: z.string().refine(
+			(value) => value.length >= minLength && countCharacterTypes(value) >= 2,
+			`${minLength}文字以上で、2種類以上の文字種を含めてください`,
+		),
+		password_confirm: z.string(),
+	}).superRefine((values, context) => {
+		if (values.new_password !== values.password_confirm) {
+			context.addIssue({
+				code: z.ZodIssueCode.custom,
+				path: ["password_confirm"],
+				message: "新しいパスワードが一致しません",
+			});
+		}
+	});
+}
 
-	if (
-		values.new_password.length < MIN_PASSWORD_LENGTH ||
-		countCharacterTypes(values.new_password) < 2
-	) {
-		errors.new_password = "8文字以上で、2種類以上の文字種を含めてください";
-	}
-	if (values.new_password !== values.password_confirm) {
-		errors.password_confirm = "新しいパスワードが一致しません";
-	}
+function nameSchema() {
+	const maxLength = getValidationConfig().userNameMaxLength;
+	return z.string().trim().min(1, "入力してください").max(
+		maxLength,
+		`${maxLength}文字以内で入力してください`,
+	);
+}
 
-	return errors;
+function kanaSchema() {
+	return nameSchema().regex(KANA_PATTERN, "ひらがな・カタカナ・数字のみで入力してください");
 }
 
 export function getToday(): string {
@@ -95,8 +94,5 @@ export function getFieldErrors(error: unknown): ApiFieldError[] {
 	}
 
 	const details = (error as { details?: unknown }).details;
-	if (!Array.isArray(details)) {
-		return [];
-	}
-	return details.filter(isApiFieldError);
+	return Array.isArray(details) ? details.filter(isApiFieldError) : [];
 }

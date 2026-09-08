@@ -60,4 +60,14 @@ describe("SettingsPage", () => {
 		expect(screen.getByRole("tab", { name: "パスワード" })).toHaveAttribute("aria-selected", "true");
 		expect(screen.getByRole("tab", { name: "パスワード" })).toHaveFocus();
 	});
+
+	it("クリックで選択したタブにフォーカスを保持する", () => {
+		renderPage();
+
+		const passwordTab = screen.getByRole("tab", { name: "パスワード" });
+		fireEvent.click(passwordTab);
+
+		expect(passwordTab).toHaveAttribute("aria-selected", "true");
+		expect(passwordTab).toHaveFocus();
+	});
 });

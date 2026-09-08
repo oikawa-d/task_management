@@ -62,7 +62,10 @@ export function SettingsPage({
 						className={styles.tab}
 						id={`${tab.id}-tab`}
 						key={tab.id}
-						onClick={() => setActiveTab(tab.id)}
+						onClick={(event) => {
+							setActiveTab(tab.id);
+							event.currentTarget.focus();
+						}}
 						onKeyDown={(event) => {
 							if (["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp"].includes(event.key)) {
 								event.preventDefault();

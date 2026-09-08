@@ -20,20 +20,21 @@ describe("ProfileForm", () => {
 		render(<ProfileForm initialValues={initialValues} onSubmit={onSubmit} />);
 
 		fireEvent.change(screen.getByLabelText("姓"), { target: { value: "佐藤" } });
+		await waitFor(() => expect(screen.getByRole("button", { name: "プロフィールを保存" })).not.toBeDisabled());
 		fireEvent.click(screen.getByRole("button", { name: "プロフィールを保存" }));
 
 		await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({ last_name: "佐藤" }));
 		expect(await screen.findByRole("status")).toHaveTextContent("プロフィールを更新しました");
 	});
 
-	it("不正なフリガナでは保存できず、エラーを表示する", () => {
+	it("不正なフリガナでは保存できず、エラーを表示する", async () => {
 		const onSubmit = vi.fn();
 		render(<ProfileForm initialValues={initialValues} onSubmit={onSubmit} />);
 
 		fireEvent.change(screen.getByLabelText("姓カナ"), { target: { value: "山田" } });
 
-		expect(screen.getByRole("button", { name: "プロフィールを保存" })).toBeDisabled();
-		expect(screen.getByText("ひらがな・カタカナ・数字のみで入力してください")).toBeInTheDocument();
+		await waitFor(() => expect(screen.getByRole("button", { name: "プロフィールを保存" })).toBeDisabled());
+		expect(await screen.findByText("ひらがな・カタカナ・数字のみで入力してください")).toBeInTheDocument();
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
@@ -44,18 +45,19 @@ describe("ProfileForm", () => {
 		render(<ProfileForm initialValues={initialValues} onSubmit={onSubmit} />);
 
 		fireEvent.change(screen.getByLabelText("名"), { target: { value: "花子" } });
+		await waitFor(() => expect(screen.getByRole("button", { name: "プロフィールを保存" })).not.toBeDisabled());
 		fireEvent.click(screen.getByRole("button", { name: "プロフィールを保存" }));
 
 		expect(await screen.findByText("この名前は使用できません")).toBeInTheDocument();
 	});
 
-	it("未来の生年月日を入力すると保存できない", () => {
+	it("未来の生年月日を入力すると保存できない", async () => {
 		const onSubmit = vi.fn();
 		render(<ProfileForm initialValues={initialValues} onSubmit={onSubmit} />);
 
 		fireEvent.change(screen.getByLabelText("生年月日"), { target: { value: "2999-01-01" } });
 
-		expect(screen.getByText("未来の日付は指定できません")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "プロフィールを保存" })).toBeDisabled();
+		expect(await screen.findByText("未来の日付は指定できません")).toBeInTheDocument();
+		await waitFor(() => expect(screen.getByRole("button", { name: "プロフィールを保存" })).toBeDisabled());
 	});
 });

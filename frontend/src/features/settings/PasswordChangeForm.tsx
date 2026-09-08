@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
+import { useForm, type UseFormRegisterReturn } from "react-hook-form";
 
 import styles from "./PasswordChangeForm.module.css";
 import type { PasswordChangeInput } from "./types";
-import { getFieldErrors, validatePassword } from "./validation";
+import { createZodResolver, getFieldErrors, passwordSchema } from "./validation";
 
 export interface PasswordChangeFormProps {
 	hasPassword: boolean;
@@ -13,109 +14,88 @@ export interface PasswordChangeFormProps {
 type PasswordField = keyof PasswordChangeInput;
 
 export function PasswordChangeForm({ hasPassword, onSubmit, onSuccess }: PasswordChangeFormProps) {
-	const [values, setValues] = useState<PasswordChangeInput>({
-		...(hasPassword ? { current_password: "" } : {}),
-		new_password: "",
-		password_confirm: "",
-	});
 	const [visible, setVisible] = useState<Record<PasswordField, boolean>>({
 		current_password: false,
 		new_password: false,
 		password_confirm: false,
 	});
-	const [errors, setErrors] = useState(() => validatePassword(values, hasPassword));
 	const [submitError, setSubmitError] = useState<string | null>(null);
-	const [isSubmitting, setIsSubmitting] = useState(false);
 	const [isSaved, setIsSaved] = useState(false);
+	const {
+		register,
+		handleSubmit,
+		reset,
+		setError,
+		watch,
+		formState: { errors, isSubmitting },
+	} = useForm<PasswordChangeInput>({
+		defaultValues: createDefaultValues(hasPassword),
+		resolver: createZodResolver(passwordSchema(hasPassword)),
+		mode: "onChange",
+	});
+	const currentPassword = watch("current_password");
 
-	const updateField = (field: PasswordField, value: string) => {
-		const nextValues = { ...values, [field]: value };
-		setValues(nextValues);
-		setErrors(validatePassword(nextValues, hasPassword));
+	const submit = async (values: PasswordChangeInput) => {
 		setSubmitError(null);
 		setIsSaved(false);
-	};
-
-	const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-		event.preventDefault();
-		const nextErrors = validatePassword(values, hasPassword);
-		setErrors(nextErrors);
-		if (Object.keys(nextErrors).length > 0) {
-			return;
-		}
-
-		const payload = hasPassword
-			? values
-			: { new_password: values.new_password, password_confirm: values.password_confirm };
-		setSubmitError(null);
-		setIsSaved(false);
-		setIsSubmitting(true);
 		try {
-			await onSubmit(payload);
-			const resetValues: PasswordChangeInput = {
-				...(hasPassword ? { current_password: "" } : {}),
-				new_password: "",
-				password_confirm: "",
-			};
-			setValues({
-				...(hasPassword ? { current_password: "" } : {}),
-				new_password: "",
-				password_confirm: "",
-			});
-			setErrors(validatePassword(resetValues, hasPassword));
+			await onSubmit(hasPassword ? values : omitCurrentPassword(values));
+			reset(createDefaultValues(hasPassword));
 			setIsSaved(true);
 			onSuccess?.();
 		} catch (error: unknown) {
 			const fieldErrors = getFieldErrors(error);
 			if (fieldErrors.length > 0) {
-				setErrors((current) => ({
-					...current,
-					...Object.fromEntries(fieldErrors.map(({ field, message }) => [field, message])),
-				}));
+				for (const fieldError of fieldErrors) {
+					if (isPasswordField(fieldError.field)) {
+						setError(fieldError.field, { type: "server", message: fieldError.message });
+					}
+				}
+			} else if (isInvalidCredentials(error) && hasPassword) {
+				setError("current_password", { type: "server", message: "現在のパスワードが正しくありません" });
 			} else if (isInvalidCredentials(error)) {
-				setErrors((current) => ({ ...current, current_password: "現在のパスワードが正しくありません" }));
+				setSubmitError("パスワードを変更できませんでした。再度ログインしてからお試しください");
 			} else {
 				setSubmitError("パスワードの変更に失敗しました");
 			}
-		} finally {
-			setIsSubmitting(false);
 		}
 	};
 
 	return (
-		<form className={styles.form} onSubmit={handleSubmit} noValidate>
+		<form className={styles.form} onSubmit={handleSubmit(submit)} noValidate>
 			{hasPassword && (
 				<PasswordFieldInput
 					field="current_password"
 					label="現在のパスワード"
-					value={values.current_password ?? ""}
-					error={errors.current_password}
+					registration={register("current_password")}
+					error={errors.current_password?.message}
 					isVisible={visible.current_password}
 					onToggle={() => setVisible((current) => ({ ...current, current_password: !current.current_password }))}
-					onChange={(value) => updateField("current_password", value)}
 				/>
 			)}
 			<PasswordFieldInput
 				field="new_password"
 				label="新しいパスワード"
-				value={values.new_password}
-				error={errors.new_password}
+				registration={register("new_password")}
+				error={errors.new_password?.message}
 				isVisible={visible.new_password}
 				onToggle={() => setVisible((current) => ({ ...current, new_password: !current.new_password }))}
-				onChange={(value) => updateField("new_password", value)}
 			/>
 			<PasswordFieldInput
 				field="password_confirm"
 				label="新しいパスワード（確認）"
-				value={values.password_confirm}
-				error={errors.password_confirm}
+				registration={register("password_confirm")}
+				error={errors.password_confirm?.message}
 				isVisible={visible.password_confirm}
 				onToggle={() => setVisible((current) => ({ ...current, password_confirm: !current.password_confirm }))}
-				onChange={(value) => updateField("password_confirm", value)}
 			/>
 			{submitError && <p className={styles.submitError} role="alert">{submitError}</p>}
 			{isSaved && <p className={styles.success} role="status">パスワードを変更しました</p>}
-			<button className={styles.button} type="submit" disabled={isSubmitting || Object.keys(errors).length > 0}>
+			<button
+				className={styles.button}
+				type="submit"
+				disabled={isSubmitting || (hasPassword && !currentPassword) || Object.keys(errors).length > 0}
+			>
 				{isSubmitting ? "変更中…" : "パスワードを変更"}
 			</button>
 		</form>
@@ -125,14 +105,13 @@ export function PasswordChangeForm({ hasPassword, onSubmit, onSuccess }: Passwor
 interface PasswordFieldInputProps {
 	field: PasswordField;
 	label: string;
-	value: string;
-	error?: string;
+	registration: UseFormRegisterReturn;
+	error?: ReactNode;
 	isVisible: boolean;
 	onToggle: () => void;
-	onChange: (value: string) => void;
 }
 
-function PasswordFieldInput({ field, label, value, error, isVisible, onToggle, onChange }: PasswordFieldInputProps) {
+function PasswordFieldInput({ field, label, registration, error, isVisible, onToggle }: PasswordFieldInputProps) {
 	const errorId = `${field}-error`;
 	return (
 		<div className={styles.field}>
@@ -141,12 +120,10 @@ function PasswordFieldInput({ field, label, value, error, isVisible, onToggle, o
 				<input
 					className={styles.input}
 					id={field}
-					name={field}
+					{...registration}
 					type={isVisible ? "text" : "password"}
-					value={value}
 					aria-invalid={Boolean(error)}
 					aria-describedby={error ? errorId : undefined}
-					onChange={(event) => onChange(event.target.value)}
 				/>
 				<button className={styles.toggle} type="button" aria-label="パスワードを表示/非表示" onClick={onToggle}>
 					{isVisible ? "隠す" : "表示"}
@@ -155,6 +132,22 @@ function PasswordFieldInput({ field, label, value, error, isVisible, onToggle, o
 			{error && <span className={styles.error} id={errorId}>{error}</span>}
 		</div>
 	);
+}
+
+function createDefaultValues(hasPassword: boolean): PasswordChangeInput {
+	return {
+		...(hasPassword ? { current_password: "" } : {}),
+		new_password: "",
+		password_confirm: "",
+	};
+}
+
+function omitCurrentPassword(values: PasswordChangeInput): PasswordChangeInput {
+	return { new_password: values.new_password, password_confirm: values.password_confirm };
+}
+
+function isPasswordField(field: string): field is PasswordField {
+	return ["current_password", "new_password", "password_confirm"].includes(field);
 }
 
 function isInvalidCredentials(error: unknown): boolean {

@@ -10,7 +10,7 @@
 | 状態管理 | Zustand（認証状態・UI設定）＋ TanStack Query（サーバー状態のキャッシュ） |
 | HTTPクライアント | axios（インスタンス + interceptor） |
 | ドラッグ＆ドロップ | `@dnd-kit/core`（カンバンのカード移動） |
-| フォーム | React Hook Form + zod（バックエンドと同一のバリデーション規則を再現） |
+| フォーム | React Hook Form + zod（バックエンドと同一のバリデーション規則を再現）。既存フォームの移行は各画面Issueで行う |
 | スタイル | CSS Modules + CSS変数（文字サイズ設定のため `rem` ベースで設計） |
 | テスト | Vitest + React Testing Library + MSW（APIモック） |
 | Lint / 型 | ESLint（flat config）+ `tsc --noEmit` |
@@ -405,6 +405,8 @@ flowchart TB
 | `VITE_API_BASE_URL` | `/api` | APIのベースURL（同一オリジンを既定） |
 | `VITE_NOTIFICATION_POLL_INTERVAL_MS` | `60000` | 未読通知件数のポーリング間隔（ミリ秒） |
 | `VITE_TASK_COMMENT_BODY_MAX_LENGTH` | `2000` | コメント本文のzodバリデーション上限文字数。バックエンドの`TASK_COMMENT_BODY_MAX_LENGTH`と同じ値を`.env`へ設定し、値の一致は運用（`.env.example`のコメント併記）で担保する |
+| `VITE_USER_NAME_MAX_LENGTH` | `30` | プロフィールの姓名・フリガナに対するzodバリデーション上限文字数。未設定・不正値は既定値へフォールバックする |
+| `VITE_PASSWORD_MIN_LENGTH` | `8` | パスワードのzodバリデーション最小文字数。未設定・不正値は既定値へフォールバックする |
 
 認証モード、Googleログインの有効/無効、CSRF Cookie名は `GET /auth/config` から実行時に取得する。`VITE_AUTH_MODE` / `VITE_GOOGLE_LOGIN_ENABLED` / `VITE_CSRF_COOKIE_NAME` は定義しない。これによりfrontendイメージとbackendの設定がずれても、起動時にbackendの設定へ追従できる。
 
@@ -488,6 +490,10 @@ flowchart TB
 | 文字サイズの変更 | 小 / 標準 / 大 / 特大（`0.875` / `1` / `1.125` / `1.25`）。サーバーには保存しない |
 | ログイン履歴 | `GET /users/me/login-history` を表形式で表示（自衛的な監査） |
 
+フォームはReact Hook Formで状態・送信を管理し、zodスキーマをresolverとして使用する。プロフィールの生年月日は単一の`input type="date"`とし、APIの`YYYY-MM-DD`値をそのまま扱う。年/月/日プルダウンは会員登録画面の仕様であり、アカウント設定には適用しない。
+
+フォーム方針は新規フォームおよび変更対象画面ではRHF+zodを標準とする。既存フォームの全面移行は本Issueの対象外とし、各画面の実装Issueで順次移行する。
+
 ### 7.7 管理者ユーザー管理
 
 - タブ「管理」自体を `role = admin` のみ表示。直接URLアクセス時も `RequireAdmin` で `/dashboard` にリダイレクト
@@ -528,7 +534,7 @@ flowchart LR
 | 単体 | `authAdapter` | session / jwt それぞれで `attach` / `onUnauthorized` の挙動、リフレッシュの多重実行防止 |
 | 単体 | `AuthProvider` | 起動時の認証状態を `loading` に保ち、初期化成功で `authenticated`、未認証・失敗で `unauthenticated` に遷移 |
 | コンポーネント | `RequireAuth` / `RequireAdmin` / `RequireGuest` | `loading` 中はローディングUIを表示し、リダイレクトしない |
-| 単体 | zod スキーマ | パスワードポリシー・フリガナ・50文字制限などの境界値 |
+| 単体 | zod スキーマ | パスワードポリシー・フリガナ・各環境変数上限などの境界値 |
 | 単体 | `uiStore` | 文字サイズの永続化と復元、localStorage が空の場合の既定値 |
 | コンポーネント | LoginForm / RegisterForm | 入力検証・エラー表示・送信内容 |
 | コンポーネント | KanbanBoard | D&D後の楽観的更新とロールバック（MSWで失敗レスポンスを返す） |
