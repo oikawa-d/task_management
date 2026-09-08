@@ -9,6 +9,7 @@ import yaml  # type: ignore[import-untyped]
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = ROOT / ".github/workflows/ci.yml"
+API_REQUIREMENTS_DEV_PATH = ROOT / "api/requirements-dev.txt"
 
 
 def _load_workflow() -> dict[Any, Any]:
@@ -72,3 +73,27 @@ def test_docker_build_requires_all_quality_jobs_and_never_pushes() -> None:
 	assert len(build_steps) == 3
 	for step in build_steps:
 		assert step["with"]["push"] is False
+
+
+def _install_step_run(job_name: str) -> str:
+	steps = _load_workflow()["jobs"][job_name]["steps"]
+	install_step = next(step for step in steps if "pip install" in step.get("run", ""))
+	return cast(str, install_step["run"])
+
+
+def test_backend_jobs_install_dev_requirements() -> None:
+	# 開発用依存（httpx2等）の入れ忘れでpytestのcollectが失敗する事故を防ぐ。
+	for job_name in ("backend-lint", "backend-test"):
+		run = _install_step_run(job_name)
+		assert "-r requirements.txt" in run
+		assert "-r requirements-dev.txt" in run
+
+
+def test_api_dev_requirements_cover_lint_and_test_tools() -> None:
+	packages = {
+		line.split("==")[0].strip()
+		for line in API_REQUIREMENTS_DEV_PATH.read_text(encoding="utf-8").splitlines()
+		if line.strip() and not line.startswith("#")
+	}
+	# httpx2はfastapi.testclient（starlette.testclient）の実行に必須。
+	assert {"ruff", "mypy", "pytest", "pytest-cov", "pytest-asyncio", "httpx2"} <= packages
