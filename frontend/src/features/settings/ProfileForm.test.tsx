@@ -39,7 +39,10 @@ describe("ProfileForm", () => {
 
 	it("APIのフィールドエラーを該当項目に表示する", async () => {
 		const onSubmit = vi.fn().mockRejectedValue({
-			details: [{ field: "first_name", message: "この名前は使用できません" }],
+			error: {
+				code: "VALIDATION_ERROR",
+				details: [{ field: "body.first_name", message: "この名前は使用できません" }],
+			},
 		});
 		render(<ProfileForm initialValues={initialValues} onSubmit={onSubmit} />);
 

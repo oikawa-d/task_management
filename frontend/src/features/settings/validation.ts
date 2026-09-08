@@ -90,13 +90,42 @@ function isApiFieldError(value: unknown): value is ApiFieldError {
 }
 
 export function getFieldErrors(error: unknown): ApiFieldError[] {
-	if (!error || typeof error !== "object" || !("details" in error)) {
+	const payload = getApiErrorPayload(error);
+	if (!payload || !Array.isArray(payload.details)) {
 		return [];
 	}
 
-	const details = (error as { details?: unknown }).details;
-	if (!Array.isArray(details)) {
-		return [];
+	return payload.details.filter(isApiFieldError).map((detail) => ({
+		...detail,
+		field: normalizeApiField(detail.field),
+	}));
+}
+
+export function getApiErrorCode(error: unknown): string | undefined {
+	return getApiErrorPayload(error)?.code;
+}
+
+interface ApiErrorPayload {
+	code?: string;
+	details?: unknown;
+}
+
+function getApiErrorPayload(error: unknown): ApiErrorPayload | undefined {
+	if (!error || typeof error !== "object") {
+		return undefined;
 	}
-	return details.filter(isApiFieldError);
+
+	const candidate = error as Record<string, unknown>;
+	const payload = candidate.error && typeof candidate.error === "object"
+		? candidate.error as Record<string, unknown>
+		: candidate;
+
+	return {
+		code: typeof payload.code === "string" ? payload.code : undefined,
+		details: payload.details,
+	};
+}
+
+function normalizeApiField(field: string): string {
+	return field.startsWith("body.") ? field.slice("body.".length) : field;
 }

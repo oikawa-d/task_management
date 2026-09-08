@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import styles from "./PasswordChangeForm.module.css";
 import type { PasswordChangeInput } from "./types";
-import { getFieldErrors, validatePassword } from "./validation";
+import { getApiErrorCode, getFieldErrors, validatePassword } from "./validation";
 
 export interface PasswordChangeFormProps {
 	hasPassword: boolean;
@@ -158,5 +158,5 @@ function PasswordFieldInput({ field, label, value, error, isVisible, onToggle, o
 }
 
 function isInvalidCredentials(error: unknown): boolean {
-	return Boolean(error && typeof error === "object" && "code" in error && error.code === "INVALID_CREDENTIALS");
+	return getApiErrorCode(error) === "INVALID_CREDENTIALS";
 }
