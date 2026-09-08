@@ -171,6 +171,11 @@ async def test_user_indexes_support_redis_binary_members(redis: _FakeRedis) -> N
 	assert first not in redis.values
 	assert second not in redis.values
 
+	await redis_store.store_refresh_token("one", user_id, "family", 90)
+	await redis_store.store_refresh_token("two", user_id, "family", 90)
+	assert await redis_store.revoke_all_refresh_tokens(user_id) == 2
+	assert not [name for name in redis.values if name.startswith("test:refresh:")]
+
 
 async def test_refresh_token_storage_and_revocation(redis: _FakeRedis) -> None:
 	user_id = uuid.uuid4()
