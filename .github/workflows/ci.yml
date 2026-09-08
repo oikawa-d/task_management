@@ -166,7 +166,9 @@ jobs:
           python-version: '3.14'
 
       - name: pytestをインストール
-        run: pip install pytest pytest-asyncio
+        run: |
+          pip install pytest pytest-asyncio
+          pip install -r batch/requirements.txt
 
       - name: batch専用コンテナからDB/Redisへの直接接続を検証
         env:
