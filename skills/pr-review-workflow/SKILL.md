@@ -42,7 +42,7 @@ gh pr comment <番号> --body-file <file>
 
 | PRの種類 | 重点観点 |
 | --- | --- |
-| GitHub Actions (CI/CD) | secrets の扱い、`pull_request_target` 等の危険トリガ、`permissions` の最小化、self-hosted runner のfork PR実行可否、ロールバック条件、action のバージョン固定 |
+| GitHub Actions (CI/CD) | secrets の扱い、`pull_request_target` 等の危険トリガ、`permissions` の最小化、ロールバック条件、action のバージョン固定。self-hosted runner を使うワークフロー（`cd.yml`）ではさらに fork PR からの実行可否、レジストリ認証、ワークスペースの残留 |
 | 認証・認可 | トークン/Cookie/CSRF/OAuthリダイレクト、保存先、失効処理、エラーコードの一貫性、機密情報のログ出力、後方互換性 |
 | フロントエンド(ポーリング/非同期) | `useEffect` のクリーンアップ、依存配列、リクエストの重複発火とレース、`AbortSignal` の伝搬、リトライ/バックオフ方針 |
 | 管理者向け画面 | ルートガード(認証必須/ロール必須)の有無、個人情報の表示・ログ出力、破壊的操作の確認導線 |
@@ -61,7 +61,7 @@ gh pr comment <番号> --body-file <file>
 
 1. **親エージェント**がレビュー結果を `gh pr comment` で投稿する（指摘ごとに「なぜ問題か」「推奨対応」を書く）。
 2. `issue-label-workflow` に従い、対応するissueを `changes-requested` に更新する。
-3. **修正用サブエージェントを起動する。** 複数PRを並行修正する場合は、Agentツールの `isolation: "worktree"` を必ず指定して各エージェントを独立worktreeに分離する（同一チェックアウトを共有すると `git checkout`/`add`/`commit` が競合する）。
+3. **修正用サブエージェントを起動する。** 複数PRを並行修正する場合は、Agentツールの `isolation: "worktree"` を必ず指定して各エージェントを独立worktreeに分離する（同一チェックアウトを共有すると `git checkout`/`add`/`commit` が競合する）。起動前に「作業前のworktree清掃」（末尾）を済ませておくこと — 過去のworktreeがブランチを掴んでいると分離worktreeを作れない。
    修正エージェントへの指示に必ず含める:
    - 対象ブランチ名と `git fetch && git checkout <branch> && git pull --ff-only`
    - レビュー指摘の全文（どのファイルの何行目を、なぜ、どう直すか）
@@ -129,7 +129,9 @@ gh pr reopen <番号>                                        # PRを再オープ
 
 マージ後、関連issueを `gh issue close <番号> -c "..."` でコメント付きにcloseする。スコープ外とした指摘・後続タスクへの申し送りは、closeコメントと**引き継ぎ先issueの両方**にコメントとして残す（片方だけだと追跡が切れる）。
 
-`Closes #<番号>` がPR本文にあってもGitHubが自動closeしない場合があるので、マージ後に `gh issue view` でstateを必ず確認する。
+`Closes #<番号>` がPR本文にあってもGitHubが自動closeしない場合があるので、マージ後に `gh issue view` でstateを必ず確認する。逆に自動closeされていた場合は `gh issue close` がエラーになるため、申し送りは `gh issue comment` で別途残す。
+
+close後は `issue-label-workflow` の手順5に従い、issueから状態ラベル（`in-progress` / `review-requested` / `changes-requested`）を外す。
 
 ## 作業前のworktree清掃
 
