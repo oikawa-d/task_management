@@ -257,7 +257,8 @@ flowchart TB
 | `authStore`（Zustand） | `user`, `status`（`loading` / `authenticated` / `unauthenticated`）, `accessToken`（jwtモードのみ）, `authAdapter` | **しない**（メモリのみ） | アクセストークンを localStorage に置かない（XSS対策）。adapterは起動時のbackend設定から選択 |
 | `uiStore`（Zustand + persist） | `fontScale`, `sidebarOpen`, `dashboardView`（`"cards"` / `"calendar"`） | localStorage | 文字サイズ・サイドバー開閉・ダッシュボードの表示モードはクライアント側のみで保持。次回起動時も選択中の表示モードを復元する |
 | 通知（React Query） | `['notifications','unread-count']` / `['notifications', page, unreadOnly]` | しない | 未読件数はポーリング、一覧はパネルを開いたときに取得。パネルの開閉状態のみコンポーネントのローカルstateで持つ |
-| TanStack Query | プロジェクト一覧・ボード・コメント・ユーザー一覧 | しない | `queryKey` は `['projects']` / `['board', projectId]` / `['comments', taskId]` |
+| TanStack Query | プロジェクト一覧・ボード・ユーザー一覧 | しない | `queryKey` は `['projects']` / `['board', projectId]`。タスク詳細コメントは`taskDetailStore`で管理する（下段参照） |
+| `taskDetailStore`（singleton） | タスク詳細・コメント詳細の取得結果、更新中/エラー、`notFound`、`closeRequested`、`boardRefreshToken` | しない | タスク詳細モーダルは既存実装との互換性を優先し、`subscribe`/`getSnapshot`を`useSyncExternalStore`から購読する。TanStack Queryへ移行しない方針は[タスク詳細モーダル詳細設計](../detailed_design/screen/08_task_detail_modal.md)を正とする |
 | カレンダー（React Query） | `['tasks-calendar', scope, projectId, from, to]` | しない | 表示中の月（前後の見切れ週を含む`from`〜`to`）が変わるたびに取得し直す。`scope`/`projectId`の切替時も同様に再取得する |
 
 ### 5.1 認証状態の遷移
