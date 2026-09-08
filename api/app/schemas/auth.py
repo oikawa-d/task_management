@@ -159,4 +159,4 @@ class CurrentUser(_AuthSchema):
 	username: str
 	role: Literal["member", "admin"]
 	is_active: bool
-	email_verified_at: datetime | None
+	email_verified_at: datetime | None = None

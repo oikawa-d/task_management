@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import secrets
+from collections.abc import AsyncIterator
 from typing import Any, cast
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,11 +19,12 @@ from app.core.exceptions import (
 )
 from app.db import get_db_session
 from app.redis_client import get_redis_client
-from app.repository import user_repository
+from app.repository import project_member_repository, project_repository, user_repository
 from app.repository.session_repository import RedisSessionInterface, SessionRepository
 from app.schemas.auth import CurrentUser
 from app.service.auth_strategy import AuthContext, AuthStrategy
 from app.service.auth_strategy import get_auth_strategy as build_auth_strategy
+from app.service.authorization_service import authorize_project_member, authorize_project_owner
 from app.service.session_auth_service import SessionAuthContext, SessionAuthService
 
 
@@ -30,6 +33,11 @@ def get_session_auth_service(
 	settings: BackendSettings = Depends(get_backend_settings),
 ) -> SessionAuthService:
 	return SessionAuthService(SessionRepository(redis, settings.redis_key_prefix), settings)
+
+
+async def get_db() -> AsyncIterator[AsyncSession]:
+	async for session in get_db_session():
+		yield session
 
 
 def get_auth_strategy(settings: BackendSettings = Depends(get_backend_settings)) -> AuthStrategy:
@@ -91,6 +99,23 @@ def require_admin(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
 	if user.role != "admin":
 		raise ForbiddenError()
 	return user
+
+
+async def require_project_member(
+	project_id: UUID,
+	user: CurrentUser = Depends(get_current_user),
+	db: AsyncSession = Depends(get_db),
+) -> Any:
+	project = await project_repository.get_by_id(db, project_id)
+	is_member = user.role == "admin" or await project_member_repository.exists(db, project_id, user.id)
+	return authorize_project_member(user, project, is_member)
+
+
+async def require_project_owner(
+	project: Any = Depends(require_project_member),
+	user: CurrentUser = Depends(get_current_user),
+) -> Any:
+	return authorize_project_owner(user, project, is_member=True)
 
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})

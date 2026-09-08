@@ -22,6 +22,10 @@ async def exists(db: AsyncSession, project_id: uuid.UUID, user_id: uuid.UUID) ->
 	return bool(result.scalar_one())
 
 
+async def is_member(db: AsyncSession, project_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+	return await exists(db, project_id, user_id)
+
+
 async def list_by_project(db: AsyncSession, project_id: uuid.UUID) -> list[ProjectMember]:
 	result = await db.execute(
 		select(ProjectMember)
