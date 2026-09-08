@@ -255,7 +255,7 @@ flowchart TB
 | 引数 | 上記のとおり |
 | 戻り値 | なし |
 | 送出例外 | `RedisError`は無関係。DB接続不能時は`OperationalError`（503） |
-| 処理内容 | `CALL sp_record_login_history(:user_id, :login_method, :ip_address, :success)` を実行（`login_method`は`'session'`/`'jwt'`、OAuthは別API） |
+| 処理内容 | `CALL sp_record_login_history(:user_id, :login_identifier, :login_method, :ip_address, :user_agent, :success, :failure_reason)` を実行（`login_method`は`'session'`/`'jwt'`、OAuthは別API） |
 | 副作用 | DB: `login_history` へ1行追加 |
 
 ## 7. 関数相関図
@@ -366,6 +366,6 @@ stateDiagram-v2
 
 | 正式な呼び出し | 契約 |
 |----------------|------|
-| fn_find_user_by_identifier(p_identifier), sp_record_login_history(p_user_id, p_login_method, p_ip_address, p_success) | `detailed_design/database/08_db_functions.md` のシグネチャに従う |
+| fn_find_user_by_identifier(p_identifier), sp_record_login_history(p_user_id, p_login_identifier, p_login_method, p_ip_address, p_user_agent, p_success, p_failure_reason) | `detailed_design/database/08_db_functions.md` のシグネチャに従う |
 
 SQLSTATE P0xxxは同文書 §4 の対応表でAPIエラーへ変換し、Redis・メール・JWTの処理はAPI/service層に残す。
