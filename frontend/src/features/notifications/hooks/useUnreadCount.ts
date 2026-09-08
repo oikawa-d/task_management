@@ -1,6 +1,6 @@
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 
-import { fetchUnreadCount } from "../api/unreadCountApi";
+import { fetchUnreadCount, UnreadCountFetchError } from "../api/unreadCountApi";
 import { getNotificationPollIntervalMs } from "../config/pollingConfig";
 
 export const UNREAD_COUNT_QUERY_KEY = ["notifications", "unread-count"] as const;
@@ -24,12 +24,23 @@ export function useUnreadCount({
 }: UseUnreadCountOptions): UseQueryResult<number> {
 	return useQuery({
 		queryKey: UNREAD_COUNT_QUERY_KEY,
-		queryFn: async () => {
-			const response = await fetchUnreadCount();
+		queryFn: async ({ signal }) => {
+			const response = await fetchUnreadCount(signal);
 			return response.unread_count;
 		},
 		enabled: isAuthenticated,
 		refetchInterval: getNotificationPollIntervalMs(),
 		refetchIntervalInBackground: false,
+		// 401（UNAUTHENTICATED/SESSION_EXPIRED）はリトライしても回復しないため即座に諦める。
+		// 詳細設計 docs/detailed_design/api/notifications/02_get_notifications_unread_count.md §3 は
+		// SESSION_EXPIRED時のポーリング停止（enabled: false化）を規定しているが、
+		// それには authStore との結線が必要で別task（#179/#178）のスコープのため、
+		// 本taskでは最低限のリトライ抑止のみ行う。
+		retry: (failureCount, error) => {
+			if (error instanceof UnreadCountFetchError && error.status === 401) {
+				return false;
+			}
+			return failureCount < 3;
+		},
 	});
 }
