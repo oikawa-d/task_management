@@ -123,6 +123,13 @@ class BackendSettings(BaseSettings):
 			raise ValueError("must not be blank")
 		return value
 
+	@field_validator("access_token_ttl_seconds", "refresh_ttl_seconds")
+	@classmethod
+	def _reject_non_positive_ttl(cls, value: int) -> int:
+		if value <= 0:
+			raise ValueError("token TTL must be positive")
+		return value
+
 
 @lru_cache
 def get_backend_settings() -> BackendSettings:

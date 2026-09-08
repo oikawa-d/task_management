@@ -69,3 +69,12 @@ def test_settings_unknown_auth_mode_raises(monkeypatch: pytest.MonkeyPatch) -> N
 
 	with pytest.raises(ValidationError):
 		BackendSettings(_env_file=None)
+
+
+@pytest.mark.parametrize("field", ["ACCESS_TOKEN_TTL_SECONDS", "REFRESH_TTL_SECONDS"])
+def test_settings_token_ttl_must_be_positive(monkeypatch: pytest.MonkeyPatch, field: str) -> None:
+	_base_env(monkeypatch)
+	monkeypatch.setenv(field, "0")
+
+	with pytest.raises(ValidationError):
+		BackendSettings(_env_file=None)

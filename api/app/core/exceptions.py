@@ -44,6 +44,24 @@ class SessionExpiredError(UnauthenticatedError):
 	message = "セッションの有効期限が切れました"
 
 
+class TokenInvalidError(AppError):
+	code = "TOKEN_INVALID"
+	status_code = 401
+	message = "トークンが正しくありません"
+
+
+class TokenExpiredError(AppError):
+	code = "TOKEN_EXPIRED"
+	status_code = 401
+	message = "トークンの有効期限が切れています"
+
+
+class TokenRevokedError(AppError):
+	code = "TOKEN_REVOKED"
+	status_code = 401
+	message = "セッションが無効になりました。再度ログインしてください"
+
+
 class UserInactiveError(AppError):
 	code = "USER_INACTIVE"
 	status_code = 403
