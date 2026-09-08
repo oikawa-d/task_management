@@ -186,7 +186,7 @@ flowchart TB
 | 処理内容 | `fn_find_user_by_identifier` 相当のFNで重複候補を取得する。登録本体の一意性保証は `sp_register_user` がP0001/P0002で行う |
 | 副作用 | なし（参照のみ） |
 
-### 6.4 `repository/user_repository.py :: sp_record_login_history`
+### 6.4 `repository/user_repository.py :: sp_register_user`
 
 | 項目 | 内容 |
 |------|------|
