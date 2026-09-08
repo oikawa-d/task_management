@@ -226,3 +226,45 @@ def test_password_reset_request_rejects_invalid_values(payload: dict[str, object
 def test_password_reset_request_rejects_password_mismatch() -> None:
 	with pytest.raises(ValidationError):
 		PasswordResetRequest(**_password_reset_payload(password_confirm="OtherPassword1!"))
+
+
+@pytest.mark.parametrize(
+	"model,payload",
+	[
+		(RegisterRequest, _register_payload()),
+		(RegisterResponse, {"id": uuid4(), "email": "taro@example.com", "message": "ok"}),
+		(LoginRequest, {"identifier": "taro", "password": "password"}),
+		(LoginResponse, {"access_token": "token", "token_type": "bearer", "expires_in": 900}),
+		(RefreshResponse, {"access_token": "token", "token_type": "bearer", "expires_in": 900}),
+		(VerifyEmailRequest, {"token": "token"}),
+		(ResendVerifyEmailRequest, {"email": "taro@example.com"}),
+		(ResendVerifyEmailResponse, {"message": "ok"}),
+		(PasswordForgotRequest, {"email": "taro@example.com"}),
+		(PasswordForgotResponse, {"message": "ok"}),
+		(PasswordResetRequest, _password_reset_payload()),
+		(
+			MeResponse,
+			{
+				"id": uuid4(),
+				"username": "taro",
+				"email": "taro@example.com",
+				"last_name": None,
+				"first_name": None,
+				"last_name_kana": None,
+				"first_name_kana": None,
+				"birth_date": None,
+				"profile_completed": False,
+				"role": "member",
+				"has_password": True,
+				"oauth_providers": [],
+				"auth_mode": "session",
+			},
+		),
+		(AuthConfigResponse, {"auth_mode": "session", "google_login_enabled": True, "csrf_cookie_name": "csrf"}),
+	],
+)
+def test_auth_schemas_reject_extra_fields(model: type[object], payload: dict[str, object]) -> None:
+	payload["unexpected"] = "rejected"
+
+	with pytest.raises(ValidationError):
+		model(**payload)  # type: ignore[call-arg]
