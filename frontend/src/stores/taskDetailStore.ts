@@ -106,6 +106,8 @@ class TaskDetailStore {
 			isCommentsLoading: false,
 			error: taskResult.status === "rejected" ? asError(taskResult.reason) : null,
 			commentsError: commentsResult.status === "rejected" ? asError(commentsResult.reason) : null,
+			// 設計書§7.1/§11: open時のtask 404は自動クローズせずモーダル内表示＋手動導線とする。
+			// comments 404もtaskと同じ扱いに揃え、自動クローズしない。
 			notFound: taskMissing || commentsMissing,
 			closeRequested: false,
 		});

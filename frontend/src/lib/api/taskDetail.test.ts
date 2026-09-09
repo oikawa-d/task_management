@@ -89,4 +89,14 @@ describe("taskDetail API", () => {
 		const [, requestInit] = fetchMock.mock.calls[0] as [string, RequestInit];
 		expect(requestInit.credentials).toBe("same-origin");
 	});
+
+	it("CSRFトークン欠落・不一致時の403 CSRF_INVALIDをTaskDetailApiErrorとして返す", async () => {
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ code: "CSRF_INVALID" }, { ok: false, status: 403 })));
+
+		await expect(patchTask("task-1", { title: "更新", version: 2 })).rejects.toEqual(expect.objectContaining({
+			constructor: TaskDetailApiError,
+			status: 403,
+			code: "CSRF_INVALID",
+		}));
+	});
 });
