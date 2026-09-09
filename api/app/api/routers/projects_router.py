@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,7 +20,14 @@ from app.schemas.project import (
 	ProjectSummaryResponse,
 	ProjectUpdateRequest,
 )
-from app.service import project_service
+from app.schemas.project_member import (
+	AddMemberRequest,
+	CandidateListResponse,
+	CandidateSearchQuery,
+	MemberListResponse,
+	MemberResponse,
+)
+from app.service import member_service, project_service
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -74,4 +83,44 @@ async def delete_project(
 	__csrf: None = Depends(verify_csrf),
 ) -> Response:
 	await project_service.deactivate_project(db, project)
+	return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/{project_id}/members", response_model=MemberListResponse)
+async def list_project_members(
+	project: Project = Depends(require_project_member), db: AsyncSession = Depends(get_db_session)
+) -> MemberListResponse:
+	return await member_service.list_members(project, db)
+
+
+@router.post("/{project_id}/members", response_model=MemberResponse, status_code=status.HTTP_201_CREATED)
+async def add_project_member(
+	payload: AddMemberRequest,
+	project: Project = Depends(require_project_owner),
+	user: CurrentUser = Depends(get_current_user),
+	db: AsyncSession = Depends(get_db_session),
+	_: None = Depends(verify_origin),
+	__csrf: None = Depends(verify_csrf),
+) -> MemberResponse:
+	return await member_service.add_member(project, payload.user_id, user.id, db)
+
+
+@router.get("/{project_id}/member-candidates", response_model=CandidateListResponse)
+async def search_member_candidates(
+	query: CandidateSearchQuery = Depends(),
+	project: Project = Depends(require_project_owner),
+	db: AsyncSession = Depends(get_db_session),
+) -> CandidateListResponse:
+	return await member_service.search_candidates(project, query.q, db)
+
+
+@router.delete("/{project_id}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_project_member(
+	user_id: UUID,
+	project: Project = Depends(require_project_owner),
+	db: AsyncSession = Depends(get_db_session),
+	_: None = Depends(verify_origin),
+	__csrf: None = Depends(verify_csrf),
+) -> Response:
+	await member_service.remove_member(project, user_id, db)
 	return Response(status_code=status.HTTP_204_NO_CONTENT)
