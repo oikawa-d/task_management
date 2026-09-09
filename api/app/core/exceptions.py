@@ -71,6 +71,24 @@ class UserInactiveError(AppError):
 	message = "このアカウントは無効化されています"
 
 
+class InvalidCredentialsError(AppError):
+	code = "INVALID_CREDENTIALS"
+	status_code = 401
+	message = "IDまたはパスワードが正しくありません"
+
+
+class ValidationError(AppError):
+	code = "VALIDATION_ERROR"
+	status_code = 422
+	message = "入力内容に誤りがあります"
+
+
+class ServiceUnavailableError(AppError):
+	code = "SERVICE_UNAVAILABLE"
+	status_code = 503
+	message = "現在サービスをご利用いただけません"
+
+
 def _build_error_body(code: str, message: str, details: Any, request_id: str) -> dict[str, Any]:
 	return {
 		"error": {
