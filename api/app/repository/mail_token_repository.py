@@ -16,14 +16,18 @@ return 1
 """
 
 _CONSUME_CURRENT_TOKEN_SCRIPT = """
-local current_hash = redis.call('GET', KEYS[1])
-if not current_hash or current_hash ~= ARGV[1] then
-    return false
+local value = redis.call('GET', KEYS[1])
+if not value then
+	return false
 end
-local value = redis.call('GET', KEYS[2])
+local data = cjson.decode(value)
+local current_key = ARGV[1] .. data.user_id
+if redis.call('GET', current_key) ~= ARGV[2] then
+	return false
+end
 if value then
-    redis.call('DEL', KEYS[2])
-    redis.call('DEL', KEYS[1])
+	redis.call('DEL', KEYS[1])
+	redis.call('DEL', current_key)
 end
 return value
 """
@@ -110,9 +114,9 @@ class MailTokenRepository:
 		token_hash = self.hash_token(token)
 		value = await self._redis.eval(
 			_CONSUME_CURRENT_TOKEN_SCRIPT,
-			2,
-			self._key("pwreset_current", "").rstrip(":"),
+			1,
 			self._key("pwreset", token_hash),
+			self._key("pwreset_current", "").rstrip(":") + ":",
 			token_hash,
 		)
 		return self._user_id_from_value(value)

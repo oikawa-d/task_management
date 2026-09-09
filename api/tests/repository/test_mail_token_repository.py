@@ -32,6 +32,7 @@ async def test_consume_password_reset_token_requires_current_hash_and_is_one_tim
 
 	assert result == user_id
 	arguments = redis.eval.await_args.args
+	assert arguments[1] == 1
 	assert "reset-token" not in arguments
 	assert repository.hash_token("reset-token") in arguments
 
