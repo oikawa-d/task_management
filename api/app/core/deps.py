@@ -107,15 +107,14 @@ async def verify_csrf(
 	strategy: AuthStrategy = Depends(get_auth_strategy),
 	settings: BackendSettings = Depends(get_backend_settings),
 ) -> None:
+	if strategy.mode == "jwt":
+		return
 	header = request.headers.get("x-csrf-token")
 	if not header:
 		raise CsrfInvalidError()
-	if strategy.mode == "session":
-		session_id = request.cookies.get(settings.cookie_name_session)
-		if not session_id:
-			raise CsrfInvalidError()
-		cookie_token = await redis_store.get_csrf_token(session_id)
-	else:
-		cookie_token = request.cookies.get(settings.cookie_name_csrf)
+	session_id = request.cookies.get(settings.cookie_name_session)
+	if not session_id:
+		raise CsrfInvalidError()
+	cookie_token = await redis_store.get_csrf_token(session_id)
 	if cookie_token is None or not secrets.compare_digest(cookie_token, header):
 		raise CsrfInvalidError()
