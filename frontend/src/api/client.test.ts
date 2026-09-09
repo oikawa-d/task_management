@@ -6,15 +6,17 @@ import { createApiClient, getApiClient } from "./client";
 import { ApiError } from "./errors";
 
 function createAdapter(overrides: Partial<AuthAdapter> = {}): AuthAdapter {
-	return {
-		mode: "session",
+	const adapter = {
+		mode: "session" as const,
 		attach: vi.fn((config) => ({ ...config, withCredentials: true })),
 		onLoginSuccess: vi.fn(),
 		onUnauthorized: vi.fn().mockResolvedValue(false),
 		restoreSession: vi.fn().mockResolvedValue(true),
 		...overrides,
 		onLogout: overrides.onLogout ?? vi.fn(),
+		logout: vi.fn().mockResolvedValue(undefined),
 	};
+	return adapter;
 }
 
 function createError(config: RetryableRequestConfig, status: number, data: unknown): AxiosError {
