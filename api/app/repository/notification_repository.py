@@ -6,9 +6,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.notification import Notification
 
 
+def validate_page_window(limit: int, offset: int) -> None:
+	if limit < 1:
+		raise ValueError("limit must be positive")
+	if offset < 0:
+		raise ValueError("offset must not be negative")
+
+
 async def list_by_user(
 	db: AsyncSession, user_id: uuid.UUID, unread_only: bool, limit: int, offset: int
 ) -> list[Notification]:
+	validate_page_window(limit, offset)
 	result = await db.execute(
 		select(Notification)
 		.from_statement(text("SELECT * FROM fn_list_notifications(:user_id, :unread_only, :limit, :offset)"))
