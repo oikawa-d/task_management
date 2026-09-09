@@ -38,6 +38,21 @@ class CsrfInvalidError(ForbiddenError):
 	message = "CSRFトークンが不正です"
 
 
+class ConflictError(AppError):
+	status_code = 409
+	message = "競合が発生しました"
+
+
+class AlreadyMemberError(ConflictError):
+	code = "ALREADY_MEMBER"
+	message = "既にプロジェクトのメンバーです"
+
+
+class OwnerCannotBeRemovedError(ConflictError):
+	code = "OWNER_CANNOT_BE_REMOVED"
+	message = "オーナーはメンバーから削除できません"
+
+
 class UnauthenticatedError(AppError):
 	code = "UNAUTHENTICATED"
 	status_code = 401
