@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { createContext, useContext, useState, type PropsWithChildren, type ReactNode } from "react";
 import { useLocation } from "react-router-dom";
 
 import styles from "./SettingsPage.module.css";
@@ -18,6 +18,26 @@ export interface SettingsPageProps {
 	passwordChangeForm?: ReactNode;
 }
 
+export type SettingsFormSlotProps = {
+	onSuccess: (message: string) => void;
+};
+
+export type SettingsFormSlot = (props: SettingsFormSlotProps) => ReactNode;
+
+export type SettingsFormSlots = {
+	profile?: SettingsFormSlot;
+	password?: SettingsFormSlot;
+};
+
+const SettingsFormsContext = createContext<SettingsFormSlots>({});
+
+export function SettingsFormsProvider({
+	slots,
+	children,
+}: PropsWithChildren<{ slots?: SettingsFormSlots }>) {
+	return <SettingsFormsContext.Provider value={slots ?? {}}>{children}</SettingsFormsContext.Provider>;
+}
+
 function FormPlaceholder({ label }: { label: string }) {
 	return (
 		<form aria-label={`${label}フォーム`} className={styles.placeholder}>
@@ -32,9 +52,18 @@ export function SettingsPage({
 	passwordChangeForm = <FormPlaceholder label="パスワード変更" />,
 }: SettingsPageProps) {
 	const { search } = useLocation();
+	const formSlots = useContext(SettingsFormsContext);
 	const [activeTab, setActiveTab] = useState<SettingsTab>("profile");
+	const [successMessage, setSuccessMessage] = useState<string | null>(null);
 	const isCompletionRequested = new URLSearchParams(search).get("complete_profile") === "1";
 	const showCompletionBanner = !profileCompleted && isCompletionRequested;
+	const handleFormSuccess = (message: string) => setSuccessMessage(message);
+	const renderedProfileForm = formSlots.profile
+		? formSlots.profile({ onSuccess: handleFormSuccess })
+		: profileForm;
+	const renderedPasswordChangeForm = formSlots.password
+		? formSlots.password({ onSuccess: handleFormSuccess })
+		: passwordChangeForm;
 	const activeLabel = SETTINGS_TABS.find((tab) => tab.id === activeTab)?.label ?? "プロフィール";
 	const changeTabByKeyboard = (currentTab: SettingsTab, key: string) => {
 		const currentIndex = SETTINGS_TABS.findIndex((tab) => tab.id === currentTab);
@@ -54,6 +83,7 @@ export function SettingsPage({
 					プロフィールを入力してください
 				</p>
 			) : null}
+			{successMessage ? <p role="status">{successMessage}</p> : null}
 			<div className={styles.tabs} role="tablist" aria-label="アカウント設定の項目">
 				{SETTINGS_TABS.map((tab) => (
 					<button
@@ -88,8 +118,8 @@ export function SettingsPage({
 				tabIndex={-1}
 			>
 				<h2 id={`${activeTab}-heading`}>{activeLabel}</h2>
-				{activeTab === "profile" ? profileForm : null}
-				{activeTab === "password" ? passwordChangeForm : null}
+				{activeTab === "profile" ? renderedProfileForm : null}
+				{activeTab === "password" ? renderedPasswordChangeForm : null}
 				{activeTab === "display" ? <p>文字サイズ設定は準備中です。</p> : null}
 				{activeTab === "history" ? <p>ログイン履歴は準備中です。</p> : null}
 			</div>

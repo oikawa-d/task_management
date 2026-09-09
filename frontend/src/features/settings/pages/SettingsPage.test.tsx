@@ -4,7 +4,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 
-import { SettingsPage, type SettingsPageProps } from "./SettingsPage";
+import { SettingsFormsProvider, SettingsPage, type SettingsPageProps } from "./SettingsPage";
 
 function renderPage(initialEntry = "/settings", props: SettingsPageProps = {}) {
 	return render(
@@ -69,5 +69,26 @@ describe("SettingsPage", () => {
 
 		expect(passwordTab).toHaveAttribute("aria-selected", "true");
 		expect(passwordTab).toHaveFocus();
+	});
+
+	it("SettingsFormsProviderの実フォームslotを設定画面へ描画する", () => {
+		render(
+		<MemoryRouter initialEntries={["/settings"]}>
+			<SettingsFormsProvider
+				slots={{
+					profile: ({ onSuccess }) => (
+						<button type="button" onClick={() => onSuccess("プロフィールを更新しました")}>
+							実プロフィールフォーム
+						</button>
+					),
+				}}
+			>
+				<SettingsPage />
+			</SettingsFormsProvider>
+		</MemoryRouter>,
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: "実プロフィールフォーム" }));
+		expect(screen.getByRole("status")).toHaveTextContent("プロフィールを更新しました");
 	});
 });
