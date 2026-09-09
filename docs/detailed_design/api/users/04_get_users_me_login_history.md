@@ -95,7 +95,7 @@ Cookie
 | meta.limit | integer | 不可 | 適用された上限件数（`LOGIN_HISTORY_LIST_LIMIT`の現在値） |
 | meta.count | integer | 不可 | `items`の実件数（`limit`以下） |
 
-`items`はログイン試行の`login_identifier`（入力されたusername/email原文）を含めない（自分自身の履歴であり値は自明だが、`login_history`テーブルは第三者の誤入力によるレコードも`user_id`一致条件では返らないため、`login_identifier`を返す必然性がなく個人情報の重複露出を避ける。§13参照）。Set-Cookieは発行しない。共通ヘッダ：`X-Request-ID`。`Cache-Control: no-store`を付与する。
+`items`はログイン試行の`login_identifier`（通常ログインのusername/email原文、Google OAuthの検証済みGoogle email）を含めない（自分自身の履歴であり値は自明だが、`login_history`テーブルは第三者の誤入力によるレコードも`user_id`一致条件では返らないため、`login_identifier`を返す必然性がなく個人情報の重複露出を避ける。§13参照）。Set-Cookieは発行しない。共通ヘッダ：`X-Request-ID`。`Cache-Control: no-store`を付与する。
 
 ## 3. エラー仕様
 
@@ -167,7 +167,7 @@ flowchart TB
 | 引数 | `current_user`、`db`、`limit`（環境変数由来） |
 | 戻り値 | `LoginHistoryListResponse` |
 | 送出例外 | なし |
-| 処理内容 | 1. `login_history_repository.fn_list_user_login_history(db, current_user.id, limit=limit, offset=0)` 2. 取得した行を`LoginHistoryItem`へマッピング（`login_identifier`は含めない） 3. `meta.limit=limit`、`meta.count=len(items)`を設定し`LoginHistoryListResponse`を返す |
+| 処理内容 | 1. `login_history_repository.fn_list_user_login_history(db, current_user.id, limit=limit, offset=0)` 2. 取得した行を`LoginHistoryItem`へマッピング（通常ログインのusername/email、OAuthの検証済みGoogle emailを含む`login_identifier`はレスポンスへ写像しない） 3. `meta.limit=limit`、`meta.count=len(items)`を設定し`LoginHistoryListResponse`を返す |
 | 副作用 | なし |
 
 ### 6.3 `repository/login_history_repository.py :: fn_list_user_login_history`
@@ -222,7 +222,7 @@ sessionモードの認証解決（`GET session:{sid}` → `EXPIRE`）以外の�
 | 件数上限の環境変数化 | 上限件数はコードにハードコードせず`LOGIN_HISTORY_LIST_LIMIT`（既定50。`basic_design/04_api.md`§2.2の「直近50件」に対応）として`core/config.py`の`Settings`に定義する。ページングは提供せず常に最新N件のみを返す |
 | 自分の履歴のみ | `login_history_repository.fn_list_user_login_history`が`user_id=current_user.id`を必ず条件に含むため、他ユーザーの履歴を混入させる経路がない。管理者であっても本APIでは自分の履歴のみが返る（全ユーザー分は`GET /admin/login-history`が別途提供） |
 | fail-close方針 | Redis（session時）/PostgreSQL接続不能時は503 |
-| 個人情報の露出範囲 | `login_identifier`（入力されたID文字列）はレスポンスに含めない。IPアドレス・UAは自分自身の履歴表示のため許容する |
+| 個人情報の露出範囲 | `login_identifier`（通常ログインの入力ID文字列、またはGoogle OAuthの検証済みGoogle email）はレスポンスに含めない。IPアドレス・UAは自分自身の履歴表示のため許容する |
 
 ## 12. テスト設計
 

@@ -26,6 +26,8 @@ export interface AuthAdapter {
 	restoreSession(): Promise<boolean>;
 	/** クライアント側の後片付け */
 	onLogout(): void;
+	/** logout APIを呼び出す。認証方式固有のCookie/CSRF設定は実装側で付与する */
+	logout(): Promise<void>;
 }
 
 /**
@@ -35,4 +37,11 @@ export interface AuthAdapter {
 export interface TokenStore {
 	getAccessToken(): string | null;
 	setAccessToken(token: string | null): void;
+}
+
+/** 認証アダプタ生成時に実行時設定とトークン保持先を注入するオプション */
+export interface AuthAdapterOptions {
+	csrfCookieName?: string;
+	tokenStore?: TokenStore;
+	httpClient?: import("axios").AxiosInstance;
 }

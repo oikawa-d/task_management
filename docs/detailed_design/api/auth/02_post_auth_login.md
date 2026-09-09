@@ -255,7 +255,7 @@ flowchart TB
 | 引数 | 上記のとおり |
 | 戻り値 | なし |
 | 送出例外 | `RedisError`は無関係。DB接続不能時は`OperationalError`（503） |
-| 処理内容 | `CALL sp_record_login_history(:user_id, :login_identifier, :login_method, :ip_address, :user_agent, :success, :failure_reason)` を実行（`login_method`は`'session'`/`'jwt'`、OAuthは別API） |
+| 処理内容 | `CALL sp_record_login_history(:user_id, :login_identifier, :login_method, :ip_address, :user_agent, :success, :failure_reason)` を実行（`login_identifier`はリクエストのusername/email原文。`login_method`は`'session'`/`'jwt'`、OAuthは別API） |
 | 副作用 | DB: `login_history` へ1行追加 |
 
 ## 7. 関数相関図

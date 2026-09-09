@@ -381,4 +381,6 @@ flowchart LR
 |------|------|------|
 | 要検討 | メンバー招待UIを本画面（③⑨付近）に置くか、独立した導線とするかが基本設計（[05_frontend.md §7.5](../../basic_design/05_frontend.md#75-カンバンボード)）に明記されていない。本書では簡易表示のみとし招待操作は対象外とした | メンバー管理APIの呼び出し元画面の要確認 |
 | 確定 | タスク作成時の `description` 文字数上限はissue #40で0〜2000文字に確定（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） | - |
+| 確定 | board層の実装は、PR #231由来の`@dnd-kit`対応`TaskCard`/`KanbanBoard`/`KanbanColumn`を正とする。キーボードD&D、`role=listitem`、`aria-roledescription`、`aria-live`通知を維持する。PR #230由来の素の`TaskCard`は採用せず、同PR由来の`BoardPage`・API取得・`TaskDetailModal`は詳細モーダルとデータ取得の責務へ整理する | D&D・ARIA要件と詳細画面遷移を同時に満たすため、同一パスの二重実装を許容しない |
+| 確定 | `KanbanBoard`のカードクリックcallback名は設計書に合わせて`onCardClick`に統一する。内部の列コンポーネントへ渡すcallbackは`onTaskClick`とし、公開propsとの責務を分ける | #230/#231間の命名差異による接続ミスを防止 |
 | なし | 上記以外 | - |

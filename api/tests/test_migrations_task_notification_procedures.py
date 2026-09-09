@@ -57,16 +57,20 @@ def test_task_notification_procedure_revision_is_reversible() -> None:
 	engine = create_engine(_sync_database_url())
 	try:
 		with engine.connect() as connection:
-			argument_names = connection.execute(
-				text("SELECT p.proargnames FROM pg_proc p WHERE p.proname = 'sp_create_task'")
-			).scalar_one()
-			assert "p_day_start_utc" in argument_names
+			for procedure_name in ("sp_create_task", "sp_update_task"):
+				argument_names = connection.execute(
+					text("SELECT p.proargnames FROM pg_proc p WHERE p.proname = :procedure_name"),
+					{"procedure_name": procedure_name},
+				).scalar_one()
+				assert {"p_day_start_utc", "p_day_end_utc"} <= set(argument_names)
 
 		command.downgrade(cfg, "0015")
 		with engine.connect() as connection:
-			argument_names = connection.execute(
-				text("SELECT p.proargnames FROM pg_proc p WHERE p.proname = 'sp_create_task'")
-			).scalar_one()
-			assert "p_day_start_utc" not in argument_names
+			for procedure_name in ("sp_create_task", "sp_update_task"):
+				argument_names = connection.execute(
+					text("SELECT p.proargnames FROM pg_proc p WHERE p.proname = :procedure_name"),
+					{"procedure_name": procedure_name},
+				).scalar_one()
+				assert not {"p_day_start_utc", "p_day_end_utc"} & set(argument_names)
 	finally:
 		engine.dispose()

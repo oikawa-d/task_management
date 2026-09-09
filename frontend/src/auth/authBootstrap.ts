@@ -36,6 +36,7 @@ export async function bootstrapAuth(): Promise<AuthUser | null> {
 		csrfCookieName: config.csrf_cookie_name,
 		httpClient: client,
 	});
+	useAuthStore.getState().setAuthAdapter(adapter);
 
 	configureApiClient(client, {
 		authAdapter: adapter,

@@ -4,10 +4,12 @@ import { RequireAdmin, RequireAuth, RequireGuest } from "./auth/guards";
 import { AdminUsersPage } from "./features/admin/pages/AdminUsersPage";
 import { LoginPage } from "./features/auth/pages/LoginPage";
 import { DashboardPage } from "./features/dashboard/pages/DashboardPage";
+import { BoardPage } from "./features/board/BoardPage";
+import { SettingsPage } from "./features/settings/pages/SettingsPage";
 import { AppLayout } from "./layouts/AppLayout";
 import { ROUTES } from "./routes";
 
-export const router = createBrowserRouter([
+export const appRoutes = [
 	{
 		path: ROUTES.ROOT,
 		element: <Navigate to={ROUTES.LOGIN} replace />,
@@ -31,6 +33,18 @@ export const router = createBrowserRouter([
 						path: ROUTES.DASHBOARD,
 						element: <DashboardPage />,
 					},
+					{
+						path: ROUTES.PROJECT_PATTERN,
+						element: <BoardPage />,
+					},
+					{
+						path: ROUTES.TASK_PATTERN,
+						element: <BoardPage />,
+					},
+					{
+						path: ROUTES.SETTINGS,
+						element: <SettingsPage />,
+					},
 				],
 			},
 			{
@@ -44,4 +58,6 @@ export const router = createBrowserRouter([
 			},
 		],
 	},
-]);
+];
+
+export const router = createBrowserRouter(appRoutes);

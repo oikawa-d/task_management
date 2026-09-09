@@ -198,7 +198,7 @@ flowchart TB
 | 引数 | `code`：一時ハンドオフコード。`request`/`response`：Strategy.loginへ引き渡す |
 | 戻り値 | `OAuthExchangeResult`（`access_token`, `expires_in`, `redirect_to`） |
 | 送出例外 | `OAuthHandoffInvalidError`、`UserInactiveError`、`ServiceUnavailableError` |
-| 処理内容 | 1. `redis_store.consume_oauth_handoff(code)`を呼び`None`なら`OAuthHandoffInvalidError` 2. `user_repository.fn_get_user(data.user_id)`で現在の有効ユーザーを取得（Redisに保存されたuser_idのみを信頼し、role等は再取得しない） 3. 取得できなければ`UserInactiveError` 4. `jwt_strategy.login(user, request, response)`を呼び`LoginResult`を得る 5. `login_history_repository.sp_record_login_history(user.id, login_identifier=user.email, method='oauth_google', success=True)`を呼ぶ 6. `data.redirect_to`（正規化済み）とともに結果を返す |
+| 処理内容 | 1. `redis_store.consume_oauth_handoff(code)`を呼び`None`なら`OAuthHandoffInvalidError` 2. `user_repository.fn_get_user(data.user_id)`で現在の有効ユーザーを取得（Redisに保存されたuser_idのみを信頼し、role等は再取得しない） 3. 取得できなければ`UserInactiveError` 4. `jwt_strategy.login(user, request, response)`を呼び`LoginResult`を得る 5. `login_history_repository.sp_record_login_history(user.id, login_identifier=user.email, method='oauth_google', success=True)`を呼ぶ 6. `data.redirect_to`（正規化済み）とともに結果を返す。ここでの`login_identifier`は解決済みユーザーの検証済みGoogle emailであり、OAuthアカウントの`sub`ではない |
 | 副作用 | PostgreSQL：`login_history`INSERT。Redis：`refresh:{hash}`/`user_refresh:{uid}`新規作成（`JwtAuthStrategy.login`内）。Cookie：`cerberus_rt`/`cerberus_csrf`発行 |
 
 ### 6.3 `repository/user_repository.py :: fn_get_user`
@@ -223,15 +223,15 @@ flowchart TB
 | 処理内容 | 1. `family_id = uuid4()`を生成 2. アクセストークン（JWT、`sub=user.id`, `exp`, `jti`, `typ='access'`）を署名生成 3. リフレッシュトークン（`token_urlsafe(48)`）を生成 4. `redis_store.store_refresh_token(refresh_token, user.id, family_id, REFRESH_TTL_SECONDS)`を呼ぶ 5. CSRFトークン（`token_urlsafe(32)`）を生成 6. `response`に`cerberus_rt`（HttpOnly）・`cerberus_csrf`（非HttpOnly）をSet-Cookie |
 | 副作用 | Redis：`refresh:{hash}`/`user_refresh:{uid}`新規作成。Cookie：2件発行 |
 
-### 6.5 `repository/login_history_repository.py :: sp_record_login_history`
+### 6.5 `repository/login_history_repository.py :: create`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def record(user_id: UUID, method: Literal["session", "jwt", "oauth_google"], success: bool, ip_address: str | None = None, failure_reason: str | None = None) -> None` |
+| シグネチャ | `async def create(db: AsyncSession, user_id: uuid.UUID | None, login_identifier: str, login_method: str, ip_address: str | None, user_agent: str | None, success: bool, failure_reason: str | None) -> None` |
 | 引数 | 表の通り |
 | 戻り値 | なし |
 | 送出例外 | なし（DB例外は共通ハンドラに委譲） |
-| 処理内容 | `CALL sp_record_login_history(:user_id, :login_identifier, :login_method, :ip_address, :user_agent, :success, :failure_reason)` |
+| 処理内容 | `CALL sp_record_login_history(:user_id, :login_identifier, :login_method, :ip_address, :user_agent, :success, :failure_reason)`。OAuth交換では`login_identifier=user.email`、`login_method='oauth_google'`を渡す |
 | 副作用 | PostgreSQL：`login_history`INSERT |
 
 ## 7. 関数相関図
@@ -261,7 +261,7 @@ stateDiagram-v2
     handoff消費済み --> [*]: 無効なら400で終了
 
     handoff消費済み --> refresh発行済み: SETEX refresh:{hash}<br/>SADD user_refresh:{uid}
-    refresh発行済み --> login_history記録済み: INSERT login_history(method='oauth_google')
+    refresh発行済み --> login_history記録済み: INSERT login_history(method='oauth_google', login_identifier=user.email)
     login_history記録済み --> [*]: 200応答・Cookie発行完了
 ```
 
@@ -275,7 +275,7 @@ PostgreSQLの`users`/`oauth_accounts`は本APIでは更新しない（12番フ�
 | Redis | `refresh:{token_hash}` | `SETEX`（新規作成） | TTL=`REFRESH_TTL_SECONDS`（既定14日） | `JwtAuthStrategy.login`内 |
 | Redis | `user_refresh:{user_id}` | `SADD` + `EXPIRE`（新規追加） | TTL=`REFRESH_TTL_SECONDS` | 同上 |
 | PostgreSQL | `users` | `SELECT`（`id`+`is_active`） | - | ハンドオフに保存された`user_id`の再検証 |
-| PostgreSQL | `login_history` | `INSERT`（`method='oauth_google'`） | - | 交換成功時のみ記録 |
+| PostgreSQL | `login_history` | `INSERT`（`method='oauth_google'`, `login_identifier=user.email`） | - | 交換成功時のみ、解決済みユーザーの検証済みGoogle emailを記録 |
 
 ## 10. バリデーション規則
 
@@ -310,7 +310,7 @@ PostgreSQLの`users`/`oauth_accounts`は本APIでは更新しない（12番フ�
 | 8 | 結合 | 許可されていない`Origin`ヘッダ | `Origin: https://evil.com` | 403 `CSRF_INVALID` | `test_oauth_exchange_rejects_disallowed_origin` |
 | 9 | 結合 | 交換前にユーザーが無効化される | handoff発行後に対象ユーザーの`is_active=false`へ更新 | 403 `USER_INACTIVE` | `test_oauth_exchange_rejects_deactivated_user` |
 | 10 | 結合 | `code`未指定 | ボディに`code`なし | 422 `VALIDATION_ERROR` | `test_oauth_exchange_requires_code_field` |
-| 11 | 結合 | 交換成功後の`login_history` | 正常系 | `login_history`に`method='oauth_google', success=true`の行が1件追加される | `test_oauth_exchange_records_login_history` |
+| 11 | 結合 | 交換成功後の`login_history` | 正常系 | `login_history`に`method='oauth_google', login_identifier=user.email, success=true`の行が1件追加される | `test_oauth_exchange_records_login_history` |
 | 12 | 結合 | `redirect_to`の伝播 | 11番ファイルで`redirect_to=/projects/1`を保存 → 12番でhandoffへ引き継ぎ | レスポンスの`redirect_to`が`/projects/1` | `test_oauth_exchange_returns_propagated_redirect_to` |
 
 網羅できない範囲：なし（本APIは外部通信を行わないため、Google関連の手動確認対象は11・12番ファイル側に集約される）。

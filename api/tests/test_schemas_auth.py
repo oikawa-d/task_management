@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 from app.schemas.auth import (
 	AuthConfigResponse,
+	CurrentUser,
 	LoginRequest,
 	LoginResponse,
 	MeResponse,
@@ -17,6 +18,7 @@ from app.schemas.auth import (
 	ResendVerifyEmailResponse,
 	VerifyEmailRequest,
 )
+from app.schemas.base import StrictSchema
 from pydantic import ValidationError
 
 
@@ -226,3 +228,44 @@ def test_password_reset_request_rejects_invalid_values(payload: dict[str, object
 def test_password_reset_request_rejects_password_mismatch() -> None:
 	with pytest.raises(ValidationError):
 		PasswordResetRequest(**_password_reset_payload(password_confirm="OtherPassword1!"))
+
+
+def test_register_request_rejects_undefined_field() -> None:
+	"""想定外の入力フィールドを拒否する（extra="forbid"）。"""
+	with pytest.raises(ValidationError):
+		RegisterRequest(**_register_payload(is_admin=True))
+
+
+def test_login_request_rejects_undefined_field() -> None:
+	with pytest.raises(ValidationError):
+		LoginRequest(login_identifier="user", password="Password1!", role="admin")
+
+
+def test_password_reset_request_rejects_undefined_field() -> None:
+	with pytest.raises(ValidationError):
+		PasswordResetRequest(**_password_reset_payload(user_id=str(uuid4())))
+
+
+@pytest.mark.parametrize(
+	"model",
+	[
+		AuthConfigResponse,
+		CurrentUser,
+		LoginRequest,
+		LoginResponse,
+		MeResponse,
+		PasswordForgotRequest,
+		PasswordForgotResponse,
+		PasswordResetRequest,
+		RefreshResponse,
+		RegisterRequest,
+		RegisterResponse,
+		ResendVerifyEmailRequest,
+		ResendVerifyEmailResponse,
+		VerifyEmailRequest,
+	],
+)
+def test_auth_schemas_forbid_extra_fields(model: type[StrictSchema]) -> None:
+	"""auth系DTOが漏れなく共通基底を継承し、extra="forbid" が効いていること。"""
+	assert issubclass(model, StrictSchema)
+	assert model.model_config.get("extra") == "forbid"
