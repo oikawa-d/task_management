@@ -6,6 +6,7 @@ import {
 	DEFAULT_API_BASE_URL,
 } from "../api/authAdapter/constants";
 import { createAuthAdapter, type RetryableRequestConfig } from "../api/authAdapter";
+import { setTaskDetailAuthAdapter } from "../lib/api/taskDetail";
 import type { AuthUser } from "./authStore";
 
 export type AuthConfigResponse = {
@@ -50,6 +51,7 @@ export async function bootstrapAuth(): Promise<AuthUser | null> {
 		csrfCookieName: config.csrf_cookie_name,
 		httpClient: client,
 	});
+	setTaskDetailAuthAdapter(adapter);
 
 	installAuthInterceptors(client, adapter);
 	if (!(await adapter.restoreSession())) {

@@ -1,14 +1,17 @@
-import { createAuthAdapter } from "../../api/authAdapter";
-import type { AuthAdapter, AuthMode, RetryableRequestConfig } from "../../api/authAdapter";
+import { createAuthAdapter, type AuthAdapter, type AuthMode, type RetryableRequestConfig } from "../../api/authAdapter";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api";
 
 /**
  * design doc: docs/basic_design/05_frontend.md §6.2
- * auth_modeは本来 `GET /auth/config` から実行時に取得するが、AuthProvider未実装のため
- * 既定値としてsessionモードを用いる。導入後は setAuthAdapterMode で切り替える。
+ * auth_modeはAuthProviderのbootstrapで取得したアダプタを共有する。
+ * 単体テストではsetAuthAdapterModeで方式を注入する。
  */
-let authAdapter: AuthAdapter = createAuthAdapter("session");
+let authAdapter: AuthAdapter | null = null;
+
+export function setTaskDetailAuthAdapter(adapter: AuthAdapter): void {
+	authAdapter = adapter;
+}
 
 export function setAuthAdapterMode(mode: AuthMode): void {
 	authAdapter = createAuthAdapter(mode);
@@ -95,6 +98,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 		url: path,
 		headers: headerEntries,
 	};
+	if (!authAdapter) {
+		throw new TaskDetailApiError(0, "AUTH_NOT_INITIALIZED");
+	}
 	const attached = authAdapter.attach(config);
 	const attachedHeaders = new Headers(attached.headers as Record<string, string>);
 
