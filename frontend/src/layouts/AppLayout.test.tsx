@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { clearAuthAdapter } from "../api/authAdapter/client";
 import type { AuthAdapter } from "../api/authAdapter";
 import { useAuthStore } from "../auth/authStore";
 import { buildNotification } from "../features/notifications/testFixtures";
@@ -43,15 +44,23 @@ function renderAppLayout(props: Parameters<typeof AppLayout>[0] = {}) {
 	);
 }
 
+function mockUnreadCount(unreadCount: number) {
+	vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+		const body = String(input).endsWith("/auth/config") ? { auth_mode: "session" } : { unread_count: unreadCount };
+		return Promise.resolve({ ok: true, status: 200, json: async () => body });
+	}));
+}
+
 describe("AppLayout", () => {
 	afterEach(() => {
 		cleanup();
 		vi.unstubAllGlobals();
+		clearAuthAdapter();
 		act(() => useAuthStore.getState().reset());
 	});
 
 	it("設定リンク・通知ベル・adminリンクを実アプリ用レイアウトで表示する", async () => {
-		vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ unread_count: 3 }) }));
+		mockUnreadCount(3);
 		act(() => {
 			useAuthStore.setState({ status: "authenticated", user: { id: "u1", role: "admin" }, authAdapter: createAuthAdapter() });
 		});
@@ -77,7 +86,7 @@ describe("AppLayout", () => {
 	it("通知操作callbackを注入値へ接続する", async () => {
 		const onItemClick = vi.fn();
 		const onMarkAllRead = vi.fn();
-		vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ unread_count: 1 }) }));
+		mockUnreadCount(1);
 		act(() => useAuthStore.setState({ status: "authenticated", user: { id: "u1", role: "member" }, authAdapter: createAuthAdapter() }));
 		renderAppLayout({ notifications: [buildNotification()], onNotificationItemClick: onItemClick, onMarkAllNotificationsRead: onMarkAllRead });
 

@@ -11,6 +11,8 @@ const task = {
 	description: null,
 	status: "in_progress" as const,
 	assignee: null,
+		project_id: "project-1",
+		created_by: { id: "user-1", username: "taro", display_name: "山田 太郎" },
 	position: 0,
 	version: 1,
 	due_at: null,

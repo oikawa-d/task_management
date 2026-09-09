@@ -12,6 +12,8 @@ const task = {
 	description: null,
 	status: "todo" as const,
 	assignee: null,
+	project_id: "project-1",
+	created_by: { id: "user-1", username: "taro", display_name: "山田 太郎" },
 	position: 0,
 	version: 1,
 	due_at: null,
@@ -27,14 +29,16 @@ function jsonResponse(data: unknown) {
 
 describe("BoardPage and TaskDetailModal", () => {
 	beforeEach(() => {
-		vi.stubGlobal(
-			"fetch",
-			vi.fn(() => jsonResponse({
+		vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+			if (String(input).endsWith("/auth/config")) {
+				return jsonResponse({ auth_mode: "session" });
+			}
+			return jsonResponse({
 				project_id: "project-1",
 				project_is_active: true,
 				columns: { todo: [task], in_progress: [], done: [] },
-			})),
-		);
+			});
+		}));
 	});
 
 	afterEach(() => vi.unstubAllGlobals());

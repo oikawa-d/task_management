@@ -11,6 +11,8 @@ const task = {
 	description: null,
 	status: "todo" as const,
 	assignee: { id: "user-1", username: "taro", display_name: "山田 太郎" },
+	project_id: "project-1",
+	created_by: { id: "user-1", username: "taro", display_name: "山田 太郎" },
 	position: 0,
 	version: 3,
 	due_at: "2026-09-10T10:00:00Z",
