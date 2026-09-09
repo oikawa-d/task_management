@@ -86,7 +86,7 @@
 | ローカルstate | `showPassword` | boolean | `false` | ④クリック | なし |
 | ローカルstate | `lastError` | `{ code: string; message: string; retryAfterSec?: number } \| null` | `null` | ログイン失敗時に設定、再送信時にクリア | なし |
 | ローカルstate | `resendState` | `'idle' \| 'sending' \| 'sent'` | `'idle'` | 再送ボタン操作 | なし |
-| Zustand `authStore` | `user`, `status`, `accessToken`, `authAdapter` | - | §5.1参照（[05_frontend.md#5](../../basic_design/05_frontend.md)） | ログイン成功時に更新 | しない |
+| Zustand `authStore` | `user`, `status` | - | §5.1参照（[05_frontend.md#5](../../basic_design/05_frontend.md)）。JWTのaccessTokenはAuthAdapterへ注入したTokenStoreが保持する | ログイン成功時にuser/statusを更新 | しない |
 | TanStack Query | `['auth', 'config']` | `AuthConfig` | - | `AuthProvider` 起動時に取得しキャッシュ | しない |
 | React Router `location.state` | `registeredEmail?: string` | - | `/register` からの `navigate` 時のみ | - | なし（画面遷移1回のみ有効） |
 
@@ -135,7 +135,7 @@ sequenceDiagram
     API-->>EP: 200/204 + Set-Cookie
     EP-->>LP: LoginResponse
     LP->>AD: onLoginSuccess(res)
-    AD-->>LP: authStoreへ反映（jwtはaccessToken保持）
+    AD-->>LP: authStoreへ反映（JWTのaccessTokenはTokenStore保持）
     LP->>LP: authStore.status = "authenticated"
     LP-->>U: "/dashboard" へ navigate
 ```
@@ -210,7 +210,7 @@ flowchart TB
 | シグネチャ | `function useLogin(): UseMutationResult<LoginResponse, ApiError, LoginFormValues>` |
 | 引数 | なし |
 | 戻り値 | TanStack Query の `mutation` オブジェクト |
-| 処理内容 | 1. `endpoints/auth.ts#login` を呼ぶ 2. 成功時に `authAdapter.onLoginSuccess` → `authStore` 更新 3. 失敗時は `ApiError` をそのまま呼び出し元へ伝播 |
+| 処理内容 | 1. `endpoints/auth.ts#login` を呼ぶ 2. 成功時に `authAdapter.onLoginSuccess` → JWTはTokenStoreへaccessTokenを保存し、authStoreのuser/statusを更新 3. 失敗時は `ApiError` をそのまま呼び出し元へ伝播 |
 | 副作用 | API呼び出し、`authStore` 更新、成功時に呼び出し元で `navigate("/dashboard")` |
 
 ### 9.2 `hooks/useResendVerification.ts :: useResendVerification`
@@ -263,8 +263,9 @@ flowchart LR
     C --> D{"レスポンス"}
     D -->|"成功"| E["LoginResponse<br/>(session: なし / jwt: access_token)"]
     E --> F["authAdapter.onLoginSuccess"]
-    F --> G["authStore.user / status / accessToken"]
-    G --> H["GET /auth/me（AuthProvider側）で再取得・整合"]
+    F --> G["TokenStore（JWTのaccessToken）"]
+    F --> H["authStore.user / status"]
+    G --> L["GET /auth/me（AuthProvider側）で再取得・整合"]
     D -->|"失敗"| I["ApiError{code,message}"]
     I --> J["lastError state"]
     J --> K["ErrorBanner再描画"]
@@ -286,7 +287,7 @@ flowchart LR
 |----|------|--------|----------------------------|----------|-------------|
 | 1 | 単体（zod） | identifier/password 未入力 | - | バリデーションエラーメッセージ表示、送信ブロック | `loginSchema rejects empty fields` |
 | 2 | コンポーネント | 正常ログイン（session） | `POST /auth/login` → 204 | `/dashboard` へ遷移、authStoreがauthenticated | `LoginForm success (session) navigates to dashboard` |
-| 3 | コンポーネント | 正常ログイン（jwt） | `POST /auth/login` → 200 `{access_token}` | authStoreにaccessToken保存、`/dashboard` へ遷移 | `LoginForm success (jwt) stores access token` |
+| 3 | コンポーネント | 正常ログイン（jwt） | `POST /auth/login` → 200 `{access_token}` | TokenStoreにaccessTokenを保存し、`/dashboard` へ遷移 | `LoginForm success (jwt) stores access token` |
 | 4 | コンポーネント | 401 INVALID_CREDENTIALS | `POST /auth/login` → 401 | 統一エラー文言表示 | `LoginForm shows unified error on invalid credentials` |
 | 5 | コンポーネント | 403 EMAIL_NOT_VERIFIED → 再送 | `POST /auth/login` → 403、`POST /verify-email/resend` → 202 | 再送ボタン表示 → クリックで「送信しました」表示 | `LoginForm resend verification flow` |
 | 6 | コンポーネント | 429 TOO_MANY_ATTEMPTS | `POST /auth/login` → 429 | 待機案内メッセージ表示 | `LoginForm shows rate limit message` |

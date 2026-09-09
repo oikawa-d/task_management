@@ -8,6 +8,7 @@ export interface UserSummary {
 
 export interface BoardTask {
 	id: string;
+	project_id: string | null;
 	title: string;
 	description: string | null;
 	status: TaskStatus;
@@ -16,6 +17,7 @@ export interface BoardTask {
 	version: number;
 	due_at: string | null;
 	is_active: boolean;
+	created_by: UserSummary;
 	comment_count: number;
 	created_at: string;
 	updated_at: string;

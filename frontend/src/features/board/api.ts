@@ -1,3 +1,4 @@
+import { fetchWithAuth } from "../../api/authAdapter/client";
 import type { BoardResponse } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api";
@@ -13,10 +14,9 @@ export class BoardApiError extends Error {
 }
 
 async function getJson<T>(path: string): Promise<T> {
-	const response = await fetch(`${API_BASE_URL}${path}`, {
-		credentials: "include",
+	const response = await fetchWithAuth(`${API_BASE_URL}${path}`, {
 		headers: { Accept: "application/json" },
-	});
+	}, API_BASE_URL);
 	if (!response.ok) {
 		let code: string | undefined;
 		try {

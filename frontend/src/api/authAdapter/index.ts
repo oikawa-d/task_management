@@ -1,16 +1,10 @@
 import { JwtAdapter } from "./jwtAdapter";
 import { SessionAdapter } from "./sessionAdapter";
-import type { AuthAdapter, AuthMode, TokenStore } from "./types";
+import type { AuthAdapter, AuthAdapterOptions, AuthMode } from "./types";
 
 export { JwtAdapter } from "./jwtAdapter";
 export { SessionAdapter } from "./sessionAdapter";
-export type { AuthAdapter, AuthMode, LoginSuccessResponse, RetryableRequestConfig, TokenStore } from "./types";
-
-export type AuthAdapterOptions = {
-	csrfCookieName?: string;
-	httpClient?: import("axios").AxiosInstance;
-	tokenStore?: TokenStore;
-};
+export type { AuthAdapter, AuthAdapterOptions, AuthMode, LoginSuccessResponse, RetryableRequestConfig, TokenStore } from "./types";
 
 /**
  * auth_mode（"session" | "jwt"）に応じたAuthAdapterを生成するファクトリ。
