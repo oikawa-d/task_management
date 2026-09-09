@@ -11,7 +11,16 @@ from app.core.config import BackendSettings, get_backend_settings
 from app.core.exceptions import CsrfInvalidError, ForbiddenError, NotFoundError, UnauthenticatedError, UserInactiveError
 from app.db import get_db_session
 from app.models.project import Project
-from app.repository import project_repository, redis_store, user_repository
+from app.models.task import Task
+from app.models.task_comment import TaskComment
+from app.repository import (
+	project_member_repository,
+	project_repository,
+	redis_store,
+	task_comment_repository,
+	task_repository,
+	user_repository,
+)
 from app.schemas.auth import CurrentUser
 
 
@@ -119,3 +128,37 @@ async def verify_csrf(
 		cookie_token = request.cookies.get(settings.cookie_name_csrf)
 	if cookie_token is None or not secrets.compare_digest(cookie_token, header):
 		raise CsrfInvalidError()
+
+
+async def get_task_for_member(
+	task_id: UUID,
+	user: CurrentUser = Depends(get_current_user),
+	db: AsyncSession = Depends(get_db_session),
+) -> Task:
+	task_with_status = await task_repository.get_by_id(db, task_id)
+	if task_with_status is None:
+		raise NotFoundError()
+	task = task_with_status.task
+	if user.role != "admin":
+		if task.project_id is None or not await project_member_repository.exists(db, task.project_id, user.id):
+			raise NotFoundError()
+	return task
+
+
+async def get_comment_for_member(
+	comment_id: UUID,
+	user: CurrentUser = Depends(get_current_user),
+	db: AsyncSession = Depends(get_db_session),
+) -> TaskComment:
+	comment = await task_comment_repository.get_by_id(db, comment_id)
+	if comment is None:
+		raise NotFoundError()
+	task_with_status = await task_repository.get_by_id(db, comment.task_id)
+	if task_with_status is None:
+		raise NotFoundError()
+	task = task_with_status.task
+	if user.role != "admin":
+		if task.project_id is None or not await project_member_repository.exists(db, task.project_id, user.id):
+			raise NotFoundError()
+	comment.task = task
+	return comment
