@@ -82,6 +82,7 @@ export function AppLayout({
 			</header>
 			<nav aria-label="サイドバー">
 				<Link to={ROUTES.DASHBOARD}>home</Link>
+				<Link to={ROUTES.SETTINGS}>設定</Link>
 				{isAdmin ? <Link to={ROUTES.ADMIN_USERS}>管理</Link> : null}
 				<Link to={ROUTES.SETTINGS}>設定</Link>
 				<button type="button" onClick={handleLogout} disabled={isLoggingOut}>
