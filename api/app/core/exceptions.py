@@ -33,6 +33,11 @@ class ForbiddenError(AppError):
 	message = "このリソースへのアクセス権がありません"
 
 
+class CsrfInvalidError(ForbiddenError):
+	code = "CSRF_INVALID"
+	message = "CSRFトークンが不正です"
+
+
 class UnauthenticatedError(AppError):
 	code = "UNAUTHENTICATED"
 	status_code = 401
