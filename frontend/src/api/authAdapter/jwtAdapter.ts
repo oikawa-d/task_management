@@ -103,6 +103,12 @@ export class JwtAdapter implements AuthAdapter {
 		this.tokenStore.setAccessToken(null);
 	}
 
+	logout(): Promise<void> {
+		return this.httpClient
+			.post(LOGOUT_ENDPOINT_PATH, undefined, this.attach({ method: "post", url: LOGOUT_ENDPOINT_PATH }))
+			.then(() => undefined);
+	}
+
 	private async refresh(): Promise<boolean> {
 		try {
 			const csrfToken = readCookie(this.csrfCookieName);

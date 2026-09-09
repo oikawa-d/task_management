@@ -83,6 +83,8 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
+        VITE_USER_NAME_MAX_LENGTH: ${VITE_USER_NAME_MAX_LENGTH:-30}
+        VITE_PASSWORD_MIN_LENGTH: ${VITE_PASSWORD_MIN_LENGTH:-8}
     image: ${IMAGE_NAME_FRONTEND:-cerberus-frontend}:${FRONTEND_IMAGE_TAG:-latest}
     depends_on:
       backend:

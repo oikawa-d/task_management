@@ -29,7 +29,7 @@
 	justify-content: center;
 	border-radius: 9999px;
 	background: var(--color-danger, #d32f2f);
-	color: #fff;
+	color: var(--color-header-badge-fg, #fff);
 	font-size: 0.625rem;
 	line-height: 1;
 	font-weight: 700;
