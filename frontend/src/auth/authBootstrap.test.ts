@@ -2,6 +2,7 @@ import axios, { type AxiosInstance } from "axios";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AUTH_CONFIG_ENDPOINT, AUTH_ME_ENDPOINT } from "../api/authAdapter/constants";
+import { resetApiClient } from "../api/client";
 import { bootstrapAuth } from "./authBootstrap";
 
 function createMockClient(authMode: "session" | "jwt"): AxiosInstance {
@@ -23,6 +24,7 @@ function createMockClient(authMode: "session" | "jwt"): AxiosInstance {
 describe("bootstrapAuth", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
+		resetApiClient();
 	});
 
 	it("gets config, restores the session, then gets the current user", async () => {

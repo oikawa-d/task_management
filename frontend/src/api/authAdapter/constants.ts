@@ -15,6 +15,9 @@ export const AUTH_CONFIG_ENDPOINT = "/auth/config";
 /** 起動時に現在のユーザーを取得するAPIパス */
 export const AUTH_ME_ENDPOINT = "/auth/me";
 
+/** 認証成功レスポンスをadapterへ渡すAPIパス */
+export const LOGIN_ENDPOINT_PATH = "/auth/login";
+
 /** CSRF Cookie名の既定値。実際の値は将来 /auth/config から注入される想定（#178スコープ） */
 export const DEFAULT_CSRF_COOKIE_NAME = "cerberus_csrf";
 
