@@ -370,7 +370,7 @@ $$;
 | `sp_update_user_password` | users.password_hashをUPDATE | 全認証失効はAPIのRedis処理 |
 | `sp_update_user_profile` | usersのprofile列をUPDATE | 指定値の検証はAPI、更新はSP |
 | `sp_upsert_oauth_account` | users作成/verified更新とoauth_accounts紐付け | 同一トランザクション |
-| `sp_record_login_history` | `login_identifier`・`user_agent`・`failure_reason`を含めてlogin_historyをINSERT | 認証成否を記録。`login_history`のNOT NULL列（`login_identifier`・`login_method`・`success`）はすべて引数で受け取る |
+| `sp_record_login_history` | `login_identifier`・`user_agent`・`failure_reason`を含めてlogin_historyをINSERT | 認証成否を記録。`login_history`のNOT NULL列（`login_identifier`・`login_method`・`success`）はすべて引数で受け取る。`login_identifier`の値は呼び出し元が認証方式に応じて設定し、通常ログインはusername/email原文、Google OAuthは検証済みGoogle emailとする（OAuthの`sub`は記録しない） |
 
 task SPが通知をINSERTする場合は `(user_id, dedupe_key)` の一意制約へ `ON CONFLICT DO NOTHING` を適用する。Pコードを発生させる条件、transaction境界、テストは各行を[§6](#6-テスト設計)の結合テストへ対応付ける。
 

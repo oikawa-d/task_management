@@ -38,7 +38,7 @@
 | page | integer | 任意 | 1以上。既定 `1` | ページ番号 |
 | per_page | integer | 任意 | 1〜100。既定 `20`（`PAGINATION_DEFAULT_PER_PAGE` / `PAGINATION_MAX_PER_PAGE`） | 1ページあたり件数 |
 | user_id | string(uuid) | 任意 | UUID形式 | 特定ユーザーの履歴に絞り込む（`login_history.user_id` の完全一致）。管理者ユーザー管理画面からのドリルダウン導線を想定 |
-| q | string | 任意 | 100文字以内 | `login_identifier`（入力されたusername/email原文）の部分一致検索。未登録ID/メールでの試行も検索対象にできる |
+| q | string | 任意 | 100文字以内 | `login_identifier`（通常ログインは入力されたusername/email原文、Google OAuthは検証済みGoogle email）の部分一致検索。未登録ID/メールでの試行も検索対象にできる |
 | login_method | string | 任意 | `session` / `jwt` / `oauth_google` のいずれか | ログイン方式で絞り込み |
 | success | boolean | 任意 | `true` / `false` | 成否で絞り込み |
 | from | string(datetime) | 任意 | ISO 8601。`to` 未満であること | `created_at >= from` |
@@ -73,7 +73,7 @@
 |-----------|----|----|------|
 | items[].id | string(uuid) | 不可 | `login_history.id` |
 | items[].user | object | 可 | `login_history.user_id` が存在するユーザーを指す場合のみ `{id, username, display_name}` を格納。未登録ID/メールでの試行、または対象ユーザーが削除済み（`ON DELETE SET NULL`）の場合は `null` |
-| items[].login_identifier | string | 不可 | 入力された username / email の原文（パスワードは含めない） |
+| items[].login_identifier | string | 不可 | 通常ログインは入力された username / email の原文、Google OAuthは検証済みGoogle email（パスワード・OAuthの `sub`・トークンは含めない） |
 | items[].login_method | string | 不可 | `session` / `jwt` / `oauth_google` |
 | items[].ip_address | string | 可 | 記録時に取得できなかった場合はNULL |
 | items[].user_agent | string | 可 | 同上 |

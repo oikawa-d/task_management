@@ -241,7 +241,7 @@ flowchart TB
 | 引数 | `code`/`state`/`state_cookie`：表6.1参照。`request`/`response`：Strategy.loginへ引き渡す |
 | 戻り値 | `OAuthCallbackResult`（`auth_mode`, `redirect_to`, `handoff_code: str | None`） |
 | 送出例外 | `InvalidStateError`（400/302マッピングは`invalid_state`）、`OAuthFailedError`（`oauth_failed`）、`OAuthEmailUnverifiedError`（400/`oauth_email_unverified`）、`ServiceUnavailableError`（Redis接続不能） |
-| 処理内容 | 1. `state is None or state_cookie is None or state != state_cookie` なら即`InvalidStateError` 2. `redis_store.consume_oauth_state(state)`を呼び`None`なら`InvalidStateError` 3. `oauth_provider.exchange_code(code, data.code_verifier)`を呼ぶ 4. id_tokenをJWKSで検証（署名・`aud==GOOGLE_CLIENT_ID`・`iss`・`exp`・`nonce==data.nonce`） 5. `oauth_provider.fetch_userinfo(access_token)`を呼ぶ 6. `userinfo.sub == id_token.sub`を確認 7. `_resolve_or_create_user(userinfo)`を呼ぶ 8. `AUTH_MODE`により分岐し、sessionなら`strategy.login()`＋`login_history`記録、jwtなら`handoff_code`発行 |
+| 処理内容 | 1. `state is None or state_cookie is None or state != state_cookie` なら即`InvalidStateError` 2. `redis_store.consume_oauth_state(state)`を呼び`None`なら`InvalidStateError` 3. `oauth_provider.exchange_code(code, data.code_verifier)`を呼ぶ 4. id_tokenをJWKSで検証（署名・`aud==GOOGLE_CLIENT_ID`・`iss`・`exp`・`nonce==data.nonce`） 5. `oauth_provider.fetch_userinfo(access_token)`を呼ぶ 6. `userinfo.sub == id_token.sub`を確認 7. `_resolve_or_create_user(userinfo)`を呼ぶ 8. `AUTH_MODE`により分岐し、sessionなら`strategy.login()`＋`login_history(login_identifier=user.email)`記録、jwtなら`handoff_code`発行 |
 | 副作用 | PostgreSQL：`users`/`oauth_accounts`のINSERT/UPDATE、`login_history`INSERT（sessionモードのみ）。Redis：`oauth_state`削除（consume時点）、`oauth_handoff`新規作成（jwtモードのみ）。Cookie：sessionモードは`login()`内で発行 |
 
 ### 6.3 `service/auth_service.py :: _resolve_or_create_user`
@@ -340,7 +340,7 @@ stateDiagram-v2
 | Redis | `oauth_handoff:{code}` | `SETEX`（新規作成） | TTL=60秒固定 | jwtモードのみ |
 | PostgreSQL | `oauth_accounts` | `SELECT`（`provider`+`provider_user_id`）／`INSERT`（新規紐付け時） | - | 紐付け確認・新規紐付け |
 | PostgreSQL | `users` | `SELECT`（`email`）／`INSERT`／`UPDATE(email_verified_at)` | - | 新規作成・既存紐付け・メール検証更新 |
-| PostgreSQL | `login_history` | `INSERT`（`method='oauth_google'`） | - | sessionモードはここで記録。jwtモードは13番ファイルで記録 |
+| PostgreSQL | `login_history` | `INSERT`（`method='oauth_google'`, `login_identifier=user.email`） | - | sessionモードはここで検証済みGoogle emailを記録。jwtモードは13番ファイルで記録 |
 
 ## 10. バリデーション規則
 
@@ -375,7 +375,7 @@ stateDiagram-v2
 | 2 | 単体 | `_resolve_or_create_user`：未紐付け・email一致・verified | モック repository | `oauth_accounts`追加、`email_verified_at`更新 | `test_resolve_user_links_existing_by_email` |
 | 3 | 単体 | `_resolve_or_create_user`：未紐付け・email一致・未verified | モック repository | `OAuthEmailUnverifiedError`送出 | `test_resolve_user_rejects_unverified_email_link` |
 | 4 | 単体 | `_resolve_or_create_user`：完全新規 | モック repository | `users`/`oauth_accounts`作成、`username`が`google_`プレフィックス | `test_resolve_user_creates_new_oauth_user` |
-| 5 | 結合 | 正常系・sessionモード | `respx`でGoogle token/userinfoモック、実PostgreSQL/Redis | 302 `#redirect_to`、Set-Cookie(sid, csrf)、`login_history`に`method='oauth_google'`が記録される | `test_oauth_callback_session_mode_success` |
+| 5 | 結合 | 正常系・sessionモード | `respx`でGoogle token/userinfoモック、実PostgreSQL/Redis | 302 `#redirect_to`、Set-Cookie(sid, csrf)、`login_history`に`method='oauth_google'`かつ`login_identifier=user.email`が記録される | `test_oauth_callback_session_mode_success` |
 | 6 | 結合 | 正常系・jwtモード | 同上 | 302 `#code=...&redirect_to=...`、`oauth_handoff:{code}`がRedisに存在、Set-Cookieは`cerberus_oauth_state`削除のみ | `test_oauth_callback_jwt_mode_issues_handoff` |
 | 7 | 結合 | state Cookie不一致 / state期限切れ | クエリstateとCookie値を変える／Redisから事前削除 | いずれも302 `/login?error=invalid_state` | `test_oauth_callback_rejects_invalid_state` |
 | 8 | 結合 | nonce不一致 / userinfo.sub不一致 | id_tokenのnonceを改ざん／userinfoモックのsubを変更 | いずれも302 `/login?error=oauth_failed` | `test_oauth_callback_rejects_token_tampering` |

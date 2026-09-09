@@ -1,0 +1,26 @@
+:root {
+	--color-header-fg: inherit;
+	--color-header-hover: rgb(0 0 0 / 6%);
+	--color-danger: rgb(211 47 47);
+	--color-header-badge-fg: rgb(255 255 255);
+	--color-row-hover: rgb(0 0 0 / 4%);
+	--color-accent: rgb(25 118 210);
+	--color-muted: rgb(102 102 102);
+	--color-surface: rgb(255 255 255);
+	--color-border: rgb(221 221 221);
+	--color-warning-surface: rgb(255 243 205);
+	--color-warning-border: rgb(255 236 181);
+	--color-accent-strong: rgb(36 87 166);
+	--color-border-subtle: rgb(217 222 231);
+	--color-border-placeholder: rgb(154 166 178);
+	--color-danger-surface: rgb(254 242 242);
+	--color-danger-fg: rgb(185 28 28);
+	--color-text-secondary: rgb(71 85 105);
+	--color-border-muted: rgb(148 163 184);
+	--color-surface-muted: rgb(248 250 252);
+	--color-focus: rgb(37 99 235);
+	--color-accent-surface: rgb(239 246 255);
+	--color-text-tertiary: rgb(100 116 139);
+	--color-border-light: rgb(203 213 225);
+	--color-text-primary: rgb(15 23 42);
+}

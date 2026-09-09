@@ -36,7 +36,7 @@
 │  ┌ プロフィールタブ ─────────────────────┐                  │
 │  │ [3-1]姓 [3-2]名                        │                  │
 │  │ [3-3]姓カナ [3-4]名カナ                │                  │
-│  │ [3-5]生年月日（年/月/日プルダウン）     │                  │
+│  │ [3-5]生年月日（date入力）                 │                  │
 │  │ [3-6]保存ボタン                        │                  │
 │  └─────────────────────────────────────┘                  │
 │  ┌ パスワードタブ ───────────────────────┐                  │
@@ -63,7 +63,7 @@
 | 2 | タブ | タブ切替 | `complete_profile=1` なら「プロフィール」、それ以外は「プロフィール」 | - | 常時活性 | クリックで `activeTab` state 更新 |
 | 3-1〜3-2 | 姓・名入力 | text | `GET /users/me` の値（`null`なら空） | 各1〜30文字必須 | 常時活性 | 入力毎に RHF state 更新 |
 | 3-3〜3-4 | 姓カナ・名カナ入力 | text | 同上 | 各1〜30文字、ひらがな/カタカナ/数字のみ | 常時活性 | 同上 |
-| 3-5 | 生年月日プルダウン×3 | select | 同上（`null`なら未選択） | 未来日不可 | 常時活性 | 選択毎に更新 |
+| 3-5 | 生年月日 | `input type="date"` | 同上（`null`なら空） | 未来日不可 | 常時活性 | 入力毎にRHF state更新 |
 | 3-6 | 保存ボタン | button | disabled（未変更時） | フォームdirty かつ valid | dirty かつ valid | `PATCH /users/me` 送信 |
 | 3-7 | 現在のパスワード入力 | password | 空 | 必須（`has_password=true`時のみ表示） | `has_password=true`のとき表示・必須 | 目のアイコンで表示切替 |
 | 3-8 | 新パスワード入力 | password | 空 | 8文字以上・2種類以上の文字種 | 常時活性 | 強度インジケータ更新 |
@@ -267,7 +267,7 @@ flowchart TB
 | APIエラーコード / HTTP | 画面表示 | 遷移 | 再試行導線 |
 |--------------------------|----------|------|-------------|
 | 422 `VALIDATION_ERROR` | 対象フィールド下にエラーメッセージ | なし | 修正後に再送信 |
-| 401 `INVALID_CREDENTIALS`（パスワード変更） | 3-7に「現在のパスワードが正しくありません」 | なし | 再入力して再送信 |
+| 401 `INVALID_CREDENTIALS`（パスワード変更） | `has_password=true`は3-7に「現在のパスワードが正しくありません」、`false`はフォーム上部に再ログインを促すエラー | なし | 入力を確認して再送信 |
 | 401 `UNAUTHENTICATED`（全体） | interceptorが処理（[05_frontend §6.1](../../basic_design/05_frontend.md#61-interceptor-の流れ)） | `/login`へ | - |
 | 404（履歴取得失敗など） | トースト「情報を取得できませんでした」 | なし | 「再試行」ボタン |
 | 5xx | トースト「エラーが発生しました。時間をおいて再度お試しください」 | なし | 「再試行」ボタン |
@@ -300,7 +300,7 @@ flowchart LR
 | 文字サイズ | `--font-scale`（`0.875`/`1`/`1.125`/`1.25`）を全コンポーネントの`rem`基準に反映（[05_frontend §8](../../basic_design/05_frontend.md#8-アクセシビリティ設定文字サイズ)） |
 | キーボード操作 | タブは矢印キーで移動、Enterで選択（`role="tablist"` / `role="tab"`） |
 | aria属性 | フォームエラーは`aria-invalid="true"`＋`aria-describedby`でエラー文言と紐付け。バナーは`role="status"` |
-| フォーカス管理 | タブ切替時、パネル先頭の見出しへフォーカス移動。保存成功トーストはフォーカスを奪わない |
+| フォーカス管理 | クリックまたは矢印キーで選択したタブボタンへフォーカスを置く（ARIA Tabsの標準挙動）。パネル見出しへは移動しない。保存成功トーストはフォーカスを奪わない |
 | ラベル | パスワード表示切替ボタンに`aria-label="パスワードを表示/非表示"`を付与 |
 
 ## 14. テスト設計
@@ -315,6 +315,7 @@ flowchart LR
 | 6 | コンポーネント | パスワード変更成功 | `PUT .../password`が204、`POST /auth/logout`が204 | `/login`へ遷移 | `PasswordChangeForm redirects to login after success` |
 | 7 | コンポーネント | ログイン履歴取得失敗 | `GET .../login-history`が500 | エラー表示＋再試行ボタン | `LoginHistoryTable shows retry on error` |
 | 8 | 結合 | `?complete_profile=1`付き遷移 | `GET /users/me`で`profile_completed:false` | プロフィールタブ初期選択・バナー表示 | `SettingsPage opens profile tab with banner when complete_profile=1` |
+| 9 | コンポーネント | `has_password=false`で401 `INVALID_CREDENTIALS` | パスワード変更APIが401 | フォーム上部に再ログインを促すエラー | `PasswordChangeForm shows form error for oauth-only invalid credentials` |
 | 網羅できない範囲 | - | 実際のブラウザでの日本語IME入力挙動 | - | - | RTLのイベントシミュレートで代替し、実操作は手動確認とする |
 
 ## 15. 不明点・要検討事項

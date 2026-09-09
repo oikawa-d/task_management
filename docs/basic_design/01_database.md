@@ -107,7 +107,7 @@ erDiagram
     login_history {
         uuid id PK
         uuid user_id FK "未登録メール時はNULL"
-        varchar_50 login_identifier "入力されたID/メール"
+        varchar_50 login_identifier "認証に使用したusername/emailまたは検証済みGoogle email"
         varchar_20 login_method "session / jwt / oauth_google"
         inet ip_address
         text user_agent
@@ -304,7 +304,7 @@ Redis の失効状況とは独立して、設定した保持期間（既定90日
 |--------|----|------|------|
 | id | UUID | NO | PK |
 | user_id | UUID | YES | FK → users.id `ON DELETE SET NULL`。存在しないID入力時は NULL |
-| login_identifier | VARCHAR(50) | NO | 入力された username / email（原文。パスワードは記録しない） |
+| login_identifier | VARCHAR(50) | NO | 認証に使用した識別子。通常ログインはリクエストの username / email 原文、Google OAuth は `email_verified=true` を確認した Google email。パスワード・OAuthの `sub`・トークンは記録しない |
 | login_method | VARCHAR(20) | NO | `CHECK (login_method IN ('session','jwt','oauth_google'))` |
 | ip_address | INET | YES | `X-Forwarded-For` を考慮して取得 |
 | user_agent | TEXT | YES | |
@@ -313,6 +313,8 @@ Redis の失効状況とは独立して、設定した保持期間（既定90日
 | created_at | TIMESTAMPTZ | NO | |
 
 **インデックス**：`ix_login_history_user_created` (user_id, created_at DESC)、`ix_login_history_created` (created_at DESC)
+
+`login_identifier` は監査・検索用の値であり、ユーザーやOAuthアカウントを一意に識別するキーではない。通常の username / email ログインではリクエストの `identifier` をそのまま記録し、Google OAuthではGoogleの検証済み `email`（実装上は解決済み `user.email`）を記録する。OAuthアカウントの不変な識別には `oauth_accounts.provider_user_id`（Googleの `sub`）を使用する。
 
 > パスワードリセットの実行履歴はこのテーブルに含めない（`login_method` の CHECK 制約を汚さないため）。本基本設計のスコープでは `security_events` テーブルも追加しない。
 
