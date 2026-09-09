@@ -12,8 +12,8 @@ function createAdapter(overrides: Partial<AuthAdapter> = {}): AuthAdapter {
 		onLoginSuccess: vi.fn(),
 		onUnauthorized: vi.fn().mockResolvedValue(false),
 		restoreSession: vi.fn().mockResolvedValue(true),
-		onLogout: vi.fn(),
 		...overrides,
+		onLogout: overrides.onLogout ?? vi.fn(),
 	};
 }
 
