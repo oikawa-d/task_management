@@ -4,6 +4,7 @@ import { RequireAdmin, RequireAuth, RequireGuest } from "./auth/guards";
 import { AdminUsersPage } from "./features/admin/pages/AdminUsersPage";
 import { LoginPage } from "./features/auth/pages/LoginPage";
 import { DashboardPage } from "./features/dashboard/pages/DashboardPage";
+import { BoardPage } from "./features/board/BoardPage";
 import { AppLayout } from "./layouts/AppLayout";
 import { ROUTES } from "./routes";
 
@@ -30,6 +31,14 @@ export const router = createBrowserRouter([
 					{
 						path: ROUTES.DASHBOARD,
 						element: <DashboardPage />,
+					},
+					{
+						path: ROUTES.PROJECT_PATTERN,
+						element: <BoardPage />,
+					},
+					{
+						path: ROUTES.TASK_PATTERN,
+						element: <BoardPage />,
 					},
 				],
 			},
