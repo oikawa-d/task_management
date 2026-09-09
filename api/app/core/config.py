@@ -128,8 +128,11 @@ class BackendSettings(BaseSettings):
 		"session_absolute_ttl_seconds",
 		"access_token_ttl_seconds",
 		"refresh_ttl_seconds",
+		"google_jwks_cache_ttl_seconds",
 		"oauth_state_ttl_seconds",
 		"oauth_handoff_ttl_seconds",
+		"password_reset_ttl_seconds",
+		"email_verify_ttl_seconds",
 	)
 	@classmethod
 	def _validate_positive_ttl(cls, value: int) -> int:
