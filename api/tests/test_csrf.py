@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 from app.api.deps import verify_csrf, verify_origin
 from app.core.config import BackendSettings
-from app.core.exceptions import CsrfInvalidError
+from app.core.exceptions import CsrfInvalidError, ServiceUnavailableError
 from starlette.requests import Request
 
 
@@ -88,7 +88,7 @@ async def test_verify_origin_skips_oauth_callback_without_origin() -> None:
 
 @pytest.mark.asyncio
 async def test_verify_csrf_session_requires_cookie_header_and_redis_match() -> None:
-	redis = SimpleNamespace(get_csrf_token=lambda session_id: _async_value("csrf-token"))
+	redis = SimpleNamespace(get=lambda key: _async_value('{"token": "csrf-token"}'))
 	request = _request(
 		cookies={"cerberus_sid": "sid", "cerberus_csrf": "csrf-token"},
 		headers={"X-CSRF-Token": "csrf-token"},
@@ -99,11 +99,27 @@ async def test_verify_csrf_session_requires_cookie_header_and_redis_match() -> N
 
 @pytest.mark.asyncio
 async def test_verify_csrf_rejects_missing_header() -> None:
-	redis = SimpleNamespace(get_csrf_token=lambda session_id: _async_value("csrf-token"))
+	redis = SimpleNamespace(get=lambda key: _async_value('{"token": "csrf-token"}'))
 	request = _request(cookies={"cerberus_sid": "sid", "cerberus_csrf": "csrf-token"})
 
 	with pytest.raises(CsrfInvalidError):
 		await verify_csrf(request, SimpleNamespace(mode="session"), redis, _settings())
+
+
+@pytest.mark.asyncio
+async def test_verify_csrf_returns_service_unavailable_when_redis_fails() -> None:
+	from redis.exceptions import ConnectionError
+
+	async def fail_get(key: str) -> str:
+		raise ConnectionError()
+
+	request = _request(
+		cookies={"cerberus_sid": "sid", "cerberus_csrf": "csrf-token"},
+		headers={"X-CSRF-Token": "csrf-token"},
+	)
+
+	with pytest.raises(ServiceUnavailableError):
+		await verify_csrf(request, SimpleNamespace(mode="session"), SimpleNamespace(get=fail_get), _settings())
 
 
 @pytest.mark.asyncio

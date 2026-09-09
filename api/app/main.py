@@ -1,8 +1,11 @@
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from starlette.responses import Response
 
+from app.api.deps import CSRF_EXEMPT_PATHS, SAFE_METHODS, verify_csrf, verify_origin
 from app.api.routers.system_router import router as system_router
 from app.core.config import get_backend_settings
 from app.core.exceptions import register_error_handling
@@ -30,4 +33,17 @@ app = FastAPI(
 )
 
 register_error_handling(app)
+
+
+@app.middleware("http")
+async def csrf_protection_middleware(
+	request: Request,
+	call_next: Callable[[Request], Awaitable[Response]],
+) -> Response:
+	if request.method.upper() not in SAFE_METHODS and request.url.path not in CSRF_EXEMPT_PATHS:
+		await verify_origin(request, settings)
+		await verify_csrf(request, settings=settings)
+	return await call_next(request)
+
+
 app.include_router(system_router)

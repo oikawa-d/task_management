@@ -1,23 +1,25 @@
 from __future__ import annotations
 
 import secrets
-from typing import Any, cast
+from typing import Any
 from urllib.parse import urlsplit
 
 from fastapi import Depends, Request
+from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import BackendSettings, get_backend_settings
 from app.core.exceptions import (
 	CsrfInvalidError,
 	ForbiddenError,
+	ServiceUnavailableError,
 	SessionExpiredError,
 	UnauthenticatedError,
 	UserInactiveError,
 )
 from app.db import get_db_session
 from app.redis_client import get_redis_client
-from app.repository import user_repository
+from app.repository import redis_store_session, user_repository
 from app.repository.session_repository import RedisSessionInterface, SessionRepository
 from app.schemas.auth import CurrentUser
 from app.service.auth_strategy import AuthContext, AuthStrategy
@@ -148,10 +150,7 @@ def _strategy_mode(strategy: object | None, settings: BackendSettings) -> str:
 
 
 async def _session_csrf_token(redis_client: Any, session_id: str, settings: BackendSettings) -> str | None:
-	get_token = getattr(redis_client, "get_csrf_token", None)
-	if get_token is not None:
-		return cast(str | None, await get_token(session_id))
-	return cast(str | None, await redis_client.get(f"{settings.redis_key_prefix}csrf:{session_id}"))
+	return await redis_store_session.get_csrf_token(redis_client, settings.redis_key_prefix, session_id)
 
 
 async def verify_csrf(
@@ -178,7 +177,10 @@ async def verify_csrf(
 	if not session_id:
 		raise CsrfInvalidError()
 	client = redis_client or get_redis_client()
-	stored_token = await _session_csrf_token(client, session_id, resolved_settings)
+	try:
+		stored_token = await _session_csrf_token(client, session_id, resolved_settings)
+	except RedisError as exc:
+		raise ServiceUnavailableError() from exc
 	if (
 		stored_token
 		and secrets.compare_digest(cookie_token, stored_token)
