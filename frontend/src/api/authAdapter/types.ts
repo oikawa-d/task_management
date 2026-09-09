@@ -26,6 +26,8 @@ export interface AuthAdapter {
 	restoreSession(): Promise<boolean>;
 	/** クライアント側の後片付け */
 	onLogout(): void;
+	/** logout APIを呼び出す。認証方式固有のCookie/CSRF設定は実装側で付与する */
+	logout(): Promise<void>;
 }
 
 /**

@@ -7,6 +7,7 @@ import {
 } from "../api/authAdapter/constants";
 import { createAuthAdapter, type RetryableRequestConfig } from "../api/authAdapter";
 import type { AuthUser } from "./authStore";
+import { useAuthStore } from "./authStore";
 
 export type AuthConfigResponse = {
 	auth_mode: "session" | "jwt";
@@ -50,6 +51,7 @@ export async function bootstrapAuth(): Promise<AuthUser | null> {
 		csrfCookieName: config.csrf_cookie_name,
 		httpClient: client,
 	});
+	useAuthStore.getState().setAuthAdapter(adapter);
 
 	installAuthInterceptors(client, adapter);
 	if (!(await adapter.restoreSession())) {

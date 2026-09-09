@@ -341,6 +341,7 @@ classDiagram
         +onUnauthorized(error) Promise~boolean~
         +restoreSession() Promise~boolean~
         +onLogout() void
+        +logout() Promise~void~
     }
     class SessionAdapter {
         +mode "session"
@@ -359,10 +360,10 @@ classDiagram
     AuthAdapter <|.. JwtAdapter
 ```
 
-| 実装 | `attach` | `onLoginSuccess` | `onUnauthorized` | `restoreSession` | `onLogout` |
-|------|----------|------------------|------------------|------------------|------------|
-| `SessionAdapter` | `withCredentials = true`、更新系には `X-CSRF-Token`（Cookieから読む）を付与 | 何もしない（Cookieはブラウザが保持） | `false`（リトライしない） | 追加処理なしで `true` | authStoreを破棄。Cookie破棄はbackendのlogoutに任せる |
-| `JwtAdapter` | 通常APIには `Authorization: Bearer {accessToken}`、refresh/logoutには `withCredentials=true` と `X-CSRF-Token` を付与 | authStore にaccessTokenを保存。Cookieはbackendが発行 | `/auth/refresh` を1回だけ試行し、成功なら `true` | `/auth/refresh` を実行し、成功時にaccessTokenを保持 | accessTokenをメモリから破棄。Cookie破棄はbackendのlogoutに任せる |
+| 実装 | `attach` | `onLoginSuccess` | `onUnauthorized` | `restoreSession` | `onLogout` | `logout` |
+|------|----------|------------------|------------------|------------------|------------|------------|
+| `SessionAdapter` | `withCredentials = true`、更新系には `X-CSRF-Token`（Cookieから読む）を付与 | 何もしない（Cookieはブラウザが保持） | `false`（リトライしない） | 追加処理なしで `true` | authStoreを破棄。Cookie破棄はbackendのlogoutに任せる | `POST /api/auth/logout`をCookie・CSRF付きで実行 |
+| `JwtAdapter` | 通常APIには `Authorization: Bearer {accessToken}`、refresh/logoutには `withCredentials=true` と `X-CSRF-Token` を付与 | authStore にaccessTokenを保存。Cookieはbackendが発行 | `/auth/refresh` を1回だけ試行し、成功なら `true` | `/auth/refresh` を実行し、成功時にaccessTokenを保持 | accessTokenをメモリから破棄。Cookie破棄はbackendのlogoutに任せる | `POST /api/auth/logout`をCookie・CSRF付きで実行 |
 
 | メソッド | 引数 | 戻り値 | 責務 |
 |----------|------|--------|------|
@@ -371,6 +372,7 @@ classDiagram
 | `onUnauthorized` | `AxiosError` | `Promise<boolean>` | 401 時の復帰処理。`true` を返した場合のみ元リクエストを再送 |
 | `restoreSession` | なし | `Promise<boolean>` | アプリ起動時に既存Cookieから認証状態を復元。jwtではrefreshを実行 |
 | `onLogout` | なし | `void` | クライアント側の後片付け |
+| `logout` | なし | `Promise<void>` | `POST /api/auth/logout`を認証方式固有の設定で実行 |
 
 ### 6.1 interceptor の流れ
 
