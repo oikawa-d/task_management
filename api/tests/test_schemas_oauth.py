@@ -1,4 +1,5 @@
 import pytest
+from app.schemas.base import StrictSchema
 from app.schemas.oauth import (
 	OAuthCallbackResult,
 	OAuthExchangeRequest,
@@ -110,3 +111,19 @@ def test_oauth_schemas_reject_invalid_required_values(field: str, value: object)
 
 	with pytest.raises(ValidationError):
 		model(**payload)
+
+
+def test_oauth_exchange_request_rejects_undefined_field() -> None:
+	"""想定外の入力フィールドを拒否する（extra="forbid"）。"""
+	with pytest.raises(ValidationError):
+		OAuthExchangeRequest(code="auth-code", state="state-token")
+
+
+@pytest.mark.parametrize(
+	"model",
+	[OAuthCallbackResult, OAuthExchangeRequest, OAuthExchangeResponse, OAuthStartResult],
+)
+def test_oauth_schemas_forbid_extra_fields(model: type[StrictSchema]) -> None:
+	"""OAuth系DTOが漏れなく共通基底を継承し、extra="forbid" が効いていること。"""
+	assert issubclass(model, StrictSchema)
+	assert model.model_config.get("extra") == "forbid"
