@@ -3,6 +3,21 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+_LOGIN_HISTORY_COMMENTS = {
+	"id": "ログイン試行を一意に識別するUUID",
+	"user_id": "未登録ID/メール入力時はNULL",
+	"login_identifier": (
+		"認証に使用した識別子。通常ログインはusername/email原文、Google OAuthは検証済みGoogle email。"
+		"パスワード・OAuthのsub・トークンは記録しない"
+	),
+	"login_method": "ログイン方式。session / jwt / oauth_google",
+	"ip_address": "信頼できるProxy情報から解決した接続元IPアドレス",
+	"user_agent": "ログイン試行時のUser-Agent",
+	"success": "ログイン試行の成否",
+	"failure_reason": "ログイン失敗時の理由。成功時はNULL",
+	"created_at": "ログイン試行を記録した日時",
+}
+
 
 async def test_users_table_created_with_default_role_and_active(db_session: AsyncSession) -> None:
 	result = await db_session.execute(
@@ -128,3 +143,20 @@ async def test_login_history_failure_reason_consistency_check(db_session: AsyncS
 				"VALUES ('ghost', 'session', true, 'invalid_credentials')"
 			)
 		)
+
+
+async def test_login_history_column_comments_match_design(db_session: AsyncSession) -> None:
+	table_comment = (
+		await db_session.execute(text("SELECT obj_description('login_history'::regclass, 'pg_class')"))
+	).scalar_one()
+	result = await db_session.execute(
+		text(
+			"SELECT attname, col_description(attrelid, attnum) AS comment "
+			"FROM pg_catalog.pg_attribute "
+			"WHERE attrelid = 'login_history'::regclass "
+			"AND attnum > 0 AND NOT attisdropped ORDER BY attnum"
+		)
+	)
+
+	assert table_comment == "ログイン試行の監査ログ。Redis側のTTL失効とは独立して保持する"
+	assert {row.attname: row.comment for row in result} == _LOGIN_HISTORY_COMMENTS
