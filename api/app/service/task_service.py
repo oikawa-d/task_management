@@ -166,3 +166,14 @@ async def deactivate_task(task_id: UUID, db: AsyncSession) -> None:
 	if await task_repository.get_by_id(db, task_id) is None:
 		raise NotFoundError()
 	await task_repository.set_active(db, task_id, False)
+
+
+async def get_task_detail(task_id: UUID, user: CurrentUser, db: AsyncSession) -> TaskDetailResponse:
+	item = await task_repository.get_by_id(db, task_id)
+	if item is None:
+		raise NotFoundError()
+	return _response(item, user)
+
+
+async def delete_task(task_id: UUID, user: CurrentUser, db: AsyncSession) -> None:
+	await deactivate_task(task_id, db)
