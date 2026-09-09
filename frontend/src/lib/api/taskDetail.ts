@@ -1,18 +1,6 @@
-import { createAuthAdapter } from "../../api/authAdapter";
-import type { AuthAdapter, AuthMode, RetryableRequestConfig } from "../../api/authAdapter";
+import { fetchWithAuth } from "../../api/authAdapter/client";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api";
-
-/**
- * design doc: docs/basic_design/05_frontend.md §6.2
- * auth_modeは本来 `GET /auth/config` から実行時に取得するが、AuthProvider未実装のため
- * 既定値としてsessionモードを用いる。導入後は setAuthAdapterMode で切り替える。
- */
-let authAdapter: AuthAdapter = createAuthAdapter("session");
-
-export function setAuthAdapterMode(mode: AuthMode): void {
-	authAdapter = createAuthAdapter(mode);
-}
 
 export type TaskStatus = "todo" | "in_progress" | "done";
 
@@ -85,26 +73,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	headers.set("Accept", "application/json");
 	if (init?.body) headers.set("Content-Type", "application/json");
 
-	const headerEntries: Record<string, string> = {};
-	headers.forEach((value, key) => {
-		headerEntries[key] = value;
-	});
-
-	const config: RetryableRequestConfig = {
-		method: init?.method ?? "GET",
-		url: path,
-		headers: headerEntries,
-	};
-	const attached = authAdapter.attach(config);
-	const attachedHeaders = new Headers(attached.headers as Record<string, string>);
-
 	let response: Response;
 	try {
-		response = await fetch(`${API_BASE_URL}${path}`, {
+		response = await fetchWithAuth(`${API_BASE_URL}${path}`, {
 			...init,
-			credentials: attached.withCredentials ? "include" : "same-origin",
-			headers: attachedHeaders,
-		});
+			headers,
+		}, API_BASE_URL);
 	} catch {
 		throw new TaskDetailApiError(0, "NETWORK_ERROR");
 	}

@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CSRF_HEADER_NAME, DEFAULT_CSRF_COOKIE_NAME } from "../../api/authAdapter/constants";
-import { TaskDetailApiError, deleteComment, getTask, patchTask, setAuthAdapterMode } from "./taskDetail";
+import { clearAuthAdapter, setAuthAdapterMode } from "../../api/authAdapter/client";
+import { TaskDetailApiError, deleteComment, getTask, patchTask } from "./taskDetail";
 
 function response(body: unknown, init: { ok: boolean; status: number }) {
 	return {
@@ -11,10 +12,14 @@ function response(body: unknown, init: { ok: boolean; status: number }) {
 }
 
 describe("taskDetail API", () => {
+	beforeEach(() => {
+		setAuthAdapterMode("session");
+	});
+
 	afterEach(() => {
 		vi.unstubAllGlobals();
 		document.cookie = `${DEFAULT_CSRF_COOKIE_NAME}=; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
-		setAuthAdapterMode("session");
+		clearAuthAdapter();
 	});
 
 	it("GETでCookieを送信し、タスク詳細を返す", async () => {
