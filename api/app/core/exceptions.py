@@ -71,6 +71,17 @@ class UserInactiveError(AppError):
 	message = "このアカウントは無効化されています"
 
 
+class InvalidCredentialsError(UnauthenticatedError):
+	code = "INVALID_CREDENTIALS"
+	message = "IDまたはパスワードが正しくありません"
+
+
+class TooManyAttemptsError(AppError):
+	code = "TOO_MANY_ATTEMPTS"
+	status_code = 429
+	message = "試行回数が多いため、しばらく待ってから再度お試しください"
+
+
 def _build_error_body(code: str, message: str, details: Any, request_id: str) -> dict[str, Any]:
 	return {
 		"error": {

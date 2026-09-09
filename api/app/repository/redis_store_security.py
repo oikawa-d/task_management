@@ -18,6 +18,11 @@ async def mark_email_verify_sent(client: Redis, prefix: str, user_id: UUID, inte
 	)
 
 
+async def get_login_failure_count(client: Redis, prefix: str, identifier: str, client_ip: str) -> int:
+	value = await client.get(key("login_fail", prefix, identifier_hash(identifier, client_ip)))
+	return int(value) if value is not None else 0
+
+
 async def incr_login_failure(client: Redis, prefix: str, identifier: str, client_ip: str, window: int) -> int:
 	validate_ttl(window, "window")
 	login_key = key("login_fail", prefix, identifier_hash(identifier, client_ip))
