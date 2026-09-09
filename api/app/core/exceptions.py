@@ -39,6 +39,38 @@ class UnauthenticatedError(AppError):
 	message = "認証が必要です"
 
 
+class NotSupportedInModeError(AppError):
+	code = "NOT_SUPPORTED_IN_MODE"
+	status_code = 405
+	message = "現在の認証方式ではサポートされていません"
+
+
+class SessionExpiredError(UnauthenticatedError):
+	code = "SESSION_EXPIRED"
+	message = "セッションの有効期限が切れました"
+
+
+class TokenInvalidError(UnauthenticatedError):
+	code = "TOKEN_INVALID"
+	message = "トークンが正しくありません"
+
+
+class TokenExpiredError(UnauthenticatedError):
+	code = "TOKEN_EXPIRED"
+	message = "トークンの有効期限が切れています"
+
+
+class TokenRevokedError(UnauthenticatedError):
+	code = "TOKEN_REVOKED"
+	message = "セッションが無効になりました。再度ログインしてください"
+
+
+class UserInactiveError(AppError):
+	code = "USER_INACTIVE"
+	status_code = 403
+	message = "このアカウントは無効化されています"
+
+
 def _build_error_body(code: str, message: str, details: Any, request_id: str) -> dict[str, Any]:
 	return {
 		"error": {

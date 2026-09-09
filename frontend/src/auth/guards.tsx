@@ -1,12 +1,17 @@
 import { Navigate, Outlet } from "react-router-dom";
 
+import { AuthLoading } from "./AuthLoading";
 import { useAuthStore } from "./authStore";
 import { ROUTES } from "../routes";
 
 export function RequireAuth() {
 	const status = useAuthStore((state) => state.status);
 
-	if (status !== "authenticated") {
+	if (status === "loading") {
+		return <AuthLoading />;
+	}
+
+	if (status === "unauthenticated") {
 		return <Navigate to={ROUTES.LOGIN} replace />;
 	}
 
@@ -15,6 +20,10 @@ export function RequireAuth() {
 
 export function RequireGuest() {
 	const status = useAuthStore((state) => state.status);
+
+	if (status === "loading") {
+		return <AuthLoading />;
+	}
 
 	if (status === "authenticated") {
 		return <Navigate to={ROUTES.DASHBOARD} replace />;
@@ -27,7 +36,11 @@ export function RequireAdmin() {
 	const status = useAuthStore((state) => state.status);
 	const user = useAuthStore((state) => state.user);
 
-	if (status !== "authenticated") {
+	if (status === "loading") {
+		return <AuthLoading />;
+	}
+
+	if (status === "unauthenticated") {
 		return <Navigate to={ROUTES.LOGIN} replace />;
 	}
 

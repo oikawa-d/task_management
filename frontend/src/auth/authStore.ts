@@ -20,10 +20,16 @@ const initialAuthState: AuthState = {
 };
 
 export type AuthStore = AuthState & {
+	setLoading: () => void;
+	setAuthenticated: (user: AuthUser) => void;
+	setUnauthenticated: () => void;
 	reset: () => void;
 };
 
 export const useAuthStore = create<AuthStore>((set) => ({
 	...initialAuthState,
+	setLoading: () => set(initialAuthState),
+	setAuthenticated: (user) => set({ user, status: "authenticated" }),
+	setUnauthenticated: () => set({ user: null, status: "unauthenticated" }),
 	reset: () => set(initialAuthState),
 }));
