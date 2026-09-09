@@ -68,6 +68,7 @@ class BackendSettings(BaseSettings):
 	# ページング
 	pagination_default_per_page: int = 20
 	pagination_max_per_page: int = 100
+	task_comment_body_max_length: int = 2000
 
 	# Google OAuth2
 	google_login_enabled: bool = True
