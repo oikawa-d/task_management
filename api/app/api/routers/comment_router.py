@@ -12,7 +12,7 @@ from app.db import get_db_session
 from app.models.task import Task
 from app.models.task_comment import TaskComment
 from app.schemas.auth import CurrentUser
-from app.schemas.comment import CommentCreateRequest, CommentListResponse, CommentResponse
+from app.schemas.comment import CommentCreateRequest, CommentListResponse, CommentResponse, CommentUpdateRequest
 from app.service import task_comment_service
 
 router = APIRouter(tags=["comments"])
@@ -45,7 +45,7 @@ async def create_task_comment(
 
 @router.patch("/api/comments/{comment_id}", response_model=CommentResponse)
 async def update_task_comment(
-	payload: CommentCreateRequest,
+	payload: CommentUpdateRequest,
 	comment: TaskComment = Depends(get_comment_for_member),
 	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
