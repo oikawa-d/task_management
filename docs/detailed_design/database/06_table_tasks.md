@@ -245,9 +245,9 @@ repositoryは下表のSP/FN呼び出しとDTO写像だけを行う。advisory lo
 | repository契約 | DB呼び出し | 戻り値・エラー |
 |----------------|------------|----------------|
 | `acquire_status_lock` / `next_position` | 単独公開しない。`sp_create_task` / `sp_update_task` 内でlock→`fn_next_task_position` | SPトランザクション内でのみ有効 |
-| `insert` | `CALL sp_create_task(:project_id, :created_by, :assignee_id, :title, :body, :status, :due_at, :position, :task_id)`（`:task_id` はOUTパラメータ。DB側で `gen_random_uuid()` により採番される） | `fn_get_task(:task_id)`で作成結果を取得 |
+| `insert` | `CALL sp_create_task(:project_id, :created_by, :assignee_id, :title, :body, :status, :due_at, :position, :day_start_utc, :day_end_utc, :task_id)`（`:task_id` はOUTパラメータ。DB側で `gen_random_uuid()` により採番される。日境界はAPIがUTCへ変換して渡す） | `fn_get_task(:task_id)`で作成結果を取得 |
 | `get_by_id_for_update` | `SELECT fn_get_task(:task_id)` | 存在しなければ空集合。行ロックはSP内部 |
-| `update_with_optimistic_lock` / reorder | `CALL sp_update_task(:task_id, :editor_id, :version, ...)` | version不一致は `P0005 TASK_CONFLICT` |
+| `update_with_optimistic_lock` / reorder | `CALL sp_update_task(:task_id, :editor_id, :version, :title, :body, :status, :assignee_id, :due_at, :position, :day_start_utc, :day_end_utc)` | version不一致は `P0005 TASK_CONFLICT` |
 | `deactivate` / `reactivate` | `CALL sp_deactivate_task(:task_id, :is_active)` | `is_active`だけ変更、position詰めなし |
 | `list_by_project_grouped` | `SELECT fn_get_project_board(:project_id, :include_inactive)` | status/position順のFN結果を3列へ写像 |
 | 横断一覧 | `SELECT fn_list_tasks(:user_id, :project_id, :status, :include_inactive, :limit, :offset)` | 権限スコープはFN内で判定 |

@@ -17,8 +17,8 @@ return 0
 """
 
 
-def build_due_lock_key(run_date: date, slot: str) -> str:
-	return f"{LOCK_KEY_PREFIX}:{run_date.isoformat()}:{slot}"
+def build_due_lock_key(run_date: date, slot: str, key_prefix: str = "") -> str:
+	return f"{key_prefix}{LOCK_KEY_PREFIX}:{run_date.isoformat()}:{slot}"
 
 
 def _validate_lock_arguments(slot: str, runner_id: str, ttl_seconds: int) -> None:
@@ -36,11 +36,12 @@ async def acquire_due_notification_lock(
 	slot: str,
 	runner_id: str,
 	ttl_seconds: int,
+	key_prefix: str = "",
 ) -> bool:
 	_validate_lock_arguments(slot, runner_id, ttl_seconds)
 	return bool(
 		await redis.set(
-			build_due_lock_key(run_date, slot),
+			build_due_lock_key(run_date, slot, key_prefix),
 			runner_id,
 			ex=ttl_seconds,
 			nx=True,
@@ -48,7 +49,9 @@ async def acquire_due_notification_lock(
 	)
 
 
-async def release_due_notification_lock(redis: RedisLockClient, run_date: date, slot: str, runner_id: str) -> bool:
+async def release_due_notification_lock(
+	redis: RedisLockClient, run_date: date, slot: str, runner_id: str, key_prefix: str = ""
+) -> bool:
 	if not slot:
 		raise ValueError("slot must not be empty")
 	if not runner_id:
@@ -57,7 +60,7 @@ async def release_due_notification_lock(redis: RedisLockClient, run_date: date, 
 	deleted = await redis.eval(
 		_RELEASE_LOCK_SCRIPT,
 		1,
-		build_due_lock_key(run_date, slot),
+		build_due_lock_key(run_date, slot, key_prefix),
 		runner_id,
 	)
 	return bool(deleted)

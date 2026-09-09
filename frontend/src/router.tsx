@@ -1,0 +1,47 @@
+import { Navigate, createBrowserRouter } from "react-router-dom";
+
+import { RequireAdmin, RequireAuth, RequireGuest } from "./auth/guards";
+import { AdminUsersPage } from "./features/admin/pages/AdminUsersPage";
+import { LoginPage } from "./features/auth/pages/LoginPage";
+import { DashboardPage } from "./features/dashboard/pages/DashboardPage";
+import { AppLayout } from "./layouts/AppLayout";
+import { ROUTES } from "./routes";
+
+export const router = createBrowserRouter([
+	{
+		path: ROUTES.ROOT,
+		element: <Navigate to={ROUTES.LOGIN} replace />,
+	},
+	{
+		element: <RequireGuest />,
+		children: [
+			{
+				path: ROUTES.LOGIN,
+				element: <LoginPage />,
+			},
+		],
+	},
+	{
+		element: <AppLayout />,
+		children: [
+			{
+				element: <RequireAuth />,
+				children: [
+					{
+						path: ROUTES.DASHBOARD,
+						element: <DashboardPage />,
+					},
+				],
+			},
+			{
+				element: <RequireAdmin />,
+				children: [
+					{
+						path: ROUTES.ADMIN_USERS,
+						element: <AdminUsersPage />,
+					},
+				],
+			},
+		],
+	},
+]);

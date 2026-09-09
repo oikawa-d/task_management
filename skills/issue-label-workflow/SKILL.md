@@ -5,7 +5,7 @@ description: このtask_managementリポジトリでGitHub issueに対応する�
 
 # issueラベルによる進捗状態管理
 
-このリポジトリではgh CLIの認証が単一のGitHubアカウント(oikawa-d)に紐づいているため、`assignee`では「誰が/どのエージェントが対応中か」を区別できない。また、実装・レビュー・修正を別々のエージェントが担当することが前提のため、「自分か他人か」でも判断できない。そのため、**「誰が」ではなく「issueが今どのフェーズにあるか」をラベルで管理し、これから始めようとしているフェーズの前提ラベルと一致するかだけを確認する。**ラベルは**issueのみ**に付与し、PR側はGitHub標準のレビュー機能(Approve/Request changes)をそのまま使う。
+このリポジトリではgh CLIの認証が単一のGitHubアカウント(oikawa-d)に紐づいているため、`assignee`では「誰が/どのエージェントが対応中か」を区別できない。また、実装・レビュー・修正を別々のエージェントが担当することが前提のため、「自分か他人か」でも判断できない。そのため、**「誰が」ではなく「issueが今どのフェーズにあるか」をラベルで管理し、これから始めようとしているフェーズの前提ラベルと一致するかだけを確認する。**ラベルは**issueのみ**に付与する。PR側は、gh CLIが単一アカウント認証のため**自分のPRに`Approve`/`Request changes`を提出できない**(GitHubが拒否する)。そのためレビュー結果は`gh pr comment`で判定を明記したコメントとして残す。詳細は`pr-review-workflow` skillを参照。
 
 ## 状態ラベル(常にどれか1つ、またはラベルなし)
 
@@ -35,11 +35,11 @@ description: このtask_managementリポジトリでGitHub issueに対応する�
       │ PRを作成             │ 修正を再開
       ▼                     │
  review-requested            │
-      │ レビューでchanges requested │
+      │ レビューで要修正と判定       │
       ▼                     │
  changes-requested ─────────┘
       │
-      ▼ (Approve → マージ)
+      ▼ (LGTM → マージ)
  (ラベル解除・issue close)
 ```
 
@@ -74,13 +74,13 @@ description: このtask_managementリポジトリでGitHub issueに対応する�
 ### 3. レビューに着手する前
 - レビューを依頼された/レビュー作業を始める前にも、必ず現在のラベルを確認する。前提ラベルは `review-requested`。付いていない場合、まだ実装中・レビュー対象外・フェーズ不一致の可能性があるため、着手前にユーザーに確認する。
 - レビューの結果に応じて次のいずれかを行う。
-  - **変更依頼あり**: PRに `Request changes` を付けた、またはレビューコメントで修正が必要と判断したら、`review-requested` を外し `changes-requested` を付ける。
+  - **変更依頼あり**: レビューコメント(`gh pr comment`)に「要修正 (Changes requested)」と明記したら、`review-requested` を外し `changes-requested` を付ける。
 
     ```bash
     gh issue edit <番号> --repo <owner/repo> --remove-label review-requested --add-label changes-requested
     ```
 
-  - **Approve → マージ**: 手順5へ進む。
+  - **LGTM → マージ**: レビューコメントに「レビュー済み / LGTM」と明記したうえで手順5へ進む。
 
 ### 4. 修正対応への着手前
 - 前提ラベルは `changes-requested`。付いていない場合、まだレビュー中・フェーズ不一致の可能性があるため、着手前にユーザーに確認する。

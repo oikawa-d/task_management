@@ -5,6 +5,7 @@ Revises: 0009
 Create Date: 2026-09-07
 
 """
+
 from pathlib import Path
 from typing import Sequence, Union
 
@@ -18,6 +19,11 @@ depends_on: Union[str, Sequence[str], None] = None
 DB_DIR = Path(__file__).resolve().parents[3] / "db"
 FUNCTIONS_DIR = DB_DIR / "functions"
 PROCEDURES_DIR = DB_DIR / "procedures"
+LEGACY_PROCEDURES_DIR = PROCEDURES_DIR / "legacy"
+LEGACY_PROCEDURE_FILES = {
+	"sp_create_task.sql": "0010_sp_create_task.sql",
+	"sp_update_task.sql": "0010_sp_update_task.sql",
+}
 
 _TRIGGER_TABLES = ("projects", "tasks", "task_comments")
 
@@ -59,7 +65,17 @@ def upgrade() -> None:
 	for filename in _FUNCTION_FILES:
 		op.execute((FUNCTIONS_DIR / filename).read_text())
 	for filename in _PROCEDURE_FILES:
-		op.execute((PROCEDURES_DIR / filename).read_text())
+		procedure_dir = (
+			LEGACY_PROCEDURES_DIR
+			if filename
+			in {
+				"sp_create_task.sql",
+				"sp_update_task.sql",
+			}
+			else PROCEDURES_DIR
+		)
+		procedure_filename = LEGACY_PROCEDURE_FILES.get(filename, filename)
+		op.execute((procedure_dir / procedure_filename).read_text())
 
 
 def downgrade() -> None:
@@ -72,8 +88,7 @@ def downgrade() -> None:
 		"UUID, UUID, INTEGER, VARCHAR, TEXT, VARCHAR, UUID, TIMESTAMPTZ, INTEGER)"
 	)
 	op.execute(
-		"DROP PROCEDURE IF EXISTS sp_create_task("
-		"UUID, UUID, UUID, VARCHAR, TEXT, VARCHAR, TIMESTAMPTZ, INTEGER)"
+		"DROP PROCEDURE IF EXISTS sp_create_task(UUID, UUID, UUID, VARCHAR, TEXT, VARCHAR, TIMESTAMPTZ, INTEGER)"
 	)
 	op.execute("DROP PROCEDURE IF EXISTS sp_remove_project_member(UUID, UUID)")
 	op.execute("DROP PROCEDURE IF EXISTS sp_add_project_member(UUID, UUID, UUID)")

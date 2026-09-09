@@ -4,7 +4,9 @@
 
 このリポジトリは設計ドキュメントと実装コードの両方を管理しています。
 
-Codex・Claude Code共通のレビュー手順は [.agent/review-policy.md](./.agent/review-policy.md) に定義しています。変更をコミットまたはPRにする前に、必ず参照してレビューを完了してください。
+Codex・Claude Code共通のレビュー手順は [.agents/review-policy.md](./.agents/review-policy.md) に定義しています。変更をコミットまたはPRにする前に、必ず参照してレビューを完了してください。
+
+依存追加を伴う並行PRは、[依存管理運用ルール](./.agents/dependency-management.md) に従って計画・実施してください。
 
 - `docs/requirements/`：要件定義書
 - `docs/basic_design/`：システム概要、DB、Redis、認証、API、フロントエンド、インフラ、図
@@ -44,7 +46,7 @@ CIでは、`api/`・`batch/`それぞれに対して`ruff check`、`ruff format 
 
 既存の`<type>: <description>`形式に従います。例：`docs: 要件・基本・詳細設計の整合性を修正`、`fix: ...`、`ci: ...`。コミットは目的ごとに分けてください。プルリクエストには変更対象の文書、関連Issue、他文書への影響を記載し、図やUIを変更した場合は描画結果のスクリーンショットを添付してください。
 
-変更をコミットまたはPRにする前に、[共通レビュー方針](./.agent/review-policy.md)に従ったレビューを必ず実施し、結果を作業報告またはPR本文に記載してください。
+変更をコミットまたはPRにする前に、[共通レビュー方針](./.agents/review-policy.md)に従ったレビューを必ず実施し、結果を作業報告またはPR本文に記載してください。
 
 PR作成後は作成した時点で作業完了とせず、CIの全チェックが成功次第、ユーザーへ都度確認せずsquash mergeまで実施してください。マージ後はリモート・ローカルの作業ブランチを削除し、関連issueをcloseしてください。CIが失敗した場合はmergeせず、原因を修正してから再度確認してください。
 

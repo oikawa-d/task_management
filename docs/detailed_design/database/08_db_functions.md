@@ -54,8 +54,8 @@ repository層は `CALL sp_xxx(...)` または `SELECT fn_xxx(...)` と戻り値�
 | 19 | 関数 | `fn_list_tasks` | `p_user_id UUID`, `p_project_id UUID`, `p_status VARCHAR`, `p_include_inactive BOOLEAN`, `p_limit INTEGER`, `p_offset INTEGER` | `SETOF tasks` | 権限スコープ付き一覧 |
 | 20 | 関数 | `fn_list_task_comments` | `p_task_id UUID` | `SETOF task_comments` | コメント一覧 |
 | 21 | 関数 | `fn_get_comment_with_task` | `p_comment_id UUID` | `SETOF task_comments` | コメント・所属判定用取得 |
-| 22 | プロシージャ | `sp_create_task` | `p_project_id UUID`, `p_created_by UUID`, `p_assignee_id UUID`, `p_title VARCHAR`, `p_body TEXT`, `p_status VARCHAR`, `p_due_at TIMESTAMPTZ`, `p_position INTEGER`, `OUT p_task_id UUID` | `p_task_id UUID`（OUT） | task作成・position採番・条件付き通知を一体実行し、DB側で採番したtask_idをOUTで返す |
-| 23 | プロシージャ | `sp_update_task` | `p_task_id UUID`, `p_editor_id UUID`, `p_version INTEGER`, `p_title VARCHAR`, `p_body TEXT`, `p_status VARCHAR`, `p_assignee_id UUID`, `p_due_at TIMESTAMPTZ`, `p_position INTEGER` | なし | version・再採番・通知を一体実行 |
+| 22 | プロシージャ | `sp_create_task` | `p_project_id UUID`, `p_created_by UUID`, `p_assignee_id UUID`, `p_title VARCHAR`, `p_body TEXT`, `p_status VARCHAR`, `p_due_at TIMESTAMPTZ`, `p_position INTEGER`, `p_day_start_utc TIMESTAMPTZ`, `p_day_end_utc TIMESTAMPTZ`, `OUT p_task_id UUID` | `p_task_id UUID`（OUT） | task作成・position採番・当日期限通知を一体実行し、DB側で採番したtask_idをOUTで返す |
+| 23 | プロシージャ | `sp_update_task` | `p_task_id UUID`, `p_editor_id UUID`, `p_version INTEGER`, `p_title VARCHAR`, `p_body TEXT`, `p_status VARCHAR`, `p_assignee_id UUID`, `p_due_at TIMESTAMPTZ`, `p_position INTEGER`, `p_day_start_utc TIMESTAMPTZ`, `p_day_end_utc TIMESTAMPTZ` | なし | version・再採番・当日期限通知を一体実行 |
 | 24 | プロシージャ | `sp_deactivate_task` | `p_task_id UUID`, `p_is_active BOOLEAN` | なし | taskの有効/無効切替 |
 | 25 | プロシージャ | `sp_add_task_comment` | `p_task_id UUID`, `p_user_id UUID`, `p_body TEXT`, `OUT p_comment_id UUID` | `p_comment_id UUID`（OUT） | コメント追加。DB側で採番したcomment_idをOUTで返す |
 | 26 | プロシージャ | `sp_update_task_comment` | `p_comment_id UUID`, `p_user_id UUID`, `p_body TEXT` | なし | コメント更新 |
@@ -343,8 +343,8 @@ $$;
 | `fn_list_tasks` | user role・所属・未所属作成者条件を適用してtasksをページング | 参照のみ |
 | `fn_list_task_comments` | task_commentsと表示用usersを結合しcreated_at昇順で返す | 参照のみ |
 | `fn_get_comment_with_task` | comment、task、project owner、投稿者の判定材料を一括取得 | 参照のみ |
-| `sp_create_task` | advisory lock→末尾position→`gen_random_uuid()`で採番したidでtasks INSERT（採番したidをOUTで返す）→条件付きnotifications INSERT | lock保持中の1トランザクション |
-| `sp_update_task` | versionを検証し、status/positionを再採番してtasks UPDATE。期限通知も同一SPでINSERT | 不一致はP0005、担当者無効はP0006 |
+| `sp_create_task` | advisory lock→末尾position→`gen_random_uuid()`で採番したidでtasks INSERT（採番したidをOUTで返す）→`p_day_start_utc <= p_due_at < p_day_end_utc` の場合だけnotifications INSERT | lock保持中の1トランザクション。日境界はAPIがAPP_TIMEZONEからUTCへ変換して渡す |
+| `sp_update_task` | versionを検証し、status/positionを再採番してtasks UPDATE。`due_at`変更後が`p_day_start_utc <= p_due_at < p_day_end_utc` の場合だけ通知をINSERT | 不一致はP0005、担当者無効はP0006。重複は`(user_id, dedupe_key)`で防止 |
 | `sp_deactivate_task` | `tasks.is_active`をUPDATE | position詰めなし |
 | `sp_add_task_comment` | `gen_random_uuid()`で採番したidでtask_comments INSERTし、採番したidをOUTで返す | task不存在等はAPIへ事実結果を返す |
 | `sp_update_task_comment` | comment本文をUPDATE | 投稿者比較はAPIで実施 |
@@ -454,11 +454,14 @@ flowchart LR
 | 20 | 結合 | notification系FN・SP全件 | 他人の通知を返さず、既読済みを上書きしない | `test_notification_db_contracts` |
 | 21 | 結合 | admin系FN・SP全件 | 自己変更禁止、最後のadmin保護、一覧取得を確認 | `test_admin_db_contracts` |
 | 22 | 結合 | SQLSTATE `P0001`〜`P0009` | API code・HTTP statusへ一意に変換 | `test_db_sqlstate_mapping` |
+| 23 | 結合 | `sp_create_task`：担当者あり・APP_TIMEZONE当日期限 | `due_today_created`が1件作成される | `test_sp_create_task_inserts_due_today_notification_for_assignee` |
+| 24 | 結合 | `sp_create_task`：担当者なしまたは翌日期限 | 通知が作成されない | `test_sp_create_task_skips_notification_without_assignee_or_for_future` |
+| 25 | 結合 | `sp_update_task`：期限変更なし・当日/翌日変更・同一日時再設定 | 当日変更時だけ通知され、dedupeで1件に収まる | `test_sp_update_task_notifies_only_when_due_at_changes_to_today_and_deduplicates` |
 
 ## 7. 不明点・要検討事項
 
 - `fn_is_project_member` を将来的にRLSポリシーへ組み込むかは要検討。ただし現行の実運用RBACでは本関数を使用する。
 - `sp_purge_login_history` のバッチ削除化（大量データ時のロック長時間化対策）は基本設計のスコープ外であり、想定データ量次第で要検討。
 - `db/functions/` `db/procedures/` の `.sql` をAlembicから読み込むAPIは実装担当が確定する（詳細は [09_migration.md](./09_migration.md) 参照）。
-- `APP_TIMEZONE` はAPIからUTC化した `p_due_at` を渡す方針とし、セッションGUCへ変更する場合は接続プールのリセットを要検証とする。
+- `APP_TIMEZONE`の日境界はAPI側で計算する。`task_repository`は当日開始・翌日開始をUTCへ変換し、`p_day_start_utc`・`p_day_end_utc`とUTC化済みの`p_due_at`をtask SPへ渡す。DBセッションのタイムゾーンやGUCは変更しない。
 - ~~adminのDB更新とRedisセッション失効は同一トランザクションにできないため、順序・再試行・監査ログを要検討~~ → issue #40で確認。両方を伴うのは無効化API（`sp_admin_update_user_status`）のみで、「DB先行→成功後Redis失効」で確定済み（[`00_policy.md` §11](./00_policy.md)参照）。role変更・強制ログアウトはDB/Redisいずれか一方のみの更新のため対象外。
