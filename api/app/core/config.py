@@ -109,6 +109,7 @@ class BackendSettings(BaseSettings):
 	csrf_trust_referer_on_https: bool = False
 	health_check_timeout_seconds: float = 2
 	login_history_list_limit: int = 50
+	admin_search_query_max_length: int = 100
 
 	@field_validator("cors_allow_origins", "trusted_proxy_cidrs", mode="before")
 	@classmethod
