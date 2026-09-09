@@ -64,17 +64,9 @@ async def require_project_member(
 	project = await project_repository.get_by_id(db, project_id)
 	if project is None:
 		raise NotFoundError()
-	if user.role == "admin":
-		return project
-	if not await project_repository_member_exists(db, project_id, user.id):
+	if not await project_repository.is_member(db, project_id, user.id):
 		raise NotFoundError()
 	return project
-
-
-async def project_repository_member_exists(db: AsyncSession, project_id: UUID, user_id: UUID) -> bool:
-	from app.repository import project_member_repository
-
-	return await project_member_repository.exists(db, project_id, user_id)
 
 
 async def require_project_owner(
