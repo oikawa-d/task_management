@@ -13,7 +13,7 @@
 	font-size: 1.125rem;
 }
 
-.count { color: #475569; font-size: 0.9rem; font-weight: 400; }
-.taskList { display: grid; align-content: start; gap: 10px; min-height: 9rem; padding: 10px; border: 1px dashed #94a3b8; border-radius: 10px; background: #f8fafc; }
-.taskList.over { border-color: #2563eb; background: #eff6ff; }
-.empty { margin: auto; color: #64748b; }
+.count { color: var(--color-text-secondary, #475569); font-size: 0.9rem; font-weight: 400; }
+.taskList { display: grid; align-content: start; gap: 10px; min-height: 9rem; padding: 10px; border: 1px dashed var(--color-border-muted, #94a3b8); border-radius: 10px; background: var(--color-surface-muted, #f8fafc); }
+.taskList.over { border-color: var(--color-focus, #2563eb); background: var(--color-accent-surface, #eff6ff); }
+.empty { margin: auto; color: var(--color-text-tertiary, #64748b); }
