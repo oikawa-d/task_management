@@ -23,6 +23,50 @@ async def test_create_records_successful_login(db_session: AsyncSession) -> None
 	assert histories[0].failure_reason is None
 
 
+async def test_oauth_session_callback_records_user_email(db_session: AsyncSession) -> None:
+	user_id = await user_repository.create(db_session, "alice", "alice@example.com", None)
+	user = await user_repository.get_by_id(db_session, user_id)
+	assert user is not None
+
+	await login_history_repository.create(
+		db_session,
+		user_id=user_id,
+		login_identifier=user.email,
+		login_method="oauth_google",
+		ip_address="127.0.0.1",
+		user_agent="pytest",
+		success=True,
+		failure_reason=None,
+	)
+
+	histories = await login_history_repository.list_by_user_id(db_session, user_id)
+
+	assert histories[0].login_identifier == user.email
+	assert histories[0].login_method == "oauth_google"
+
+
+async def test_oauth_jwt_exchange_records_user_email(db_session: AsyncSession) -> None:
+	user_id = await user_repository.create(db_session, "bob", "bob@example.com", None)
+	user = await user_repository.get_by_id(db_session, user_id)
+	assert user is not None
+
+	await login_history_repository.create(
+		db_session,
+		user_id=user_id,
+		login_identifier=user.email,
+		login_method="oauth_google",
+		ip_address="127.0.0.1",
+		user_agent="pytest",
+		success=True,
+		failure_reason=None,
+	)
+
+	histories = await login_history_repository.list_by_user_id(db_session, user_id)
+
+	assert histories[0].login_identifier == user.email
+	assert histories[0].login_method == "oauth_google"
+
+
 async def test_create_records_failed_login_with_unregistered_identifier(db_session: AsyncSession) -> None:
 	await login_history_repository.create(
 		db_session,

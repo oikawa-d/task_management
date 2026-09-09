@@ -145,7 +145,7 @@ Issue #8で、ログイン以外のRate Limit、パスワード再設定トー�
 | tasks | id, project_id, title, status, assignee_id, due_at, is_active, created_at | statusは`todo`/`in_progress`/`done`。`due_at`は期限（日付＋終了時刻）。`project_id`はNULL許容（未所属タスク）。`is_active`で論理削除 |
 | task_comments | id, task_id, user_id, body, created_at | |
 | notifications | id, user_id, task_id, type, title, read_at, dedupe_key, created_at | アプリ内通知。`type`は`due_soon_batch`/`due_today_created`/`due_today_updated`。`dedupe_key`で重複作成を防ぐ |
-| login_history | id, user_id, login_method, ip_address, success, created_at | ログイン試行の監査ログ。login_methodは`session`/`jwt`/`oauth_google`。Redis側の失効状況とは独立して保持し、INSERT失敗時はログインを成立させない |
+| login_history | id, user_id, login_identifier, login_method, ip_address, success, created_at | ログイン試行の監査ログ。`login_identifier`は通常ログインではリクエストのusername/email、Google OAuthでは検証済みGoogle emailを記録する。`login_method`は`session`/`jwt`/`oauth_google`。Redis側の失効状況とは独立して保持し、INSERT失敗時はログインを成立させない |
 | api_history | id, request_id, method, path, status, status_code, error_code, error_detail, body, user_id, duration_ms, created_at | `/api`配下の全APIリクエスト履歴。bodyはマスキング済み。既定30日保持 |
 | batch_history | id, run_id, batch_name, trigger_type, slot, status, started_at, ended_at, error_code, error_detail, target_count, success_count, skipped_count, updated_at | batchの開始・完了・失敗履歴。既定30日保持 |
 

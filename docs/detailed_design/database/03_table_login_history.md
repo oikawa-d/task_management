@@ -18,7 +18,7 @@
 | テーブル名 / 論理名 | `login_history` / ログイン試行履歴（監査ログ） |
 | 役割 | ログイン試行（成功・失敗いずれも）の監査ログ。Redis側のセッション/リフレッシュトークンのTTL失効とは独立して「誰が・いつ・どの方式で・成功したか」を永続的に記録する |
 | 想定件数・増加傾向 | **INSERTのみで単調増加**。ログイン試行（成功・失敗問わず）のたびに1行追加されるため、他テーブルより増加速度が速い。学習用途では小規模だが、設計としては「件数が最も速く増えるテーブル」として扱う |
-| ライフサイクル | 作成契機：`POST /api/auth/login` の成否確定時、OAuthコールバック成功時（`login_method='oauth_google'`）。更新契機：**なし**（追記専用、`updated_at` を持たない）。削除契機：保持期間（既定90日、環境変数 `LOGIN_HISTORY_RETENTION_DAYS`）超過分を `sp_purge_login_history` プロシージャで一括物理削除（運用者が月次で手動実行。アプリ内cronは設けない） |
+| ライフサイクル | 作成契機：`POST /api/auth/login` の成否確定時、OAuthではsessionモードはOAuthコールバック成功時、jwtモードは`/api/auth/oauth/exchange`成功時（いずれも`login_method='oauth_google'`）。更新契機：**なし**（追記専用、`updated_at` を持たない）。削除契機：保持期間（既定90日、環境変数 `LOGIN_HISTORY_RETENTION_DAYS`）超過分を `sp_purge_login_history` プロシージャで一括物理削除（運用者が月次で手動実行。アプリ内cronは設けない） |
 | 関連ORMモデル | `models/login_history.py :: LoginHistory` |
 
 ## 2. カラム定義
@@ -29,7 +29,7 @@
 |--------|----------|----|------|--------|--------------|------|
 | ID | `id` | UUID | NO | `gen_random_uuid()` | PK | |
 | ユーザーID | `user_id` | UUID | YES | - | FK → `users.id`（`ON DELETE SET NULL`） | 存在しないID/メール入力時はNULL |
-| 入力識別子 | `login_identifier` | VARCHAR(50) | NO | - | - | 入力された username / email（原文。パスワードは記録しない） |
+| ログイン識別子 | `login_identifier` | VARCHAR(50) | NO | - | - | 認証に使用した識別子。通常ログインはリクエストの username / email 原文、Google OAuth は `email_verified=true` を確認した Google email（実装上は解決済み `user.email`）。パスワード・OAuthの `sub`・トークンは記録しない |
 | ログイン方式 | `login_method` | VARCHAR(20) | NO | - | - | `session` / `jwt` / `oauth_google`（CHECK） |
 | IPアドレス | `ip_address` | INET | YES | - | - | `TRUSTED_PROXY_CIDRS`に含まれる直近ProxyからのXFFだけを解決して取得。未信頼時は接続元IP |
 | ユーザーエージェント | `user_agent` | TEXT | YES | - | - | |
@@ -62,7 +62,7 @@ CREATE TABLE login_history (
 );
 
 COMMENT ON TABLE login_history IS 'ログイン試行の監査ログ。Redis側のTTL失効とは独立して保持する';
-COMMENT ON COLUMN login_history.login_identifier IS '入力された username / email の原文。パスワードは記録しない';
+COMMENT ON COLUMN login_history.login_identifier IS '認証に使用した識別子。通常ログインはusername/email原文、Google OAuthは検証済みGoogle email。パスワード・OAuthのsub・トークンは記録しない';
 COMMENT ON COLUMN login_history.user_id IS '未登録ID/メール入力時はNULL';
 
 CREATE INDEX ix_login_history_user_created ON login_history (user_id, created_at DESC);
@@ -132,6 +132,7 @@ erDiagram
     login_history {
         uuid id PK
         uuid user_id FK "NULL可・ON DELETE SET NULL"
+        varchar_50 login_identifier "通常: username/email、OAuth: 検証済みGoogle email"
         varchar_20 login_method
         boolean success
         timestamptz created_at
@@ -144,7 +145,8 @@ erDiagram
 
 ```mermaid
 flowchart LR
-    A["POST /api/auth/login<br/>または OAuthコールバック"] --> B{"認証結果"}
+    A["POST /api/auth/login"] --> B{"認証結果"}
+    O["OAuth session callback<br/>または /api/auth/oauth/exchange"] --> B
     B -->|"成功"| C["INSERT login_history<br/>success=true, failure_reason=NULL"]
     B -->|"失敗<br/>（資格情報不一致・無効化ユーザー等）"| D["INSERT login_history<br/>success=false, failure_reason=<理由>"]
     C --> E["永続保持<br/>（UPDATEなし）"]

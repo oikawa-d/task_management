@@ -227,7 +227,7 @@ sessionモードはsession Cookieを必要とし、`DEL session:{sid}` 等を実
 | リダイレクトURI | `GOOGLE_REDIRECT_URI`（例：`http://localhost:5173/api/auth/oauth/google/callback`。frontendの `/api` proxy経由） |
 | state | `token_urlsafe(32)`。Redis に10分TTLで保持しワンタイム消費。開始時に `cerberus_oauth_state` HttpOnly Cookieにも設定し、callbackでCookieとの一致を検証 |
 | nonce | `token_urlsafe(32)`。stateと同じRedis値に保存し、id_tokenの `nonce` claim と一致検証 |
-| 識別子 | `id_token` の `sub`（`oauth_accounts.provider_user_id`） |
+| OAuthアカウント識別子 | `id_token` の `sub`（`oauth_accounts.provider_user_id`）。OAuthアカウントの紐付け検索に使用する |
 
 `redirect_to` は state に保存する前に、`/` で始まり `//` で始まらない同一オリジンの相対パスへ正規化する。絶対URL・プロトコル相対URL・外部ドメインは受け付けず、違反時は既定値 `OAUTH_DEFAULT_REDIRECT_TO`（既定 `/dashboard`）を使う。これによりOAuth完了後のopen redirectを防ぐ。`/` は `/login` へのリダイレクト専用パスであり画面を持たないため、既定値には使わない（[05_frontend.md 2.1](./05_frontend.md#21-ルートパス--の扱い) 参照）。
 
@@ -270,7 +270,7 @@ sequenceDiagram
         end
         alt session モード
             API->>API: SessionAuthStrategy.login() を実行
-            API->>PG: INSERT login_history(method='oauth_google')
+            API->>PG: INSERT login_history(method='oauth_google', login_identifier=user.email)
             API-->>FE: 302 → フロントのコールバックURL#redirect_to=...（Cookie設定済み）
         else jwt モード
             API->>RD: SETEX oauth_handoff:{code} TTL=60（user_id, redirect_to）
@@ -278,7 +278,7 @@ sequenceDiagram
             FE->>API: POST /api/auth/oauth/exchange（code）
             API->>RD: GETDEL oauth_handoff:{code}
             API->>API: JwtAuthStrategy.login() を実行（refresh/CSRF Cookie設定）
-            API->>PG: INSERT login_history(method='oauth_google')
+            API->>PG: INSERT login_history(method='oauth_google', login_identifier=user.email)
             API-->>FE: 200 access_token + redirect_to（正規化済み）
         end
     end
@@ -304,6 +304,8 @@ OAuth コールバックはブラウザのリダイレクトであるため、�
 3. sessionモードではコールバック中にSessionAuthStrategy.loginを実行し、正規化済み `redirect_to` をfragmentで付けた同じフロント経路へリダイレクトする
 
 fragmentの形式は、jwtモードでは `#code=xxx`、sessionモードでは `#redirect_to=<URLエンコード済みの相対パス>` とする。
+
+OAuthのログイン履歴では、`login_identifier` に `email_verified=true` を確認したGoogle emailを記録する。jwtモードはOAuth callbackでは履歴を記録せず、`/auth/oauth/exchange` で解決済みユーザーの `user.email` を記録する。Google OAuthのアカウント紐付けに使う不変な識別子は `oauth_accounts.provider_user_id` の `sub` であり、`login_identifier` には保存しない。詳細は [データベース基本設計 §3.7](./01_database.md#37-login_history) を参照する。
 
 `LoginResult` の `refresh_token` / `csrf_token` はサーバー内部でCookieを設定するための一時値であり、JSONレスポンスやURLには含めない。`redirect_to` はstate保存時に検証済みの相対パスだけを返し、フロントは任意URLとして解釈しない。
 
