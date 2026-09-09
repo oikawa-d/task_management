@@ -1,5 +1,5 @@
 import { createAuthAdapter } from "./index";
-import type { AuthAdapter, AuthMode, TokenStore } from "./types";
+import type { AuthAdapter, AuthMode } from "./types";
 
 const DEFAULT_API_BASE_URL = "/api";
 
@@ -10,14 +10,6 @@ export type AuthConfigResponse = {
 
 let authAdapter: AuthAdapter | null = null;
 let authConfigRequest: Promise<AuthAdapter> | null = null;
-let accessToken: string | null = null;
-
-const runtimeTokenStore: TokenStore = {
-	getAccessToken: () => accessToken,
-	setAccessToken: (token) => {
-		accessToken = token;
-	},
-};
 
 function isAuthMode(value: unknown): value is AuthMode {
 	return value === "session" || value === "jwt";
@@ -44,21 +36,24 @@ function toFetchHeaders(headers: unknown): Headers {
 	return result;
 }
 
-export function setAuthAdapterMode(mode: AuthMode, csrfCookieName?: string): void {
-	authAdapter = createAuthAdapter(mode, {
-		csrfCookieName,
-		tokenStore: runtimeTokenStore,
-	});
+/**
+ * bootstrapAuth()が生成したアダプタを共有する。
+ * これを呼ばないとjwtモードでトークンを持たない別インスタンスが使われ、
+ * Authorizationヘッダが付与されない。
+ */
+export function setAuthAdapter(adapter: AuthAdapter): void {
+	authAdapter = adapter;
+	authConfigRequest = null;
 }
 
-export function setAuthAccessToken(token: string | null): void {
-	runtimeTokenStore.setAccessToken(token);
+/** bootstrap未実行時のフォールバックと単体テスト用に、auth_modeだけからアダプタを生成する */
+export function setAuthAdapterMode(mode: AuthMode, csrfCookieName?: string): void {
+	authAdapter = createAuthAdapter(mode, { csrfCookieName });
 }
 
 export function clearAuthAdapter(): void {
 	authAdapter = null;
 	authConfigRequest = null;
-	runtimeTokenStore.setAccessToken(null);
 }
 
 export async function resolveAuthAdapter(

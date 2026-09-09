@@ -1,5 +1,6 @@
 import axios, { type AxiosInstance } from "axios";
 
+import { setAuthAdapter } from "../api/authAdapter/client";
 import {
 	AUTH_CONFIG_ENDPOINT,
 	AUTH_ME_ENDPOINT,
@@ -52,6 +53,7 @@ export async function bootstrapAuth(): Promise<AuthUser | null> {
 		httpClient: client,
 	});
 	useAuthStore.getState().setAuthAdapter(adapter);
+	setAuthAdapter(adapter);
 
 	installAuthInterceptors(client, adapter);
 	if (!(await adapter.restoreSession())) {
