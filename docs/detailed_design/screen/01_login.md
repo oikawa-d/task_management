@@ -237,7 +237,7 @@ flowchart TB
 
 | フィールド | zodスキーマ | ルール | エラーメッセージ | バックエンド対応 |
 |-----------|-------------|--------|-------------------|-------------------|
-| `identifier` | `loginSchema.identifier` | `z.string().min(1).max(255)` | 「IDまたはメールアドレスを入力してください」 | pydantic `identifier: str`（[04_api.md §3.1](../../basic_design/04_api.md#31-認証)） |
+| `identifier` | `loginSchema.identifier` | `z.string().min(1).max(50)` | 「IDまたはメールアドレスを入力してください」 | pydantic `identifier: str`（[04_api.md §3.1](../../basic_design/04_api.md#31-認証)） |
 | `password` | `loginSchema.password` | `z.string().min(1)` | 「パスワードを入力してください」 | pydantic `password: str` |
 
 クライアント側は必須チェックのみ行い、パスワード強度検証はログイン画面では行わない（登録画面のみ）。再送フォーム（identifierがusername形式の場合）の `email` は `z.string().email()`。
