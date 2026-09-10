@@ -9,6 +9,8 @@ from app.schemas.auth import CurrentUser
 
 
 async def require_task_access(task: Task, user: CurrentUser, db: AsyncSession) -> None:
+	if not task.is_active:
+		raise NotFoundError()
 	if user.role == "admin":
 		return
 	if task.project_id is None:
