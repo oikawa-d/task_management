@@ -4,10 +4,12 @@ import { RequireAdmin, RequireAuth, RequireGuest } from "./auth/guards";
 import { AdminUsersPage } from "./features/admin/pages/AdminUsersPage";
 import { LoginPage } from "./features/auth/pages/LoginPage";
 import { OAuthCallbackPage } from "./features/auth/pages/OAuthCallbackPage";
+import { RegisterPage } from "./features/auth/pages/RegisterPage";
 import { DashboardPage } from "./features/dashboard/pages/DashboardPage";
 import { BoardPage } from "./features/board/BoardPage";
 import { SettingsPage } from "./features/settings/pages/SettingsPage";
 import { AppLayout } from "./layouts/AppLayout";
+import { AuthLayout } from "./layouts/AuthLayout";
 import { ROUTES } from "./routes";
 
 export const appRoutes = [
@@ -23,11 +25,20 @@ export const appRoutes = [
 		element: <OAuthCallbackPage />,
 	},
 	{
-		element: <RequireGuest />,
+		element: <AuthLayout />,
 		children: [
 			{
-				path: ROUTES.LOGIN,
-				element: <LoginPage />,
+				element: <RequireGuest />,
+				children: [
+					{
+						path: ROUTES.LOGIN,
+						element: <LoginPage />,
+					},
+					{
+						path: ROUTES.REGISTER,
+						element: <RegisterPage />,
+					},
+				],
 			},
 		],
 	},
