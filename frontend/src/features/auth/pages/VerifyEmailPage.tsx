@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { ROUTES } from "../../../routes";
-import { verifyEmail } from "../api/authApi";
+import { AuthApiError, verifyEmail } from "../api/authApi";
 import { VerifyEmailPanel, type VerifyEmailPhase } from "../components/VerifyEmailPanel";
 import { EMAIL_VERIFY_REDIRECT_DELAY_MS } from "../config/pageConfig";
 import { useHashToken } from "../hooks/useHashToken";
@@ -15,6 +15,7 @@ export function VerifyEmailPage() {
 	const navigate = useNavigate();
 	const { token, ready } = useHashToken();
 	const [phase, setPhase] = useState<VerifyEmailPhase>("verifying");
+	const [errorMessage, setErrorMessage] = useState<string | undefined>();
 	const verifyRequestedRef = useRef(false);
 
 	useEffect(() => {
@@ -34,8 +35,14 @@ export function VerifyEmailPage() {
 			.then(() => {
 				if (mounted) setPhase("success");
 			})
-			.catch(() => {
-				if (mounted) setPhase("error");
+			.catch((error: unknown) => {
+				if (!mounted) return;
+				if (error instanceof AuthApiError && error.status === 400 && error.code === "INVALID_VERIFY_TOKEN") {
+					setErrorMessage(undefined);
+				} else {
+					setErrorMessage("エラーが発生しました。しばらくしてから再度お試しください");
+				}
+				setPhase("error");
 			});
 
 		return () => {
@@ -58,7 +65,11 @@ export function VerifyEmailPage() {
 	return (
 		<section aria-labelledby="verify-email-heading">
 			<h1 id="verify-email-heading">メールアドレスを確認中です</h1>
-			{ready ? <VerifyEmailPanel phase={phase} onRedirectNow={redirectNow} /> : <p role="status">確認しています…</p>}
+			{ready ? (
+				<VerifyEmailPanel phase={phase} errorMessage={errorMessage} onRedirectNow={redirectNow} />
+			) : (
+				<p role="status">確認しています…</p>
+			)}
 		</section>
 	);
 }

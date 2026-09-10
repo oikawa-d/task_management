@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -12,15 +13,18 @@ function response(body: unknown, init: { ok: boolean; status: number }) {
 	return { ok: init.ok, status: init.status, headers: new Headers(), json: vi.fn().mockResolvedValue(body) };
 }
 
-function renderPage(hash: string) {
+function renderPage(hash: string, strictMode = false) {
 	window.history.replaceState(null, "", `/verify-email${hash}`);
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-	return render(
+	const page = (
 		<MemoryRouter>
 			<QueryClientProvider client={queryClient}>
 				<VerifyEmailPage />
 			</QueryClientProvider>
-		</MemoryRouter>,
+		</MemoryRouter>
+	);
+	return render(
+		strictMode ? <StrictMode>{page}</StrictMode> : page,
 	);
 }
 
@@ -68,12 +72,34 @@ describe("VerifyEmailPage", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
-	it("StrictMode相当の再実行でも検証APIを一度しか呼ばない", async () => {
+	it("StrictModeの二重マウントでも検証APIを一度だけ呼び成功表示にする", async () => {
 		const fetchMock = vi.fn().mockResolvedValue(response(undefined, { ok: true, status: 204 }));
 		vi.stubGlobal("fetch", fetchMock);
-		renderPage("#token=verify-token-123");
+		renderPage("#token=verify-token-123", true);
 
 		await waitFor(() => expect(screen.getByText("メール認証が完了しました")).toBeInTheDocument());
 		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("ネットワークエラーは無効なリンクと誤表示しない", async () => {
+		vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+
+		renderPage("#token=network-error");
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("エラーが発生しました。しばらくしてから再度お試しください");
+		expect(screen.getByRole("alert")).not.toHaveTextContent("リンクの有効期限が切れているか、既に使用済みです");
+	});
+
+	it("503は無効なリンクと誤表示しない", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(
+				response({ error: { code: "SERVICE_UNAVAILABLE", message: "停止中" } }, { ok: false, status: 503 }),
+			),
+		);
+
+		renderPage("#token=service-error");
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("エラーが発生しました。しばらくしてから再度お試しください");
 	});
 });
