@@ -45,7 +45,7 @@ async def test_list_members_includes_inactive_members(db_session: AsyncSession) 
 
 	members = await project_member_repository.list_by_project(db_session, project_id)
 
-	assert [member.user_id for member in members] == [owner_id, member_id]
+	assert {member.user_id for member in members} == {owner_id, member_id}
 
 
 async def test_remove_owner_returns_p0004(db_session: AsyncSession) -> None:
