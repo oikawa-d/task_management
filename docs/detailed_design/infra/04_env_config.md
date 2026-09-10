@@ -113,6 +113,9 @@
 | 変数名 | 型 | 既定値 | 用途 | 秘匿 |
 |--------|-----|--------|------|------|
 | `CORS_ALLOW_ORIGINS` | list[str]（カンマ区切りをパース） | `http://localhost:5173` | 許可Origin一覧。`allow_credentials=true`と併用 | 平文可 |
+| `CORS_ALLOW_METHODS` | list[str]（カンマ区切りをパース） | `GET,POST,PUT,PATCH,DELETE,OPTIONS` | `CORSMiddleware`が許可するHTTPメソッド一覧 | 平文可 |
+| `CORS_ALLOW_HEADERS` | list[str]（カンマ区切りをパース） | `Content-Type,X-CSRF-Token,Authorization` | `CORSMiddleware`が許可するリクエストヘッダー一覧（Double Submit Cookieの`X-CSRF-Token`を含む） | 平文可 |
+| `CORS_MAX_AGE_SECONDS` | int | `600` | プリフライト(OPTIONS)応答のキャッシュ秒数（`Access-Control-Max-Age`） | 平文可 |
 | `ENABLE_API_DOCS` | bool | `true` | `/api/docs`（Swagger UI）の有効化。本番は`false`推奨 | 平文可 |
 
 ### 3.6 ページング
