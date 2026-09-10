@@ -33,6 +33,14 @@ app = FastAPI(
 )
 
 register_error_handling(app)
+# allow_credentials=Trueは固定値。CookieベースのDouble Submit Cookie認証（core/deps.pyの
+# verify_origin/verify_csrf）を前提としており、settings.cors_allow_originsのワイルドカード
+# 禁止バリデータ（core/config.py :: _reject_wildcard_origin）はallow_credentials=Trueである
+# ことを前提に成立する（docs/detailed_design/auth/03_csrf.md §10）。
+# CORSMiddlewareはミドルウェアスタックの最外周として動作させる必要がある（Starletteは
+# 後から追加したミドルウェアほど外側になるため、他のミドルウェアを追加する場合は
+# 必ずこのadd_middleware呼び出しより後に追加すること。そうしないとエラーレスポンスに
+# CORSヘッダーが付与されない）。
 app.add_middleware(
 	CORSMiddleware,
 	allow_origins=settings.cors_allow_origins,

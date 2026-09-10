@@ -126,6 +126,8 @@ class BackendSettings(BaseSettings):
 	@field_validator("cors_allow_origins")
 	@classmethod
 	def _reject_wildcard_origin(cls, value: list[str]) -> list[str]:
+		# app.main.appのCORSMiddlewareはallow_credentials=Trueで固定登録しているため、
+		# ここでのワイルドカード禁止は常にその前提で成立する（docs/detailed_design/auth/03_csrf.md §10）。
 		if "*" in value:
 			raise ValueError("cors_allow_origins must not contain '*' when allow_credentials is True")
 		return value
