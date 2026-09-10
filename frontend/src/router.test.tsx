@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { useAuthStore } from "./auth/authStore";
 import { appRoutes } from "./router";
+import styles from "./layouts/AuthLayout.module.css";
 import { ROUTES } from "./routes";
 
 describe("アプリケーションルート", () => {
@@ -133,7 +134,7 @@ describe("アプリケーションルート", () => {
 		["authenticated" as const, ROUTES.PASSWORD_RESET, "新しいパスワードを設定"],
 		["unauthenticated" as const, ROUTES.VERIFY_EMAIL, "メールアドレスを確認中です"],
 		["authenticated" as const, ROUTES.VERIFY_EMAIL, "メールアドレスを確認中です"],
-	])("認証状態が%sでも%sへリダイレクトされず画面を表示する", async (status, path, heading) => {
+	])("認証状態が%sでも%sへリダイレクトされずAuthLayout内に表示する", async (status, path, heading) => {
 		act(() => {
 			useAuthStore.setState(
 				status === "authenticated"
@@ -153,5 +154,7 @@ describe("アプリケーションルート", () => {
 		});
 
 		expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument();
+		const pageHeading = screen.getByRole("heading", { name: heading });
+		expect(pageHeading.closest(`.${styles.card}`)).not.toBeNull();
 	});
 });
