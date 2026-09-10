@@ -43,7 +43,10 @@ export const loginSchema = z.object({
 });
 
 export const resendVerificationSchema = z.object({
-	email: emailSchema,
+	email: z
+		.string()
+		.email("有効なメールアドレスを入力してください")
+		.max(EMAIL_MAX_LENGTH, "有効なメールアドレスを入力してください"),
 });
 
 export function registerSchema() {
@@ -128,4 +131,36 @@ export function getFieldErrors(error: unknown): ApiFieldError[] {
 	}
 	const details = (error as AuthApiError).details;
 	return Array.isArray(details) ? details.filter(isApiFieldError) : [];
+}
+
+/** docs/detailed_design/screen/03_password_forgot.md §10 */
+export const passwordForgotSchema = z.object({
+	email: z
+		.string()
+		.email("メールアドレスの形式が正しくありません")
+		.max(EMAIL_MAX_LENGTH, "メールアドレスの形式が正しくありません"),
+});
+
+/** docs/detailed_design/screen/04_password_reset.md §10 */
+export function passwordResetSchema() {
+	const minLength = getAuthValidationConfig().passwordMinLength;
+	return z
+		.object({
+			newPassword: z
+				.string()
+				.refine(
+					(value) => value.length >= minLength && countCharacterTypes(value) >= 2,
+					`${minLength}文字以上で、2種類以上の文字種を含めてください`,
+				),
+			passwordConfirm: z.string(),
+		})
+		.superRefine((values, context) => {
+			if (values.newPassword !== values.passwordConfirm) {
+				context.addIssue({
+					code: z.ZodIssueCode.custom,
+					path: ["passwordConfirm"],
+					message: "パスワードが一致しません",
+				});
+			}
+		});
 }
