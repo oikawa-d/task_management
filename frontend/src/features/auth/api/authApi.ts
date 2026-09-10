@@ -96,3 +96,11 @@ export function resendVerification(email: string): Promise<void> {
 		body: JSON.stringify({ email }),
 	});
 }
+
+/** POST /api/auth/verify-email（docs/detailed_design/api/auth/07_post_auth_verify_email.md） */
+export function verifyEmail(token: string): Promise<void> {
+	return request("/auth/verify-email", {
+		method: "POST",
+		body: JSON.stringify({ token }),
+	});
+}
