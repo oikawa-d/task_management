@@ -62,6 +62,8 @@ describe("RegisterPage", () => {
 	});
 
 	it("googleLoginButtonスロットが無い場合はGoogleログイン導線を表示しない", () => {
+		useAuthStore.getState().setGoogleLoginEnabled(true);
+
 		renderRegisterPage();
 
 		expect(screen.queryByRole("button", { name: /Google/ })).not.toBeInTheDocument();
@@ -79,7 +81,8 @@ describe("RegisterPage", () => {
 		expect(screen.getByRole("button", { name: "Googleで新規登録" })).toBeInTheDocument();
 	});
 
-	it("google_login_enabled=falseの場合はGoogleログイン導線を表示しない", () => {
+	// design doc: docs/detailed_design/screen/02_register.md §14 No.10 "RegisterPage hides Google button when disabled"
+	it("RegisterPage hides Google button when disabled", () => {
 		useAuthStore.getState().setGoogleLoginEnabled(false);
 		const googleLoginButton = vi.fn(({ label }: { label: string }) => (
 			<button type="button">{label}</button>

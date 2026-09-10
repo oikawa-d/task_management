@@ -255,7 +255,7 @@ flowchart TB
 
 | ストア | 保持内容 | 永続化 | 備考 |
 |--------|----------|--------|------|
-| `authStore`（Zustand） | `user`, `status`（`loading` / `authenticated` / `unauthenticated`） | **しない**（メモリのみ） | JWTのアクセストークンは`AuthAdapter`へ注入したメモリ上の`TokenStore`が保持し、authStoreには保持しない。adapterは`GET /auth/config`の実行時設定から選択 |
+| `authStore`（Zustand） | `user`, `status`（`loading` / `authenticated` / `unauthenticated`）, `googleLoginEnabled` | **しない**（メモリのみ） | JWTのアクセストークンは`AuthAdapter`へ注入したメモリ上の`TokenStore`が保持し、authStoreには保持しない。adapterと`googleLoginEnabled`は`GET /auth/config`の実行時設定から選択・保持する（`authBootstrap`が起動時に設定） |
 | `uiStore`（Zustand + persist） | `fontScale`, `sidebarOpen`, `dashboardView`（`"cards"` / `"calendar"`） | localStorage | 文字サイズ・サイドバー開閉・ダッシュボードの表示モードはクライアント側のみで保持。次回起動時も選択中の表示モードを復元する |
 | 通知（React Query） | `['notifications','unread-count']` / `['notifications', page, unreadOnly]` | しない | 未読件数はポーリング、一覧はパネルを開いたときに取得。パネルの開閉状態のみコンポーネントのローカルstateで持つ |
 | TanStack Query | プロジェクト一覧・ボード・ユーザー一覧 | しない | `queryKey` は `['projects']` / `['board', projectId]`。タスク詳細コメントは`taskDetailStore`で管理する（下段参照） |

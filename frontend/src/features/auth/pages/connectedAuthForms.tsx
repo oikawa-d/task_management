@@ -1,4 +1,3 @@
-import { useAuthStore } from "../../../auth/authStore";
 import { GoogleLoginButton } from "../components/GoogleLoginButton";
 import { LoginForm } from "../components/LoginForm";
 import { RegisterForm } from "../components/RegisterForm";
@@ -45,10 +44,12 @@ function ConnectedRegisterForm({ onSuccess }: RegisterFormSlotProps) {
 	);
 }
 
+/**
+ * LoginPage/RegisterPageが既にauthStore.googleLoginEnabledで呼び出し可否を判定しているため
+ * （呼ばれた時点でtrue確定）、ここでは常時enabledでGoogleLoginButtonを描画する。
+ */
 function ConnectedGoogleLoginButton({ label }: GoogleLoginButtonSlotProps) {
-	const googleLoginEnabled = useAuthStore((state) => state.googleLoginEnabled);
-
-	return <GoogleLoginButton enabled={googleLoginEnabled} label={label} />;
+	return <GoogleLoginButton enabled label={label} />;
 }
 
 /** main.tsxでAppへ渡し、AuthFormsProviderのslotsへ注入する */
