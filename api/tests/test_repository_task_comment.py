@@ -53,7 +53,7 @@ async def test_list_comments_loads_author_for_the_target_task(db_session: AsyncS
 	assert comments[0].author.username == "comment-author"
 
 
-async def test_get_by_id_loads_task_and_author(db_session: AsyncSession) -> None:
+async def test_get_by_id_loads_task_project_and_author(db_session: AsyncSession) -> None:
 	owner_id, task_id = await _setup_task(db_session, "comment-relation")
 	comment_id = await task_comment_repository.create(db_session, task_id, owner_id, "with relations")
 
@@ -63,6 +63,9 @@ async def test_get_by_id_loads_task_and_author(db_session: AsyncSession) -> None
 	assert comment.task is not None
 	assert comment.task.id == task_id
 	assert comment.task.is_active is True
+	assert comment.task.project is not None
+	assert comment.task.project.name == "P"
+	assert comment.task.project.owner_id == owner_id
 	assert comment.author is not None
 	assert comment.author.id == owner_id
 
@@ -70,22 +73,30 @@ async def test_get_by_id_loads_task_and_author(db_session: AsyncSession) -> None
 async def test_update_comment_changes_body(db_session: AsyncSession) -> None:
 	owner_id, task_id = await _setup_task(db_session, "carol")
 	comment_id = await task_comment_repository.create(db_session, task_id, owner_id, "original")
+	other_comment_id = await task_comment_repository.create(db_session, task_id, owner_id, "untouched")
 
 	await task_comment_repository.update(db_session, comment_id, owner_id, "edited")
 
 	comment = await task_comment_repository.get_by_id(db_session, comment_id)
+	other_comment = await task_comment_repository.get_by_id(db_session, other_comment_id)
 	assert comment is not None
 	assert comment.body == "edited"
+	assert other_comment is not None
+	assert other_comment.body == "untouched"
 
 
 async def test_delete_comment_removes_row(db_session: AsyncSession) -> None:
 	owner_id, task_id = await _setup_task(db_session, "dave")
 	comment_id = await task_comment_repository.create(db_session, task_id, owner_id, "to delete")
+	other_comment_id = await task_comment_repository.create(db_session, task_id, owner_id, "to keep")
 
 	await task_comment_repository.delete(db_session, comment_id, owner_id)
 
 	comment = await task_comment_repository.get_by_id(db_session, comment_id)
+	other_comment = await task_comment_repository.get_by_id(db_session, other_comment_id)
 	assert comment is None
+	assert other_comment is not None
+	assert other_comment.body == "to keep"
 
 
 async def test_deactivate_task_does_not_delete_comments(db_session: AsyncSession) -> None:
