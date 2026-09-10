@@ -137,7 +137,14 @@ def normalize_redirect_to(raw: str | None, settings: BackendSettings | None = No
 	if not raw:
 		return config.oauth_default_redirect_to
 	parsed = urlsplit(raw)
-	if not raw.startswith("/") or raw.startswith("//") or parsed.scheme or parsed.netloc:
+	if (
+		not raw.startswith("/")
+		or raw.startswith("//")
+		or parsed.scheme
+		or parsed.netloc
+		or "\\" in raw
+		or any(ord(char) < 0x20 or ord(char) == 0x7F for char in raw)
+	):
 		return config.oauth_default_redirect_to
 	return raw
 

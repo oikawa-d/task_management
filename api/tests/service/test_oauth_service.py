@@ -74,20 +74,29 @@ class _OAuthHttpClient:
 		return _HttpResponse(200, self.jwks if "certs" in url else self.userinfo)
 
 
-def _signed_id_token(settings: BackendSettings, nonce: str) -> tuple[str, dict[str, object]]:
+def _signed_id_token(
+	settings: BackendSettings,
+	nonce: str,
+	*,
+	audience: str | list[str] | None = None,
+	azp: str | None = None,
+) -> tuple[str, dict[str, object]]:
 	private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 	public_jwk = json.loads(RSAAlgorithm.to_jwk(private_key.public_key()))
 	public_jwk["kid"] = "key-1"
+	claims: dict[str, object] = {
+		"sub": "google-sub",
+		"email": "alice@example.com",
+		"email_verified": True,
+		"iss": "https://accounts.google.com",
+		"aud": settings.google_client_id if audience is None else audience,
+		"exp": int(time.time()) + 60,
+		"nonce": nonce,
+	}
+	if azp is not None:
+		claims["azp"] = azp
 	token = jwt.encode(
-		{
-			"sub": "google-sub",
-			"email": "alice@example.com",
-			"email_verified": True,
-			"iss": "https://accounts.google.com",
-			"aud": settings.google_client_id,
-			"exp": int(time.time()) + 60,
-			"nonce": nonce,
-		},
+		claims,
 		private_key,
 		algorithm="RS256",
 		headers={"kid": "key-1"},
@@ -101,6 +110,8 @@ def test_normalize_redirect_to_rejects_external_and_protocol_relative_urls() -> 
 	assert auth_service.normalize_redirect_to("/projects/1", settings) == "/projects/1"
 	assert auth_service.normalize_redirect_to("https://evil.example", settings) == "/dashboard"
 	assert auth_service.normalize_redirect_to("//evil.example", settings) == "/dashboard"
+	assert auth_service.normalize_redirect_to(r"/\evil.example", settings) == "/dashboard"
+	assert auth_service.normalize_redirect_to("/projects/1\nnext", settings) == "/dashboard"
 
 
 def test_build_authorize_url_contains_contract_parameters() -> None:
@@ -139,6 +150,31 @@ async def test_provider_exchanges_code_with_pkce_parameters() -> None:
 
 
 @pytest.mark.asyncio
+async def test_provider_logs_token_exchange_failure_without_sensitive_values(caplog: pytest.LogCaptureFixture) -> None:
+	client = SimpleNamespace(post=AsyncMock(return_value=_HttpResponse(400, {})))
+	provider = GoogleOAuthProvider(_settings(), client)
+
+	with caplog.at_level("WARNING", logger="app.oauth"), pytest.raises(OAuthFailedError):
+		await provider.exchange_code("secret-code", "secret-verifier")
+
+	assert any(record.operation == "token_exchange" for record in caplog.records)
+	assert "secret-code" not in caplog.text
+	assert "secret-verifier" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_provider_logs_userinfo_failure_without_sensitive_values(caplog: pytest.LogCaptureFixture) -> None:
+	client = SimpleNamespace(get=AsyncMock(return_value=_HttpResponse(500, {})))
+	provider = GoogleOAuthProvider(_settings(), client)
+
+	with caplog.at_level("WARNING", logger="app.oauth"), pytest.raises(OAuthFailedError):
+		await provider.fetch_userinfo("secret-access-token")
+
+	assert any(record.operation == "userinfo" for record in caplog.records)
+	assert "secret-access-token" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_provider_rejects_id_token_with_wrong_nonce() -> None:
 	settings = _settings()
 	token, jwks = _signed_id_token(settings, "expected")
@@ -147,6 +183,74 @@ async def test_provider_rejects_id_token_with_wrong_nonce() -> None:
 
 	with pytest.raises(OAuthFailedError):
 		await provider.verify_id_token(token, "wrong")
+
+
+@pytest.mark.asyncio
+async def test_provider_logs_id_token_verification_failure_without_sensitive_values(
+	caplog: pytest.LogCaptureFixture,
+) -> None:
+	settings = _settings()
+	token, jwks = _signed_id_token(settings, "expected")
+	provider = GoogleOAuthProvider(settings, _OAuthHttpClient({}, {}, jwks))
+
+	with caplog.at_level("WARNING", logger="app.oauth"), pytest.raises(OAuthFailedError):
+		await provider.verify_id_token(token, "wrong")
+
+	assert any(record.operation == "id_token_verify" for record in caplog.records)
+	assert token not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_provider_logs_jwks_failure_without_sensitive_values(caplog: pytest.LogCaptureFixture) -> None:
+	settings = _settings(google_jwks_uri="https://jwks.example.test/unique")
+	client = SimpleNamespace(get=AsyncMock(return_value=_HttpResponse(500, {})))
+	provider = GoogleOAuthProvider(settings, client)
+
+	with caplog.at_level("WARNING", logger="app.oauth"), pytest.raises(OAuthFailedError):
+		await provider._get_jwks()
+
+	assert any(record.operation == "jwks" for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_provider_rejects_id_token_with_wrong_audience() -> None:
+	settings = _settings()
+	token, jwks = _signed_id_token(settings, "nonce", audience="other-client")
+	provider = GoogleOAuthProvider(settings, _OAuthHttpClient({}, {}, jwks))
+
+	with pytest.raises(OAuthFailedError):
+		await provider.verify_id_token(token, "nonce")
+
+
+@pytest.mark.asyncio
+async def test_provider_rejects_multiple_audience_with_wrong_azp() -> None:
+	settings = _settings()
+	token, jwks = _signed_id_token(
+		settings,
+		"nonce",
+		audience=[settings.google_client_id, "other-client"],
+		azp="other-client",
+	)
+	provider = GoogleOAuthProvider(settings, _OAuthHttpClient({}, {}, jwks))
+
+	with pytest.raises(OAuthFailedError):
+		await provider.verify_id_token(token, "nonce")
+
+
+@pytest.mark.asyncio
+async def test_provider_accepts_multiple_audience_with_matching_azp() -> None:
+	settings = _settings(google_jwks_uri="https://jwks.example.test/certs/matching")
+	token, jwks = _signed_id_token(
+		settings,
+		"nonce",
+		audience=[settings.google_client_id, "other-client"],
+		azp=settings.google_client_id,
+	)
+	provider = GoogleOAuthProvider(settings, _OAuthHttpClient({}, {}, jwks))
+
+	claims = await provider.verify_id_token(token, "nonce")
+
+	assert claims.sub == "google-sub"
 
 
 @pytest.mark.asyncio

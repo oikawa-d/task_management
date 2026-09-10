@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 import time
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from app.core.exceptions import OAuthFailedError
 
 _GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
 _GOOGLE_SCOPE = "openid email profile"
+logger = logging.getLogger("app.oauth")
 
 
 @dataclass(frozen=True)
@@ -95,8 +97,10 @@ class GoogleOAuthProvider:
 			body = response.json()
 			return OAuthTokenResponse(_required_string(body, "id_token"), _required_string(body, "access_token"))
 		except OAuthFailedError:
+			logger.warning("OAuth token exchange failed", extra={"operation": "token_exchange"})
 			raise
 		except Exception as exc:
+			logger.warning("OAuth token exchange failed", extra={"operation": "token_exchange"})
 			raise OAuthFailedError() from exc
 
 	async def fetch_userinfo(self, access_token: str) -> GoogleUserInfo:
@@ -119,8 +123,10 @@ class GoogleOAuthProvider:
 				_optional_string(body, "family_name"),
 			)
 		except OAuthFailedError:
+			logger.warning("OAuth userinfo request failed", extra={"operation": "userinfo"})
 			raise
 		except Exception as exc:
+			logger.warning("OAuth userinfo request failed", extra={"operation": "userinfo"})
 			raise OAuthFailedError() from exc
 
 	async def verify_id_token(self, id_token: str, expected_nonce: str) -> IdTokenClaims:
@@ -140,6 +146,7 @@ class GoogleOAuthProvider:
 				audience=self.settings.google_client_id,
 				options={"require": ["sub", "email", "email_verified", "iss", "aud", "exp", "nonce"]},
 			)
+			_validate_audience(claims, self.settings.google_client_id)
 			if claims.get("iss") not in _GOOGLE_ISSUERS:
 				raise ValueError("unexpected issuer")
 			nonce = claims.get("nonce")
@@ -158,6 +165,7 @@ class GoogleOAuthProvider:
 		except OAuthFailedError:
 			raise
 		except Exception as exc:
+			logger.warning("OAuth ID token verification failed", extra={"operation": "id_token_verify"})
 			raise OAuthFailedError() from exc
 
 	async def _get_jwks(self) -> dict[str, Any]:
@@ -176,6 +184,7 @@ class GoogleOAuthProvider:
 			_jwks_cache = (self.settings.google_jwks_uri, body, now + self.settings.google_jwks_cache_ttl_seconds)
 			return body
 		except Exception as exc:
+			logger.warning("OAuth JWKS request failed", extra={"operation": "jwks"})
 			raise OAuthFailedError() from exc
 
 	async def _verify_id_token(self, id_token: str, expected_nonce: str) -> IdTokenClaims:
@@ -199,6 +208,20 @@ def _required_string(value: dict[str, Any], key: str) -> str:
 	if not isinstance(result, str) or not result:
 		raise ValueError(f"missing OAuth value: {key}")
 	return result
+
+
+def _validate_audience(claims: dict[str, Any], client_id: str) -> None:
+	audience = claims.get("aud")
+	if isinstance(audience, str):
+		if audience != client_id:
+			raise ValueError("unexpected audience")
+		return
+	if not isinstance(audience, list) or not all(isinstance(value, str) for value in audience):
+		raise ValueError("invalid audience")
+	if client_id not in audience:
+		raise ValueError("unexpected audience")
+	if len(audience) > 1 and claims.get("azp") != client_id:
+		raise ValueError("unexpected authorized party")
 
 
 def _optional_string(value: dict[str, Any], key: str) -> str | None:
