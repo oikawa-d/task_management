@@ -3,7 +3,10 @@ import { Navigate, createBrowserRouter } from "react-router-dom";
 import { RequireAdmin, RequireAuth, RequireGuest } from "./auth/guards";
 import { AdminUsersPage } from "./features/admin/pages/AdminUsersPage";
 import { LoginPage } from "./features/auth/pages/LoginPage";
+import { PasswordForgotPage } from "./features/auth/pages/PasswordForgotPage";
+import { PasswordResetPage } from "./features/auth/pages/PasswordResetPage";
 import { RegisterPage } from "./features/auth/pages/RegisterPage";
+import { VerifyEmailPage } from "./features/auth/pages/VerifyEmailPage";
 import { DashboardPage } from "./features/dashboard/pages/DashboardPage";
 import { BoardPage } from "./features/board/BoardPage";
 import { SettingsPage } from "./features/settings/pages/SettingsPage";
@@ -33,6 +36,20 @@ export const appRoutes = [
 				],
 			},
 		],
+	},
+	// パスワード再設定・メール認証は認証状態に関わらず表示する公開画面のため、
+	// RequireGuest/RequireAuthのいずれのガードにも含めない（各設計書§1参照）。
+	{
+		path: ROUTES.PASSWORD_FORGOT,
+		element: <PasswordForgotPage />,
+	},
+	{
+		path: ROUTES.PASSWORD_RESET,
+		element: <PasswordResetPage />,
+	},
+	{
+		path: ROUTES.VERIFY_EMAIL,
+		element: <VerifyEmailPage />,
 	},
 	{
 		element: <AppLayout />,
