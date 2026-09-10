@@ -27,6 +27,21 @@ def _pgcrypto_installed() -> bool:
 		engine.dispose()
 
 
+def _login_history_id_comment() -> str | None:
+	engine = create_engine(_sync_database_url())
+	try:
+		with engine.connect() as connection:
+			return connection.execute(
+				text(
+					"SELECT col_description(attrelid, attnum) "
+					"FROM pg_catalog.pg_attribute "
+					"WHERE attrelid = 'login_history'::regclass AND attname = 'id'"
+				)
+			).scalar()
+	finally:
+		engine.dispose()
+
+
 @pytest.fixture(autouse=True)
 def _reset_schema():
 	command.downgrade(_alembic_config(), "base")
@@ -61,3 +76,14 @@ def test_migration_upgrade_downgrade_upgrade_roundtrip() -> None:
 	command.upgrade(cfg, "head")
 
 	assert _pgcrypto_installed() is True
+
+
+def test_login_history_comment_migration_downgrade_restores_previous_comment() -> None:
+	cfg = _alembic_config()
+	command.upgrade(cfg, "head")
+
+	assert _login_history_id_comment() is None
+
+	command.downgrade(cfg, "0017")
+
+	assert _login_history_id_comment() == "ログイン試行を一意に識別するUUID"
