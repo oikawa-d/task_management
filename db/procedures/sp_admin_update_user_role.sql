@@ -20,7 +20,8 @@ BEGIN
     PERFORM pg_advisory_xact_lock(hashtext('admin_protection'));
 
     SELECT role, is_active INTO v_current_role, v_current_is_active
-    FROM users WHERE id = p_target_id;
+    FROM users WHERE id = p_target_id
+    FOR UPDATE;
 
     IF v_current_role = 'admin' AND v_current_is_active = true AND p_new_role <> 'admin' THEN
         SELECT count(*) INTO v_other_active_admins
