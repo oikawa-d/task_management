@@ -91,6 +91,41 @@ class UserInactiveError(AppError):
 	message = "このアカウントは無効化されています"
 
 
+class InvalidCredentialsError(UnauthenticatedError):
+	code = "INVALID_CREDENTIALS"
+	message = "IDまたはパスワードが正しくありません"
+
+
+class TooManyAttemptsError(AppError):
+	code = "TOO_MANY_ATTEMPTS"
+	status_code = 429
+	message = "試行回数が多いため、しばらく待ってから再度お試しください"
+
+
+class InvalidVerifyTokenError(AppError):
+	code = "INVALID_VERIFY_TOKEN"
+	status_code = 400
+	message = "認証リンクが無効か、有効期限が切れています"
+
+
+class InvalidResetTokenError(AppError):
+	code = "INVALID_RESET_TOKEN"
+	status_code = 400
+	message = "リセットリンクが無効か、有効期限が切れています"
+
+
+class ValidationError(AppError):
+	code = "VALIDATION_ERROR"
+	status_code = 422
+	message = "入力内容に誤りがあります"
+
+
+class ServiceUnavailableError(AppError):
+	code = "SERVICE_UNAVAILABLE"
+	status_code = 503
+	message = "現在サービスをご利用いただけません"
+
+
 def _build_error_body(code: str, message: str, details: Any, request_id: str) -> dict[str, Any]:
 	return {
 		"error": {

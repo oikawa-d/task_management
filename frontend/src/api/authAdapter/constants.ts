@@ -30,10 +30,13 @@ export const REFRESH_ENDPOINT_PATH = "/auth/refresh";
 /** jwtモードのログアウトAPIパス（refresh同様にCookie+CSRFで送る） */
 export const LOGOUT_ENDPOINT_PATH = "/auth/logout";
 
+/** jwtモードのOAuthハンドオフコード交換API（docs/detailed_design/api/auth/13_post_auth_oauth_exchange.md） */
+export const AUTH_OAUTH_EXCHANGE_ENDPOINT = "/auth/oauth/exchange";
+
 /** 401でもリトライ対象外とするパス（設計書§6.1「リフレッシュ対象外」） */
 export const REFRESH_EXEMPT_PATHS = [
 	"/auth/login",
 	"/auth/refresh",
 	"/auth/register",
-	"/auth/oauth/exchange",
+	AUTH_OAUTH_EXCHANGE_ENDPOINT,
 ] as const;
