@@ -35,7 +35,7 @@ export const AUTH_OAUTH_EXCHANGE_ENDPOINT = "/auth/oauth/exchange";
 
 /** 401でもリトライ対象外とするパス（設計書§6.1「リフレッシュ対象外」） */
 export const REFRESH_EXEMPT_PATHS = [
-	"/auth/login",
+	LOGIN_ENDPOINT_PATH,
 	"/auth/refresh",
 	"/auth/register",
 	AUTH_OAUTH_EXCHANGE_ENDPOINT,

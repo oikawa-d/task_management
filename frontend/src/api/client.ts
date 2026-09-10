@@ -1,11 +1,11 @@
 import axios, { type AxiosInstance } from "axios";
 
-import { LOGIN_ENDPOINT_PATH, REFRESH_EXEMPT_PATHS } from "./authAdapter/constants";
+import { AUTH_OAUTH_EXCHANGE_ENDPOINT, LOGIN_ENDPOINT_PATH, REFRESH_EXEMPT_PATHS } from "./authAdapter/constants";
 import type { AuthAdapter, RetryableRequestConfig } from "./authAdapter";
 import { getApiClientConfig } from "./config";
 import { toApiError } from "./errors";
 
-const LOGIN_SUCCESS_PATHS = [LOGIN_ENDPOINT_PATH, "/auth/oauth/exchange"] as const;
+const LOGIN_SUCCESS_PATHS = [LOGIN_ENDPOINT_PATH, AUTH_OAUTH_EXCHANGE_ENDPOINT] as const;
 
 export interface ApiClientOptions {
 	authAdapter?: AuthAdapter;
@@ -21,8 +21,25 @@ interface ApiClientRuntime {
 
 const runtimes = new WeakMap<AxiosInstance, ApiClientRuntime>();
 
+function toPathSegments(path: string): string[] {
+	return path.split("/").filter(Boolean);
+}
+
+/** クエリ・ハッシュを除いたパスのセグメントが末尾で完全一致する場合のみtrueにする（部分一致による誤一致を防ぐ）。 */
 function matchesPath(url: string | undefined, paths: readonly string[]): boolean {
-	return Boolean(url && paths.some((path) => url.includes(path)));
+	if (!url) {
+		return false;
+	}
+	const pathname = url.split(/[?#]/)[0] ?? "";
+	const urlSegments = toPathSegments(pathname);
+	return paths.some((path) => {
+		const pathSegments = toPathSegments(path);
+		if (pathSegments.length > urlSegments.length) {
+			return false;
+		}
+		const tail = urlSegments.slice(urlSegments.length - pathSegments.length);
+		return tail.every((segment, index) => segment === pathSegments[index]);
+	});
 }
 
 function configureRuntime(client: AxiosInstance, options: ApiClientOptions): ApiClientRuntime {

@@ -1,12 +1,9 @@
-import type { AxiosInstance } from "axios";
-
 import {
 	AUTH_CONFIG_ENDPOINT,
 	AUTH_ME_ENDPOINT,
-	DEFAULT_API_BASE_URL,
 } from "../api/authAdapter/constants";
 import { createAuthAdapter } from "../api/authAdapter";
-import { configureApiClient, createApiClient, getApiClient } from "../api/client";
+import { configureApiClient, getApiClient } from "../api/client";
 import type { AuthUser } from "./authStore";
 import { useAuthStore } from "./authStore";
 
@@ -20,14 +17,6 @@ type AuthMeResponse = {
 	id: string;
 	role: AuthUser["role"];
 };
-
-function getApiBaseUrl(): string {
-	return import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE_URL;
-}
-
-export function createAuthClient(baseURL = getApiBaseUrl()): AxiosInstance {
-	return createApiClient({ baseURL });
-}
 
 export async function bootstrapAuth(): Promise<AuthUser | null> {
 	const client = getApiClient();

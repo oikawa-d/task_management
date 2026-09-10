@@ -111,6 +111,32 @@ describe("createApiClient", () => {
 		await expect(client.get("/resource")).rejects.toMatchObject({ code, status });
 		expect(adapter.onLogout).not.toHaveBeenCalled();
 	});
+
+	it("REFRESH_EXEMPT_PATHSと前方一致するだけの別パスはexempt対象にせずlogoutを実行する", async () => {
+		const adapter = createAdapter();
+		const onLogout = vi.fn();
+		const client = createApiClient({ authAdapter: adapter, onLogout });
+		client.defaults.adapter = async (config) => {
+			throw createError(config as RetryableRequestConfig, 401, {
+				error: { code: "UNAUTHENTICATED", message: "認証が必要です", details: null, request_id: "req-2" },
+			});
+		};
+
+		await expect(client.get("/auth/login-history")).rejects.toBeInstanceOf(ApiError);
+		expect(adapter.onLogout).toHaveBeenCalledOnce();
+		expect(onLogout).toHaveBeenCalledOnce();
+	});
+
+	it("LOGIN_SUCCESS_PATHSと前方一致するだけの別パスではonLoginSuccessを呼ばない", async () => {
+		const adapter = createAdapter();
+		const client = withAdapter(adapter, async (config) => ({
+			data: { access_token: "access-token" }, status: 200, statusText: "OK", headers: {}, config,
+		}));
+
+		await client.post("/auth/login-history", { taskId: "1" });
+
+		expect(adapter.onLoginSuccess).not.toHaveBeenCalled();
+	});
 });
 
 describe("getApiClient", () => {
