@@ -5,11 +5,13 @@ import { AdminUsersPage } from "./features/admin/pages/AdminUsersPage";
 import { LoginPage } from "./features/auth/pages/LoginPage";
 import { PasswordForgotPage } from "./features/auth/pages/PasswordForgotPage";
 import { PasswordResetPage } from "./features/auth/pages/PasswordResetPage";
+import { RegisterPage } from "./features/auth/pages/RegisterPage";
 import { VerifyEmailPage } from "./features/auth/pages/VerifyEmailPage";
 import { DashboardPage } from "./features/dashboard/pages/DashboardPage";
 import { BoardPage } from "./features/board/BoardPage";
 import { SettingsPage } from "./features/settings/pages/SettingsPage";
 import { AppLayout } from "./layouts/AppLayout";
+import { AuthLayout } from "./layouts/AuthLayout";
 import { ROUTES } from "./routes";
 
 export const appRoutes = [
@@ -18,11 +20,20 @@ export const appRoutes = [
 		element: <Navigate to={ROUTES.LOGIN} replace />,
 	},
 	{
-		element: <RequireGuest />,
+		element: <AuthLayout />,
 		children: [
 			{
-				path: ROUTES.LOGIN,
-				element: <LoginPage />,
+				element: <RequireGuest />,
+				children: [
+					{
+						path: ROUTES.LOGIN,
+						element: <LoginPage />,
+					},
+					{
+						path: ROUTES.REGISTER,
+						element: <RegisterPage />,
+					},
+				],
 			},
 		],
 	},

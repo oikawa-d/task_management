@@ -6,6 +6,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.project import Project
+from app.repository import project_member_repository
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,11 @@ async def get_by_id(db: AsyncSession, project_id: uuid.UUID) -> Project | None:
 		.execution_options(populate_existing=True)
 	)
 	return result.scalars().one_or_none()
+
+
+async def is_member(db: AsyncSession, project_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+	"""`fn_is_project_member`の薄いラッパー。admin bypassの判定もFN側の戻り値に含まれる。"""
+	return await project_member_repository.exists(db, project_id, user_id)
 
 
 async def list_for_user(
