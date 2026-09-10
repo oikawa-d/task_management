@@ -1,7 +1,20 @@
+import re
+from pathlib import Path
+
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+_LOGIN_HISTORY_DESIGN = Path(__file__).resolve().parents[2] / "docs/detailed_design/database/03_table_login_history.md"
+
+
+def _login_history_design_comments() -> tuple[str, dict[str, str]]:
+	design = _LOGIN_HISTORY_DESIGN.read_text(encoding="utf-8")
+	table_comment = re.search(r"COMMENT ON TABLE login_history IS '([^']*)';", design)
+	column_comments = dict(re.findall(r"COMMENT ON COLUMN login_history\.([a-z_]+) IS '([^']*)';", design))
+	assert table_comment is not None
+	return table_comment.group(1), column_comments
 
 
 async def test_users_table_created_with_default_role_and_active(db_session: AsyncSession) -> None:
@@ -128,3 +141,22 @@ async def test_login_history_failure_reason_consistency_check(db_session: AsyncS
 				"VALUES ('ghost', 'session', true, 'invalid_credentials')"
 			)
 		)
+
+
+async def test_login_history_column_comments_match_design(db_session: AsyncSession) -> None:
+	expected_table_comment, expected_column_comments = _login_history_design_comments()
+	table_comment = (
+		await db_session.execute(text("SELECT obj_description('login_history'::regclass, 'pg_class')"))
+	).scalar_one()
+	result = await db_session.execute(
+		text(
+			"SELECT attname, col_description(attrelid, attnum) AS comment "
+			"FROM pg_catalog.pg_attribute "
+			"WHERE attrelid = 'login_history'::regclass "
+			"AND attnum > 0 AND NOT attisdropped ORDER BY attnum"
+		)
+	)
+
+	actual_column_comments = {row.attname: row.comment for row in result}
+	assert table_comment == expected_table_comment
+	assert actual_column_comments == {column: expected_column_comments.get(column) for column in actual_column_comments}
