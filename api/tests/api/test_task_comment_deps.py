@@ -9,9 +9,7 @@ from app.schemas.auth import CurrentUser
 
 
 def _user(*, role: str = "member", user_id: uuid.UUID | None = None) -> CurrentUser:
-	return CurrentUser(
-		id=user_id or uuid.uuid4(), username="taro", role=role, is_active=True, email_verified_at=None
-	)
+	return CurrentUser(id=user_id or uuid.uuid4(), username="taro", role=role, is_active=True, email_verified_at=None)
 
 
 def _task(*, project_id: uuid.UUID | None = None, created_by: uuid.UUID | None = None) -> SimpleNamespace:
@@ -52,9 +50,7 @@ class TestGetTaskForMember:
 		result = await get_task_for_member(task.id, user=_user(), db=_Db())
 		assert result is task
 
-	async def test_allows_project_less_task_to_reach_service_for_creator(
-		self, monkeypatch: pytest.MonkeyPatch
-	) -> None:
+	async def test_allows_project_less_task_to_reach_service_for_creator(self, monkeypatch: pytest.MonkeyPatch) -> None:
 		"""project_idなしタスクは、作成者本人かどうかをdepsでは判定せずserviceの認可へ到達させる。"""
 		user = _user()
 		task = _task(project_id=None, created_by=user.id)
