@@ -166,33 +166,44 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def list_notifications(user: CurrentUser, page: int, per_page: int, unread_only: bool, db: AsyncSession) -> tuple[Page[NotificationItem], int]` |
+| シグネチャ | `async def list_notifications(db: AsyncSession, user: CurrentUser, page: int, per_page: int, unread_only: bool) -> NotificationListResponse` |
 | 引数 | `user`: 現在ユーザー / `page`, `per_page`: ページング指定 / `unread_only`: 未読絞り込み / `db`: DBセッション |
-| 戻り値 | `(Page[NotificationItem], unread_count)`。`Page` は `items: list[NotificationItem]`, `total: int` |
+| 戻り値 | `NotificationListResponse`（`items`, `meta`, `unread_count`） |
 | 送出例外 | `ServiceUnavailableError`（PostgreSQL接続不能時）→503 |
-| 処理内容 | 1. `SELECT fn_list_notifications(user.id, unread_only, limit, offset)` を1回呼び出す（戻り値にtask情報を含む） 2. `unread_only=false` の場合のみ `SELECT fn_count_unread_notifications(user.id)` を追加で呼び出す 3. FNの結果に含まれるtask情報をそのままマッピングし、`task_id IS NULL` は `task=null` とする |
+| 処理内容 | 1. `notification_repository.list_by_user` を1回呼び出す（`fn_list_notifications` の結果にtask情報と`total_count`を含む） 2. 該当0件（pageが総ページ数を超えた場合等で`total_count`が取得できない）のときのみ `notification_repository.count_notifications` を追加で呼び出し `total` を確定する 3. `unread_only=true` の場合は確定した `total`（＝未読総数と一致）をそのまま `unread_count` として使い、`fn_count_unread_notifications` は呼ばない。`unread_only=false` の場合のみ `notification_repository.count_unread` を追加で呼び出す 4. `task_title IS NULL`（`task_id`がNULL、またはtask削除済みでLEFT JOINが不一致）の行は `task=null` とする |
 | 副作用 | なし（FN呼び出しのみ） |
 
-### 6.3 `repository/notification_repository.py :: fn_list_notifications`
+### 6.3 `repository/notification_repository.py :: list_by_user`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def fn_list_notifications(db: AsyncSession, user_id: UUID, page: int, per_page: int, unread_only: bool) -> list[Notification]` |
-| 引数 | `user_id`: 対象ユーザー / `page`, `per_page`: ページング / `unread_only`: 未読絞り込み |
-| 戻り値 | `fn_list_notifications` の結果を写像した `Notification` エンティティのリスト |
+| シグネチャ | `async def list_by_user(db: AsyncSession, user_id: UUID, unread_only: bool, limit: int, offset: int) -> list[NotificationListItem]` |
+| 引数 | `user_id`: 対象ユーザー / `unread_only`: 未読絞り込み / `limit`, `offset`: ページング |
+| 戻り値 | `NotificationListItem`（`notification: Notification`, `task_title: str \| None`, `task_project_id: UUID \| None`, `total_count: int`）のリスト |
 | 送出例外 | `OperationalError`（DB不通） |
-| 処理内容 | `SELECT fn_list_notifications(:user_id, :unread_only, :limit, :offset)` のみを発行する。本人スコープ、未読条件、task結合、順序、ページングはFN内部で処理する |
+| 処理内容 | `SELECT (notification).*, task_title, task_project_id, total_count FROM fn_list_notifications(:user_id, :unread_only, :limit, :offset)` のみを発行する。本人スコープ、未読条件、task結合、順序、ページング、ページング前の総件数（`total_count`）はFN内部で処理する |
 | 副作用 | なし |
 
-### 6.4 `repository/notification_repository.py :: fn_count_unread_notifications`
+### 6.4 `repository/notification_repository.py :: count_notifications`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def fn_count_unread_notifications(db: AsyncSession, user_id: UUID) -> int` |
+| シグネチャ | `async def count_notifications(db: AsyncSession, user_id: UUID, unread_only: bool) -> int` |
+| 引数 | `user_id`: 対象ユーザー / `unread_only`: 未読絞り込み（`fn_list_notifications`と同一条件） |
+| 戻り値 | 該当件数（全体件数） |
+| 送出例外 | `OperationalError` |
+| 処理内容 | `SELECT fn_count_notifications(:user_id, :unread_only)` のみを発行する。`list_by_user` の結果が0件で `total_count` を取得できない場合のフォールバックとしてのみ呼び出す |
+| 副作用 | なし |
+
+### 6.5 `repository/notification_repository.py :: count_unread`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `async def count_unread(db: AsyncSession, user_id: UUID) -> int` |
 | 引数 | `user_id`: 対象ユーザー |
 | 戻り値 | 未読件数 |
 | 送出例外 | `OperationalError` |
-| 処理内容 | `SELECT fn_count_unread_notifications(:user_id)` のみを発行する。未読条件とインデックス利用はFN内部で処理する（詳細は [./02_get_notifications_unread_count.md](./02_get_notifications_unread_count.md) §9） |
+| 処理内容 | `SELECT fn_count_unread_notifications(:user_id)` のみを発行する。未読条件とインデックス利用はFN内部で処理する（詳細は [./02_get_notifications_unread_count.md](./02_get_notifications_unread_count.md) §9）。`unread_only=false` の場合のみ呼び出す |
 | 副作用 | なし |
 
 ## 7. 関数相関図
@@ -200,10 +211,12 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["notifications_router.list_notifications"] --> S["notification_service.list_notifications"]
-    S --> NR1["notification_repository.fn_list_notifications"]
-    S --> NR3["notification_repository.fn_count_unread_notifications"]
+    S --> NR1["notification_repository.list_by_user"]
+    S -.->|"該当0件時のみ"| NR2["notification_repository.count_notifications"]
+    S -.->|"unread_only=falseの場合のみ"| NR3["notification_repository.count_unread"]
     NR1 --> M["models.Notification"]
-    NR1 --> MT["models.Task（FN戻り値に含む、NULL可）"]
+    NR1 --> MT["tasks（FN内部でLEFT JOIN、NULL可）"]
+    NR2 --> M
     NR3 --> M
 ```
 
@@ -229,7 +242,9 @@ flowchart LR
 
 | 種別 | 契約 | 説明 |
 |------|------|------|
-| fn_list_notifications | `fn_list_notifications(p_user_id, p_unread_only, p_limit, p_offset)` | fn_list_notificationsを呼び出し、結果をレスポンスへ写像する |
+| fn_list_notifications | `fn_list_notifications(p_user_id, p_unread_only, p_limit, p_offset)` | fn_list_notificationsを呼び出し、結果（task情報・total_countを含む）をレスポンスへ写像する |
+| fn_count_notifications | `fn_count_notifications(p_user_id, p_unread_only)` | fn_list_notificationsの該当行が0件で`total_count`を取得できない場合のみ呼び出し、`meta.total`を確定する |
+| fn_count_unread_notifications | `fn_count_unread_notifications(p_user_id)` | `unread_only=false`の場合のみ呼び出し、`unread_count`を確定する（`unread_only=true`時は`total_count`を`unread_count`として再利用する） |
 
 repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
@@ -238,9 +253,10 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | テーブル | 操作 | 条件 | 使用インデックス | 備考 |
 |----------|------|------|-------------------|------|
 | notifications | SELECT | `user_id = :me` [`AND read_at IS NULL`] | `ix_notifications_user_created (user_id, created_at DESC)` | 一覧取得。`ORDER BY created_at DESC LIMIT/OFFSET` |
-| notifications | SELECT COUNT | 同上 | `ix_notifications_user_created`（`unread_only=false`）／`ix_notifications_user_unread`（`unread_only=true`） | `meta.total` 算出用 |
-| notifications | SELECT COUNT | `user_id = :me AND read_at IS NULL` | `ix_notifications_user_unread (user_id) WHERE read_at IS NULL` | `unread_count` バッジ用 |
-| tasks | SELECT（`fn_list_notifications`内部のLEFT JOIN） | `notifications.task_id` | （PK） | タスク表示用。`fn_list_notifications`の1回の呼び出しで通知本体と同時に返る。`task_id IS NULL` の行は結合されず `task=null` |
+| notifications | SELECT（ウィンドウ関数） | 同上 | `ix_notifications_user_created`（`unread_only=false`）／`ix_notifications_user_unread`（`unread_only=true`） | `count(*) OVER()` により`fn_list_notifications`内でページング前の`total_count`を算出。`meta.total`算出用 |
+| notifications | SELECT COUNT（`fn_count_notifications`） | 同上 | 同上 | `fn_list_notifications`の該当0件時のみ実行する`meta.total`算出用フォールバック |
+| notifications | SELECT COUNT | `user_id = :me AND read_at IS NULL` | `ix_notifications_user_unread (user_id) WHERE read_at IS NULL` | `unread_count` バッジ用。`unread_only=false`の場合のみ実行 |
+| tasks | SELECT（`fn_list_notifications`内部のLEFT JOIN） | `notifications.task_id` | （PK） | タスク表示用。`fn_list_notifications`の1回の呼び出しで通知本体と同時に返る。`task_id IS NULL` の行、またはtask削除済みでLEFT JOINが不一致の行は `task=null` |
 
 **Redis**
 
@@ -265,7 +281,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | タイミング攻撃対策 | 該当なし |
 | レート制限 | user_id + 解決済みIP単位で120回/60秒。フロントのポーリング間隔に依存せずサーバー側で制限する |
 | fail-close方針 | PostgreSQL接続不能時は `503 SERVICE_UNAVAILABLE`。空配列を返して隠蔽しない |
-| N+1対策・クエリ回数 | `fn_list_notifications` 1回のみ（内部でtask情報までLEFT JOIN済みのため、通知件数に応じた追加SELECTは発生しない）。`unread_only=false` の場合は `fn_count_unread_notifications` 1回を加える。`unread_only=true` は `fn_list_notifications` の結果を再利用するため追加しない |
+| N+1対策・クエリ回数 | 通常時（該当行が1件以上）：`fn_list_notifications` 1回のみ（内部でtask情報・`total_count`までLEFT JOIN／ウィンドウ関数で算出済みのため、通知件数に応じた追加SELECTは発生しない）。`unread_only=false` の場合は `fn_count_unread_notifications` 1回を加える。`unread_only=true` は `total_count` が未読総数と一致するため `fn_count_unread_notifications` を追加で呼ばない。該当行が0件（pageが総ページ数を超えた場合等）のときのみ `fn_count_notifications` を1回追加し、`meta.total`（`unread_only=true`時は`unread_count`も兼ねる）を確定する |
 | 個人情報の取り扱い | `title`/`body` はタスク作成者・担当者にのみ関わる業務情報であり、本人以外には返さない（本APIの認可自体がその境界を保証する） |
 
 ## 12. テスト設計
@@ -281,6 +297,11 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 7 | 結合 | 未認証は401 | Cookie/Bearerなし | `401 UNAUTHENTICATED` | `test_get_notifications_unauthenticated` |
 | 8 | 結合 | per_page=101は422 | クエリ不正 | `422 VALIDATION_ERROR` | `test_get_notifications_invalid_per_page` |
 | 9 | 結合 | unread_only=trueで既読通知が除外される | 既読1件・未読2件を作成 | `items` に未読2件のみ、`meta.total=2` | `test_get_notifications_unread_only_excludes_read` |
+| 10 | 単体 | `meta.total`が取得ページ件数ではなく全体件数になる | 通知25件相当の`total_count`を持つ行を返すモックで`per_page=20, page=2` | `items`は5件、`meta.total=25`、`meta.total_pages=2` | `test_list_notifications_meta_total_reflects_overall_count_not_page_size` |
+| 11 | 単体 | クエリ回数契約：`unread_only=false`時は`count_unread`を呼ぶ | `list_by_user`が非空を返すモック、`unread_only=False` | `count_unread`が呼ばれる、`count_notifications`は呼ばれない | `test_list_notifications_calls_count_unread_only_when_not_unread_only` |
+| 12 | 単体 | クエリ回数契約：`unread_only=true`時は`count_unread`を呼ばない | `list_by_user`が非空を返すモック、`unread_only=True` | `count_unread`が呼ばれない、`unread_count`は`total_count`と一致 | `test_list_notifications_skips_count_unread_when_unread_only` |
+| 13 | 単体 | pageが範囲外で`items`が空でも`meta.total`が正しい全体件数になる | `list_by_user`が空リストを返すモック、`count_notifications`が実際の全体件数を返すモック | `items=[]`、`meta.total`が`count_notifications`の返す全体件数と一致（0にならない） | `test_list_notifications_meta_total_uses_fallback_when_no_rows` |
+| 14 | 単体 | `task_id`が非NULLでも`tasks`側に行が無い（LEFT JOIN不一致）場合は`task=null` | `task_title is None`かつ`task_id`が非NULLのモック | レスポンスの `task` が `null`（空文字titleのオブジェクトにしない） | `test_list_notifications_task_title_none_returns_null_task` |
 
 `AUTH_MODE=session` / `jwt` の両方で No.7（401判定経路の違い：`SESSION_EXPIRED` と `TOKEN_EXPIRED`）をパラメータ化して実施する。バッチ（[../../batch/02_due_notification_job.md](../../batch/02_due_notification_job.md)）による通知作成そのものはこのAPIのテスト範囲外とし、事前にDBへ直接INSERTしたフィクスチャで代替する。
 
@@ -290,3 +311,4 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 |------|------|------|
 | 要検討 | `items[].task.title`（現在のタスク名）と `items[].title`（通知作成時点のスナップショット）が異なる場合のフロント表示方針（どちらを主表示にするか）は基本設計に明記がないため本書での提案。フロント側（[../../screen/06_dashboard.md](../../screen/06_dashboard.md)）での明文化が望ましい |
 | 不明 | `unread_only=true` かつ `page` が総ページ数を超えた場合に空配列 vs 422 のどちらを返すか。本書では他一覧APIに合わせ空配列（`items=[]`）を返す方針としたが、基本設計に明記がない |
+| 解決済み（本書で確定） | `page`が総ページ数を超えて`items=[]`になる場合でも、`meta.total`は`fn_count_notifications`によるフォールバック取得で正しい全体件数を返す（0を返さない）。ウィンドウ関数`count(*) OVER()`のみに依拠すると該当0件時に総件数が取得できず`meta.total=0`という誤応答になるため、§6.2/§9.1のとおりフォールバックFNを追加した |
