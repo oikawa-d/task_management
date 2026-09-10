@@ -34,6 +34,18 @@ async def test_get_by_id_not_found_returns_none(db_session: AsyncSession) -> Non
 	assert project is None
 
 
+async def test_is_member_true_for_member_admin_false_for_stranger(db_session: AsyncSession) -> None:
+	owner_id = await _create_owner(db_session, "judy")
+	stranger_id = await user_repository.create(db_session, "stranger2", "stranger2@example.com", "hash")
+	admin_id = await user_repository.create(db_session, "admin2", "admin2@example.com", "hash")
+	await db_session.execute(text("UPDATE users SET role = 'admin' WHERE id = :id"), {"id": admin_id})
+	project_id = await project_repository.create(db_session, owner_id, "Project J", None, None, None)
+
+	assert await project_repository.is_member(db_session, project_id, owner_id) is True
+	assert await project_repository.is_member(db_session, project_id, stranger_id) is False
+	assert await project_repository.is_member(db_session, project_id, admin_id) is True
+
+
 async def test_create_project_invalid_period_raises_p0009(db_session: AsyncSession) -> None:
 	owner_id = await _create_owner(db_session, "bob")
 	start = datetime(2026, 2, 1, tzinfo=timezone.utc)

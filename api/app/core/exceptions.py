@@ -33,6 +33,26 @@ class ForbiddenError(AppError):
 	message = "このリソースへのアクセス権がありません"
 
 
+class CsrfInvalidError(ForbiddenError):
+	code = "CSRF_INVALID"
+	message = "CSRFトークンが不正です"
+
+
+class ConflictError(AppError):
+	status_code = 409
+	message = "競合が発生しました"
+
+
+class AlreadyMemberError(ConflictError):
+	code = "ALREADY_MEMBER"
+	message = "既にプロジェクトのメンバーです"
+
+
+class OwnerCannotBeRemovedError(ConflictError):
+	code = "OWNER_CANNOT_BE_REMOVED"
+	message = "オーナーはメンバーから削除できません"
+
+
 class UnauthenticatedError(AppError):
 	code = "UNAUTHENTICATED"
 	status_code = 401
@@ -69,6 +89,17 @@ class UserInactiveError(AppError):
 	code = "USER_INACTIVE"
 	status_code = 403
 	message = "このアカウントは無効化されています"
+
+
+class InvalidCredentialsError(UnauthenticatedError):
+	code = "INVALID_CREDENTIALS"
+	message = "IDまたはパスワードが正しくありません"
+
+
+class TooManyAttemptsError(AppError):
+	code = "TOO_MANY_ATTEMPTS"
+	status_code = 429
+	message = "試行回数が多いため、しばらく待ってから再度お試しください"
 
 
 def _build_error_body(code: str, message: str, details: Any, request_id: str) -> dict[str, Any]:
