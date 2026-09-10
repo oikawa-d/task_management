@@ -47,3 +47,19 @@ export interface AuthApiError {
 	message?: string;
 	details?: ApiFieldError[] | null;
 }
+
+/** パスワード再設定要求フォームの入力値（docs/detailed_design/screen/03_password_forgot.md §5） */
+export interface PasswordForgotFormValues {
+	email: string;
+}
+
+/** パスワード再設定フォームの入力値（docs/detailed_design/screen/04_password_reset.md §5） */
+export interface PasswordResetFormValues {
+	newPassword: string;
+	passwordConfirm: string;
+}
+
+/** メール認証再送フォームの入力値（docs/detailed_design/screen/05_verify_email.md §5） */
+export interface ResendVerificationFormValues {
+	email: string;
+}
