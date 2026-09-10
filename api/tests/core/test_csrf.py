@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from app.core import security
-from app.core.deps import _origin_from_referer, verify_csrf, verify_origin
+from app.core.deps import _origin_from_referer, verify_csrf, verify_csrf_if_session, verify_origin
 from app.core.exceptions import CsrfInvalidError
 from starlette.requests import Request
 
@@ -167,6 +167,46 @@ class TestVerifyCsrfJwtMode:
 
 		with pytest.raises(CsrfInvalidError):
 			await verify_csrf(request, _strategy("jwt"), _settings())
+
+
+class TestVerifyCsrfIfSessionForNormalApi:
+	"""tasks/projects/comments等の通常APIが使う verify_csrf_if_session の認証方式別挙動。
+
+	docs/detailed_design/auth/03_csrf.md §6: 通常APIのCSRF検証はsessionモードのみ必須、
+	jwtモードでは検証自体を行わない。
+	"""
+
+	async def test_session_mode_matching_token_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+		get_csrf_token = AsyncMock(return_value="token-123")
+		monkeypatch.setattr("app.core.deps.redis_store.get_csrf_token", get_csrf_token)
+		request = _request(headers={"x-csrf-token": "token-123"}, cookies={"cerberus_sid": "sid-1"})
+
+		await verify_csrf_if_session(request, _strategy("session"), _settings())
+
+		get_csrf_token.assert_awaited_once_with("sid-1")
+
+	async def test_session_mode_missing_header_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+		monkeypatch.setattr("app.core.deps.redis_store.get_csrf_token", AsyncMock(return_value="token-123"))
+		request = _request(cookies={"cerberus_sid": "sid-1"})
+
+		with pytest.raises(CsrfInvalidError):
+			await verify_csrf_if_session(request, _strategy("session"), _settings())
+
+	async def test_jwt_mode_skips_verification_even_without_header_or_cookie(
+		self, monkeypatch: pytest.MonkeyPatch
+	) -> None:
+		get_csrf_token = AsyncMock()
+		monkeypatch.setattr("app.core.deps.redis_store.get_csrf_token", get_csrf_token)
+		request = _request()
+
+		await verify_csrf_if_session(request, _strategy("jwt"), _settings())
+
+		get_csrf_token.assert_not_awaited()
+
+	async def test_jwt_mode_skips_verification_even_with_mismatched_cookie(self) -> None:
+		request = _request(headers={"x-csrf-token": "token-abc"}, cookies={"cerberus_csrf": "token-xyz"})
+
+		await verify_csrf_if_session(request, _strategy("jwt"), _settings())
 
 
 class TestCsrfTokensMatch:

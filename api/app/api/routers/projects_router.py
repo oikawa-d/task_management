@@ -7,7 +7,7 @@ from app.core.deps import (
 	get_current_user,
 	require_project_member,
 	require_project_owner,
-	verify_csrf,
+	verify_csrf_if_session,
 	verify_origin,
 )
 from app.db import get_db_session
@@ -49,7 +49,7 @@ async def create_project(
 	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
 	_: None = Depends(verify_origin),
-	__csrf: None = Depends(verify_csrf),
+	__csrf: None = Depends(verify_csrf_if_session),
 ) -> ProjectSummaryResponse:
 	return await project_service.create_project(user, payload, db)
 
@@ -70,7 +70,7 @@ async def update_project(
 	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
 	_: None = Depends(verify_origin),
-	__csrf: None = Depends(verify_csrf),
+	__csrf: None = Depends(verify_csrf_if_session),
 ) -> ProjectSummaryResponse:
 	return await project_service.update_project(db, project, payload, user)
 
@@ -80,7 +80,7 @@ async def delete_project(
 	project: Project = Depends(require_project_owner),
 	db: AsyncSession = Depends(get_db_session),
 	_: None = Depends(verify_origin),
-	__csrf: None = Depends(verify_csrf),
+	__csrf: None = Depends(verify_csrf_if_session),
 ) -> Response:
 	await project_service.deactivate_project(db, project)
 	return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -100,7 +100,7 @@ async def add_project_member(
 	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
 	_: None = Depends(verify_origin),
-	__csrf: None = Depends(verify_csrf),
+	__csrf: None = Depends(verify_csrf_if_session),
 ) -> MemberResponse:
 	return await member_service.add_member(project, payload.user_id, user.id, db)
 
@@ -120,7 +120,7 @@ async def remove_project_member(
 	project: Project = Depends(require_project_owner),
 	db: AsyncSession = Depends(get_db_session),
 	_: None = Depends(verify_origin),
-	__csrf: None = Depends(verify_csrf),
+	__csrf: None = Depends(verify_csrf_if_session),
 ) -> Response:
 	await member_service.remove_member(project, user_id, db)
 	return Response(status_code=status.HTTP_204_NO_CONTENT)
