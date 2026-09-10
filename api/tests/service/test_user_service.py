@@ -196,6 +196,10 @@ async def test_change_password_with_current_password_success(monkeypatch):
 	revoke_refresh_mock = AsyncMock()
 	monkeypatch.setattr(redis_store, "delete_all_sessions", delete_sessions_mock)
 	monkeypatch.setattr(redis_store, "revoke_all_refresh_tokens", revoke_refresh_mock)
+	monkeypatch.setattr(
+		user_service, "verify_password", lambda plain, hashed: plain == "OldPass1!" and hashed == "old-hash"
+	)
+	monkeypatch.setattr(user_service, "hash_password", lambda plain: f"hashed:{plain}")
 
 	payload = PasswordChangeRequest(
 		current_password="OldPass1!", new_password="NewPass1!", password_confirm="NewPass1!"
@@ -204,8 +208,6 @@ async def test_change_password_with_current_password_success(monkeypatch):
 		_current_user(user_id),
 		payload,
 		db=object(),
-		verify_password=lambda plain, hashed: plain == "OldPass1!" and hashed == "old-hash",
-		hash_password=lambda plain: f"hashed:{plain}",
 	)
 
 	update_password_mock.assert_awaited_once()
@@ -226,6 +228,7 @@ async def test_change_password_wrong_current_password(monkeypatch):
 	delete_sessions_mock = AsyncMock()
 	monkeypatch.setattr(redis_store, "delete_all_sessions", delete_sessions_mock)
 	monkeypatch.setattr(redis_store, "revoke_all_refresh_tokens", AsyncMock())
+	monkeypatch.setattr(user_service, "verify_password", lambda plain, hashed: False)
 
 	payload = PasswordChangeRequest(
 		current_password="WrongPass1!", new_password="NewPass1!", password_confirm="NewPass1!"
@@ -236,8 +239,6 @@ async def test_change_password_wrong_current_password(monkeypatch):
 			_current_user(user_id),
 			payload,
 			db=object(),
-			verify_password=lambda plain, hashed: False,
-			hash_password=lambda plain: f"hashed:{plain}",
 		)
 
 	update_password_mock.assert_not_awaited()
@@ -257,8 +258,6 @@ async def test_change_password_missing_current_password_when_required(monkeypatc
 			_current_user(user_id),
 			payload,
 			db=object(),
-			verify_password=lambda plain, hashed: True,
-			hash_password=lambda plain: plain,
 		)
 
 
@@ -271,14 +270,13 @@ async def test_change_password_set_initial_password_without_current(monkeypatch)
 	monkeypatch.setattr(user_repository, "update_password", update_password_mock)
 	monkeypatch.setattr(redis_store, "delete_all_sessions", AsyncMock())
 	monkeypatch.setattr(redis_store, "revoke_all_refresh_tokens", AsyncMock())
+	monkeypatch.setattr(user_service, "hash_password", lambda plain: f"hashed:{plain}")
 
 	payload = PasswordChangeRequest(current_password=None, new_password="NewPass1!", password_confirm="NewPass1!")
 	await user_service.change_password(
 		_current_user(user_id),
 		payload,
 		db=object(),
-		verify_password=lambda plain, hashed: True,
-		hash_password=lambda plain: f"hashed:{plain}",
 	)
 
 	update_password_mock.assert_awaited_once()
@@ -299,8 +297,6 @@ async def test_change_password_current_password_not_allowed_when_unset(monkeypat
 			_current_user(user_id),
 			payload,
 			db=object(),
-			verify_password=lambda plain, hashed: True,
-			hash_password=lambda plain: plain,
 		)
 
 
@@ -317,8 +313,6 @@ async def test_change_password_user_not_found_raises(monkeypatch):
 			_current_user(user_id),
 			payload,
 			db=object(),
-			verify_password=lambda plain, hashed: True,
-			hash_password=lambda plain: plain,
 		)
 
 
@@ -331,6 +325,8 @@ async def test_change_password_redis_failure_returns_service_unavailable_and_ski
 	monkeypatch.setattr(user_repository, "update_password", update_password_mock)
 	monkeypatch.setattr(redis_store, "delete_all_sessions", AsyncMock(side_effect=ConnectionError("redis down")))
 	monkeypatch.setattr(redis_store, "revoke_all_refresh_tokens", AsyncMock())
+	monkeypatch.setattr(user_service, "verify_password", lambda plain, hashed: True)
+	monkeypatch.setattr(user_service, "hash_password", lambda plain: f"hashed:{plain}")
 
 	payload = PasswordChangeRequest(
 		current_password="OldPass1!", new_password="NewPass1!", password_confirm="NewPass1!"
@@ -341,8 +337,6 @@ async def test_change_password_redis_failure_returns_service_unavailable_and_ski
 			_current_user(user_id),
 			payload,
 			db=object(),
-			verify_password=lambda plain, hashed: True,
-			hash_password=lambda plain: f"hashed:{plain}",
 		)
 
 	update_password_mock.assert_not_awaited()
