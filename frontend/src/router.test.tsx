@@ -125,4 +125,33 @@ describe("アプリケーションルート", () => {
 
 		expect(await screen.findByRole("heading", { name: "ダッシュボード" })).toBeInTheDocument();
 	});
+
+	it.each([
+		["unauthenticated" as const, ROUTES.PASSWORD_FORGOT, "パスワードをお忘れの方"],
+		["authenticated" as const, ROUTES.PASSWORD_FORGOT, "パスワードをお忘れの方"],
+		["unauthenticated" as const, ROUTES.PASSWORD_RESET, "新しいパスワードを設定"],
+		["authenticated" as const, ROUTES.PASSWORD_RESET, "新しいパスワードを設定"],
+		["unauthenticated" as const, ROUTES.VERIFY_EMAIL, "メールアドレスを確認中です"],
+		["authenticated" as const, ROUTES.VERIFY_EMAIL, "メールアドレスを確認中です"],
+	])("認証状態が%sでも%sへリダイレクトされず画面を表示する", async (status, path, heading) => {
+		act(() => {
+			useAuthStore.setState(
+				status === "authenticated"
+					? { status, user: { id: "user-1", role: "member" } }
+					: { status },
+			);
+		});
+		const router = createMemoryRouter(appRoutes, { initialEntries: [path] });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+		await act(async () => {
+			render(
+				<QueryClientProvider client={queryClient}>
+					<RouterProvider router={router} />
+				</QueryClientProvider>,
+			);
+		});
+
+		expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument();
+	});
 });
