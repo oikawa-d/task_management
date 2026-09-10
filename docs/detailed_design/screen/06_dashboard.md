@@ -23,7 +23,9 @@
 | ガード | 認証必須（`RequireAuth`）。未認証は `/login` へリダイレクト |
 | 対応要件 | 要件書§2-3 |
 | 主なユースケース | 自分が所属するプロジェクトを一覧し、カードから `/projects/:projectId` へ遷移する。新規プロジェクトを作成する |
-| 実装ファイル | `frontend/src/features/projects/DashboardPage.tsx`、`frontend/src/features/projects/components/ProjectCardList.tsx`、`frontend/src/features/projects/components/ProjectCreateModal.tsx` |
+| 実装ファイル | `frontend/src/features/dashboard/pages/DashboardPage.tsx`、`frontend/src/features/dashboard/components/ProjectList.tsx`、`frontend/src/features/dashboard/components/ProjectCreateModal.tsx`、`frontend/src/features/dashboard/components/Calendar.tsx`、`frontend/src/features/dashboard/hooks/useDashboard.ts`、`frontend/src/lib/api/projects.ts`、`frontend/src/stores/projectStore.ts` |
+
+> 推奨方針: 実装済みのルート・コンポーネント・状態管理が`features/dashboard`配下に統一されているため、ファイルを`features/projects`へ移動せず、詳細設計書の実装パスを`features/dashboard`へ合わせる。この方針を#159の設計・実装パス差異に対する確定方針とする。
 
 ## 2. 画面レイアウト
 
@@ -128,7 +130,7 @@ sequenceDiagram
     actor U as ユーザー
     participant DP as DashboardPage
     participant Q as TanStack Query
-    participant EP as endpoints/projects.ts
+    participant EP as lib/api/projects.ts
     participant AA as AuthAdapter
     participant API as FastAPI
 
@@ -164,7 +166,7 @@ sequenceDiagram
     participant PCM as ProjectCreateModal
     participant RHF as react-hook-form + zod
     participant Q as TanStack Query
-    participant EP as endpoints/projects.ts
+    participant EP as lib/api/projects.ts
     participant API as FastAPI
 
     U->>PCM: 「新規プロジェクトの作成」クリック
@@ -217,32 +219,32 @@ flowchart TB
     PCM --> BTN["Button（送信/キャンセル）"]
 
     PC -->|"onClick"| NAV["router.navigate(/projects/:id)"]
-    PCM -->|"mutate"| EP["endpoints/projects.ts :: postProject"]
+    PCM -->|"mutate"| EP["lib/api/projects.ts :: createProject"]
 ```
 
 ## 9. 関数・カスタムフック詳細
 
-### 9.1 `features/projects/hooks/useProjects.ts :: useProjects`
+### 9.1 `features/dashboard/hooks/useDashboard.ts :: useDashboard`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `function useProjects(params: { page?: number; perPage?: number }): UseQueryResult<ProjectListResponse, ApiError>` |
-| 引数 | `page`（既定1）、`perPage`（既定20） |
-| 戻り値 | TanStack Query の `UseQueryResult` |
-| 処理内容 | 1. `queryKey: ['projects', { page, perPage }]` を組み立てる 2. `endpoints/projects.ts :: getProjects` を `queryFn` に設定 3. 結果を返す |
-| 副作用 | `GET /api/projects` 呼び出し |
+| シグネチャ | `function useDashboard(options?: { calendarParams?: CalendarParams; perPage?: number }): DashboardState` |
+| 引数 | `calendarParams`（カレンダー取得条件、任意）、`perPage`（既定20） |
+| 戻り値 | プロジェクト一覧、選択中プロジェクト、カレンダータスク、ページング、取得・作成状態、再取得関数 |
+| 処理内容 | 1. `queryKey: ['projects', { page, perPage }]` で一覧取得 2. `calendarParams` 指定時はカレンダータスクを取得 3. 取得結果を`projectStore`へ反映 4. 作成成功時に一覧を無効化し、作成プロジェクトを選択 |
+| 副作用 | `GET /api/projects`、`GET /api/tasks/calendar` 呼び出し。作成成功時は一覧キャッシュを無効化 |
 
-### 9.2 `features/projects/hooks/useCreateProject.ts :: useCreateProject`
+### 9.2 `lib/api/projects.ts :: getProjects / createProject / getCalendarTasks`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `function useCreateProject(): UseMutationResult<Project, ApiError, ProjectCreateInput>` |
-| 引数 | なし（`mutate(payload)` 時に `ProjectCreateInput` を渡す） |
-| 戻り値 | TanStack Query の `UseMutationResult` |
-| 処理内容 | 1. `mutationFn` に `endpoints/projects.ts :: postProject` を設定 2. `onSuccess` で `queryClient.invalidateQueries(['projects'])` 3. `onError` は呼び出し元（`ProjectCreateModal`）でハンドリング |
-| 副作用 | `POST /api/projects` 呼び出し、成功時にキャッシュ無効化 |
+| シグネチャ | `getProjects(options?, client?): Promise<ProjectListResponse>`、`createProject(input, client?): Promise<ProjectSummaryResponse>`、`getCalendarTasks(params, client?): Promise<CalendarTask[]>` |
+| 引数 | 一覧取得条件、作成入力、カレンダー取得条件。HTTP clientは共通`getApiClient()`を既定値とする |
+| 戻り値 | APIレスポンスの型付きPromise |
+| 処理内容 | 共通API clientを使用してプロジェクト一覧取得、作成、カレンダータスク取得を行う |
+| 副作用 | `GET /api/projects`、`POST /api/projects`、`GET /api/tasks/calendar` 呼び出し |
 
-### 9.3 `features/projects/components/ProjectCreateModal.tsx :: ProjectCreateModal`
+### 9.3 `features/dashboard/components/ProjectCreateModal.tsx :: ProjectCreateModal`
 
 | 項目 | 内容 |
 |------|------|

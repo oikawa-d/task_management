@@ -220,12 +220,17 @@ async def test_password_and_email_tokens_enforce_current_value(redis: _FakeRedis
 
 
 async def test_login_failures_and_rate_limit_are_hashed_and_expiring(redis: _FakeRedis) -> None:
+	assert await redis_store.get_login_failure_count("user@example.com", "127.0.0.1") == 0
+
 	first = await redis_store.incr_login_failure(" User@Example.COM ", "127.0.0.1", 60)
 	second = await redis_store.incr_login_failure("user@example.com", "127.0.0.1", 60)
 	assert (first, second) == (1, 2)
 	assert next(key for key in redis.values if key.startswith("test:login_fail:"))
+	assert await redis_store.get_login_failure_count("user@example.com", "127.0.0.1") == 2
+
 	await redis_store.reset_login_failure("user@example.com", "127.0.0.1")
 	assert not [key for key in redis.values if key.startswith("test:login_fail:")]
+	assert await redis_store.get_login_failure_count("user@example.com", "127.0.0.1") == 0
 
 	assert await redis_store.check_rate_limit("register", "127.0.0.1", 2, 60) == 1
 	assert await redis_store.check_rate_limit("register", "127.0.0.1", 2, 60) == 2

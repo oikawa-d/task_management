@@ -14,8 +14,8 @@ def _user(*, role: str = "member") -> CurrentUser:
 	return CurrentUser(id=uuid4(), username="taro", role=role, is_active=True, email_verified_at=None)
 
 
-def _task(user_id):
-	return SimpleNamespace(id=uuid4(), project_id=None, created_by=user_id)
+def _task(user_id, *, project_id=None, is_active: bool = True):
+	return SimpleNamespace(id=uuid4(), project_id=project_id, created_by=user_id, is_active=is_active)
 
 
 def _comment(user_id, task_id):
@@ -54,9 +54,68 @@ async def test_update_comment_rejects_other_member(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_list_comments_rejects_non_member(monkeypatch) -> None:
 	user = _user()
-	task = SimpleNamespace(id=uuid4(), project_id=uuid4(), created_by=uuid4())
+	task = SimpleNamespace(id=uuid4(), project_id=uuid4(), created_by=uuid4(), is_active=True)
 	exists = AsyncMock(return_value=False)
 	monkeypatch.setattr(authorization_service.project_member_repository, "exists", exists)
 
 	with pytest.raises(NotFoundError):
 		await task_comment_service.list_comments(task, user, AsyncMock())
+
+
+@pytest.mark.asyncio
+async def test_list_comments_rejects_inactive_task_for_admin(monkeypatch) -> None:
+	admin = _user(role="admin")
+	task = _task(uuid4(), is_active=False)
+
+	with pytest.raises(NotFoundError):
+		await task_comment_service.list_comments(task, admin, AsyncMock())
+
+
+@pytest.mark.asyncio
+async def test_list_comments_rejects_inactive_task_for_project_member(monkeypatch) -> None:
+	user = _user()
+	task = _task(uuid4(), project_id=uuid4(), is_active=False)
+	exists = AsyncMock(return_value=True)
+	monkeypatch.setattr(authorization_service.project_member_repository, "exists", exists)
+
+	with pytest.raises(NotFoundError):
+		await task_comment_service.list_comments(task, user, AsyncMock())
+	exists.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_list_comments_rejects_inactive_task_for_creator_without_project(monkeypatch) -> None:
+	user = _user()
+	task = _task(user.id, project_id=None, is_active=False)
+
+	with pytest.raises(NotFoundError):
+		await task_comment_service.list_comments(task, user, AsyncMock())
+
+
+@pytest.mark.asyncio
+async def test_add_comment_rejects_inactive_task(monkeypatch) -> None:
+	user = _user()
+	task = _task(user.id, is_active=False)
+
+	with pytest.raises(NotFoundError):
+		await task_comment_service.add_comment(task, CommentCreateRequest(body="本文"), user, AsyncMock())
+
+
+@pytest.mark.asyncio
+async def test_update_comment_rejects_inactive_task(monkeypatch) -> None:
+	user = _user()
+	task = _task(user.id, is_active=False)
+	comment = _comment(user.id, task.id)
+
+	with pytest.raises(NotFoundError):
+		await task_comment_service.update_comment(task, comment, CommentCreateRequest(body="更新"), user, AsyncMock())
+
+
+@pytest.mark.asyncio
+async def test_delete_comment_rejects_inactive_task(monkeypatch) -> None:
+	user = _user()
+	task = _task(user.id, is_active=False)
+	comment = _comment(user.id, task.id)
+
+	with pytest.raises(NotFoundError):
+		await task_comment_service.delete_comment(task, comment, user, AsyncMock())
