@@ -788,7 +788,12 @@ async def test_oauth_exchange_returns_token_and_records_login_history(monkeypatc
 		auth_service,
 		"get_auth_strategy",
 		lambda: SimpleNamespace(
-			mode="jwt", login=AsyncMock(return_value=SimpleNamespace(access_token="access", expires_in=900))
+			mode="jwt",
+			login=AsyncMock(
+				return_value=SimpleNamespace(
+					access_token="access", refresh_token="refresh", csrf_token="csrf", expires_in=900
+				)
+			),
 		),
 	)
 	login_history = AsyncMock()
@@ -822,7 +827,12 @@ async def test_oauth_login_history_uses_resolved_client_ip(monkeypatch: pytest.M
 		auth_service,
 		"get_auth_strategy",
 		lambda: SimpleNamespace(
-			mode="jwt", login=AsyncMock(return_value=SimpleNamespace(access_token="access", expires_in=900))
+			mode="jwt",
+			login=AsyncMock(
+				return_value=SimpleNamespace(
+					access_token="access", refresh_token="refresh", csrf_token="csrf", expires_in=900
+				)
+			),
 		),
 	)
 	login_history = AsyncMock()
@@ -867,7 +877,10 @@ async def test_oauth_exchange_rolls_back_login_when_history_recording_fails(monk
 
 
 @pytest.mark.asyncio
-async def test_oauth_exchange_rolls_back_when_login_result_is_incomplete(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("missing_field", ["access_token", "refresh_token", "csrf_token", "expires_in"])
+async def test_oauth_exchange_rolls_back_when_login_result_is_incomplete(
+	monkeypatch: pytest.MonkeyPatch, missing_field: str
+) -> None:
 	user_id = uuid4()
 	user = SimpleNamespace(id=user_id, email="alice@example.com", is_active=True)
 	monkeypatch.setattr(
@@ -876,7 +889,16 @@ async def test_oauth_exchange_rolls_back_when_login_result_is_incomplete(monkeyp
 		AsyncMock(return_value=OAuthHandoffData(user_id, "/dashboard", None)),
 	)
 	monkeypatch.setattr(auth_service.user_repository, "get_by_id", AsyncMock(return_value=user))
-	login_result = LoginResult("jwt", access_token=None, refresh_token="refresh", expires_in=900)
+	complete_login_result = LoginResult(
+		"jwt", access_token="access", refresh_token="refresh", csrf_token="csrf", expires_in=900
+	)
+	login_result = LoginResult(
+		"jwt",
+		access_token=None if missing_field == "access_token" else complete_login_result.access_token,
+		refresh_token=None if missing_field == "refresh_token" else complete_login_result.refresh_token,
+		csrf_token=None if missing_field == "csrf_token" else complete_login_result.csrf_token,
+		expires_in=None if missing_field == "expires_in" else complete_login_result.expires_in,
+	)
 	login = AsyncMock(return_value=login_result)
 	rollback = AsyncMock()
 	login_history = AsyncMock()

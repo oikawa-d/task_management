@@ -487,7 +487,10 @@ async def oauth_exchange(
 		raise UserInactiveError()
 	auth_strategy = _auth_strategy(config, strategy)
 	login_result = await auth_strategy.login(user, request, response)
-	if login_result.access_token is None or login_result.expires_in is None:
+	if any(
+		getattr(login_result, field, None) is None
+		for field in ("access_token", "refresh_token", "csrf_token", "expires_in")
+	):
 		try:
 			await _rollback_oauth_login(
 				auth_strategy,
