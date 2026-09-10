@@ -21,8 +21,11 @@ assert_allowed() {
 
 assert_blocked() {
 	local command=$1
-	if payload "$command" | "$hook" >/dev/null 2>&1; then
-		echo "禁止されるコマンドが許可されました: $command" >&2
+	local status=0
+	payload "$command" | "$hook" >/dev/null 2>&1 || status=$?
+	# Claude Codeがツール実行を中断するのはexit 2のみ。他の非0はブロックにならない
+	if [[ "$status" -ne 2 ]]; then
+		echo "禁止されるコマンドがexit 2でブロックされませんでした (exit=$status): $command" >&2
 		return 1
 	fi
 }
@@ -34,3 +37,5 @@ assert_blocked "gh --repo oikawa-d/task_management pr merge 123"
 assert_blocked "gh issue close 123"
 assert_blocked "gh --repo oikawa-d/task_management issue close 123"
 assert_blocked "git status; gh pr merge 123"
+
+echo "block-github-destructive-actions: すべてのケースが期待通りです"
