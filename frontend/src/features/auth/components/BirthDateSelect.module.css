@@ -1,0 +1,10 @@
+.group {
+	display: flex;
+	gap: 0.5rem;
+}
+
+.field {
+	display: grid;
+	gap: 0.35rem;
+	flex: 1;
+}
