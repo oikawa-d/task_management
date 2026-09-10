@@ -917,3 +917,58 @@ async def test_oauth_exchange_rolls_back_when_login_result_is_incomplete(
 
 	rollback.assert_awaited_once_with(user, login_result, response)
 	login_history.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+	("field", "invalid_value"),
+	[
+		("access_token", ""),
+		("refresh_token", ""),
+		("csrf_token", ""),
+		("access_token", 123),
+		("refresh_token", 123),
+		("csrf_token", 123),
+		("expires_in", 0),
+		("expires_in", -1),
+		("expires_in", "900"),
+		("expires_in", True),
+	],
+)
+async def test_oauth_exchange_rolls_back_for_invalid_login_result_values(
+	monkeypatch: pytest.MonkeyPatch, field: str, invalid_value: object
+) -> None:
+	user_id = uuid4()
+	user = SimpleNamespace(id=user_id, email="alice@example.com", is_active=True)
+	monkeypatch.setattr(
+		auth_service.redis_store,
+		"consume_oauth_handoff",
+		AsyncMock(return_value=OAuthHandoffData(user_id, "/dashboard", None)),
+	)
+	monkeypatch.setattr(auth_service.user_repository, "get_by_id", AsyncMock(return_value=user))
+	login_result_values: dict[str, object] = {
+		"access_token": "access",
+		"refresh_token": "refresh",
+		"csrf_token": "csrf",
+		"expires_in": 900,
+	}
+	login_result_values[field] = invalid_value
+	login_result = SimpleNamespace(**login_result_values)
+	login = AsyncMock(return_value=login_result)
+	rollback = AsyncMock()
+	login_history = AsyncMock()
+	monkeypatch.setattr(auth_service.login_history_repository, "create", login_history)
+	response = Response()
+
+	with pytest.raises(OAuthFailedError):
+		await auth_service.oauth_exchange(
+			"code",
+			_request(),
+			response,
+			db=SimpleNamespace(commit=AsyncMock()),
+			settings=_settings(auth_mode="jwt"),
+			strategy=SimpleNamespace(mode="jwt", login=login, rollback_login=rollback),
+		)
+
+	rollback.assert_awaited_once_with(user, login_result, response)
+	login_history.assert_not_awaited()

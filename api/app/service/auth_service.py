@@ -192,6 +192,15 @@ def _auth_strategy(settings: BackendSettings, strategy: Any | None) -> Any:
 	return SessionAuthStrategy(settings) if settings.auth_mode == "session" else JwtAuthStrategy(settings)
 
 
+def _is_valid_jwt_login_result(login_result: Any) -> bool:
+	for field in ("access_token", "refresh_token", "csrf_token"):
+		value = getattr(login_result, field, None)
+		if not isinstance(value, str) or not value:
+			return False
+	expires_in = getattr(login_result, "expires_in", None)
+	return isinstance(expires_in, int) and not isinstance(expires_in, bool) and expires_in >= 1
+
+
 async def _check_oauth_rate_limit(request: Request, scope: str, route: str, settings: BackendSettings) -> ClientIpInfo:
 	client_info = resolve_client_ip(request, settings.trusted_proxy_cidrs)
 	try:
@@ -487,10 +496,7 @@ async def oauth_exchange(
 		raise UserInactiveError()
 	auth_strategy = _auth_strategy(config, strategy)
 	login_result = await auth_strategy.login(user, request, response)
-	if any(
-		getattr(login_result, field, None) is None
-		for field in ("access_token", "refresh_token", "csrf_token", "expires_in")
-	):
+	if not _is_valid_jwt_login_result(login_result):
 		try:
 			await _rollback_oauth_login(
 				auth_strategy,
