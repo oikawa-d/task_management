@@ -52,6 +52,7 @@ export async function bootstrapAuth(): Promise<AuthUser | null> {
 		httpClient: client,
 	});
 	useAuthStore.getState().setAuthAdapter(adapter);
+	useAuthStore.getState().setGoogleLoginEnabled(config.google_login_enabled);
 
 	installAuthInterceptors(client, adapter);
 	if (!(await adapter.restoreSession())) {
