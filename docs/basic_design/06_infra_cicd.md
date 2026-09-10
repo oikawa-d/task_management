@@ -157,6 +157,9 @@ flowchart TB
 | `RATE_LIMIT_NOTIFICATION_READ_MAX_REQUESTS` / `RATE_LIMIT_NOTIFICATION_WRITE_MAX_REQUESTS` | `120` / `60` | 通知APIのuser_id + IP単位Rate Limit（時間窓60秒） |
 | `TRUSTED_PROXY_CIDRS` | 空 | `X-Forwarded-For`を信頼するProxyのCIDR。空の場合は接続元IPのみ使用 |
 | `CORS_ALLOW_ORIGINS` | `http://localhost:5173` | カンマ区切り |
+| `CORS_ALLOW_METHODS` | `GET,POST,PUT,PATCH,DELETE,OPTIONS` | カンマ区切り。CORSミドルウェアが許可するHTTPメソッド |
+| `CORS_ALLOW_HEADERS` | `Content-Type,X-CSRF-Token,Authorization` | カンマ区切り。CORSミドルウェアが許可するリクエストヘッダー |
+| `CORS_MAX_AGE_SECONDS` | `600` | プリフライト(OPTIONS)応答のキャッシュ秒数 |
 | `ENABLE_API_DOCS` | `true` | `/api/docs` の有効化 |
 
 ### 4.4 OAuth2 / メール

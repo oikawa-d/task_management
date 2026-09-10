@@ -29,12 +29,16 @@
 | `cerberus_csrf` Cookie | Cookie | Double Submit Cookieのトークン保持 | `HttpOnly=No`（JSが読み取り`X-CSRF-Token`へ転記するため） |
 | axiosインターセプタ | フロント実装（参考記載のみ・本設計では規定しない） | `cerberus_csrf`Cookie値を読み取り全更新系リクエストへ`X-CSRF-Token`として自動付与 | [`../../basic_design/05_frontend.md`](../../basic_design/05_frontend.md)側の責務（本ファイルはバックエンド検証のみを規定） |
 | `CORS_ALLOW_ORIGINS` | 設定 | 許可Originの一覧 | `allow_credentials=true`との併用時は`*`禁止 |
+| `CORS_ALLOW_METHODS` / `CORS_ALLOW_HEADERS` / `CORS_MAX_AGE_SECONDS` | 設定 | CORSミドルウェアが許可するメソッド・ヘッダー・プリフライトキャッシュ秒数 | `CORS_ALLOW_HEADERS`には`X-CSRF-Token`を含める（Double Submit Cookieのトークンをこのヘッダーで送るため） |
 
 ## 3. 設定項目（環境変数）
 
 | 変数名 | 型 | 既定値 | 用途 | 秘匿 |
 |--------|----|--------|------|------|
 | `CORS_ALLOW_ORIGINS` | list[str] | なし（必須。例：`http://localhost:5173`） | 許可Originの一覧。CORSミドルウェアと`verify_origin`で共用 | 否 |
+| `CORS_ALLOW_METHODS` | list[str] | `GET,POST,PUT,PATCH,DELETE,OPTIONS` | CORSミドルウェアが許可するHTTPメソッド一覧 | 否 |
+| `CORS_ALLOW_HEADERS` | list[str] | `Content-Type,X-CSRF-Token,Authorization` | CORSミドルウェアが許可するリクエストヘッダー一覧 | 否 |
+| `CORS_MAX_AGE_SECONDS` | int | `600` | プリフライト(OPTIONS)応答のキャッシュ秒数 | 否 |
 | `COOKIE_NAME_CSRF` | str | `cerberus_csrf` | CSRFトークンCookie名（session/jwt共通） | 否 |
 | `COOKIE_SAMESITE` | str | `lax` | CSRF Cookie・sessionモードの追加防御 | 否 |
 | `COOKIE_SAMESITE_REFRESH` | str | `strict` | jwtモードのrefresh Cookie（追加防御。CSRF検証を代替はしない） | 否 |
