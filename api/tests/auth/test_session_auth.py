@@ -13,24 +13,30 @@ from fastapi import Response
 from starlette.requests import Request
 
 
-def _settings() -> BackendSettings:
-	return BackendSettings(
-		database_url="postgresql+asyncpg://test:test@localhost/test",
-		jwt_secret_key="test-secret",
-		google_client_id="client",
-		google_client_secret="secret",
-		initial_admin_email="admin@example.com",
-		initial_admin_username="admin",
-		initial_admin_password="Password1!",
-		session_ttl_seconds=30,
-		session_absolute_ttl_seconds=300,
-		cookie_secure=True,
-	)
+def _settings(**overrides: object) -> BackendSettings:
+	values: dict[str, object] = {
+		"database_url": "postgresql+asyncpg://test:test@localhost/test",
+		"jwt_secret_key": "test-secret",
+		"google_client_id": "client",
+		"google_client_secret": "secret",
+		"initial_admin_email": "admin@example.com",
+		"initial_admin_username": "admin",
+		"initial_admin_password": "Password1!",
+		"session_ttl_seconds": 30,
+		"session_absolute_ttl_seconds": 300,
+		"cookie_secure": True,
+	}
+	values.update(overrides)
+	return BackendSettings(**values)
 
 
-def _request(cookie: str | None = None) -> Request:
-	headers = [] if cookie is None else [(b"cookie", cookie.encode())]
-	return Request({"type": "http", "headers": headers, "client": ("127.0.0.1", 1234)})
+def _request(cookie: str | None = None, peer: str = "127.0.0.1", forwarded: str | None = None) -> Request:
+	headers: list[tuple[bytes, bytes]] = []
+	if cookie is not None:
+		headers.append((b"cookie", cookie.encode()))
+	if forwarded is not None:
+		headers.append((b"x-forwarded-for", forwarded.encode()))
+	return Request({"type": "http", "headers": headers, "client": (peer, 1234)})
 
 
 def _user() -> SimpleNamespace:
@@ -64,6 +70,18 @@ async def _create_session(user_id: object, ip: str | None, ttl: int) -> tuple[st
 	assert ip == "127.0.0.1"
 	assert ttl == 30
 	return "session-id", "csrf-token"
+
+
+@pytest.mark.asyncio
+async def test_login_uses_trusted_xff_client_ip(monkeypatch: pytest.MonkeyPatch) -> None:
+	create_session = AsyncMock(return_value=("session-id", "csrf-token"))
+	monkeypatch.setattr("app.auth.session_auth.redis_store.create_session", create_session)
+	strategy = SessionAuthStrategy(_settings(trusted_proxy_cidrs=["10.0.0.0/8"]))
+	user = _user()
+
+	await strategy.login(user, _request(peer="10.0.0.1", forwarded="198.51.100.4, 10.0.0.2"), Response())
+
+	create_session.assert_awaited_once_with(user.id, "198.51.100.4", 30)
 
 
 @pytest.mark.asyncio
