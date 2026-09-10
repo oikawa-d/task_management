@@ -25,7 +25,8 @@ async def ensure_login_not_rate_limited(identifier: str, client_ip: str, setting
 	"""現在の失敗回数が上限に達している場合は`TooManyAttemptsError`を送出する。"""
 	failure_count = await redis_store.get_login_failure_count(identifier, client_ip)
 	if failure_count >= settings.login_max_attempts:
-		raise TooManyAttemptsError()
+		retry_after = max(await redis_store.get_login_failure_ttl(identifier, client_ip), 0)
+		raise TooManyAttemptsError(retry_after=retry_after)
 
 
 async def record_login_failure(identifier: str, client_ip: str, settings: BackendSettings) -> int:
