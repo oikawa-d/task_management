@@ -3,6 +3,7 @@ import { Navigate, createBrowserRouter } from "react-router-dom";
 import { RequireAdmin, RequireAuth, RequireGuest } from "./auth/guards";
 import { AdminUsersPage } from "./features/admin/pages/AdminUsersPage";
 import { LoginPage } from "./features/auth/pages/LoginPage";
+import { OAuthCallbackPage } from "./features/auth/pages/OAuthCallbackPage";
 import { PasswordForgotPage } from "./features/auth/pages/PasswordForgotPage";
 import { PasswordResetPage } from "./features/auth/pages/PasswordResetPage";
 import { RegisterPage } from "./features/auth/pages/RegisterPage";
@@ -18,6 +19,13 @@ export const appRoutes = [
 	{
 		path: ROUTES.ROOT,
 		element: <Navigate to={ROUTES.LOGIN} replace />,
+	},
+	{
+		// ガード不要。AuthProviderの未認証リダイレクトより先行して本画面自身の
+		// 交換・確認処理を完了させる例外パスのため、AuthLayout/AppLayoutの外に置く
+		// （docs/detailed_design/screen/11_oauth_callback.md §1）
+		path: ROUTES.OAUTH_CALLBACK,
+		element: <OAuthCallbackPage />,
 	},
 	{
 		element: <AuthLayout />,

@@ -5,6 +5,7 @@ export const ROUTES = {
 	PASSWORD_FORGOT: "/password/forgot",
 	PASSWORD_RESET: "/password/reset",
 	VERIFY_EMAIL: "/verify-email",
+	OAUTH_CALLBACK: "/oauth/callback",
 	DASHBOARD: "/dashboard",
 	SETTINGS: "/settings",
 	ADMIN_USERS: "/admin/users",
