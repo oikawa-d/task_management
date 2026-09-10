@@ -30,5 +30,7 @@ assert_blocked() {
 assert_allowed "gh pr view 123"
 assert_allowed "git commit -m 'test'"
 assert_blocked "gh pr merge 123 --squash"
+assert_blocked "gh --repo oikawa-d/task_management pr merge 123"
 assert_blocked "gh issue close 123"
+assert_blocked "gh --repo oikawa-d/task_management issue close 123"
 assert_blocked "git status; gh pr merge 123"
