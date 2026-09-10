@@ -1,5 +1,5 @@
 import { fetchWithAuth } from "../../../api/authAdapter/client";
-import type { ApiFieldError } from "../types";
+import type { ApiFieldError, LoginFormValues, LoginResponse, RegisterResponse, RegisterSubmitPayload } from "../types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api";
 
@@ -71,6 +71,22 @@ async function request<T = void>(path: string, init?: RequestInit): Promise<T> {
 		return undefined as T;
 	}
 	return (await response.json()) as T;
+}
+
+/** POST /api/auth/login（docs/detailed_design/api/auth/02_post_auth_login.md） session: 204で本文なし / jwt: 200 */
+export function login(payload: LoginFormValues): Promise<LoginResponse | undefined> {
+	return request("/auth/login", {
+		method: "POST",
+		body: JSON.stringify(payload),
+	});
+}
+
+/** POST /api/auth/register（docs/detailed_design/api/auth/01_post_auth_register.md） */
+export function register(payload: RegisterSubmitPayload): Promise<RegisterResponse> {
+	return request("/auth/register", {
+		method: "POST",
+		body: JSON.stringify(payload),
+	});
 }
 
 /** POST /api/auth/password/forgot（docs/detailed_design/api/auth/09_post_auth_password_forgot.md） */

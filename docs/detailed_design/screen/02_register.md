@@ -86,7 +86,7 @@
 
 | No | 呼び出しタイミング | メソッド／パス | 送信内容 | 成功時処理 | 失敗時処理 | queryKey / mutationKey |
 |----|--------------------|-----------------|----------|------------|------------|--------------------------|
-| 1 | マウント時（`AuthProvider` 経由） | GET `/auth/config` | - | ⑯の表示可否決定 | トースト表示のみ | `['auth', 'config']` |
+| 1 | マウント時（`AuthProvider`（`authBootstrap`）経由。本画面独自では呼ばない） | GET `/auth/config` | - | `authStore.googleLoginEnabled` へ保持、⑯の表示可否決定 | トースト表示のみ | - |
 | 2 | ⑮クリック | POST `/auth/register` | `{ username, email, password, password_confirm, last_name, first_name, last_name_kana, first_name_kana, birth_date }` | `authStore` は更新しない。`navigate("/login", { state: { registeredEmail: email } })` | §11参照 | `mutationKey: ['auth', 'register']` |
 
 ## 5. 状態管理
@@ -98,7 +98,7 @@
 | ローカルstate | `passwordStrength` | `0〜4`（整数） | `0` | ⑪onChange時に再計算 | なし |
 | ローカルstate | `fieldErrors` | `Record<string, string>` | `{}` | 409/422応答時に該当フィールドへマッピング | なし |
 | Zustand `authStore` | - | - | 登録処理では**更新しない**（自動ログインしないため） | - | - |
-| TanStack Query | `['auth', 'config']` | `AuthConfig` | - | `AuthProvider` 起動時に取得しキャッシュ | しない |
+| Zustand `authStore` | `googleLoginEnabled` | boolean | `false` | `authBootstrap`（`AuthProvider` 起動時）が `GET /auth/config` のレスポンスを保持 | しない |
 
 ## 6. 画面状態遷移図
 
@@ -176,7 +176,7 @@ flowchart TB
     RF --> EB["ErrorBanner"]
     RF --> BTN["SubmitButton"]
     RP -.uses.-> HOOK["useRegister()"]
-    RP -.reads.-> QCFG["useAuthConfig()"]
+    RP -.reads.-> STORE["authStore.googleLoginEnabled"]
 ```
 
 ## 9. 関数・カスタムフック詳細

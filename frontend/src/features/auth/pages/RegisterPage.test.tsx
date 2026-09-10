@@ -2,8 +2,9 @@ import "@testing-library/jest-dom/vitest";
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { useAuthStore } from "../../../auth/authStore";
 import { ROUTES } from "../../../routes";
 import { AuthFormsProvider, type AuthFormSlots } from "./authFormSlots";
 import { RegisterPage } from "./RegisterPage";
@@ -32,6 +33,10 @@ function LoginRouteProbe() {
 }
 
 describe("RegisterPage", () => {
+	afterEach(() => {
+		useAuthStore.getState().reset();
+	});
+
 	it("/registerで表示され、会員登録フォームのスロットを描画する", () => {
 		renderRegisterPage();
 
@@ -57,12 +62,15 @@ describe("RegisterPage", () => {
 	});
 
 	it("googleLoginButtonスロットが無い場合はGoogleログイン導線を表示しない", () => {
+		useAuthStore.getState().setGoogleLoginEnabled(true);
+
 		renderRegisterPage();
 
 		expect(screen.queryByRole("button", { name: /Google/ })).not.toBeInTheDocument();
 	});
 
 	it("googleLoginButtonスロットが接続された場合は描画する", () => {
+		useAuthStore.getState().setGoogleLoginEnabled(true);
 		const googleLoginButton = vi.fn(({ label }: { label: string }) => (
 			<button type="button">{label}</button>
 		));
@@ -71,6 +79,20 @@ describe("RegisterPage", () => {
 
 		expect(googleLoginButton).toHaveBeenCalledWith({ label: "Googleで新規登録" });
 		expect(screen.getByRole("button", { name: "Googleで新規登録" })).toBeInTheDocument();
+	});
+
+	// design doc: docs/detailed_design/screen/02_register.md §14 No.10 "RegisterPage hides Google button when disabled"
+	it("RegisterPage hides Google button when disabled", () => {
+		useAuthStore.getState().setGoogleLoginEnabled(false);
+		const googleLoginButton = vi.fn(({ label }: { label: string }) => (
+			<button type="button">{label}</button>
+		));
+
+		renderRegisterPage({ googleLoginButton });
+
+		expect(googleLoginButton).not.toHaveBeenCalled();
+		expect(screen.queryByRole("button", { name: /Google/ })).not.toBeInTheDocument();
+		expect(screen.queryByText("または")).not.toBeInTheDocument();
 	});
 
 	it("ログイン画面へのリンクを表示する", () => {
