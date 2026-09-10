@@ -29,11 +29,11 @@ def _to_app_timezone(value: datetime) -> datetime:
 def _to_item(item: NotificationListItem) -> NotificationItem:
 	notification = item.notification
 	task = None
-	if notification.task_id is not None:
+	if notification.task_id is not None and item.task_title is not None:
 		task = NotificationTask(
 			id=notification.task_id,
 			project_id=item.task_project_id,
-			title=item.task_title or "",
+			title=item.task_title,
 		)
 	return NotificationItem(
 		id=notification.id,
@@ -57,9 +57,18 @@ async def list_notifications(
 	rows = await notification_repository.list_by_user(
 		db, user.id, unread_only, limit=per_page, offset=(page - 1) * per_page
 	)
-	unread_count = await notification_repository.count_unread(db, user.id)
 	items = [_to_item(row) for row in rows]
-	total = rows[0].total_count if rows else 0
+
+	# fn_list_notificationsのtotal_countはウィンドウ関数のため該当行が0件だと取得できない
+	# （pageが総ページ数を超えた場合等）。その場合のみ別途fn_count_notificationsで取得する。
+	total = rows[0].total_count if rows else await notification_repository.count_notifications(db, user.id, unread_only)
+
+	if unread_only:
+		# unread_only=true時のtotalは全未読件数と一致するため、fn_count_unread_notificationsは追加で呼ばない
+		unread_count = total
+	else:
+		unread_count = await notification_repository.count_unread(db, user.id)
+
 	return NotificationListResponse(
 		items=items,
 		meta=NotificationMeta(

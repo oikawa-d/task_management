@@ -58,6 +58,15 @@ async def list_by_user(
 	]
 
 
+async def count_notifications(db: AsyncSession, user_id: uuid.UUID, unread_only: bool) -> int:
+	"""fn_list_notificationsの`total_count`が取得できない場合（該当0件）のフォールバック用件数取得。"""
+	result = await db.execute(
+		text("SELECT fn_count_notifications(:user_id, :unread_only) AS count"),
+		{"user_id": user_id, "unread_only": unread_only},
+	)
+	return int(result.scalar_one())
+
+
 async def count_unread(db: AsyncSession, user_id: uuid.UUID) -> int:
 	result = await db.execute(
 		text("SELECT fn_count_unread_notifications(:user_id) AS count"),

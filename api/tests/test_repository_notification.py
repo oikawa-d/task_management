@@ -123,6 +123,36 @@ async def test_list_by_user_total_count_reflects_all_matching_rows_not_page_size
 	assert second_page[0].total_count == 25
 
 
+async def test_list_by_user_returns_empty_and_count_notifications_still_reports_total_when_page_overruns(
+	db_session: AsyncSession,
+) -> None:
+	"""pageが総ページ数を超えるとitemsは空になるが、fn_count_notificationsで正しい全体件数が取得できる。"""
+	user_id = await user_repository.create(db_session, "notiflist6", "notiflist6@example.com", "hash")
+	for i in range(3):
+		await _create_notification(db_session, user_id, f"overrun-{i}")
+
+	overrun_page = await notification_repository.list_by_user(
+		db_session, user_id, unread_only=False, limit=20, offset=100
+	)
+	total = await notification_repository.count_notifications(db_session, user_id, unread_only=False)
+
+	assert overrun_page == []
+	assert total == 3
+
+
+async def test_count_notifications_respects_unread_only_filter(db_session: AsyncSession) -> None:
+	user_id = await user_repository.create(db_session, "notiflist7", "notiflist7@example.com", "hash")
+	for i in range(2):
+		await _create_notification(db_session, user_id, f"count-unread-{i}")
+	await _create_notification(db_session, user_id, "count-read", read_at_expr="now()")
+
+	total_all = await notification_repository.count_notifications(db_session, user_id, unread_only=False)
+	total_unread = await notification_repository.count_notifications(db_session, user_id, unread_only=True)
+
+	assert total_all == 3
+	assert total_unread == 2
+
+
 async def test_count_unread_returns_unread_only(db_session: AsyncSession) -> None:
 	user_id = await user_repository.create(db_session, "notifcount1", "notifcount1@example.com", "hash")
 	for i in range(3):

@@ -41,13 +41,26 @@ def _list_item(
 	)
 
 
+def _patch_repository(
+	monkeypatch: pytest.MonkeyPatch,
+	*,
+	list_by_user_return=None,
+	count_notifications_return: int = 0,
+	count_unread_return: int = 0,
+) -> tuple[AsyncMock, AsyncMock, AsyncMock]:
+	list_by_user = AsyncMock(return_value=list_by_user_return or [])
+	count_notifications = AsyncMock(return_value=count_notifications_return)
+	count_unread = AsyncMock(return_value=count_unread_return)
+	monkeypatch.setattr(notification_service.notification_repository, "list_by_user", list_by_user)
+	monkeypatch.setattr(notification_service.notification_repository, "count_notifications", count_notifications)
+	monkeypatch.setattr(notification_service.notification_repository, "count_unread", count_unread)
+	return list_by_user, count_notifications, count_unread
+
+
 @pytest.mark.asyncio
 async def test_list_notifications_scopes_repository_to_current_user(monkeypatch: pytest.MonkeyPatch) -> None:
 	user = _user()
-	list_by_user = AsyncMock(return_value=[_list_item()])
-	count_unread = AsyncMock(return_value=1)
-	monkeypatch.setattr(notification_service.notification_repository, "list_by_user", list_by_user)
-	monkeypatch.setattr(notification_service.notification_repository, "count_unread", count_unread)
+	list_by_user, _, _ = _patch_repository(monkeypatch, list_by_user_return=[_list_item()], count_unread_return=1)
 	db = object()
 
 	response = await notification_service.list_notifications(db, user, 2, 20, False)  # type: ignore[arg-type]
@@ -63,8 +76,7 @@ async def test_list_notifications_includes_task_when_present(monkeypatch: pytest
 	task_id = uuid4()
 	project_id = uuid4()
 	item = _list_item(task_id=task_id, task_title="設計書をレビューする", task_project_id=project_id)
-	monkeypatch.setattr(notification_service.notification_repository, "list_by_user", AsyncMock(return_value=[item]))
-	monkeypatch.setattr(notification_service.notification_repository, "count_unread", AsyncMock(return_value=0))
+	_patch_repository(monkeypatch, list_by_user_return=[item])
 	db = object()
 
 	response = await notification_service.list_notifications(db, user, 1, 20, False)  # type: ignore[arg-type]
@@ -79,8 +91,20 @@ async def test_list_notifications_includes_task_when_present(monkeypatch: pytest
 async def test_list_notifications_task_deleted_returns_null(monkeypatch: pytest.MonkeyPatch) -> None:
 	user = _user()
 	item = _list_item(task_id=None)
-	monkeypatch.setattr(notification_service.notification_repository, "list_by_user", AsyncMock(return_value=[item]))
-	monkeypatch.setattr(notification_service.notification_repository, "count_unread", AsyncMock(return_value=0))
+	_patch_repository(monkeypatch, list_by_user_return=[item])
+	db = object()
+
+	response = await notification_service.list_notifications(db, user, 1, 20, False)  # type: ignore[arg-type]
+
+	assert response.items[0].task is None
+
+
+@pytest.mark.asyncio
+async def test_list_notifications_task_title_none_returns_null_task(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""task_idが非NULLでもtask_titleがNULL（LEFT JOIN不一致）ならtask=nullとする。"""
+	user = _user()
+	item = _list_item(task_id=uuid4(), task_title=None, task_project_id=uuid4())
+	_patch_repository(monkeypatch, list_by_user_return=[item])
 	db = object()
 
 	response = await notification_service.list_notifications(db, user, 1, 20, False)  # type: ignore[arg-type]
@@ -94,8 +118,7 @@ async def test_list_notifications_meta_total_reflects_overall_count_not_page_siz
 ) -> None:
 	user = _user()
 	items = [_list_item(total_count=25) for _ in range(5)]
-	monkeypatch.setattr(notification_service.notification_repository, "list_by_user", AsyncMock(return_value=items))
-	monkeypatch.setattr(notification_service.notification_repository, "count_unread", AsyncMock(return_value=0))
+	_patch_repository(monkeypatch, list_by_user_return=items)
 	db = object()
 
 	response = await notification_service.list_notifications(db, user, 2, 20, False)  # type: ignore[arg-type]
@@ -106,17 +129,51 @@ async def test_list_notifications_meta_total_reflects_overall_count_not_page_siz
 
 
 @pytest.mark.asyncio
-async def test_list_notifications_meta_total_is_zero_when_no_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_list_notifications_meta_total_uses_fallback_when_no_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""pageが総ページ数を超えitemsが空でも、meta.totalは0ではなく実際の全体件数を返す。"""
 	user = _user()
-	monkeypatch.setattr(notification_service.notification_repository, "list_by_user", AsyncMock(return_value=[]))
-	monkeypatch.setattr(notification_service.notification_repository, "count_unread", AsyncMock(return_value=0))
+	_, count_notifications, _ = _patch_repository(monkeypatch, list_by_user_return=[], count_notifications_return=7)
+	db = object()
+
+	response = await notification_service.list_notifications(db, user, 99, 20, False)  # type: ignore[arg-type]
+
+	count_notifications.assert_awaited_once_with(db, user.id, False)
+	assert response.items == []
+	assert response.meta.total == 7
+	assert response.meta.total_pages == 1
+
+
+@pytest.mark.asyncio
+async def test_list_notifications_calls_count_unread_only_when_not_unread_only(
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	user = _user()
+	_, count_notifications, count_unread = _patch_repository(
+		monkeypatch, list_by_user_return=[_list_item(total_count=3)], count_unread_return=2
+	)
 	db = object()
 
 	response = await notification_service.list_notifications(db, user, 1, 20, False)  # type: ignore[arg-type]
 
-	assert response.items == []
-	assert response.meta.total == 0
-	assert response.meta.total_pages == 0
+	count_unread.assert_awaited_once_with(db, user.id)
+	count_notifications.assert_not_awaited()
+	assert response.unread_count == 2
+
+
+@pytest.mark.asyncio
+async def test_list_notifications_skips_count_unread_when_unread_only(monkeypatch: pytest.MonkeyPatch) -> None:
+	user = _user()
+	_, count_notifications, count_unread = _patch_repository(
+		monkeypatch, list_by_user_return=[_list_item(total_count=4)]
+	)
+	db = object()
+
+	response = await notification_service.list_notifications(db, user, 1, 20, True)  # type: ignore[arg-type]
+
+	count_unread.assert_not_awaited()
+	count_notifications.assert_not_awaited()
+	assert response.unread_count == 4
+	assert response.meta.total == 4
 
 
 @pytest.mark.asyncio
