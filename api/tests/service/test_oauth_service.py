@@ -223,7 +223,7 @@ async def test_oauth_callback_session_logs_success_and_deletes_state_cookie(
 		_request(),
 		response,
 		db=db,
-		settings=_settings(),
+		settings=_settings(auth_mode="session"),
 		provider=provider,
 		strategy=strategy,
 	)
@@ -302,7 +302,7 @@ async def test_oauth_callback_rolls_back_login_when_history_recording_fails(monk
 			_request(),
 			response,
 			db=SimpleNamespace(commit=AsyncMock()),
-			settings=_settings(),
+			settings=_settings(auth_mode="session"),
 			provider=provider,
 			strategy=SimpleNamespace(mode="session", login=login, rollback_login=rollback),
 		)
