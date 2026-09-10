@@ -60,7 +60,8 @@ repository層は `CALL sp_xxx(...)` または `SELECT fn_xxx(...)` と戻り値�
 | 25 | プロシージャ | `sp_add_task_comment` | `p_task_id UUID`, `p_user_id UUID`, `p_body TEXT`, `OUT p_comment_id UUID` | `p_comment_id UUID`（OUT） | コメント追加。DB側で採番したcomment_idをOUTで返す |
 | 26 | プロシージャ | `sp_update_task_comment` | `p_comment_id UUID`, `p_user_id UUID`, `p_body TEXT` | なし | コメント更新 |
 | 27 | プロシージャ | `sp_delete_task_comment` | `p_comment_id UUID`, `p_user_id UUID` | なし | コメント削除 |
-| 28 | 関数 | `fn_list_notifications` | `p_user_id UUID`, `p_unread_only BOOLEAN`, `p_limit INTEGER`, `p_offset INTEGER` | `SETOF notifications` | 本人の通知一覧 |
+| 28 | 関数 | `fn_list_notifications` | `p_user_id UUID`, `p_unread_only BOOLEAN`, `p_limit INTEGER`, `p_offset INTEGER` | `TABLE(notification notifications, task_title VARCHAR, task_project_id UUID, total_count BIGINT)` | 本人の通知一覧。task情報（`tasks`をLEFT JOIN、削除済みはNULL）とページング前の総件数を1回の呼び出しで返す |
+| 28a | 関数 | `fn_count_notifications` | `p_user_id UUID`, `p_unread_only BOOLEAN` | `BIGINT` | `fn_list_notifications` の`total_count`が取得できない場合（該当0件）のフォールバック用件数取得 |
 | 29 | 関数 | `fn_count_unread_notifications` | `p_user_id UUID` | `BIGINT` | 未読件数 |
 | 29a | 関数 | `fn_list_due_notification_tasks` | `p_threshold TIMESTAMPTZ` | `SETOF tasks` | batchの期限通知対象抽出 |
 | 30 | プロシージャ | `sp_mark_notification_read` | `p_notification_id UUID`, `p_user_id UUID` | なし | 本人の未読通知を既読化 |
@@ -349,7 +350,8 @@ $$;
 | `sp_add_task_comment` | `gen_random_uuid()`で採番したidでtask_comments INSERTし、採番したidをOUTで返す | task不存在等はAPIへ事実結果を返す |
 | `sp_update_task_comment` | comment本文をUPDATE | 投稿者比較はAPIで実施 |
 | `sp_delete_task_comment` | commentをDELETE | 投稿者比較はAPIで実施 |
-| `fn_list_notifications` | user_id必須、未読条件、task情報、created_at順を一括返却 | 他人の通知は結果に含めない |
+| `fn_list_notifications` | user_id必須、未読条件、tasksとのLEFT JOINによるtask情報（削除済みはNULL）、ウィンドウ関数`count(*) OVER()`によるページング前total_count、created_at順を一括返却 | 他人の通知は結果に含めない。`total_count`は該当0件の場合は取得できない（`fn_count_notifications`で別途取得） |
+| `fn_count_notifications` | user_id必須・未読条件（`fn_list_notifications`と同一条件）でCOUNTを返す | `fn_list_notifications`の該当行が0件のときのフォールバックとしてのみ使用する |
 | `fn_count_unread_notifications` | `read_at IS NULL` の件数を返す | 参照のみ |
 | `fn_list_due_notification_tasks` | threshold以下・未完了・担当者ありのtasksを返す | batch専用の参照FN |
 | `sp_mark_notification_read` | user_id一致かつ未読の行だけ`COALESCE(read_at, now())`で更新 | 対象外は空結果相当 |
