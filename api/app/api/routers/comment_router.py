@@ -5,7 +5,7 @@ from app.core.deps import (
 	get_comment_for_member,
 	get_current_user,
 	get_task_for_member,
-	verify_csrf,
+	verify_csrf_if_session,
 	verify_origin,
 )
 from app.db import get_db_session
@@ -38,7 +38,7 @@ async def create_task_comment(
 	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
 	_: None = Depends(verify_origin),
-	__csrf: None = Depends(verify_csrf),
+	__csrf: None = Depends(verify_csrf_if_session),
 ) -> CommentResponse:
 	return await task_comment_service.add_comment(task, payload, user, db)
 
@@ -50,7 +50,7 @@ async def update_task_comment(
 	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
 	_: None = Depends(verify_origin),
-	__csrf: None = Depends(verify_csrf),
+	__csrf: None = Depends(verify_csrf_if_session),
 ) -> CommentResponse:
 	return await task_comment_service.update_comment(comment.task, comment, payload, user, db)
 
@@ -61,7 +61,7 @@ async def delete_task_comment(
 	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
 	_: None = Depends(verify_origin),
-	__csrf: None = Depends(verify_csrf),
+	__csrf: None = Depends(verify_csrf_if_session),
 ) -> Response:
 	await task_comment_service.delete_comment(comment.task, comment, user, db)
 	return Response(status_code=status.HTTP_204_NO_CONTENT)

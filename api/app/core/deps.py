@@ -122,6 +122,21 @@ async def verify_csrf(
 		raise CsrfInvalidError()
 
 
+async def verify_csrf_if_session(
+	request: Request,
+	strategy: AuthStrategy = Depends(get_auth_strategy),
+	settings: BackendSettings = Depends(get_backend_settings),
+) -> None:
+	"""通常APIの更新系エンドポイント向けCSRF検証。
+
+	CSRFはsessionモードの更新系エンドポイントでのみ必須であり、
+	jwtモードの通常APIはAuthorizationヘッダで認証されるため検証しない。
+	"""
+	if strategy.mode != "session":
+		return
+	await verify_csrf(request, strategy, settings)
+
+
 async def get_task_for_member(
 	task_id: UUID,
 	user: CurrentUser = Depends(get_current_user),
@@ -131,8 +146,8 @@ async def get_task_for_member(
 	if task_with_status is None:
 		raise NotFoundError()
 	task = task_with_status.task
-	if user.role != "admin":
-		if task.project_id is None or not await project_member_repository.exists(db, task.project_id, user.id):
+	if user.role != "admin" and task.project_id is not None:
+		if not await project_member_repository.exists(db, task.project_id, user.id):
 			raise NotFoundError()
 	return task
 
@@ -149,8 +164,8 @@ async def get_comment_for_member(
 	if task_with_status is None:
 		raise NotFoundError()
 	task = task_with_status.task
-	if user.role != "admin":
-		if task.project_id is None or not await project_member_repository.exists(db, task.project_id, user.id):
+	if user.role != "admin" and task.project_id is not None:
+		if not await project_member_repository.exists(db, task.project_id, user.id):
 			raise NotFoundError()
 	comment.task = task
 	return comment
