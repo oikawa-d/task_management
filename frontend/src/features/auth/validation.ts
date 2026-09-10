@@ -6,12 +6,7 @@ import type { ApiFieldError, AuthApiError } from "./types";
 
 const KANA_PATTERN = /^[ぁ-んァ-ヶー0-9]+$/;
 const USERNAME_PATTERN = /^[A-Za-z0-9_-]+$/;
-/**
- * ログインidentifierの文字数上限。
- * 要検討: docs/detailed_design/screen/01_login.md §10は255文字としているが、
- * docs/detailed_design/api/auth/02_post_auth_login.md（frontend向けzod定義表）は
- * `z.string().min(1).max(50)` としており、API契約側の値を正として採用する（PR本文に記載）。
- */
+/** API契約（docs/detailed_design/api/auth/02_post_auth_login.md §10）に合わせる。 */
 const LOGIN_IDENTIFIER_MAX_LENGTH = 50;
 const EMAIL_MAX_LENGTH = 50;
 const USERNAME_MIN_LENGTH = 3;
