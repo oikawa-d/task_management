@@ -77,6 +77,14 @@ class JwtAuthStrategy(AuthStrategy):
 		family_id = str(uuid4())
 		return await self._issue_tokens(user.id, family_id, response)
 
+	async def rollback_login(self, user: User, result: LoginResult, response: Response) -> None:
+		try:
+			if result.refresh_token is not None:
+				await redis_store.revoke_refresh_token(result.refresh_token, user.id)
+		finally:
+			# Access tokenはstatelessで既存基盤に失効機構がないため、refresh tokenのみ失効する。
+			self._delete_cookies(response)
+
 	async def _issue_tokens(self, user_id: UUID, family_id: str, response: Response) -> LoginResult:
 		issued_at = datetime.now(UTC)
 		access_token = self._issue_access_token(user_id, issued_at)

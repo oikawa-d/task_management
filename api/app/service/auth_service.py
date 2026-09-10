@@ -5,16 +5,36 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import secrets
+from typing import Any
+from urllib.parse import urlsplit
 
-from fastapi import BackgroundTasks
+from fastapi import BackgroundTasks, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.factory import get_auth_strategy
+from app.auth.jwt_auth import JwtAuthStrategy
+from app.auth.oauth import GoogleOAuthProvider, GoogleUserInfo
+from app.auth.session_auth import SessionAuthStrategy
 from app.core.config import BackendSettings, get_backend_settings
-from app.core.exceptions import InvalidResetTokenError, InvalidVerifyTokenError, TooManyAttemptsError
+from app.core.exceptions import (
+	InvalidResetTokenError,
+	InvalidStateError,
+	InvalidVerifyTokenError,
+	NotSupportedInModeError,
+	OAuthEmailUnverifiedError,
+	OAuthFailedError,
+	OAuthHandoffInvalidError,
+	ServiceUnavailableError,
+	TooManyAttemptsError,
+	UserInactiveError,
+)
 from app.core.security import hash_password
 from app.models.user import User
-from app.repository import redis_store, user_repository
+from app.repository import login_history_repository, oauth_account_repository, redis_store, user_repository
+from app.schemas.oauth import OAuthCallbackResult, OAuthExchangeResponse, OAuthStartResult
 from app.service import mail_service
 
 # トークン長は設計上固定値だが、桁数変更の余地を残すため1箇所にまとめる（06_token_mail.md §3）。
@@ -110,3 +130,259 @@ async def reset_password(token: str, new_password: str, db: AsyncSession) -> Non
 	password_hash = hash_password(new_password)
 	await user_repository.update_password(db, user_id, password_hash)
 	await db.commit()
+
+
+def normalize_redirect_to(raw: str | None, settings: BackendSettings | None = None) -> str:
+	config = settings or get_backend_settings()
+	if not raw:
+		return config.oauth_default_redirect_to
+	parsed = urlsplit(raw)
+	if not raw.startswith("/") or raw.startswith("//") or parsed.scheme or parsed.netloc:
+		return config.oauth_default_redirect_to
+	return raw
+
+
+def _set_oauth_state_cookie(response: Response, state: str, settings: BackendSettings) -> None:
+	options: dict[str, Any] = {
+		"httponly": True,
+		"secure": settings.cookie_secure,
+		"samesite": settings.cookie_samesite,
+		"path": "/api/auth/oauth",
+		"max_age": settings.oauth_state_ttl_seconds,
+	}
+	if settings.cookie_domain:
+		options["domain"] = settings.cookie_domain
+	response.set_cookie(settings.cookie_name_oauth_state, state, **options)
+
+
+def _delete_oauth_state_cookie(response: Response, settings: BackendSettings) -> None:
+	options: dict[str, Any] = {
+		"secure": settings.cookie_secure,
+		"httponly": True,
+		"samesite": settings.cookie_samesite,
+		"path": "/api/auth/oauth",
+	}
+	if settings.cookie_domain:
+		options["domain"] = settings.cookie_domain
+	response.delete_cookie(settings.cookie_name_oauth_state, **options)
+
+
+def _auth_strategy(settings: BackendSettings, strategy: Any | None) -> Any:
+	if strategy is not None:
+		return strategy
+	configured = get_auth_strategy()
+	if configured.mode == settings.auth_mode:
+		return configured
+	return SessionAuthStrategy(settings) if settings.auth_mode == "session" else JwtAuthStrategy(settings)
+
+
+async def oauth_start(
+	redirect_to: str | None,
+	request: Request | Response | None = None,
+	response: Response | None = None,
+	*,
+	settings: BackendSettings | None = None,
+	provider: GoogleOAuthProvider | None = None,
+) -> OAuthStartResult:
+	config = settings or get_backend_settings()
+	if isinstance(request, Response) and response is None:
+		response = request
+	redirect = normalize_redirect_to(redirect_to, config)
+	state = secrets.token_urlsafe(32)
+	code_verifier = secrets.token_urlsafe(64)
+	nonce = secrets.token_urlsafe(32)
+	code_challenge = base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode()).digest()).rstrip(b"=").decode()
+	try:
+		await redis_store.save_oauth_state(state, redirect, code_verifier, nonce, config.oauth_state_ttl_seconds)
+	except Exception as exc:
+		raise ServiceUnavailableError() from exc
+	if response is not None:
+		_set_oauth_state_cookie(response, state, config)
+	oauth_provider = provider or GoogleOAuthProvider(config)
+	return OAuthStartResult(authorize_url=oauth_provider.build_authorize_url(state, code_challenge, nonce), state=state)
+
+
+async def _resolve_or_create_user(db: AsyncSession, userinfo: GoogleUserInfo) -> User:
+	account = await oauth_account_repository.get_by_provider_identity(db, "google", userinfo.sub)
+	if account is not None:
+		user = account.user or await user_repository.get_by_id(db, account.user_id)
+		if user is None:
+			raise OAuthFailedError()
+		if not user.is_active:
+			raise UserInactiveError()
+		return user
+
+	existing = await user_repository.get_by_email(db, userinfo.email)
+	if existing is not None:
+		if not userinfo.email_verified:
+			raise OAuthEmailUnverifiedError()
+		if not existing.is_active:
+			raise UserInactiveError()
+		await oauth_account_repository.upsert(db, existing.id, "google", userinfo.sub)
+		if existing.email_verified_at is None:
+			await user_repository.mark_email_verified(db, existing.id)
+		await db.commit()
+		return existing
+
+	if not userinfo.email_verified:
+		raise OAuthEmailUnverifiedError()
+	username = f"google_{hashlib.sha256(userinfo.sub.encode()).hexdigest()[:16]}"
+	user_id = await user_repository.create(db, username, userinfo.email, None)
+	await oauth_account_repository.upsert(db, user_id, "google", userinfo.sub)
+	await user_repository.mark_email_verified(db, user_id)
+	if userinfo.given_name is not None or userinfo.family_name is not None:
+		await user_repository.update_profile(db, user_id, userinfo.family_name, userinfo.given_name, None, None, None)
+	await db.commit()
+	user = await user_repository.get_by_id(db, user_id)
+	if user is None:
+		raise OAuthFailedError()
+	if not user.is_active:
+		raise UserInactiveError()
+	return user
+
+
+async def resolve_or_create_user(
+	db: AsyncSession,
+	sub: str,
+	email: str,
+	email_verified: bool,
+	given_name: str | None,
+	family_name: str | None,
+) -> User:
+	return await _resolve_or_create_user(db, GoogleUserInfo(sub, email, email_verified, given_name, family_name))
+
+
+async def _record_oauth_login(db: AsyncSession, user: User, request: Request) -> None:
+	client_ip = request.client.host if request.client is not None else None
+	await login_history_repository.create(
+		db,
+		user_id=user.id,
+		login_identifier=user.email,
+		login_method="oauth_google",
+		ip_address=client_ip,
+		user_agent=request.headers.get("user-agent"),
+		success=True,
+		failure_reason=None,
+	)
+	await db.commit()
+
+
+async def _rollback_oauth_login(
+	strategy: Any,
+	user: User,
+	login_result: Any,
+	response: Response,
+	settings: BackendSettings,
+	*,
+	clear_state_cookie: bool,
+) -> None:
+	try:
+		rollback = getattr(strategy, "rollback_login", None)
+		if rollback is None:
+			raise RuntimeError("auth strategy does not support login rollback")
+		await rollback(user, login_result, response)
+	finally:
+		if clear_state_cookie:
+			_delete_oauth_state_cookie(response, settings)
+
+
+async def oauth_callback(
+	code: str | None,
+	state: str | None,
+	state_cookie: str | None,
+	request: Request,
+	response: Response,
+	db: AsyncSession | None = None,
+	*,
+	settings: BackendSettings | None = None,
+	provider: GoogleOAuthProvider | None = None,
+	strategy: Any | None = None,
+) -> OAuthCallbackResult:
+	config = settings or get_backend_settings()
+	if not state or not state_cookie or not secrets.compare_digest(state, state_cookie):
+		raise InvalidStateError()
+	try:
+		state_data = await redis_store.consume_oauth_state(state)
+	except Exception as exc:
+		raise ServiceUnavailableError() from exc
+	if state_data is None:
+		raise InvalidStateError()
+	if not code or db is None:
+		raise OAuthFailedError()
+	oauth_provider = provider or GoogleOAuthProvider(config)
+	tokens = await oauth_provider.exchange_code(code, state_data.code_verifier)
+	claims = await oauth_provider.verify_id_token(tokens.id_token, state_data.nonce)
+	userinfo = await oauth_provider.fetch_userinfo(tokens.access_token)
+	if not secrets.compare_digest(claims.sub, userinfo.sub):
+		raise OAuthFailedError()
+	user = await _resolve_or_create_user(db, userinfo)
+	if not user.is_active:
+		raise UserInactiveError()
+	if config.auth_mode == "session":
+		auth_strategy = _auth_strategy(config, strategy)
+		login_result = await auth_strategy.login(user, request, response)
+		try:
+			await _record_oauth_login(db, user, request)
+		except Exception as exc:
+			try:
+				await _rollback_oauth_login(
+					auth_strategy, user, login_result, response, config, clear_state_cookie=True
+				)
+			except Exception as rollback_exc:
+				raise ServiceUnavailableError() from rollback_exc
+			raise ServiceUnavailableError() from exc
+		_delete_oauth_state_cookie(response, config)
+		return OAuthCallbackResult(auth_mode="session", redirect_to=state_data.redirect_to)
+
+	handoff_code = secrets.token_urlsafe(32)
+	try:
+		await redis_store.save_oauth_handoff(
+			handoff_code, user.id, state_data.redirect_to, config.oauth_handoff_ttl_seconds
+		)
+	except Exception as exc:
+		raise ServiceUnavailableError() from exc
+	_delete_oauth_state_cookie(response, config)
+	return OAuthCallbackResult(auth_mode="jwt", redirect_to=state_data.redirect_to, handoff_code=handoff_code)
+
+
+async def oauth_exchange(
+	code: str,
+	request: Request,
+	response: Response,
+	db: AsyncSession | None = None,
+	*,
+	settings: BackendSettings | None = None,
+	strategy: Any | None = None,
+) -> OAuthExchangeResponse:
+	config = settings or get_backend_settings()
+	if config.auth_mode != "jwt":
+		raise NotSupportedInModeError()
+	try:
+		handoff = await redis_store.consume_oauth_handoff(code)
+	except Exception as exc:
+		raise ServiceUnavailableError() from exc
+	if handoff is None:
+		raise OAuthHandoffInvalidError()
+	if db is None:
+		raise OAuthFailedError()
+	user = await user_repository.get_by_id(db, handoff.user_id)
+	if user is None or not user.is_active:
+		raise UserInactiveError()
+	auth_strategy = _auth_strategy(config, strategy)
+	login_result = await auth_strategy.login(user, request, response)
+	try:
+		await _record_oauth_login(db, user, request)
+	except Exception as exc:
+		try:
+			await _rollback_oauth_login(auth_strategy, user, login_result, response, config, clear_state_cookie=False)
+		except Exception as rollback_exc:
+			raise ServiceUnavailableError() from rollback_exc
+		raise ServiceUnavailableError() from exc
+	if login_result.access_token is None or login_result.expires_in is None:
+		raise OAuthFailedError()
+	return OAuthExchangeResponse(
+		access_token=login_result.access_token,
+		token_type="bearer",
+		expires_in=login_result.expires_in,
+		redirect_to=handoff.redirect_to,
+	)

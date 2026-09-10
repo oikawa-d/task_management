@@ -1,8 +1,10 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
+from app.auth.base import LoginResult
 from app.auth.session_auth import SessionAuthStrategy
 from app.core.config import BackendSettings
 from app.core.exceptions import NotSupportedInModeError
@@ -53,6 +55,7 @@ async def test_login_sets_http_only_session_and_readable_csrf_cookies(monkeypatc
 	assert result.refresh_token is None
 	assert result.csrf_token == "csrf-token"
 	assert result.expires_in == 30
+	assert result.session_id == "session-id"
 	assert any("cerberus_sid=session-id" in value and "HttpOnly" in value and "Secure" in value for value in cookies)
 	assert any("cerberus_csrf=csrf-token" in value and "HttpOnly" not in value for value in cookies)
 
@@ -115,6 +118,24 @@ async def test_logout_deletes_session_and_clears_cookies(monkeypatch: pytest.Mon
 
 async def _delete_session(session_id: str, user_id: object) -> None:
 	assert session_id == "session-id"
+
+
+@pytest.mark.asyncio
+async def test_rollback_login_deletes_session_and_clears_cookies(monkeypatch: pytest.MonkeyPatch) -> None:
+	delete_session = AsyncMock()
+	monkeypatch.setattr("app.auth.session_auth.redis_store.delete_session", delete_session)
+	strategy = SessionAuthStrategy(_settings())
+	response = Response()
+	strategy._set_cookies(response, "session-id", "csrf-token")
+	user = _user()
+	result = LoginResult("session", csrf_token="csrf-token", expires_in=30, session_id="session-id")
+
+	await strategy.rollback_login(user, result, response)
+
+	delete_session.assert_awaited_once_with("session-id", user.id)
+	assert len([header for key, header in response.raw_headers if key == b"set-cookie"]) == 4
+	deleted = [header for key, header in response.raw_headers if key == b"set-cookie"][2:]
+	assert all(b"Max-Age=0" in header for header in deleted)
 
 
 @pytest.mark.asyncio
