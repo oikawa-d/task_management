@@ -50,6 +50,7 @@
 | `0015_create_admin_functions.py` | admin用参照FN・更新SP |
 | `0016_update_task_notification_procedures.py` | task作成・更新SPへAPI計算のUTC日境界を追加し、当日期限通知を統合 |
 | `0017_add_login_history_column_comments.py` | `login_history`のテーブル・全カラムコメントを付与 |
+| `0018_align_login_history_column_comments.py` | #276で付与した`id`コメントを設計書の定義に合わせて削除 |
 
 **要検討**：上記のリビジョン分割・命名例（`0001_...` 等の連番接頭辞）は本詳細設計での具体化であり、基本設計に明記された正の構成ではない。実装時にAlembicの自動生成ハッシュIDとの整合をどう取るか（`down_revision` チェーンの実ファイル名）は実装担当の裁量とする。
 
