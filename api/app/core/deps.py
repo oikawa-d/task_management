@@ -1,4 +1,3 @@
-import secrets
 from urllib.parse import urlparse
 from uuid import UUID
 
@@ -9,6 +8,7 @@ from app.auth.base import AuthStrategy
 from app.auth.factory import get_auth_strategy
 from app.core.config import BackendSettings, get_backend_settings
 from app.core.exceptions import CsrfInvalidError, ForbiddenError, NotFoundError, UnauthenticatedError, UserInactiveError
+from app.core.security import csrf_tokens_match
 from app.db import get_db_session
 from app.models.project import Project
 from app.repository import project_repository, redis_store, user_repository
@@ -109,5 +109,5 @@ async def verify_csrf(
 		cookie_token = await redis_store.get_csrf_token(session_id)
 	else:
 		cookie_token = request.cookies.get(settings.cookie_name_csrf)
-	if cookie_token is None or not secrets.compare_digest(cookie_token, header):
+	if cookie_token is None or not csrf_tokens_match(cookie_token, header):
 		raise CsrfInvalidError()

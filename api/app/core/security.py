@@ -1,3 +1,4 @@
+import secrets
 from functools import lru_cache
 from typing import Any, cast
 
@@ -52,6 +53,11 @@ def needs_rehash(password_hash: str) -> bool:
 	return _build_password_context().needs_update(password_hash)
 
 
+def csrf_tokens_match(cookie_token: str, header_token: str) -> bool:
+	"""Double Submit CookieのCookie値とヘッダ値を定数時間比較する。"""
+	return secrets.compare_digest(cookie_token, header_token)
+
+
 _DUMMY_PASSWORD = "dummy-password-for-timing-attack-mitigation"
 
 
@@ -63,6 +69,7 @@ def get_dummy_password_hash() -> str:
 
 __all__ = [
 	"JwtDecodeError",
+	"csrf_tokens_match",
 	"decode_jwt",
 	"encode_jwt",
 	"get_dummy_password_hash",
