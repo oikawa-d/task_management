@@ -6,18 +6,16 @@
 - docs/detailed_design/api/users/03_put_users_me_password.md
 - docs/detailed_design/api/users/04_get_users_me_login_history.md
 
-パスワードのハッシュ化・検証はcore/security.py側の実装（#86/#87）に依存するため、
-本サービスは関数引数(verify_password/hash_password)としてのみ受け取り、
-argon2等の具体実装には一切依存しない。
+パスワードのハッシュ化・検証はcore/security.py側の共通実装（#86/#87）を利用する。
 """
 
-from collections.abc import Callable
 from datetime import date
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import InvalidCredentialsError, NotFoundError, ServiceUnavailableError, ValidationError
+from app.core.security import hash_password, verify_password
 from app.models.user import User
 from app.repository import login_history_repository, oauth_account_repository, redis_store, user_repository
 from app.schemas.auth import CurrentUser
@@ -29,9 +27,6 @@ from app.schemas.user import (
 	UserProfileResponse,
 	UserProfileUpdateRequest,
 )
-
-PasswordVerifier = Callable[[str, str], bool]
-PasswordHasher = Callable[[str], str]
 
 _PROFILE_FIELDS = ("last_name", "first_name", "last_name_kana", "first_name_kana", "birth_date")
 
@@ -147,9 +142,6 @@ async def change_password(
 	current_user: CurrentUser,
 	payload: PasswordChangeRequest,
 	db: AsyncSession,
-	*,
-	verify_password: PasswordVerifier,
-	hash_password: PasswordHasher,
 ) -> None:
 	user = await user_repository.get_by_id(db, current_user.id)
 	if user is None:
