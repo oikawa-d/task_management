@@ -62,7 +62,6 @@ CREATE TABLE login_history (
 );
 
 COMMENT ON TABLE login_history IS 'ログイン試行の監査ログ。Redis側のTTL失効とは独立して保持する';
-COMMENT ON COLUMN login_history.id IS 'ログイン試行を一意に識別するUUID';
 COMMENT ON COLUMN login_history.login_identifier IS '認証に使用した識別子。通常ログインはusername/email原文、Google OAuthは検証済みGoogle email。パスワード・OAuthのsub・トークンは記録しない';
 COMMENT ON COLUMN login_history.user_id IS '未登録ID/メール入力時はNULL';
 COMMENT ON COLUMN login_history.login_method IS 'ログイン方式。session / jwt / oauth_google';
