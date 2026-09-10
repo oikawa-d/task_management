@@ -102,6 +102,18 @@ class TooManyAttemptsError(AppError):
 	message = "試行回数が多いため、しばらく待ってから再度お試しください"
 
 
+class InvalidVerifyTokenError(AppError):
+	code = "INVALID_VERIFY_TOKEN"
+	status_code = 400
+	message = "認証リンクが無効か、有効期限が切れています"
+
+
+class InvalidResetTokenError(AppError):
+	code = "INVALID_RESET_TOKEN"
+	status_code = 400
+	message = "リセットリンクが無効か、有効期限が切れています"
+
+
 def _build_error_body(code: str, message: str, details: Any, request_id: str) -> dict[str, Any]:
 	return {
 		"error": {
