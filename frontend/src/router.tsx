@@ -45,19 +45,24 @@ export const appRoutes = [
 			},
 		],
 	},
-	// パスワード再設定・メール認証は認証状態に関わらず表示する公開画面のため、
-	// RequireGuest/RequireAuthのいずれのガードにも含めない（各設計書§1参照）。
 	{
-		path: ROUTES.PASSWORD_FORGOT,
-		element: <PasswordForgotPage />,
-	},
-	{
-		path: ROUTES.PASSWORD_RESET,
-		element: <PasswordResetPage />,
-	},
-	{
-		path: ROUTES.VERIFY_EMAIL,
-		element: <VerifyEmailPage />,
+		// パスワード再設定・メール認証は認証状態に関わらず表示する公開画面のため、
+		// RequireGuest/RequireAuthのいずれのガードにも含めず、AuthLayoutだけを適用する。
+		element: <AuthLayout />,
+		children: [
+			{
+				path: ROUTES.PASSWORD_FORGOT,
+				element: <PasswordForgotPage />,
+			},
+			{
+				path: ROUTES.PASSWORD_RESET,
+				element: <PasswordResetPage />,
+			},
+			{
+				path: ROUTES.VERIFY_EMAIL,
+				element: <VerifyEmailPage />,
+			},
+		],
 	},
 	{
 		element: <AppLayout />,
