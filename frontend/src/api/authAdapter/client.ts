@@ -10,6 +10,8 @@ export type AuthConfigResponse = {
 
 let authAdapter: AuthAdapter | null = null;
 let authConfigRequest: Promise<AuthAdapter> | null = null;
+/** setAuthAccessToken()がアダプタ未登録時に呼ばれた場合に保持する、登録後へ持ち越すトークン */
+let pendingAccessToken: string | null = null;
 
 function isAuthMode(value: unknown): value is AuthMode {
 	return value === "session" || value === "jwt";
@@ -36,6 +38,15 @@ function toFetchHeaders(headers: unknown): Headers {
 	return result;
 }
 
+/** 登録されたアダプタへ、持ち越し中のアクセストークンがあれば反映する */
+function applyPendingAccessToken(adapter: AuthAdapter): void {
+	if (pendingAccessToken === null) {
+		return;
+	}
+	adapter.onLoginSuccess({ access_token: pendingAccessToken });
+	pendingAccessToken = null;
+}
+
 /**
  * bootstrapAuth()が生成したアダプタを共有する。
  * これを呼ばないとjwtモードでトークンを持たない別インスタンスが使われ、
@@ -44,23 +55,38 @@ function toFetchHeaders(headers: unknown): Headers {
 export function setAuthAdapter(adapter: AuthAdapter): void {
 	authAdapter = adapter;
 	authConfigRequest = null;
+	applyPendingAccessToken(adapter);
 }
 
 /** bootstrap未実行時のフォールバックと単体テスト用に、auth_modeだけからアダプタを生成する */
 export function setAuthAdapterMode(mode: AuthMode, csrfCookieName?: string): void {
 	authAdapter = createAuthAdapter(mode, { csrfCookieName });
+	applyPendingAccessToken(authAdapter);
 }
 
-/** ログイン成功時と同様に、現在共有中のアダプタへアクセストークンを反映する（OAuthハンドオフ交換など） */
+/**
+ * ログイン成功時と同様に、現在共有中のアダプタへアクセストークンを反映する（OAuthハンドオフ交換など）。
+ * アダプタが未登録の場合はトークンを保持し、setAuthAdapter()/setAuthAdapterMode()での
+ * 登録時に反映する。tokenにnullを渡すと、登録済みアダプタのトークンをクリアする
+ * （未登録時は持ち越し中のトークンをクリアする）。
+ */
 export function setAuthAccessToken(token: string | null): void {
-	if (token && authAdapter) {
+	if (!authAdapter) {
+		pendingAccessToken = token;
+		return;
+	}
+	pendingAccessToken = null;
+	if (token) {
 		authAdapter.onLoginSuccess({ access_token: token });
+	} else {
+		authAdapter.onLogout();
 	}
 }
 
 export function clearAuthAdapter(): void {
 	authAdapter = null;
 	authConfigRequest = null;
+	pendingAccessToken = null;
 }
 
 export async function resolveAuthAdapter(

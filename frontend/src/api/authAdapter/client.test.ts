@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAuthAdapter } from "./index";
 import { CSRF_HEADER_NAME } from "./constants";
-import { clearAuthAdapter, fetchWithAuth, resolveAuthAdapter, setAuthAdapter } from "./client";
+import { clearAuthAdapter, fetchWithAuth, resolveAuthAdapter, setAuthAccessToken, setAuthAdapter } from "./client";
 
 function response(body: unknown, init: { ok: boolean; status: number }) {
 	return {
@@ -128,5 +128,71 @@ describe("fetchWithAuth", () => {
 		await fetchWithAuth("/api/projects", { method: "GET" }, "/api");
 		const [, requestInit] = fetchMock.mock.calls[1] as [string, RequestInit];
 		expect(new Headers(requestInit.headers).get("Authorization")).toBe("Bearer bootstrap-token");
+	});
+
+	it("アダプタ未登録時にsetAuthAccessTokenを呼んでも破棄されず、setAuthAdapterでの登録時に反映される", async () => {
+		// アダプタ未登録（OAuthハンドオフ交換がbootstrapAuth()完了より先に成功するケース）
+		setAuthAccessToken("oauth-token");
+
+		let accessToken: string | null = null;
+		const adapter = createAuthAdapter("jwt", {
+			tokenStore: {
+				getAccessToken: () => accessToken,
+				setAccessToken: (token) => {
+					accessToken = token;
+				},
+			},
+		});
+		setAuthAdapter(adapter);
+
+		const fetchMock = vi.fn().mockResolvedValue(response({ columns: {} }, { ok: true, status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await fetchWithAuth("/api/projects", { method: "GET" }, "/api");
+
+		const [, requestInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(new Headers(requestInit.headers).get("Authorization")).toBe("Bearer oauth-token");
+	});
+
+	it("setAuthAccessTokenにnullを渡すと登録済みアダプタのトークンをクリアする", async () => {
+		let accessToken: string | null = "existing-token";
+		const adapter = createAuthAdapter("jwt", {
+			tokenStore: {
+				getAccessToken: () => accessToken,
+				setAccessToken: (token) => {
+					accessToken = token;
+				},
+			},
+		});
+		setAuthAdapter(adapter);
+
+		setAuthAccessToken(null);
+		expect(accessToken).toBeNull();
+
+		const fetchMock = vi.fn().mockResolvedValue(response({ columns: {} }, { ok: true, status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await fetchWithAuth("/api/projects", { method: "GET" }, "/api");
+
+		const [, requestInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(new Headers(requestInit.headers).has("Authorization")).toBe(false);
+	});
+
+	it("アダプタ未登録時にnullを渡した場合は持ち越しトークンをクリアし、後続のアダプタ登録に影響しない", async () => {
+		setAuthAccessToken("stale-token");
+		setAuthAccessToken(null);
+
+		let accessToken: string | null = null;
+		const adapter = createAuthAdapter("jwt", {
+			tokenStore: {
+				getAccessToken: () => accessToken,
+				setAccessToken: (token) => {
+					accessToken = token;
+				},
+			},
+		});
+		setAuthAdapter(adapter);
+
+		expect(accessToken).toBeNull();
 	});
 });
