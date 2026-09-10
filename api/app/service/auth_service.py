@@ -19,6 +19,7 @@ from app.auth.factory import get_auth_strategy
 from app.auth.jwt_auth import JwtAuthStrategy
 from app.auth.oauth import GoogleOAuthProvider, GoogleUserInfo
 from app.auth.session_auth import SessionAuthStrategy
+from app.core.client_ip import ClientIpInfo, resolve_client_ip
 from app.core.config import BackendSettings, get_backend_settings
 from app.core.exceptions import (
 	InvalidResetTokenError,
@@ -191,20 +192,35 @@ def _auth_strategy(settings: BackendSettings, strategy: Any | None) -> Any:
 	return SessionAuthStrategy(settings) if settings.auth_mode == "session" else JwtAuthStrategy(settings)
 
 
-async def _check_oauth_rate_limit(request: Request, scope: str, settings: BackendSettings) -> None:
-	client_ip = request.client.host if request.client is not None else "unknown"
+async def _check_oauth_rate_limit(request: Request, scope: str, route: str, settings: BackendSettings) -> ClientIpInfo:
+	client_info = resolve_client_ip(request, settings.trusted_proxy_cidrs)
 	try:
 		count = await redis_store.check_rate_limit(
-			scope, client_ip, settings.rate_limit_oauth_max_requests, settings.rate_limit_oauth_window_seconds
+			scope,
+			client_info.client_ip,
+			settings.rate_limit_oauth_max_requests,
+			settings.rate_limit_oauth_window_seconds,
 		)
 	except Exception as exc:
 		raise ServiceUnavailableError() from exc
 	if count > settings.rate_limit_oauth_max_requests:
 		logger.warning(
 			"OAuth rate limit rejected",
-			extra={"operation": "rate_limit", "event": "rate_limit_rejected"},
+			extra={
+				"operation": "rate_limit",
+				"event": "rate_limit_rejected",
+				"route": route,
+				"scope": scope,
+				"limit": settings.rate_limit_oauth_max_requests,
+				"window": settings.rate_limit_oauth_window_seconds,
+				"client_ip": client_info.client_ip,
+				"proxy_peer_ip": client_info.proxy_peer_ip,
+				"ip_source": client_info.ip_source,
+				"request_id": _request_id(request),
+			},
 		)
 		raise TooManyAttemptsError()
+	return client_info
 
 
 async def oauth_start(
@@ -217,7 +233,7 @@ async def oauth_start(
 ) -> OAuthStartResult:
 	config = settings or get_backend_settings()
 	if isinstance(request, Request):
-		await _check_oauth_rate_limit(request, _OAUTH_RATE_LIMIT_SCOPE["start"], config)
+		await _check_oauth_rate_limit(request, _OAUTH_RATE_LIMIT_SCOPE["start"], "/api/auth/oauth/google", config)
 	if isinstance(request, Response) and response is None:
 		response = request
 	redirect = normalize_redirect_to(redirect_to, config)
@@ -285,14 +301,61 @@ async def resolve_or_create_user(
 	return await _resolve_or_create_user(db, GoogleUserInfo(sub, email, email_verified, given_name, family_name))
 
 
-async def _record_oauth_login(db: AsyncSession, user: User, request: Request) -> None:
-	client_ip = request.client.host if request.client is not None else None
+def _request_id(request: Request) -> str | None:
+	request_state = getattr(request, "state", None)
+	value = getattr(request_state, "request_id", None)
+	return value if isinstance(value, str) else None
+
+
+def _log_login_history_write_failed(request: Request, user: User, client_info: ClientIpInfo) -> None:
+	logger.warning(
+		"OAuth login history write failed",
+		extra={
+			"operation": "oauth_login",
+			"event": "login_history_write_failed",
+			"user_id": str(user.id),
+			"login_method": "oauth_google",
+			"client_ip": client_info.client_ip,
+			"proxy_peer_ip": client_info.proxy_peer_ip,
+			"ip_source": client_info.ip_source,
+			"request_id": _request_id(request),
+		},
+	)
+
+
+def _log_auth_state_revoke_failed(
+	request: Request,
+	user: User,
+	operation: str,
+	login_result: Any,
+	client_info: ClientIpInfo,
+) -> None:
+	logger.error(
+		"OAuth authentication state revoke failed",
+		extra={
+			"operation": operation,
+			"event": "auth_state_revoke_failed",
+			"user_id": str(user.id),
+			"deleted_session_count": 0 if getattr(login_result, "session_id", None) is None else 1,
+			"deleted_refresh_count": 0 if getattr(login_result, "refresh_token", None) is None else 1,
+			"client_ip": client_info.client_ip,
+			"proxy_peer_ip": client_info.proxy_peer_ip,
+			"ip_source": client_info.ip_source,
+			"request_id": _request_id(request),
+		},
+	)
+
+
+async def _record_oauth_login(
+	db: AsyncSession, user: User, request: Request, client_info: ClientIpInfo | None = None
+) -> None:
+	resolved_ip = client_info or resolve_client_ip(request, get_backend_settings().trusted_proxy_cidrs)
 	await login_history_repository.create(
 		db,
 		user_id=user.id,
 		login_identifier=user.email,
 		login_method="oauth_google",
-		ip_address=client_ip,
+		ip_address=resolved_ip.client_ip,
 		user_agent=request.headers.get("user-agent"),
 		success=True,
 		failure_reason=None,
@@ -308,12 +371,18 @@ async def _rollback_oauth_login(
 	settings: BackendSettings,
 	*,
 	clear_state_cookie: bool,
+	request: Request,
+	client_info: ClientIpInfo,
+	operation: str,
 ) -> None:
 	try:
 		rollback = getattr(strategy, "rollback_login", None)
 		if rollback is None:
 			raise RuntimeError("auth strategy does not support login rollback")
 		await rollback(user, login_result, response)
+	except Exception:
+		_log_auth_state_revoke_failed(request, user, operation, login_result, client_info)
+		raise
 	finally:
 		if clear_state_cookie:
 			_delete_oauth_state_cookie(response, settings)
@@ -332,7 +401,9 @@ async def oauth_callback(
 	strategy: Any | None = None,
 ) -> OAuthCallbackResult:
 	config = settings or get_backend_settings()
-	await _check_oauth_rate_limit(request, _OAUTH_RATE_LIMIT_SCOPE["callback"], config)
+	client_info = await _check_oauth_rate_limit(
+		request, _OAUTH_RATE_LIMIT_SCOPE["callback"], "/api/auth/oauth/google/callback", config
+	)
 	if not state or not state_cookie or not secrets.compare_digest(state, state_cookie):
 		raise InvalidStateError()
 	try:
@@ -356,11 +427,20 @@ async def oauth_callback(
 		auth_strategy = _auth_strategy(config, strategy)
 		login_result = await auth_strategy.login(user, request, response)
 		try:
-			await _record_oauth_login(db, user, request)
+			await _record_oauth_login(db, user, request, client_info)
 		except Exception as exc:
+			_log_login_history_write_failed(request, user, client_info)
 			try:
 				await _rollback_oauth_login(
-					auth_strategy, user, login_result, response, config, clear_state_cookie=True
+					auth_strategy,
+					user,
+					login_result,
+					response,
+					config,
+					clear_state_cookie=True,
+					request=request,
+					client_info=client_info,
+					operation="oauth_callback_session",
 				)
 			except Exception as rollback_exc:
 				raise ServiceUnavailableError() from rollback_exc
@@ -389,7 +469,9 @@ async def oauth_exchange(
 	strategy: Any | None = None,
 ) -> OAuthExchangeResponse:
 	config = settings or get_backend_settings()
-	await _check_oauth_rate_limit(request, _OAUTH_RATE_LIMIT_SCOPE["exchange"], config)
+	client_info = await _check_oauth_rate_limit(
+		request, _OAUTH_RATE_LIMIT_SCOPE["exchange"], "/api/auth/oauth/exchange", config
+	)
 	if config.auth_mode != "jwt":
 		raise NotSupportedInModeError()
 	try:
@@ -405,16 +487,41 @@ async def oauth_exchange(
 		raise UserInactiveError()
 	auth_strategy = _auth_strategy(config, strategy)
 	login_result = await auth_strategy.login(user, request, response)
-	try:
-		await _record_oauth_login(db, user, request)
-	except Exception as exc:
+	if login_result.access_token is None or login_result.expires_in is None:
 		try:
-			await _rollback_oauth_login(auth_strategy, user, login_result, response, config, clear_state_cookie=False)
+			await _rollback_oauth_login(
+				auth_strategy,
+				user,
+				login_result,
+				response,
+				config,
+				clear_state_cookie=False,
+				request=request,
+				client_info=client_info,
+				operation="oauth_exchange_invalid_login_result",
+			)
+		except Exception as rollback_exc:
+			raise ServiceUnavailableError() from rollback_exc
+		raise OAuthFailedError()
+	try:
+		await _record_oauth_login(db, user, request, client_info)
+	except Exception as exc:
+		_log_login_history_write_failed(request, user, client_info)
+		try:
+			await _rollback_oauth_login(
+				auth_strategy,
+				user,
+				login_result,
+				response,
+				config,
+				clear_state_cookie=False,
+				request=request,
+				client_info=client_info,
+				operation="oauth_exchange_login_history",
+			)
 		except Exception as rollback_exc:
 			raise ServiceUnavailableError() from rollback_exc
 		raise ServiceUnavailableError() from exc
-	if login_result.access_token is None or login_result.expires_in is None:
-		raise OAuthFailedError()
 	return OAuthExchangeResponse(
 		access_token=login_result.access_token,
 		token_type="bearer",

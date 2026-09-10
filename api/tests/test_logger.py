@@ -55,6 +55,18 @@ def test_json_formatter_includes_safe_oauth_fields_only() -> None:
 	)
 	record.operation = "token_exchange"
 	record.event = "oauth_failure"
+	record.route = "/api/auth/oauth/google/callback"
+	record.scope = "oauth_callback"
+	record.limit = 10
+	record.window = 900
+	record.client_ip = "198.51.100.4"
+	record.proxy_peer_ip = "10.0.0.1"
+	record.ip_source = "trusted_xff"
+	record.request_id = "request-123"
+	record.user_id = "user-123"
+	record.login_method = "oauth_google"
+	record.deleted_session_count = 1
+	record.deleted_refresh_count = 0
 	record.code = "secret-code"
 	record.email = "alice@example.com"
 
@@ -62,6 +74,9 @@ def test_json_formatter_includes_safe_oauth_fields_only() -> None:
 
 	assert output["operation"] == "token_exchange"
 	assert output["event"] == "oauth_failure"
+	assert output["route"] == "/api/auth/oauth/google/callback"
+	assert output["client_ip"] == "198.51.100.4"
+	assert output["deleted_session_count"] == 1
 	assert "code" not in output
 	assert "email" not in output
 

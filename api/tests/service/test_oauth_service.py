@@ -45,8 +45,9 @@ def _settings(**overrides: object) -> BackendSettings:
 	return BackendSettings(_env_file=None, **values)
 
 
-def _request() -> Request:
-	return Request({"type": "http", "method": "GET", "path": "/", "headers": [], "client": ("127.0.0.1", 1)})
+def _request(peer: str = "127.0.0.1", forwarded: str | None = None) -> Request:
+	headers = [] if forwarded is None else [(b"x-forwarded-for", forwarded.encode())]
+	return Request({"type": "http", "method": "GET", "path": "/", "headers": headers, "client": (peer, 1)})
 
 
 @pytest.fixture(autouse=True)
@@ -85,7 +86,10 @@ def _signed_id_token(
 	nonce: str,
 	*,
 	audience: str | list[str] | None = None,
-	azp: str | None = None,
+	azp: object | None = None,
+	issuer: str = "https://accounts.google.com",
+	expires_in: int = 60,
+	header_kid: str = "key-1",
 ) -> tuple[str, dict[str, object]]:
 	private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 	public_jwk = json.loads(RSAAlgorithm.to_jwk(private_key.public_key()))
@@ -94,9 +98,9 @@ def _signed_id_token(
 		"sub": "google-sub",
 		"email": "alice@example.com",
 		"email_verified": True,
-		"iss": "https://accounts.google.com",
+		"iss": issuer,
 		"aud": settings.google_client_id if audience is None else audience,
-		"exp": int(time.time()) + 60,
+		"exp": int(time.time()) + expires_in,
 		"nonce": nonce,
 	}
 	if azp is not None:
@@ -105,7 +109,7 @@ def _signed_id_token(
 		claims,
 		private_key,
 		algorithm="RS256",
-		headers={"kid": "key-1"},
+		headers={"kid": header_kid},
 	)
 	return token, {"keys": [public_jwk]}
 
@@ -248,6 +252,27 @@ async def test_provider_rejects_multiple_audience_with_wrong_azp() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("audience", ["client-id", ["client-id"]])
+async def test_provider_rejects_single_audience_with_wrong_azp(audience: str | list[str]) -> None:
+	settings = _settings()
+	token, jwks = _signed_id_token(settings, "nonce", audience=audience, azp="other-client")
+	provider = GoogleOAuthProvider(settings, _OAuthHttpClient({}, {}, jwks))
+
+	with pytest.raises(OAuthFailedError):
+		await provider.verify_id_token(token, "nonce")
+
+
+@pytest.mark.asyncio
+async def test_provider_rejects_invalid_azp_type() -> None:
+	settings = _settings()
+	token, jwks = _signed_id_token(settings, "nonce", azp=123)
+	provider = GoogleOAuthProvider(settings, _OAuthHttpClient({}, {}, jwks))
+
+	with pytest.raises(OAuthFailedError):
+		await provider.verify_id_token(token, "nonce")
+
+
+@pytest.mark.asyncio
 async def test_provider_accepts_multiple_audience_with_matching_azp() -> None:
 	settings = _settings(google_jwks_uri="https://jwks.example.test/certs/matching")
 	token, jwks = _signed_id_token(
@@ -261,6 +286,24 @@ async def test_provider_accepts_multiple_audience_with_matching_azp() -> None:
 	claims = await provider.verify_id_token(token, "nonce")
 
 	assert claims.sub == "google-sub"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+	("issuer", "expires_in", "header_kid"),
+	[
+		("https://accounts.example.com", 60, "key-1"),
+		("https://accounts.google.com", -1, "key-1"),
+		("https://accounts.google.com", 60, "unknown-key"),
+	],
+)
+async def test_provider_rejects_invalid_issuer_exp_or_kid(issuer: str, expires_in: int, header_kid: str) -> None:
+	settings = _settings(google_jwks_uri=f"https://jwks.example.test/{uuid4()}")
+	token, jwks = _signed_id_token(settings, "nonce", issuer=issuer, expires_in=expires_in, header_kid=header_kid)
+	provider = GoogleOAuthProvider(settings, _OAuthHttpClient({}, {}, jwks))
+
+	with pytest.raises(OAuthFailedError):
+		await provider.verify_id_token(token, "nonce")
 
 
 @pytest.mark.asyncio
@@ -336,6 +379,33 @@ async def test_oauth_rate_limit_redis_failure_returns_service_unavailable(
 			await auth_service.oauth_callback("code", "state", "state", _request(), Response(), settings=settings)
 		else:
 			await auth_service.oauth_exchange("code", _request(), Response(), settings=settings)
+
+
+@pytest.mark.asyncio
+async def test_oauth_rate_limit_log_contains_audit_fields(
+	caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+	settings = _settings(auth_mode="jwt", trusted_proxy_cidrs=["10.0.0.0/8"])
+	request = _request("10.0.0.1", "198.51.100.4, 10.0.0.2")
+	request.state.request_id = "request-123"
+	monkeypatch.setattr(
+		auth_service.redis_store,
+		"check_rate_limit",
+		AsyncMock(return_value=settings.rate_limit_oauth_max_requests + 1),
+	)
+
+	with caplog.at_level("WARNING", logger="app.oauth"), pytest.raises(TooManyAttemptsError):
+		await auth_service.oauth_callback("code", "state", "state", request, Response(), settings=settings)
+
+	record = next(record for record in caplog.records if record.event == "rate_limit_rejected")
+	assert record.route == "/api/auth/oauth/google/callback"
+	assert record.scope == "oauth_callback"
+	assert record.limit == settings.rate_limit_oauth_max_requests
+	assert record.window == settings.rate_limit_oauth_window_seconds
+	assert record.client_ip == "198.51.100.4"
+	assert record.proxy_peer_ip == "10.0.0.1"
+	assert record.ip_source == "trusted_xff"
+	assert record.request_id == "request-123"
 
 
 @pytest.mark.asyncio
@@ -435,7 +505,9 @@ async def test_oauth_callback_rejects_inactive_resolved_user(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
-async def test_oauth_callback_rolls_back_login_when_history_recording_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_oauth_callback_rolls_back_login_when_history_recording_fails(
+	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
 	user = SimpleNamespace(id=uuid4(), email="alice@example.com", is_active=True)
 	provider = SimpleNamespace(
 		exchange_code=AsyncMock(return_value=OAuthTokenResponse("id", "access")),
@@ -457,13 +529,15 @@ async def test_oauth_callback_rolls_back_login_when_history_recording_fails(monk
 	login = AsyncMock(return_value=login_result)
 	rollback = AsyncMock()
 	response = Response()
+	request = _request()
+	request.state.request_id = "request-123"
 
-	with pytest.raises(ServiceUnavailableError):
+	with caplog.at_level("WARNING", logger="app.oauth"), pytest.raises(ServiceUnavailableError):
 		await auth_service.oauth_callback(
 			"code",
 			"state",
 			"state",
-			_request(),
+			request,
 			response,
 			db=SimpleNamespace(commit=AsyncMock()),
 			settings=_settings(auth_mode="session"),
@@ -472,6 +546,61 @@ async def test_oauth_callback_rolls_back_login_when_history_recording_fails(monk
 		)
 	rollback.assert_awaited_once_with(user, login_result, response)
 	assert any(b"cerberus_oauth_state=" in value and b"Max-Age=0" in value for key, value in response.raw_headers)
+	record = next(record for record in caplog.records if record.event == "login_history_write_failed")
+	assert record.user_id == str(user.id)
+	assert record.login_method == "oauth_google"
+	assert record.client_ip == "127.0.0.1"
+	assert record.request_id == "request-123"
+	assert "history unavailable" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_logs_rollback_failure_without_sensitive_values(
+	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+	user = SimpleNamespace(id=uuid4(), email="alice@example.com", is_active=True)
+	provider = SimpleNamespace(
+		exchange_code=AsyncMock(return_value=OAuthTokenResponse("id", "access")),
+		verify_id_token=AsyncMock(return_value=IdTokenClaims("sub", user.email, True, None, None)),
+		fetch_userinfo=AsyncMock(return_value=GoogleUserInfo("sub", user.email, True)),
+	)
+	monkeypatch.setattr(
+		auth_service.redis_store,
+		"consume_oauth_state",
+		AsyncMock(return_value=OAuthStateData("/dashboard", "verifier", "nonce", None)),
+	)
+	monkeypatch.setattr(auth_service, "_resolve_or_create_user", AsyncMock(return_value=user))
+	monkeypatch.setattr(
+		auth_service.login_history_repository,
+		"create",
+		AsyncMock(side_effect=RuntimeError("history secret")),
+	)
+	login_result = LoginResult("session", csrf_token="csrf", expires_in=900, session_id="session-id")
+	login = AsyncMock(return_value=login_result)
+	rollback = AsyncMock(side_effect=RuntimeError("revoke secret"))
+	request = _request()
+	response = Response()
+
+	with caplog.at_level("ERROR", logger="app.oauth"), pytest.raises(ServiceUnavailableError):
+		await auth_service.oauth_callback(
+			"code",
+			"state",
+			"state",
+			request,
+			response,
+			db=SimpleNamespace(commit=AsyncMock()),
+			settings=_settings(auth_mode="session"),
+			provider=provider,
+			strategy=SimpleNamespace(mode="session", login=login, rollback_login=rollback),
+		)
+
+	record = next(record for record in caplog.records if record.event == "auth_state_revoke_failed")
+	assert record.user_id == str(user.id)
+	assert record.operation == "oauth_callback_session"
+	assert record.deleted_session_count == 1
+	assert record.deleted_refresh_count == 0
+	assert "history secret" not in caplog.text
+	assert "revoke secret" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -678,6 +807,34 @@ async def test_oauth_exchange_returns_token_and_records_login_history(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_oauth_login_history_uses_resolved_client_ip(monkeypatch: pytest.MonkeyPatch) -> None:
+	user_id = uuid4()
+	user = SimpleNamespace(id=user_id, email="alice@example.com", is_active=True)
+	settings = _settings(auth_mode="jwt", trusted_proxy_cidrs=["10.0.0.0/8"])
+	request = _request("10.0.0.1", "198.51.100.4, 10.0.0.2")
+	monkeypatch.setattr(
+		auth_service.redis_store,
+		"consume_oauth_handoff",
+		AsyncMock(return_value=OAuthHandoffData(user_id, "/dashboard", None)),
+	)
+	monkeypatch.setattr(auth_service.user_repository, "get_by_id", AsyncMock(return_value=user))
+	monkeypatch.setattr(
+		auth_service,
+		"get_auth_strategy",
+		lambda: SimpleNamespace(
+			mode="jwt", login=AsyncMock(return_value=SimpleNamespace(access_token="access", expires_in=900))
+		),
+	)
+	login_history = AsyncMock()
+	monkeypatch.setattr(auth_service.login_history_repository, "create", login_history)
+	db = SimpleNamespace(commit=AsyncMock())
+
+	await auth_service.oauth_exchange("code", request, Response(), db=db, settings=settings)
+
+	assert login_history.await_args.kwargs["ip_address"] == "198.51.100.4"
+
+
+@pytest.mark.asyncio
 async def test_oauth_exchange_rolls_back_login_when_history_recording_fails(monkeypatch: pytest.MonkeyPatch) -> None:
 	user_id = uuid4()
 	user = SimpleNamespace(id=user_id, email="alice@example.com", is_active=True)
@@ -707,3 +864,34 @@ async def test_oauth_exchange_rolls_back_login_when_history_recording_fails(monk
 			strategy=SimpleNamespace(mode="jwt", login=login, rollback_login=rollback),
 		)
 	rollback.assert_awaited_once_with(user, login_result, response)
+
+
+@pytest.mark.asyncio
+async def test_oauth_exchange_rolls_back_when_login_result_is_incomplete(monkeypatch: pytest.MonkeyPatch) -> None:
+	user_id = uuid4()
+	user = SimpleNamespace(id=user_id, email="alice@example.com", is_active=True)
+	monkeypatch.setattr(
+		auth_service.redis_store,
+		"consume_oauth_handoff",
+		AsyncMock(return_value=OAuthHandoffData(user_id, "/dashboard", None)),
+	)
+	monkeypatch.setattr(auth_service.user_repository, "get_by_id", AsyncMock(return_value=user))
+	login_result = LoginResult("jwt", access_token=None, refresh_token="refresh", expires_in=900)
+	login = AsyncMock(return_value=login_result)
+	rollback = AsyncMock()
+	login_history = AsyncMock()
+	monkeypatch.setattr(auth_service.login_history_repository, "create", login_history)
+	response = Response()
+
+	with pytest.raises(OAuthFailedError):
+		await auth_service.oauth_exchange(
+			"code",
+			_request(),
+			response,
+			db=SimpleNamespace(commit=AsyncMock()),
+			settings=_settings(auth_mode="jwt"),
+			strategy=SimpleNamespace(mode="jwt", login=login, rollback_login=rollback),
+		)
+
+	rollback.assert_awaited_once_with(user, login_result, response)
+	login_history.assert_not_awaited()

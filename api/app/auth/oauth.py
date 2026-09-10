@@ -222,12 +222,17 @@ def _validate_audience(claims: dict[str, Any], client_id: str) -> None:
 	if isinstance(audience, str):
 		if audience != client_id:
 			raise ValueError("unexpected audience")
-		return
-	if not isinstance(audience, list) or not all(isinstance(value, str) for value in audience):
+	elif isinstance(audience, list):
+		if not audience or not all(isinstance(value, str) for value in audience):
+			raise ValueError("invalid audience")
+		if client_id not in audience:
+			raise ValueError("unexpected audience")
+	else:
 		raise ValueError("invalid audience")
-	if client_id not in audience:
-		raise ValueError("unexpected audience")
-	if len(audience) > 1 and claims.get("azp") != client_id:
+	azp = claims.get("azp")
+	if azp is not None and (not isinstance(azp, str) or azp != client_id):
+		raise ValueError("unexpected authorized party")
+	if isinstance(audience, list) and len(audience) > 1 and azp != client_id:
 		raise ValueError("unexpected authorized party")
 
 
