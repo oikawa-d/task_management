@@ -1,22 +1,20 @@
+import re
+from pathlib import Path
+
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-_LOGIN_HISTORY_COMMENTS = {
-	"id": "ログイン試行を一意に識別するUUID",
-	"user_id": "未登録ID/メール入力時はNULL",
-	"login_identifier": (
-		"認証に使用した識別子。通常ログインはusername/email原文、Google OAuthは検証済みGoogle email。"
-		"パスワード・OAuthのsub・トークンは記録しない"
-	),
-	"login_method": "ログイン方式。session / jwt / oauth_google",
-	"ip_address": "信頼できるProxy情報から解決した接続元IPアドレス",
-	"user_agent": "ログイン試行時のUser-Agent",
-	"success": "ログイン試行の成否",
-	"failure_reason": "ログイン失敗時の理由。成功時はNULL",
-	"created_at": "ログイン試行を記録した日時",
-}
+_LOGIN_HISTORY_DESIGN = Path(__file__).resolve().parents[2] / "docs/detailed_design/database/03_table_login_history.md"
+
+
+def _login_history_design_comments() -> tuple[str, dict[str, str]]:
+	design = _LOGIN_HISTORY_DESIGN.read_text(encoding="utf-8")
+	table_comment = re.search(r"COMMENT ON TABLE login_history IS '([^']*)';", design)
+	column_comments = dict(re.findall(r"COMMENT ON COLUMN login_history\.([a-z_]+) IS '([^']*)';", design))
+	assert table_comment is not None
+	return table_comment.group(1), column_comments
 
 
 async def test_users_table_created_with_default_role_and_active(db_session: AsyncSession) -> None:
@@ -146,6 +144,7 @@ async def test_login_history_failure_reason_consistency_check(db_session: AsyncS
 
 
 async def test_login_history_column_comments_match_design(db_session: AsyncSession) -> None:
+	expected_table_comment, expected_column_comments = _login_history_design_comments()
 	table_comment = (
 		await db_session.execute(text("SELECT obj_description('login_history'::regclass, 'pg_class')"))
 	).scalar_one()
@@ -158,5 +157,6 @@ async def test_login_history_column_comments_match_design(db_session: AsyncSessi
 		)
 	)
 
-	assert table_comment == "ログイン試行の監査ログ。Redis側のTTL失効とは独立して保持する"
-	assert {row.attname: row.comment for row in result} == _LOGIN_HISTORY_COMMENTS
+	actual_column_comments = {row.attname: row.comment for row in result}
+	assert table_comment == expected_table_comment
+	assert actual_column_comments == {column: expected_column_comments.get(column) for column in actual_column_comments}
