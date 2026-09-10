@@ -174,6 +174,7 @@ flowchart TB
 | `OAUTH_STATE_TTL_SECONDS` | `600` | state のTTL |
 | `OAUTH_HANDOFF_TTL_SECONDS` | `60` | jwtモードのOAuth一時コードTTL |
 | `OAUTH_DEFAULT_REDIRECT_TO` | `/dashboard` | OAuth完了後の既定遷移先 |
+| `OAUTH_REDIRECT_TO_MAX_LENGTH` | `2048` | OAuth `redirect_to` の最大文字数 |
 | `FRONTEND_BASE_URL` | `http://localhost:5173` | メール内リンク・OAuth後のリダイレクト先 |
 | `SMTP_HOST` / `SMTP_PORT` | `mailpit` / `1025` | 開発は Mailpit |
 | `SMTP_USER` / `SMTP_PASSWORD` | 空 | 本番SMTP利用時のみ（**Secret**） |

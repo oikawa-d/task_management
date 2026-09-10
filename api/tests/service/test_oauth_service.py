@@ -18,6 +18,7 @@ from app.core.exceptions import (
 	OAuthFailedError,
 	OAuthHandoffInvalidError,
 	ServiceUnavailableError,
+	TooManyAttemptsError,
 	UserInactiveError,
 )
 from app.repository.redis_store_common import OAuthHandoffData, OAuthStateData
@@ -46,6 +47,11 @@ def _settings(**overrides: object) -> BackendSettings:
 
 def _request() -> Request:
 	return Request({"type": "http", "method": "GET", "path": "/", "headers": [], "client": ("127.0.0.1", 1)})
+
+
+@pytest.fixture(autouse=True)
+def _oauth_rate_limit_success(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setattr(auth_service.redis_store, "check_rate_limit", AsyncMock(return_value=1))
 
 
 class _HttpResponse:
@@ -112,6 +118,10 @@ def test_normalize_redirect_to_rejects_external_and_protocol_relative_urls() -> 
 	assert auth_service.normalize_redirect_to("//evil.example", settings) == "/dashboard"
 	assert auth_service.normalize_redirect_to(r"/\evil.example", settings) == "/dashboard"
 	assert auth_service.normalize_redirect_to("/projects/1\nnext", settings) == "/dashboard"
+	accepted = "/" + "a" * (settings.oauth_redirect_to_max_length - 1)
+	too_long = "/" + "a" * settings.oauth_redirect_to_max_length
+	assert auth_service.normalize_redirect_to(accepted, settings) == accepted
+	assert auth_service.normalize_redirect_to(too_long, settings) == "/dashboard"
 
 
 def test_build_authorize_url_contains_contract_parameters() -> None:
@@ -157,7 +167,7 @@ async def test_provider_logs_token_exchange_failure_without_sensitive_values(cap
 	with caplog.at_level("WARNING", logger="app.oauth"), pytest.raises(OAuthFailedError):
 		await provider.exchange_code("secret-code", "secret-verifier")
 
-	assert any(record.operation == "token_exchange" for record in caplog.records)
+	assert any(record.operation == "token_exchange" and record.event == "oauth_failure" for record in caplog.records)
 	assert "secret-code" not in caplog.text
 	assert "secret-verifier" not in caplog.text
 
@@ -170,7 +180,7 @@ async def test_provider_logs_userinfo_failure_without_sensitive_values(caplog: p
 	with caplog.at_level("WARNING", logger="app.oauth"), pytest.raises(OAuthFailedError):
 		await provider.fetch_userinfo("secret-access-token")
 
-	assert any(record.operation == "userinfo" for record in caplog.records)
+	assert any(record.operation == "userinfo" and record.event == "oauth_failure" for record in caplog.records)
 	assert "secret-access-token" not in caplog.text
 
 
@@ -196,7 +206,7 @@ async def test_provider_logs_id_token_verification_failure_without_sensitive_val
 	with caplog.at_level("WARNING", logger="app.oauth"), pytest.raises(OAuthFailedError):
 		await provider.verify_id_token(token, "wrong")
 
-	assert any(record.operation == "id_token_verify" for record in caplog.records)
+	assert any(record.operation == "id_token_verify" and record.event == "oauth_failure" for record in caplog.records)
 	assert token not in caplog.text
 
 
@@ -209,7 +219,7 @@ async def test_provider_logs_jwks_failure_without_sensitive_values(caplog: pytes
 	with caplog.at_level("WARNING", logger="app.oauth"), pytest.raises(OAuthFailedError):
 		await provider._get_jwks()
 
-	assert any(record.operation == "jwks" for record in caplog.records)
+	assert any(record.operation == "jwks" and record.event == "oauth_failure" for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -276,6 +286,56 @@ async def test_oauth_start_saves_state_and_pkce_cookie(monkeypatch: pytest.Monke
 		for key, value in response.raw_headers
 		if key == b"set-cookie"
 	)
+
+
+@pytest.mark.asyncio
+async def test_oauth_start_applies_rate_limit_to_request_ip(monkeypatch: pytest.MonkeyPatch) -> None:
+	settings = _settings()
+	check_rate_limit = AsyncMock(return_value=1)
+	monkeypatch.setattr(auth_service.redis_store, "check_rate_limit", check_rate_limit)
+	monkeypatch.setattr(auth_service.redis_store, "save_oauth_state", AsyncMock())
+
+	await auth_service.oauth_start("/dashboard", request=_request(), response=Response(), settings=settings)
+
+	check_rate_limit.assert_awaited_once_with(
+		"oauth_start", "127.0.0.1", settings.rate_limit_oauth_max_requests, settings.rate_limit_oauth_window_seconds
+	)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["start", "callback", "exchange"])
+async def test_oauth_rate_limit_rejects_excess_requests(operation: str, monkeypatch: pytest.MonkeyPatch) -> None:
+	settings = _settings(auth_mode="jwt")
+	monkeypatch.setattr(
+		auth_service.redis_store, "check_rate_limit", AsyncMock(return_value=settings.rate_limit_oauth_max_requests + 1)
+	)
+
+	with pytest.raises(TooManyAttemptsError):
+		if operation == "start":
+			await auth_service.oauth_start("/dashboard", request=_request(), response=Response(), settings=settings)
+		elif operation == "callback":
+			await auth_service.oauth_callback("code", "state", "state", _request(), Response(), settings=settings)
+		else:
+			await auth_service.oauth_exchange("code", _request(), Response(), settings=settings)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["start", "callback", "exchange"])
+async def test_oauth_rate_limit_redis_failure_returns_service_unavailable(
+	operation: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+	settings = _settings(auth_mode="jwt")
+	monkeypatch.setattr(
+		auth_service.redis_store, "check_rate_limit", AsyncMock(side_effect=RuntimeError("redis unavailable"))
+	)
+
+	with pytest.raises(ServiceUnavailableError):
+		if operation == "start":
+			await auth_service.oauth_start("/dashboard", request=_request(), response=Response(), settings=settings)
+		elif operation == "callback":
+			await auth_service.oauth_callback("code", "state", "state", _request(), Response(), settings=settings)
+		else:
+			await auth_service.oauth_exchange("code", _request(), Response(), settings=settings)
 
 
 @pytest.mark.asyncio

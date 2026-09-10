@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import secrets
 from typing import Any
 from urllib.parse import urlsplit
@@ -39,6 +40,12 @@ from app.service import mail_service
 
 # トークン長は設計上固定値だが、桁数変更の余地を残すため1箇所にまとめる（06_token_mail.md §3）。
 _TOKEN_URLSAFE_BYTES = 32
+logger = logging.getLogger("app.oauth")
+_OAUTH_RATE_LIMIT_SCOPE = {
+	"start": "oauth_start",
+	"callback": "oauth_callback",
+	"exchange": "oauth_exchange",
+}
 
 
 async def ensure_login_not_rate_limited(identifier: str, client_ip: str, settings: BackendSettings) -> None:
@@ -142,6 +149,7 @@ def normalize_redirect_to(raw: str | None, settings: BackendSettings | None = No
 		or raw.startswith("//")
 		or parsed.scheme
 		or parsed.netloc
+		or len(raw) > config.oauth_redirect_to_max_length
 		or "\\" in raw
 		or any(ord(char) < 0x20 or ord(char) == 0x7F for char in raw)
 	):
@@ -183,6 +191,22 @@ def _auth_strategy(settings: BackendSettings, strategy: Any | None) -> Any:
 	return SessionAuthStrategy(settings) if settings.auth_mode == "session" else JwtAuthStrategy(settings)
 
 
+async def _check_oauth_rate_limit(request: Request, scope: str, settings: BackendSettings) -> None:
+	client_ip = request.client.host if request.client is not None else "unknown"
+	try:
+		count = await redis_store.check_rate_limit(
+			scope, client_ip, settings.rate_limit_oauth_max_requests, settings.rate_limit_oauth_window_seconds
+		)
+	except Exception as exc:
+		raise ServiceUnavailableError() from exc
+	if count > settings.rate_limit_oauth_max_requests:
+		logger.warning(
+			"OAuth rate limit rejected",
+			extra={"operation": "rate_limit", "event": "rate_limit_rejected"},
+		)
+		raise TooManyAttemptsError()
+
+
 async def oauth_start(
 	redirect_to: str | None,
 	request: Request | Response | None = None,
@@ -192,6 +216,8 @@ async def oauth_start(
 	provider: GoogleOAuthProvider | None = None,
 ) -> OAuthStartResult:
 	config = settings or get_backend_settings()
+	if isinstance(request, Request):
+		await _check_oauth_rate_limit(request, _OAUTH_RATE_LIMIT_SCOPE["start"], config)
 	if isinstance(request, Response) and response is None:
 		response = request
 	redirect = normalize_redirect_to(redirect_to, config)
@@ -306,6 +332,7 @@ async def oauth_callback(
 	strategy: Any | None = None,
 ) -> OAuthCallbackResult:
 	config = settings or get_backend_settings()
+	await _check_oauth_rate_limit(request, _OAUTH_RATE_LIMIT_SCOPE["callback"], config)
 	if not state or not state_cookie or not secrets.compare_digest(state, state_cookie):
 		raise InvalidStateError()
 	try:
@@ -362,6 +389,7 @@ async def oauth_exchange(
 	strategy: Any | None = None,
 ) -> OAuthExchangeResponse:
 	config = settings or get_backend_settings()
+	await _check_oauth_rate_limit(request, _OAUTH_RATE_LIMIT_SCOPE["exchange"], config)
 	if config.auth_mode != "jwt":
 		raise NotSupportedInModeError()
 	try:

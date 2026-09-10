@@ -18,6 +18,10 @@ class JsonFormatter(logging.Formatter):
 		request_id = getattr(record, "request_id", None)
 		if request_id is not None:
 			payload["request_id"] = request_id
+		for field in ("operation", "event"):
+			value = getattr(record, field, None)
+			if isinstance(value, str):
+				payload[field] = value
 		return json.dumps(payload, ensure_ascii=False)
 
 

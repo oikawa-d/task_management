@@ -42,6 +42,30 @@ def test_json_formatter_includes_request_id_when_present() -> None:
 	assert output["request_id"] == "req-123"
 
 
+def test_json_formatter_includes_safe_oauth_fields_only() -> None:
+	formatter = JsonFormatter()
+	record = logging.LogRecord(
+		name="app.oauth",
+		level=logging.WARNING,
+		pathname=__file__,
+		lineno=1,
+		msg="OAuth operation failed",
+		args=(),
+		exc_info=None,
+	)
+	record.operation = "token_exchange"
+	record.event = "oauth_failure"
+	record.code = "secret-code"
+	record.email = "alice@example.com"
+
+	output = json.loads(formatter.format(record))
+
+	assert output["operation"] == "token_exchange"
+	assert output["event"] == "oauth_failure"
+	assert "code" not in output
+	assert "email" not in output
+
+
 def test_configure_logging_sets_level_and_json_handler() -> None:
 	configure_logging("WARNING")
 

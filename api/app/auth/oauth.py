@@ -19,6 +19,13 @@ _GOOGLE_SCOPE = "openid email profile"
 logger = logging.getLogger("app.oauth")
 
 
+def _log_oauth_failure(operation: str) -> None:
+	logger.warning(
+		"OAuth operation failed",
+		extra={"operation": operation, "event": "oauth_failure"},
+	)
+
+
 @dataclass(frozen=True)
 class OAuthTokenResponse:
 	id_token: str
@@ -97,10 +104,10 @@ class GoogleOAuthProvider:
 			body = response.json()
 			return OAuthTokenResponse(_required_string(body, "id_token"), _required_string(body, "access_token"))
 		except OAuthFailedError:
-			logger.warning("OAuth token exchange failed", extra={"operation": "token_exchange"})
+			_log_oauth_failure("token_exchange")
 			raise
 		except Exception as exc:
-			logger.warning("OAuth token exchange failed", extra={"operation": "token_exchange"})
+			_log_oauth_failure("token_exchange")
 			raise OAuthFailedError() from exc
 
 	async def fetch_userinfo(self, access_token: str) -> GoogleUserInfo:
@@ -123,10 +130,10 @@ class GoogleOAuthProvider:
 				_optional_string(body, "family_name"),
 			)
 		except OAuthFailedError:
-			logger.warning("OAuth userinfo request failed", extra={"operation": "userinfo"})
+			_log_oauth_failure("userinfo")
 			raise
 		except Exception as exc:
-			logger.warning("OAuth userinfo request failed", extra={"operation": "userinfo"})
+			_log_oauth_failure("userinfo")
 			raise OAuthFailedError() from exc
 
 	async def verify_id_token(self, id_token: str, expected_nonce: str) -> IdTokenClaims:
@@ -165,7 +172,7 @@ class GoogleOAuthProvider:
 		except OAuthFailedError:
 			raise
 		except Exception as exc:
-			logger.warning("OAuth ID token verification failed", extra={"operation": "id_token_verify"})
+			_log_oauth_failure("id_token_verify")
 			raise OAuthFailedError() from exc
 
 	async def _get_jwks(self) -> dict[str, Any]:
@@ -184,7 +191,7 @@ class GoogleOAuthProvider:
 			_jwks_cache = (self.settings.google_jwks_uri, body, now + self.settings.google_jwks_cache_ttl_seconds)
 			return body
 		except Exception as exc:
-			logger.warning("OAuth JWKS request failed", extra={"operation": "jwks"})
+			_log_oauth_failure("jwks")
 			raise OAuthFailedError() from exc
 
 	async def _verify_id_token(self, id_token: str, expected_nonce: str) -> IdTokenClaims:
