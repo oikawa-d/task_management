@@ -1,6 +1,11 @@
-import type { AxiosError } from "axios";
+import axios, { type AxiosError, type AxiosInstance } from "axios";
 
-import { CSRF_HEADER_NAME, DEFAULT_CSRF_COOKIE_NAME, MUTATING_HTTP_METHODS } from "./constants";
+import {
+	CSRF_HEADER_NAME,
+	DEFAULT_CSRF_COOKIE_NAME,
+	LOGOUT_ENDPOINT_PATH,
+	MUTATING_HTTP_METHODS,
+} from "./constants";
 import { readCookie } from "./cookieUtils";
 import type { AuthAdapter, LoginSuccessResponse, RetryableRequestConfig } from "./types";
 
@@ -17,7 +22,10 @@ function isMutatingMethod(method: string): method is MutatingMethod {
 export class SessionAdapter implements AuthAdapter {
 	readonly mode = "session" as const;
 
-	constructor(private readonly csrfCookieName: string = DEFAULT_CSRF_COOKIE_NAME) {}
+	constructor(
+		private readonly csrfCookieName: string = DEFAULT_CSRF_COOKIE_NAME,
+		private readonly httpClient: AxiosInstance = axios,
+	) {}
 
 	attach(config: RetryableRequestConfig): RetryableRequestConfig {
 		const method = (config.method ?? "get").toLowerCase();
@@ -44,7 +52,17 @@ export class SessionAdapter implements AuthAdapter {
 		return false;
 	}
 
+	async restoreSession(): Promise<boolean> {
+		return true;
+	}
+
 	onLogout(): void {
 		// Cookie破棄はbackendのlogoutに任せる
+	}
+
+	logout(): Promise<void> {
+		return this.httpClient
+			.post(LOGOUT_ENDPOINT_PATH, undefined, this.attach({ method: "post", url: LOGOUT_ENDPOINT_PATH }))
+			.then(() => undefined);
 	}
 }

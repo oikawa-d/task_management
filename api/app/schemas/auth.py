@@ -1,9 +1,11 @@
 import re
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
+
+from app.schemas.base import StrictSchema
 
 USERNAME_PATTERN = r"^[A-Za-z0-9_-]+$"
 KANA_PATTERN = r"^[ぁ-んァ-ヶー0-9]+$"
@@ -28,7 +30,7 @@ def _validate_password_categories(value: str) -> str:
 	return value
 
 
-class RegisterRequest(BaseModel):
+class RegisterRequest(StrictSchema):
 	username: str = Field(min_length=3, max_length=50, pattern=USERNAME_PATTERN)
 	email: str = Field(max_length=50)
 	password: str = Field(min_length=8)
@@ -58,34 +60,34 @@ class RegisterRequest(BaseModel):
 		return self
 
 
-class RegisterResponse(BaseModel):
+class RegisterResponse(StrictSchema):
 	id: UUID
 	email: str
 	message: str
 
 
-class LoginRequest(BaseModel):
+class LoginRequest(StrictSchema):
 	identifier: str = Field(min_length=1, max_length=50)
 	password: str = Field(min_length=1)
 
 
-class LoginResponse(BaseModel):
+class LoginResponse(StrictSchema):
 	access_token: str
 	token_type: Literal["bearer"]
 	expires_in: int
 
 
-class RefreshResponse(BaseModel):
+class RefreshResponse(StrictSchema):
 	access_token: str
 	token_type: Literal["bearer"]
 	expires_in: int
 
 
-class VerifyEmailRequest(BaseModel):
+class VerifyEmailRequest(StrictSchema):
 	token: str = Field(min_length=1)
 
 
-class ResendVerifyEmailRequest(BaseModel):
+class ResendVerifyEmailRequest(StrictSchema):
 	email: str = Field(max_length=50)
 
 	@field_validator("email")
@@ -94,11 +96,11 @@ class ResendVerifyEmailRequest(BaseModel):
 		return _validate_email(value)
 
 
-class ResendVerifyEmailResponse(BaseModel):
+class ResendVerifyEmailResponse(StrictSchema):
 	message: str
 
 
-class PasswordForgotRequest(BaseModel):
+class PasswordForgotRequest(StrictSchema):
 	email: str = Field(max_length=50)
 
 	@field_validator("email")
@@ -107,11 +109,11 @@ class PasswordForgotRequest(BaseModel):
 		return _validate_email(value)
 
 
-class PasswordForgotResponse(BaseModel):
+class PasswordForgotResponse(StrictSchema):
 	message: str
 
 
-class PasswordResetRequest(BaseModel):
+class PasswordResetRequest(StrictSchema):
 	token: str = Field(min_length=1)
 	new_password: str = Field(min_length=8)
 	password_confirm: str
@@ -128,7 +130,7 @@ class PasswordResetRequest(BaseModel):
 		return self
 
 
-class MeResponse(BaseModel):
+class MeResponse(StrictSchema):
 	id: UUID
 	username: str
 	email: str
@@ -144,7 +146,15 @@ class MeResponse(BaseModel):
 	auth_mode: Literal["session", "jwt"]
 
 
-class AuthConfigResponse(BaseModel):
+class AuthConfigResponse(StrictSchema):
 	auth_mode: Literal["session", "jwt"]
 	google_login_enabled: bool
 	csrf_cookie_name: str
+
+
+class CurrentUser(StrictSchema):
+	id: UUID
+	username: str
+	role: Literal["member", "admin"]
+	is_active: bool
+	email_verified_at: datetime | None

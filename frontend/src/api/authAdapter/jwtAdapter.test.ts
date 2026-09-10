@@ -100,6 +100,16 @@ describe("JwtAdapter", () => {
 		expect(tokenStore.getAccessToken()).toBe("refreshed-token");
 	});
 
+	it("起動時のセッション復元でrefreshを実行する", async () => {
+		const httpClient = createMockHttpClient(async () => ({ data: { access_token: "restored-token" } }));
+		const tokenStore = createTokenStore();
+		const adapter = new JwtAdapter(tokenStore, httpClient);
+
+		expect(await adapter.restoreSession()).toBe(true);
+		expect(tokenStore.getAccessToken()).toBe("restored-token");
+		expect(httpClient.post).toHaveBeenCalledTimes(1);
+	});
+
 	it("refresh失敗時はfalseを返しアクセストークンを破棄する", async () => {
 		const httpClient = createMockHttpClient(async () => {
 			throw new Error("refresh failed");
@@ -141,5 +151,22 @@ describe("JwtAdapter", () => {
 		adapter.onLogout();
 
 		expect(tokenStore.getAccessToken()).toBeNull();
+	});
+
+	it("logoutでCookie認証としてPOST /auth/logoutを呼び出す", async () => {
+		document.cookie = "cerberus_csrf=csrf-value";
+		const httpClient = createMockHttpClient(async () => ({ data: {} }));
+		const adapter = new JwtAdapter(createTokenStore("access-token"), httpClient);
+
+		await adapter.logout();
+
+		expect(httpClient.post).toHaveBeenCalledWith(
+			"/auth/logout",
+			undefined,
+			expect.objectContaining({
+				withCredentials: true,
+				headers: { [CSRF_HEADER_NAME]: "csrf-value" },
+			}),
+		);
 	});
 });

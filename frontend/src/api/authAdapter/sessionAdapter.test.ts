@@ -1,5 +1,5 @@
-import type { AxiosError } from "axios";
-import { beforeEach, describe, expect, it } from "vitest";
+import axios, { type AxiosError, type AxiosInstance } from "axios";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CSRF_HEADER_NAME } from "./constants";
 import { SessionAdapter } from "./sessionAdapter";
@@ -50,5 +50,46 @@ describe("SessionAdapter", () => {
 		const result = await adapter.onUnauthorized({} as AxiosError);
 
 		expect(result).toBe(false);
+	});
+
+	it("起動時のセッション復元は追加のリクエストを行わず成功する", async () => {
+		const adapter = new SessionAdapter();
+
+		expect(await adapter.restoreSession()).toBe(true);
+	});
+
+	it("logoutでPOST /auth/logoutを呼び出す", async () => {
+		const httpClient = { post: vi.fn(async () => undefined) } as unknown as AxiosInstance;
+		const adapter = new SessionAdapter("cerberus_csrf", httpClient);
+
+		await adapter.logout();
+
+		expect(httpClient.post).toHaveBeenCalledWith(
+			"/auth/logout",
+			undefined,
+			expect.objectContaining({ withCredentials: true }),
+		);
+	});
+
+	it("/apiをbaseURLに持つclientではlogoutへprefixを二重付与しない", async () => {
+		const httpClient = axios.create({ baseURL: "/api" });
+		let requestUrl: string | undefined;
+		httpClient.defaults.adapter = async (config) => ({
+			data: undefined,
+			status: 204,
+			statusText: "No Content",
+			headers: {},
+			config,
+		});
+		httpClient.interceptors.request.use((config) => {
+			requestUrl = config.url;
+			return config;
+		});
+		const adapter = new SessionAdapter("cerberus_csrf", httpClient);
+
+		await adapter.logout();
+
+		expect(httpClient.defaults.baseURL).toBe("/api");
+		expect(requestUrl).toBe("/auth/logout");
 	});
 });

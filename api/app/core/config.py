@@ -4,6 +4,8 @@ from typing import Annotated, Literal
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+AuthMode = Literal["session", "jwt"]
+
 
 class BackendSettings(BaseSettings):
 	model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore")
@@ -26,7 +28,7 @@ class BackendSettings(BaseSettings):
 	api_history_error_detail_max_length: int = 4000
 
 	# 認証共通・session方式
-	auth_mode: Literal["session", "jwt"] = "session"
+	auth_mode: AuthMode = "session"
 	session_ttl_seconds: int = 1800
 	session_absolute_ttl_seconds: int = 28800
 	cookie_name_session: str = "cerberus_sid"
@@ -66,6 +68,7 @@ class BackendSettings(BaseSettings):
 	# ページング
 	pagination_default_per_page: int = 20
 	pagination_max_per_page: int = 100
+	task_comment_body_max_length: int = 2000
 
 	# Google OAuth2
 	google_login_enabled: bool = True
@@ -106,6 +109,7 @@ class BackendSettings(BaseSettings):
 	csrf_trust_referer_on_https: bool = False
 	health_check_timeout_seconds: float = 2
 	login_history_list_limit: int = 50
+	admin_search_query_max_length: int = 100
 
 	@field_validator("cors_allow_origins", "trusted_proxy_cidrs", mode="before")
 	@classmethod
@@ -119,6 +123,23 @@ class BackendSettings(BaseSettings):
 	def _reject_blank(cls, value: str) -> str:
 		if not value.strip():
 			raise ValueError("must not be blank")
+		return value
+
+	@field_validator(
+		"session_ttl_seconds",
+		"session_absolute_ttl_seconds",
+		"access_token_ttl_seconds",
+		"refresh_ttl_seconds",
+		"google_jwks_cache_ttl_seconds",
+		"oauth_state_ttl_seconds",
+		"oauth_handoff_ttl_seconds",
+		"password_reset_ttl_seconds",
+		"email_verify_ttl_seconds",
+	)
+	@classmethod
+	def _validate_positive_ttl(cls, value: int) -> int:
+		if value <= 0:
+			raise ValueError("TTL must be positive")
 		return value
 
 

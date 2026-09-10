@@ -1,0 +1,77 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { clearAuthAdapter, setAuthAdapterMode } from "../../../api/authAdapter/client";
+import { fetchUnreadCount, UnreadCountFetchError } from "./unreadCountApi";
+
+describe("fetchUnreadCount", () => {
+	beforeEach(() => {
+		setAuthAdapterMode("session");
+	});
+
+	afterEach(() => {
+		clearAuthAdapter();
+		vi.unstubAllGlobals();
+	});
+
+	it("正常時はunread_countを含むレスポンスを返す", async () => {
+		const fetchMock = vi.fn().mockResolvedValue({
+			ok: true,
+			status: 200,
+			json: () => Promise.resolve({ unread_count: 3 }),
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		const result = await fetchUnreadCount();
+
+		expect(result).toEqual({ unread_count: 3 });
+		expect(fetchMock).toHaveBeenCalledWith(
+			"/api/notifications/unread-count",
+			expect.objectContaining({ method: "GET", credentials: "include" }),
+		);
+	});
+
+	it("レスポンスが200以外の場合はUnreadCountFetchErrorを投げる", async () => {
+		const fetchMock = vi.fn().mockResolvedValue({
+			ok: false,
+			status: 401,
+			json: () => Promise.resolve({}),
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(fetchUnreadCount()).rejects.toThrow("failed to fetch unread count: 401");
+
+		const error = await fetchUnreadCount().catch((e: unknown) => e);
+		expect(error).toBeInstanceOf(UnreadCountFetchError);
+		expect((error as UnreadCountFetchError).status).toBe(401);
+	});
+
+	it("fetch自体がネットワークエラーでrejectした場合は例外をそのまま伝搬する", async () => {
+		// UnreadCountFetchErrorへは包まないため、呼び出し側のretry判定では
+		// 「statusを持たないエラー」として通常のリトライ対象になる。
+		const networkError = new TypeError("Failed to fetch");
+		const fetchMock = vi.fn().mockRejectedValue(networkError);
+		vi.stubGlobal("fetch", fetchMock);
+
+		const error = await fetchUnreadCount().catch((e: unknown) => e);
+
+		expect(error).toBe(networkError);
+		expect(error).not.toBeInstanceOf(UnreadCountFetchError);
+	});
+
+	it("AbortSignalをfetchへ伝搬する", async () => {
+		const fetchMock = vi.fn().mockResolvedValue({
+			ok: true,
+			status: 200,
+			json: () => Promise.resolve({ unread_count: 0 }),
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		const controller = new AbortController();
+
+		await fetchUnreadCount(controller.signal);
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			"/api/notifications/unread-count",
+			expect.objectContaining({ signal: controller.signal }),
+		);
+	});
+});

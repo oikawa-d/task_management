@@ -92,8 +92,21 @@ export class JwtAdapter implements AuthAdapter {
 		return this.refreshPromise;
 	}
 
+	async restoreSession(): Promise<boolean> {
+		if (!this.refreshPromise) {
+			this.refreshPromise = this.refresh();
+		}
+		return this.refreshPromise;
+	}
+
 	onLogout(): void {
 		this.tokenStore.setAccessToken(null);
+	}
+
+	logout(): Promise<void> {
+		return this.httpClient
+			.post(LOGOUT_ENDPOINT_PATH, undefined, this.attach({ method: "post", url: LOGOUT_ENDPOINT_PATH }))
+			.then(() => undefined);
 	}
 
 	private async refresh(): Promise<boolean> {

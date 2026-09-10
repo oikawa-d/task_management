@@ -257,7 +257,7 @@ flowchart TB
 | 引数 | db：DBセッション／task_id：対象タスクID／editor_id：更新者ID／version：楽観ロック用の現在値／その他：`TaskUpdateRequest`の更新対象フィールド |
 | 戻り値 | 更新後の `Task` |
 | 送出例外 | `IntegrityError`（想定外の一意制約違反時。`db_error_handler` が409へ変換） |
-| 処理内容 | `CALL sp_update_task(:task_id, :editor_id, :version, :title, :body, :status, :assignee_id, :due_at, :position)` を1回発行する。行ロック、advisory lock取得、`fn_next_task_position`、version検証（不一致はP0005）、assignee検証（無効はP0006）、status/position変更時の列内・列間再採番、期限判定と`notifications`のdedupe INSERTはすべてSP内部で同一トランザクションとして実行される。`sp_update_task`はOUT/戻り値を持たないため、成功後に`SELECT fn_get_task(:task_id)`を実行し応答用のtask行を取得する |
+| 処理内容 | APIが`APP_TIMEZONE`の当日開始・翌日開始をUTCへ変換し、`p_day_start_utc`・`p_day_end_utc`を含む`CALL sp_update_task(:task_id, :editor_id, :version, :title, :body, :status, :assignee_id, :due_at, :position, :day_start_utc, :day_end_utc)`を1回発行する。行ロック、advisory lock取得、`fn_next_task_position`、version検証（不一致はP0005）、assignee検証（無効はP0006）、status/position変更時の列内・列間再採番、期限判定と`notifications`のdedupe INSERTはすべてSP内部で同一トランザクションとして実行される。`sp_update_task`はOUT/戻り値を持たないため、成功後に`SELECT fn_get_task(:task_id)`を実行し応答用のtask行を取得する |
 | 副作用 | SP内のtasks更新（対象行・同一列の複数行）・notifications INSERT（同一トランザクション） |
 
 ## 7. 関数相関図
@@ -304,7 +304,7 @@ stateDiagram-v2
 
 | 種別 | 契約 | 説明 |
 |------|------|------|
-| update_task | `sp_update_task(p_task_id, p_editor_id, p_version, p_title, p_body, p_status, p_assignee_id, p_due_at, p_position)` | sp_update_taskを呼び出す（戻り値なし）。成功後に`fn_get_task`の結果をレスポンスへ写像する |
+| update_task | `sp_update_task(p_task_id, p_editor_id, p_version, p_title, p_body, p_status, p_assignee_id, p_due_at, p_position, p_day_start_utc, p_day_end_utc)` | APIがAPP_TIMEZONEの日境界をUTCへ変換して渡し、sp_update_taskを呼び出す（戻り値なし）。成功後に`fn_get_task`の結果をレスポンスへ写像する |
 
 repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 

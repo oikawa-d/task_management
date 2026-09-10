@@ -6,6 +6,15 @@
 /** CSRFトークンを送るリクエストヘッダ名 */
 export const CSRF_HEADER_NAME = "X-CSRF-Token";
 
+/** frontendが利用するAPIの既定ベースURL */
+export const DEFAULT_API_BASE_URL = "/api";
+
+/** 起動時に認証方式を取得するAPIパス */
+export const AUTH_CONFIG_ENDPOINT = "/auth/config";
+
+/** 起動時に現在のユーザーを取得するAPIパス */
+export const AUTH_ME_ENDPOINT = "/auth/me";
+
 /** CSRF Cookie名の既定値。実際の値は将来 /auth/config から注入される想定（#178スコープ） */
 export const DEFAULT_CSRF_COOKIE_NAME = "cerberus_csrf";
 
@@ -18,10 +27,13 @@ export const REFRESH_ENDPOINT_PATH = "/auth/refresh";
 /** jwtモードのログアウトAPIパス（refresh同様にCookie+CSRFで送る） */
 export const LOGOUT_ENDPOINT_PATH = "/auth/logout";
 
+/** jwtモードのOAuthハンドオフコード交換API（docs/detailed_design/api/auth/13_post_auth_oauth_exchange.md） */
+export const AUTH_OAUTH_EXCHANGE_ENDPOINT = "/auth/oauth/exchange";
+
 /** 401でもリトライ対象外とするパス（設計書§6.1「リフレッシュ対象外」） */
 export const REFRESH_EXEMPT_PATHS = [
 	"/auth/login",
 	"/auth/refresh",
 	"/auth/register",
-	"/auth/oauth/exchange",
+	AUTH_OAUTH_EXCHANGE_ENDPOINT,
 ] as const;

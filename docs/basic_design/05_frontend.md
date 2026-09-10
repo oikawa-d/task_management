@@ -10,7 +10,7 @@
 | 状態管理 | Zustand（認証状態・UI設定）＋ TanStack Query（サーバー状態のキャッシュ） |
 | HTTPクライアント | axios（インスタンス + interceptor） |
 | ドラッグ＆ドロップ | `@dnd-kit/core`（カンバンのカード移動） |
-| フォーム | React Hook Form + zod（バックエンドと同一のバリデーション規則を再現） |
+| フォーム | React Hook Form + zod（バックエンドと同一のバリデーション規則を再現）。既存フォームの移行は各画面Issueで行う |
 | スタイル | CSS Modules + CSS変数（文字サイズ設定のため `rem` ベースで設計） |
 | テスト | Vitest + React Testing Library + MSW（APIモック） |
 | Lint / 型 | ESLint（flat config）+ `tsc --noEmit` |
@@ -36,6 +36,7 @@ frontend/
 │   ├── auth/
 │   │   ├── authStore.ts            # Zustand（user / status）
 │   │   ├── AuthProvider.tsx        # /auth/config → 必要ならrefresh → /auth/me
+│   │   ├── AuthLoading.tsx         # 認証状態確定まで表示するローディングUI
 │   │   └── guards.tsx              # RequireAuth / RequireAdmin
 │   ├── components/                 # 汎用UI（Button, Modal, Field, Toast, Avatar…）
 │   ├── layouts/
@@ -254,10 +255,11 @@ flowchart TB
 
 | ストア | 保持内容 | 永続化 | 備考 |
 |--------|----------|--------|------|
-| `authStore`（Zustand） | `user`, `status`（`loading` / `authenticated` / `unauthenticated`）, `accessToken`（jwtモードのみ）, `authAdapter` | **しない**（メモリのみ） | アクセストークンを localStorage に置かない（XSS対策）。adapterは起動時のbackend設定から選択 |
+| `authStore`（Zustand） | `user`, `status`（`loading` / `authenticated` / `unauthenticated`） | **しない**（メモリのみ） | JWTのアクセストークンは`AuthAdapter`へ注入したメモリ上の`TokenStore`が保持し、authStoreには保持しない。adapterは`GET /auth/config`の実行時設定から選択 |
 | `uiStore`（Zustand + persist） | `fontScale`, `sidebarOpen`, `dashboardView`（`"cards"` / `"calendar"`） | localStorage | 文字サイズ・サイドバー開閉・ダッシュボードの表示モードはクライアント側のみで保持。次回起動時も選択中の表示モードを復元する |
 | 通知（React Query） | `['notifications','unread-count']` / `['notifications', page, unreadOnly]` | しない | 未読件数はポーリング、一覧はパネルを開いたときに取得。パネルの開閉状態のみコンポーネントのローカルstateで持つ |
-| TanStack Query | プロジェクト一覧・ボード・コメント・ユーザー一覧 | しない | `queryKey` は `['projects']` / `['board', projectId]` / `['comments', taskId]` |
+| TanStack Query | プロジェクト一覧・ボード・ユーザー一覧 | しない | `queryKey` は `['projects']` / `['board', projectId]`。タスク詳細コメントは`taskDetailStore`で管理する（下段参照） |
+| `taskDetailStore`（singleton） | タスク詳細・コメント詳細の取得結果、更新中/エラー、`notFound`、`closeRequested`、`boardRefreshToken` | しない | タスク詳細モーダルは既存実装との互換性を優先し、`subscribe`/`getSnapshot`を`useSyncExternalStore`から購読する。TanStack Queryへ移行しない方針は[タスク詳細モーダル詳細設計](../detailed_design/screen/08_task_detail_modal.md)を正とする |
 | カレンダー（React Query） | `['tasks-calendar', scope, projectId, from, to]` | しない | 表示中の月（前後の見切れ週を含む`from`〜`to`）が変わるたびに取得し直す。`scope`/`projectId`の切替時も同様に再取得する |
 
 ### 5.1 認証状態の遷移
@@ -270,6 +272,32 @@ stateDiagram-v2
     unauthenticated --> authenticated: ログイン成功
     authenticated --> unauthenticated: ログアウト / 復帰不能な401
     authenticated --> authenticated: リフレッシュ成功（jwtモード）
+```
+
+`loading` 中は `RequireAuth` / `RequireAdmin` / `RequireGuest` のいずれもリダイレクトせず、`AuthLoading` を表示する。`AuthLoading` は `role="status"` と「認証状態を確認中...」のラベルを持ち、`AuthProvider` が初期化を完了するまで現在のURLを維持する。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant AP as AuthProvider
+    participant API as 認証API
+    participant S as authStore
+    participant G as ルートガード
+
+    AP->>S: status = loading
+    G-->>G: AuthLoadingを表示（リダイレクトしない）
+    AP->>API: GET /auth/config
+    alt jwtモード
+        AP->>API: POST /auth/refresh（Cookie + CSRF）
+    end
+    AP->>API: GET /auth/me
+    alt 認証成功
+        API-->>AP: ユーザー情報
+        AP->>S: status = authenticated、userを設定
+    else 未認証または初期化失敗
+        API-->>AP: 401 / エラー
+        AP->>S: status = unauthenticated、userを破棄
+    end
 ```
 
 ### 5.2 カンバン操作時の楽観的更新
@@ -303,6 +331,8 @@ sequenceDiagram
 
 **方針**：認証方式の差異は `AuthAdapter` に閉じ込め、画面・feature 層は `api/endpoints/*` の関数を呼ぶだけで方式に依存しない。
 
+API clientは`fetchWithAuth`（共通APIクライアント）を必ず経由する。endpointが直接`fetch`を呼び出したり、`credentials`、`Authorization`、`X-CSRF-Token`を個別に設定したりしてはならない。例外は認証モードを取得する`GET /auth/config`だけとする。`fetchWithAuth`は初回リクエスト時に`/auth/config`を取得し、`auth_mode`に応じたadapterを生成する。AuthProviderは未実装のため、起動時に認証状態を復元しadapterを明示的に初期化する処理は後続Issueで実装する。
+
 ```mermaid
 classDiagram
     class AuthAdapter {
@@ -311,34 +341,42 @@ classDiagram
         +attach(config) AxiosRequestConfig
         +onLoginSuccess(res) void
         +onUnauthorized(error) Promise~boolean~
+        +restoreSession() Promise~boolean~
         +onLogout() void
+        +logout() Promise~void~
     }
     class SessionAdapter {
         +mode "session"
         +attach(config) AxiosRequestConfig
         +onUnauthorized(error) Promise~boolean~
+        +restoreSession() Promise~boolean~
     }
     class JwtAdapter {
         -refreshPromise Promise
         +mode "jwt"
         +attach(config) AxiosRequestConfig
         +onUnauthorized(error) Promise~boolean~
+        +restoreSession() Promise~boolean~
     }
     AuthAdapter <|.. SessionAdapter
     AuthAdapter <|.. JwtAdapter
 ```
 
+| 実装 | `attach` | `onLoginSuccess` | `onUnauthorized` | `restoreSession` | `onLogout` | `logout` |
+|------|----------|------------------|------------------|------------------|------------|------------|
+| `SessionAdapter` | `withCredentials = true`、更新系には `X-CSRF-Token`（Cookieから読む）を付与 | 何もしない（Cookieはブラウザが保持） | `false`（リトライしない） | 追加処理なしで `true` | authStoreを破棄。Cookie破棄はbackendのlogoutに任せる | `POST /api/auth/logout`をCookie・CSRF付きで実行 |
+| `JwtAdapter` | 通常APIには `Authorization: Bearer {accessToken}`、refresh/logoutには `withCredentials=true` と `X-CSRF-Token` を付与 | 注入された`TokenStore`にaccessTokenを保存。Cookieはbackendが発行 | `/auth/refresh` を1回だけ試行し、成功なら `true` | `/auth/refresh` を実行し、成功時にaccessTokenを保持 | `TokenStore`のaccessTokenをメモリから破棄。Cookie破棄はbackendのlogoutに任せる | `POST /api/auth/logout`をCookie・CSRF付きで実行 |
 | 実装 | `attach` | `onLoginSuccess` | `onUnauthorized` | `onLogout` |
 |------|----------|------------------|------------------|------------|
-| `SessionAdapter` | `withCredentials = true`、更新系には `X-CSRF-Token`（Cookieから読む）を付与 | 何もしない（Cookieはブラウザが保持） | `false`（リトライしない） | authStoreを破棄。Cookie破棄はbackendのlogoutに任せる |
-| `JwtAdapter` | 通常APIには `Authorization: Bearer {accessToken}`、refresh/logoutには `withCredentials=true` と `X-CSRF-Token` を付与 | authStore にaccessTokenを保存。Cookieはbackendが発行 | `/auth/refresh` を1回だけ試行し、成功なら `true` | accessTokenをメモリから破棄。Cookie破棄はbackendのlogoutに任せる |
 
 | メソッド | 引数 | 戻り値 | 責務 |
 |----------|------|--------|------|
 | `attach` | `AxiosRequestConfig` | `AxiosRequestConfig` | リクエスト直前の認証情報付与（Cookie送信設定 / CSRFヘッダ / Bearerヘッダ）。CSRF Cookie名は `/auth/config` から取得 |
 | `onLoginSuccess` | `LoginResponse` | `void` | ログインレスポンスから必要な情報を保持 |
 | `onUnauthorized` | `AxiosError` | `Promise<boolean>` | 401 時の復帰処理。`true` を返した場合のみ元リクエストを再送 |
+| `restoreSession` | なし | `Promise<boolean>` | アプリ起動時に既存Cookieから認証状態を復元。jwtではrefreshを実行 |
 | `onLogout` | なし | `void` | クライアント側の後片付け |
+| `logout` | なし | `Promise<void>` | `POST /api/auth/logout`を認証方式固有の設定で実行 |
 
 ### 6.1 interceptor の流れ
 
@@ -373,6 +411,8 @@ flowchart TB
 | `VITE_API_BASE_URL` | `/api` | APIのベースURL（同一オリジンを既定） |
 | `VITE_NOTIFICATION_POLL_INTERVAL_MS` | `60000` | 未読通知件数のポーリング間隔（ミリ秒） |
 | `VITE_TASK_COMMENT_BODY_MAX_LENGTH` | `2000` | コメント本文のzodバリデーション上限文字数。バックエンドの`TASK_COMMENT_BODY_MAX_LENGTH`と同じ値を`.env`へ設定し、値の一致は運用（`.env.example`のコメント併記）で担保する |
+| `VITE_USER_NAME_MAX_LENGTH` | `30` | プロフィールの姓名・フリガナに対するzodバリデーション上限文字数。未設定・不正値は既定値へフォールバックする |
+| `VITE_PASSWORD_MIN_LENGTH` | `8` | パスワードのzodバリデーション最小文字数。未設定・不正値は既定値へフォールバックする |
 
 認証モード、Googleログインの有効/無効、CSRF Cookie名は `GET /auth/config` から実行時に取得する。`VITE_AUTH_MODE` / `VITE_GOOGLE_LOGIN_ENABLED` / `VITE_CSRF_COOKIE_NAME` は定義しない。これによりfrontendイメージとbackendの設定がずれても、起動時にbackendの設定へ追従できる。
 
@@ -456,6 +496,10 @@ flowchart TB
 | 文字サイズの変更 | 小 / 標準 / 大 / 特大（`0.875` / `1` / `1.125` / `1.25`）。サーバーには保存しない |
 | ログイン履歴 | `GET /users/me/login-history` を表形式で表示（自衛的な監査） |
 
+フォームはReact Hook Formで状態・送信を管理し、zodスキーマをresolverとして使用する。プロフィールの生年月日は単一の`input type="date"`とし、APIの`YYYY-MM-DD`値をそのまま扱う。年/月/日プルダウンは会員登録画面の仕様であり、アカウント設定には適用しない。
+
+フォーム方針は新規フォームおよび変更対象画面ではRHF+zodを標準とする。既存フォームの全面移行は本Issueの対象外とし、各画面の実装Issueで順次移行する。
+
 ### 7.7 管理者ユーザー管理
 
 - タブ「管理」自体を `role = admin` のみ表示。直接URLアクセス時も `RequireAdmin` で `/dashboard` にリダイレクト
@@ -494,7 +538,10 @@ flowchart LR
 | 区分 | 対象 | 内容 |
 |------|------|------|
 | 単体 | `authAdapter` | session / jwt それぞれで `attach` / `onUnauthorized` の挙動、リフレッシュの多重実行防止 |
-| 単体 | zod スキーマ | パスワードポリシー・フリガナ・50文字制限などの境界値 |
+| 単体 | `fetchWithAuth` | `/auth/config`の実行時モード選択、jwtのBearer、session更新系のCSRF、GETにCSRFを付けないこと |
+| 単体 | `AuthProvider` | 起動時の認証状態を `loading` に保ち、初期化成功で `authenticated`、未認証・失敗で `unauthenticated` に遷移 |
+| コンポーネント | `RequireAuth` / `RequireAdmin` / `RequireGuest` | `loading` 中はローディングUIを表示し、リダイレクトしない |
+| 単体 | zod スキーマ | パスワードポリシー・フリガナ・各環境変数上限などの境界値 |
 | 単体 | `uiStore` | 文字サイズの永続化と復元、localStorage が空の場合の既定値 |
 | コンポーネント | LoginForm / RegisterForm | 入力検証・エラー表示・送信内容 |
 | コンポーネント | KanbanBoard | D&D後の楽観的更新とロールバック（MSWで失敗レスポンスを返す） |

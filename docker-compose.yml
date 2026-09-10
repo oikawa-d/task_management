@@ -39,7 +39,7 @@ services:
     build:
       context: .
       dockerfile: api/Dockerfile
-    image: cerberus-backend:${BACKEND_IMAGE_TAG:-latest}
+    image: ${IMAGE_NAME_BACKEND:-cerberus-backend}:${BACKEND_IMAGE_TAG:-latest}
     env_file:
       - .env
     depends_on:
@@ -60,7 +60,7 @@ services:
     build:
       context: .
       dockerfile: batch/Dockerfile
-    image: cerberus-batch:${BATCH_IMAGE_TAG:-latest}
+    image: ${IMAGE_NAME_BATCH:-cerberus-batch}:${BATCH_IMAGE_TAG:-latest}
     env_file:
       - .env
     restart: unless-stopped
@@ -83,7 +83,9 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
-    image: cerberus-frontend:${FRONTEND_IMAGE_TAG:-latest}
+        VITE_USER_NAME_MAX_LENGTH: ${VITE_USER_NAME_MAX_LENGTH:-30}
+        VITE_PASSWORD_MIN_LENGTH: ${VITE_PASSWORD_MIN_LENGTH:-8}
+    image: ${IMAGE_NAME_FRONTEND:-cerberus-frontend}:${FRONTEND_IMAGE_TAG:-latest}
     depends_on:
       backend:
         condition: service_healthy

@@ -64,6 +64,12 @@ CREATE TABLE login_history (
 COMMENT ON TABLE login_history IS 'ログイン試行の監査ログ。Redis側のTTL失効とは独立して保持する';
 COMMENT ON COLUMN login_history.login_identifier IS '認証に使用した識別子。通常ログインはusername/email原文、Google OAuthは検証済みGoogle email。パスワード・OAuthのsub・トークンは記録しない';
 COMMENT ON COLUMN login_history.user_id IS '未登録ID/メール入力時はNULL';
+COMMENT ON COLUMN login_history.login_method IS 'ログイン方式。session / jwt / oauth_google';
+COMMENT ON COLUMN login_history.ip_address IS '信頼できるProxy情報から解決した接続元IPアドレス';
+COMMENT ON COLUMN login_history.user_agent IS 'ログイン試行時のUser-Agent';
+COMMENT ON COLUMN login_history.success IS 'ログイン試行の成否';
+COMMENT ON COLUMN login_history.failure_reason IS 'ログイン失敗時の理由。成功時はNULL';
+COMMENT ON COLUMN login_history.created_at IS 'ログイン試行を記録した日時';
 
 CREATE INDEX ix_login_history_user_created ON login_history (user_id, created_at DESC);
 CREATE INDEX ix_login_history_created ON login_history (created_at DESC);

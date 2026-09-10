@@ -36,21 +36,20 @@
 | `0001_enable_extensions.py` | `CREATE EXTENSION IF NOT EXISTS pgcrypto` |
 | `0002_create_users_table.py` | `users` テーブル、関連インデックス・CHECK制約 |
 | `0003_create_oauth_accounts_table.py` | `oauth_accounts` テーブル |
-| `0004_create_projects_table.py` | `projects` テーブル |
-| `0005_create_project_members_table.py` | `project_members` テーブル（複合PK） |
-| `0006_create_tasks_table.py` | `tasks` テーブル（`DEFERRABLE` 一意制約含む） |
-| `0007_create_task_comments_table.py` | `task_comments` テーブル |
-| `0008_create_login_history_table.py` | `login_history` テーブル |
-| `0009_create_functions_and_triggers.py` | [08_db_functions.md](./08_db_functions.md) の通知テーブルに依存しない関数・プロシージャ（`trg_set_updated_at` とその4トリガ、`fn_is_project_member`、`fn_next_task_position`、`sp_purge_login_history`） |
-| `0010_seed_initial_admin.py` | 初期adminユーザーのシード（§3） |
-| `0011_create_notifications_table.py` | `tasks.due_at`への移行、`notifications` テーブル、制約・インデックス、`sp_purge_notifications` |
-| `0012_create_history_tables.py` | `api_history` / `batch_history` テーブル、制約・インデックス、履歴パージ用プロシージャ |
-| `0013_alter_projects_tasks_lifecycle.py` | `projects` への `is_active`/`start_at`/`end_at`/`ck_projects_period` 追加、`tasks` への `is_active` 追加、`tasks.project_id` のNULL許容化とFK付け替え（`ON DELETE CASCADE` → `ON DELETE SET NULL`）（issue #10） |
-| `0014_create_project_functions.py` | `fn_get_user` / `fn_get_project` / `fn_list_projects` / `fn_search_member_candidates` / `fn_list_project_members`、`sp_create_project` / `sp_update_project` / `sp_deactivate_project` / `sp_add_project_member` / `sp_remove_project_member` |
-| `0015_create_task_functions.py` | `fn_get_project_board` / `fn_get_task` / `fn_list_tasks` / `fn_list_task_comments` / `fn_get_comment_with_task`、`sp_create_task` / `sp_update_task` / `sp_deactivate_task` / `sp_add_task_comment` / `sp_update_task_comment` / `sp_delete_task_comment` |
-| `0016_create_notification_functions.py` | `fn_list_notifications` / `fn_count_unread_notifications` / `fn_list_due_notification_tasks`、`sp_mark_notification_read` / `sp_mark_all_notifications_read`。通知作成処理はtask SP内へ統合 |
-| `0017_create_admin_functions.py` | `fn_admin_list_users` / `fn_admin_list_projects` / `fn_admin_list_login_history`、`sp_admin_update_user_role` / `sp_admin_update_user_status` / `sp_admin_deactivate_project` |
-| `0018_create_auth_user_functions.py` | auth/usersの`fn_find_*` / `fn_list_user_login_history` / `fn_list_user_oauth_accounts`、`sp_register_user` / `sp_verify_user_email` / `sp_update_user_password` / `sp_update_user_profile` / `sp_upsert_oauth_account` / `sp_record_login_history` |
+| `0004_create_login_history_table.py` | `login_history` テーブル |
+| `0005_create_auth_user_functions_and_triggers.py` | auth/usersの参照FN・更新SP、ログイン履歴トリガ |
+| `0006_create_projects_table.py` | `projects` テーブル |
+| `0007_create_project_members_table.py` | `project_members` テーブル（複合PK） |
+| `0008_create_tasks_table.py` | `tasks` テーブル（`DEFERRABLE` 一意制約含む） |
+| `0009_create_task_comments_table.py` | `task_comments` テーブル |
+| `0010_create_project_task_functions_and_triggers.py` | project/task/commentの参照FN・更新SP、updated_atトリガ |
+| `0011_create_notifications_table.py` | `notifications` テーブル、制約・インデックス、`sp_purge_notifications` |
+| `0012_create_api_history_table.py` | `api_history` テーブル |
+| `0013_create_batch_history_table.py` | `batch_history` テーブル |
+| `0014_create_notification_history_functions_and_triggers.py` | 通知・履歴の参照FN、既読・パージSP、履歴トリガ |
+| `0015_create_admin_functions.py` | admin用参照FN・更新SP |
+| `0016_update_task_notification_procedures.py` | task作成・更新SPへAPI計算のUTC日境界を追加し、当日期限通知を統合 |
+| `0017_add_login_history_column_comments.py` | `login_history`のテーブル・全カラムコメントを付与 |
 
 **要検討**：上記のリビジョン分割・命名例（`0001_...` 等の連番接頭辞）は本詳細設計での具体化であり、基本設計に明記された正の構成ではない。実装時にAlembicの自動生成ハッシュIDとの整合をどう取るか（`down_revision` チェーンの実ファイル名）は実装担当の裁量とする。
 
@@ -60,36 +59,32 @@
 flowchart LR
     R1["0001<br/>拡張有効化"] --> R2["0002<br/>users"]
     R2 --> R3["0003<br/>oauth_accounts"]
-    R3 --> R4["0004<br/>projects"]
-    R4 --> R5["0005<br/>project_members"]
-    R5 --> R6["0006<br/>tasks"]
-    R6 --> R7["0007<br/>task_comments"]
-    R7 --> R8["0008<br/>login_history"]
-    R8 --> R9["0009<br/>関数・トリガ"]
-    R9 --> R10["0010<br/>シード「初期admin」"]
-    R10 --> R11["0011<br/>notifications + due_at"]
-    R11 --> R12["0012<br/>api_history + batch_history"]
-    R12 --> R13["0013<br/>projects/tasks<br/>ライフサイクル変更（issue #10）"]
-    R13 --> R14["0014<br/>projects / members<br/>SP・FN"]
-    R14 --> R15["0015<br/>tasks / comments<br/>SP・FN"]
-    R15 --> R16["0016<br/>notifications<br/>SP・FN"]
-    R16 --> R17["0017<br/>admin<br/>SP・FN"]
-    R17 -.-> RN
-    R17 --> R18["0018<br/>auth / users<br/>SP・FN"]
-    R18 -.-> RN
+    R3 --> R4["0004<br/>login_history"]
+    R4 --> R5["0005<br/>auth SP・FN"]
+    R5 --> R6["0006<br/>projects"]
+    R6 --> R7["0007<br/>project_members"]
+    R7 --> R8["0008<br/>tasks"]
+    R8 --> R9["0009<br/>task_comments"]
+    R9 --> R10["0010<br/>project/task/comment<br/>SP・FN"]
+    R10 --> R11["0011<br/>notifications"]
+    R11 --> R12["0012<br/>api_history"]
+    R12 --> R13["0013<br/>batch_history"]
+    R13 --> R14["0014<br/>通知・履歴<br/>SP・FN"]
+    R14 --> R15["0015<br/>admin SP・FN"]
+    R15 --> R16["0016<br/>task通知SP更新"]
+    R16 -.-> RN
 ```
 
 ### 2.7 SP/FN適用順序
 
-`0014`〜`0017`は、対象テーブルのDDLと既存のUUID/CHECK/FK定義が完了した後に適用する。依存順序は `extensions → users/projects/project_members/tasks/task_comments/notifications/history → updated_at trigger → project/member FN/SP → task/comment FN/SP → notification FN/SP → admin FN/SP` とする。各リビジョンはSQL資材を読み込んで作成し、repositoryの直接CRUDを追加しない。
+`0010`、`0014`〜`0016`は、対象テーブルのDDLと既存のUUID/CHECK/FK定義が完了した後に適用する。`0016`では、`0010`が作成するtask SPの旧シグネチャを削除して、`db/procedures/`の現行SQLを再適用する。各リビジョンはSQL資材を読み込んで作成し、repositoryの直接CRUDを追加しない。
 
 | リビジョン | 依存するテーブル | 適用内容 |
 |------------|------------------|----------|
-| `0014` | `users`, `projects`, `project_members` | project/memberの参照FN・更新SP |
-| `0015` | `projects`, `tasks`, `task_comments` | task/commentの参照FN・更新SP。`fn_next_task_position`をtask SP内部から呼ぶ |
-| `0016` | `notifications`, `tasks` | 通知参照・既読更新。通知作成は`0015`のtask SPと整合させる |
-| `0017` | `users`, `projects`, `login_history` | admin参照FN・更新SP |
-| `0018` | `users`, `oauth_accounts`, `login_history` | auth/usersの参照FN・更新SP |
+| `0010` | `projects`, `tasks`, `task_comments` | project/task/commentの参照FN・更新SP。通知テーブル作成前のためtask SPはlegacy SQLを使用 |
+| `0014` | `notifications`, `api_history`, `batch_history` | 通知・履歴の参照FN、既読・パージSP、履歴トリガ |
+| `0015` | `users`, `projects`, `login_history` | admin参照FN・更新SP |
+| `0016` | `notifications`, `tasks` | APIから受け取るUTC日境界でtask SPの当日期限通知を判定。downgradeではlegacy task SPへ戻す |
 
 関数・プロシージャのDROPは依存するAPIが停止している環境でのみ行う。production CDではdowngradeを実行しない。
 
