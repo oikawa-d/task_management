@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAuthAdapter } from "./index";
 import { CSRF_HEADER_NAME } from "./constants";
-import { clearAuthAdapter, fetchWithAuth, setAuthAdapter } from "./client";
+import { clearAuthAdapter, fetchWithAuth, resolveAuthAdapter, setAuthAdapter } from "./client";
 
 function response(body: unknown, init: { ok: boolean; status: number }) {
 	return {
@@ -87,5 +87,46 @@ describe("fetchWithAuth", () => {
 
 		const [, requestInit] = fetchMock.mock.calls[1] as [string, RequestInit];
 		expect(new Headers(requestInit.headers).has(CSRF_HEADER_NAME)).toBe(false);
+	});
+
+	it("resolveAuthAdapter開始後にbootstrapAuthが先に共有アダプタを登録した場合、先行/auth/configの完了で上書きされない", async () => {
+		let resolveConfigRequest!: (value: unknown) => void;
+		const configRequestPromise = new Promise((resolve) => {
+			resolveConfigRequest = resolve;
+		});
+		const fetchMock = vi.fn().mockImplementation((url: string) => {
+			if (url === "/api/auth/config") {
+				return configRequestPromise;
+			}
+			return Promise.resolve(response({ columns: {} }, { ok: true, status: 200 }));
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		// 1. resolveAuthAdapter()を先行開始する（/auth/configはpendingのまま）
+		const resolvePromise = resolveAuthAdapter("/api");
+
+		// 2. bootstrapAuth()相当の処理が先に共有アダプタAを登録する
+		let accessToken: string | null = "bootstrap-token";
+		const bootstrapAdapter = createAuthAdapter("jwt", {
+			tokenStore: {
+				getAccessToken: () => accessToken,
+				setAccessToken: (token) => {
+					accessToken = token;
+				},
+			},
+		});
+		setAuthAdapter(bootstrapAdapter);
+
+		// 3. 先行していた/auth/configリクエストが完了し、.then()が発火する
+		resolveConfigRequest(response({ auth_mode: "jwt" }, { ok: true, status: 200 }));
+
+		const resolvedAdapter = await resolvePromise;
+
+		// fallback生成で上書きされず、bootstrapAuth()が登録したアダプタが維持される
+		expect(resolvedAdapter).toBe(bootstrapAdapter);
+
+		await fetchWithAuth("/api/projects", { method: "GET" }, "/api");
+		const [, requestInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+		expect(new Headers(requestInit.headers).get("Authorization")).toBe("Bearer bootstrap-token");
 	});
 });
