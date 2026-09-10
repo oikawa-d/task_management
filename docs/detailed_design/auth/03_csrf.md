@@ -25,6 +25,7 @@
 |------|------|------|------|
 | `verify_origin` | DI関数 | `Origin`ヘッダが`CORS_ALLOW_ORIGINS`に含まれるか検証 | Originが無い場合、HTTPS環境に限り`Referer`を代替検証 |
 | `verify_csrf` | DI関数 | Cookie値と`X-CSRF-Token`ヘッダの一致を`secrets.compare_digest`で検証 | session：Redis`csrf:{sid}`とヘッダを比較。jwt：Cookie`cerberus_csrf`とヘッダを比較（Redis参照なし） |
+| `verify_csrf_if_session` | DI関数 | tasks/projects/comments等、通常APIの更新系エンドポイント向けのCSRF検証 | `strategy.mode == "session"`の場合のみ`verify_csrf`へ委譲し、jwtモードでは検証を行わず即returnする（jwtの通常APIはAuthorizationヘッダで認証されるため）。`/auth/refresh`・`/auth/logout`はjwtモードでもCookie+CSRFの検証が必要なため、本関数ではなく`verify_csrf`を直接使用する |
 | `cerberus_csrf` Cookie | Cookie | Double Submit Cookieのトークン保持 | `HttpOnly=No`（JSが読み取り`X-CSRF-Token`へ転記するため） |
 | axiosインターセプタ | フロント実装（参考記載のみ・本設計では規定しない） | `cerberus_csrf`Cookie値を読み取り全更新系リクエストへ`X-CSRF-Token`として自動付与 | [`../../basic_design/05_frontend.md`](../../basic_design/05_frontend.md)側の責務（本ファイルはバックエンド検証のみを規定） |
 | `CORS_ALLOW_ORIGINS` | 設定 | 許可Originの一覧 | `allow_credentials=true`との併用時は`*`禁止 |
