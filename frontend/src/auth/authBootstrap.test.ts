@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { clearAuthAdapter, fetchWithAuth } from "../api/authAdapter/client";
 import { AUTH_CONFIG_ENDPOINT, AUTH_ME_ENDPOINT } from "../api/authAdapter/constants";
+import { resetApiClient } from "../api/client";
 import { bootstrapAuth } from "./authBootstrap";
 
 function createMockClient(authMode: "session" | "jwt"): AxiosInstance {
@@ -26,6 +27,7 @@ describe("bootstrapAuth", () => {
 		vi.restoreAllMocks();
 		vi.unstubAllGlobals();
 		clearAuthAdapter();
+		resetApiClient();
 	});
 
 	it("gets config, restores the session, then gets the current user", async () => {
