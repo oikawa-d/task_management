@@ -27,6 +27,7 @@ __all__ = [
 	"delete_all_sessions",
 	"delete_session",
 	"get_csrf_token",
+	"get_login_failure_count",
 	"get_refresh_token",
 	"get_session",
 	"incr_login_failure",
@@ -138,6 +139,10 @@ async def consume_email_verify_token(token: str) -> UUID | None:
 
 async def mark_email_verify_sent(user_id: UUID, interval: int) -> bool:
 	return await redis_store_security.mark_email_verify_sent(_redis(), _key_prefix(), user_id, interval)
+
+
+async def get_login_failure_count(identifier: str, client_ip: str) -> int:
+	return await redis_store_security.get_login_failure_count(_redis(), _key_prefix(), identifier, client_ip)
 
 
 async def incr_login_failure(identifier: str, client_ip: str, window: int) -> int:
