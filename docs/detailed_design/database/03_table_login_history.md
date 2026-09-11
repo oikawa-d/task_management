@@ -219,9 +219,12 @@ flowchart LR
     AS["auth_service"] --> LRP["login_history_repository"]
     US["user_service"] --> LRP
     ADS["admin_service<br/>（担当外）"] --> ARP["admin_repository"]
-    OPS["運用者による手動実行<br/>（アプリ外）"] --> LRP
-    LRP --> T["login_history テーブル"]
-    ARP --> T
+    OPS["運用者による手動実行<br/>（アプリ外）"] --> PURGE["sp_purge_login_history"]
+    LRP --> LFN["fn_list_user_login_history"]
+    ARP --> AFN["fn_admin_list_login_history"]
+    LFN --> T["login_history テーブル"]
+    AFN --> T
+    PURGE --> T
 ```
 
 ## 10. 想定クエリと性能

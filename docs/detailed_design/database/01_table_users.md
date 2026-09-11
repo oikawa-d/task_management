@@ -236,7 +236,7 @@ repository層はSQL関数・プロシージャの結果をORMモデル、ORMモ�
 | 引数 / 戻り値 | `username`・`email`・`password_hash`：`sp_register_user`の入力 / OUTパラメータ`p_user_id`のUUID |
 | 発行SQL | `CALL sp_register_user(:username, :email, :password_hash, NULL)` |
 | 使用インデックス | `uq_users_username`, `uq_users_email`（`sp_register_user`内部） |
-| 送出例外 | `IntegrityError`（`uq_users_username` / `uq_users_email` 違反時。service層で `ConflictError` に変換） |
+| 送出例外 | `DBAPIError`（`sp_register_user`がSQLSTATE `P0001` / `P0002`を返す。service層で`ConflictError`へ変換） |
 | 処理内容 | 1. `sp_register_user`がDB側でUUIDを採番し、OUTパラメータを返す 2. 通常登録は`password_hash`を渡す 3. OAuth新規登録は`password_hash=NULL`で呼び出し、メール認証日時の確定はservice層の`mark_email_verified`で行う |
 
 ### 8.5 `repository/user_repository.py :: update_profile`
@@ -294,8 +294,10 @@ flowchart LR
     AS["auth_service"] --> URP["user_repository"]
     US["user_service"] --> URP
     ADS["admin_service<br/>（担当外）"] --> ARP["admin_repository"]
-    URP --> T["users テーブル"]
-    ARP --> T
+    URP --> UFN["fn_get_user / fn_find_user_*"]
+    ARP --> AFN["fn_admin_list_users"]
+    UFN --> T["users テーブル"]
+    AFN --> T
 ```
 
 ## 10. 想定クエリと性能
@@ -315,14 +317,14 @@ flowchart LR
 | 楽観ロック | なし（`version` カラムを持たない）。同時更新はプロフィール更新・管理者による権限変更のいずれも「最後の書き込みが勝つ」方式で許容する（同時実行頻度が低いため） |
 | advisory lock | 使用しない |
 | トランザクション境界 | `create`（会員登録）・`update_profile`・`update_password`・`mark_email_verified`は単一SP呼び出し。管理者更新も`admin_repository`の単一SP呼び出しであり、service層の呼び出し単位でコミットする |
-| 一意制約違反時の扱い | `uq_users_username` / `uq_users_email` 違反は `IntegrityError` を捕捉し `409 CONFLICT`（`DUPLICATE_USERNAME` / `DUPLICATE_EMAIL`）に変換する |
+| 一意性違反時の扱い | `sp_register_user` が返すSQLSTATE `P0001` / `P0002`をservice層で捕捉し、`409 CONFLICT`（`DUPLICATE_USERNAME` / `DUPLICATE_EMAIL`）に変換する。通常のテーブル制約違反は`IntegrityError`として扱う |
 
 ## 12. テスト設計
 
 | No | 区分 | ケース | 期待結果 | テスト名案 |
 |----|------|--------|----------|-----------|
-| 1 | 制約 | `username` 重複でINSERT | `IntegrityError`（`uq_users_username`） | `test_create_user_duplicate_username_raises` |
-| 2 | 制約 | `email` 重複でINSERT（大文字小文字違い） | `IntegrityError`（`uq_users_email`、`lower()`一致） | `test_create_user_duplicate_email_case_insensitive_raises` |
+| 1 | 制約 | `username` 重複で登録SPを呼び出す | `DBAPIError`（SQLSTATE `P0001`） | `test_create_user_duplicate_username_raises` |
+| 2 | 制約 | `email` 重複で登録SPを呼び出す（大文字小文字違い） | `DBAPIError`（SQLSTATE `P0002`、`lower()`一致） | `test_create_user_duplicate_email_case_insensitive_raises` |
 | 3 | 制約 | `role` に `'member'`/`'admin'` 以外を設定 | `IntegrityError`（`ck_users_role`） | `test_users_role_check_constraint` |
 | 4 | 制約 | `username` に許可外文字（例：スペース）を設定 | `IntegrityError`（`ck_users_username_format`） | `test_users_username_format_check_constraint` |
 | 5 | CASCADE | `users` 削除時に `oauth_accounts` が連動削除されるか | `oauth_accounts` の該当行が0件になる | `test_delete_user_cascades_oauth_accounts`（削除APIは未提供のためDBレベルの検証のみ） |

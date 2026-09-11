@@ -48,7 +48,9 @@
 
 ### 2.2 レスポンス
 
-**`200 OK`**
+**`200 OK`（目標レスポンス）**
+
+現行の `admin_repository.list_login_history` と `fn_admin_list_login_history` が返すのは `SETOF login_history` の一覧のみであり、ユーザー情報・総件数・総ページ数は返さない。以下の `user` および `meta.total` / `meta.total_pages` は目標レスポンスとして記載するが、実装には別Issueで取得方法またはレスポンス契約の確定が必要である。
 
 ```json
 {
@@ -117,10 +119,10 @@ sequenceDiagram
     PG-->>ARP: login_history行
     ARP-->>S: LoginHistory ORMモデル一覧
     S->>S: LoginHistory一覧をレスポンスDTOへ写像
-    S-->>R: Page[AdminLoginHistoryItem]
-    R-->>FE: 200 {items, meta}
+    S-->>R: LoginHistory一覧（現行Repository契約）
+    R-->>FE: 200（レスポンス契約確定後）
     alt DB接続不能
-        LRP-->>S: OperationalError
+        ARP-->>S: OperationalError
         S-->>R: ServiceUnavailableError
         R-->>FE: 503 SERVICE_UNAVAILABLE
     end
@@ -140,7 +142,7 @@ flowchart TB
     E -->|"OK"| F["admin_repository.list_login_history"]
     F --> G["fn_admin_list_login_historyで絞り込み"]
     G --> H["LoginHistory ORMモデル一覧をDTOへ写像"]
-    H --> I["200 {items, meta}"]
+    H --> I["200（レスポンス契約確定後）"]
     F -.->|"DB接続不能"| J["503 SERVICE_UNAVAILABLE"]
 ```
 
@@ -152,7 +154,7 @@ flowchart TB
 |------|------|
 | シグネチャ | `async def list_admin_login_history(query: AdminLoginHistoryQuery = Depends(), user: CurrentUser = Depends(require_admin), db: AsyncSession = Depends(get_db)) -> AdminLoginHistoryListResponse` |
 | 引数 | `query`: `page`/`per_page`/`user_id`/`q`/`login_method`/`success`/`from`/`to`（クエリ） / `user`: admin確認済みユーザー / `db`: DBセッション |
-| 戻り値 | `AdminLoginHistoryListResponse`（`items`, `meta`） |
+| 戻り値 | `LoginHistory`一覧（現行Repository契約）。`AdminLoginHistoryListResponse`への写像は目標契約 |
 | 送出例外 | なし（サービス層の例外を `AppError` としてそのまま伝播） |
 | 処理内容 | 1. `require_admin` により403判定を完了させる 2. `admin_login_history_service.search` を呼び出す 3. 戻り値をそのままレスポンスとして返す |
 | 副作用 | なし |
@@ -161,11 +163,11 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def search(query: AdminLoginHistoryQuery, db: AsyncSession) -> Page[AdminLoginHistoryItem]` |
+| シグネチャ | `async def search(query: AdminLoginHistoryQuery, db: AsyncSession) -> list[LoginHistory]`（現行契約） |
 | 引数 | `query`: 検索・ページング条件 / `db`: DBセッション |
-| 戻り値 | `Page[AdminLoginHistoryItem]`（`items: list[AdminLoginHistoryItem]`, `total: int`） |
+| 戻り値 | `LoginHistory` ORMモデル一覧。`AdminLoginHistoryItem`へのユーザー情報補完と`total`取得は目標契約として未確定 |
 | 送出例外 | `ServiceUnavailableError`（PostgreSQL接続不能時）→503 |
-| 処理内容 | `admin_repository.list_login_history`を1回呼び出し、返された`LoginHistory` ORMモデル一覧を`AdminLoginHistoryItem`へ写像する。絞り込みとページングはDB関数へ委譲する。表示用ユーザー情報の取得方法は、現行のDB関数が`login_history`のみを返し、ユーザーID単位の一括取得Repositoryを持たないため要検討とする |
+| 処理内容 | `admin_repository.list_login_history`を1回呼び出し、返された`LoginHistory` ORMモデル一覧を返す。絞り込みとページングはDB関数へ委譲する。`AdminLoginHistoryItem`への写像、表示用ユーザー情報の補完、総件数の取得は別Issueで確定する |
 | 副作用 | なし（読み取りのみ） |
 
 ### 6.3 `repository/admin_repository.py :: list_login_history`
@@ -189,7 +191,7 @@ flowchart LR
     S --> ARP["admin_repository.list_login_history"]
     ARP --> FN["fn_admin_list_login_history"]
     FN --> M1["models.LoginHistory"]
-    S --> DTO["AdminLoginHistoryItemへ写像"]
+    S --> DTO["AdminLoginHistoryItemへ写像（目標）"]
 ```
 
 ## 8. データ遷移図
