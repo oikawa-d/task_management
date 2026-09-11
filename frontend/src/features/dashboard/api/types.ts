@@ -55,3 +55,18 @@ export interface ProjectCreateRequest {
 	start_at?: string | null;
 	end_at?: string | null;
 }
+
+export interface CalendarTask {
+	id: string;
+	project_id: string | null;
+	title: string;
+	due_at: string;
+	status: "todo" | "in_progress" | "done";
+}
+
+export interface CalendarTaskParams {
+	from: string;
+	to: string;
+	scope: "me" | "project";
+	project_id?: string;
+}

@@ -17,7 +17,7 @@ export interface AppLayoutProps {
 }
 
 export function AppLayout({
-	notifications = [],
+	notifications,
 	notificationPage = 1,
 	notificationTotalPages = 1,
 	onNotificationPageChange,
@@ -61,7 +61,7 @@ export function AppLayout({
 
 	const handleNotificationClick = (notification: NotificationItemData) => {
 		onNotificationItemClick?.(notification);
-		if (!onNotificationItemClick && notification.task) {
+		if (!onNotificationItemClick && notification.task?.projectId) {
 			navigate(ROUTES.PROJECT(notification.task.projectId));
 		}
 	};
@@ -77,7 +77,8 @@ export function AppLayout({
 					totalPages={notificationTotalPages}
 					onPageChange={handleNotificationPageChange}
 					onItemClick={handleNotificationClick}
-					onMarkAllRead={onMarkAllNotificationsRead ?? (() => setUnreadOverride(0))}
+				onMarkAllRead={onMarkAllNotificationsRead ?? (() => setUnreadOverride(0))}
+				enableDataApi
 				/>
 			</header>
 			<nav aria-label="サイドバー">

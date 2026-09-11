@@ -2,7 +2,7 @@ import type { AxiosInstance } from "axios";
 
 import { getApiClient } from "../../../api/client";
 import { PROJECT_LIST_DEFAULT_PAGE, PROJECT_LIST_DEFAULT_PER_PAGE } from "../config/dashboardConfig";
-import type { ProjectCreateRequest, ProjectListParams, ProjectListResponse, ProjectSummary } from "./types";
+import type { CalendarTask, CalendarTaskParams, ProjectCreateRequest, ProjectListParams, ProjectListResponse, ProjectSummary } from "./types";
 
 /**
  * GET /api/projects（docs/detailed_design/api/projects/01_get_projects.md）
@@ -26,4 +26,12 @@ export async function getProjects(params: ProjectListParams = {}, client: AxiosI
 export async function createProject(payload: ProjectCreateRequest, client: AxiosInstance = getApiClient()): Promise<ProjectSummary> {
 	const { data } = await client.post<ProjectSummary>("/projects", payload);
 	return data;
+}
+
+export async function getCalendarTasks(
+	params: CalendarTaskParams,
+	client: AxiosInstance = getApiClient(),
+): Promise<CalendarTask[]> {
+	const { data } = await client.get<CalendarTask[]>('/tasks/calendar', { params });
+	return Array.isArray(data) ? data : [];
 }

@@ -191,8 +191,8 @@ repositoryは下表のSP/FN呼び出しとDTO写像だけを行い、`notificati
 | `list_by_user` | `SELECT (notification).*, task_title, task_project_id, total_count FROM fn_list_notifications(:user_id, :unread_only, :limit, :offset)` | 本人宛てのみ。`NotificationListItem`（通知本体＋task情報＋`total_count`）のリストを返す |
 | `count_notifications` | `SELECT fn_count_notifications(:user_id, :unread_only)` | `fn_list_notifications`の該当行が0件（pageが総ページ数を超えた場合等）で`total_count`が取得できないときのフォールバック |
 | `count_unread` | `SELECT fn_count_unread_notifications(:user_id)` | 未読件数。`unread_only=false`の場合のみ呼び出す（`unread_only=true`時は`total_count`が未読総数と一致するため再利用し、追加では呼ばない） |
-| `mark_read` | `CALL sp_mark_notification_read(:notification_id, :user_id, NULL)` | `OUT p_read_at`で永続化後の既読時刻を返す。他人/不存在はNULLとして404。既読済みは上書きしない |
-| `mark_all_read` | `CALL sp_mark_all_notifications_read(:user_id)` | `read_at IS NULL` の行だけ更新 |
+| `mark_read` | `CALL sp_mark_notification_read(:notification_id, :user_id, NULL)` | OUTの`p_read_at`がNULLなら他人/不存在として404。既読済みは上書きしない |
+| `mark_all_read` | `CALL sp_mark_all_notifications_read(:user_id, NULL)` | OUTの`p_updated_count`で更新件数を返し、`read_at IS NULL`の行だけ更新 |
 | `create_if_absent` / `bulk_create_if_absent` | `sp_create_task` / `sp_update_task` / batch内部のdedupe INSERT | `(user_id, dedupe_key)`競合は `ON CONFLICT DO NOTHING` |
 | `purge_expired` | `CALL sp_purge_notifications(:retention_days)` | 未読・既読を問わず期限超過を削除 |
 
@@ -206,7 +206,7 @@ repositoryは下表のSP/FN呼び出しとDTO写像だけを行い、`notificati
 |------|------|
 | `fn_list_notifications` の欠落タスク考慮 | `tasks` を `LEFT JOIN` し、タスクが削除済み（`task_id IS NULL`）の行も欠落させず返す。`task_title` が `NULL` の行はレスポンスDTOで `task` を `null` として反映する（`04_api.md` §3.3） |
 | `fn_list_notifications` の `total_count` | ページング前（`LIMIT`/`OFFSET`適用前）のCTEで `count(*) OVER()` を算出し、全行に同じ値を付与する。該当0件時は行自体が返らないため `total_count` を取得できず、`fn_count_notifications` で別途取得する |
-| `sp_mark_notification_read` の冪等性 | `read_at = COALESCE(read_at, now())` により既読済みでも `read_at` を上書きせず、更新後の永続値を`OUT p_read_at`で返す（2回目以降の`PATCH`も`200`を返す）。他人の通知/不存在は`p_read_at = NULL`としてAPI層が`404 NOT_FOUND`に変換し、両者を区別しない |
+| `sp_mark_notification_read` の冪等性 | `read_at = COALESCE(read_at, now())` により既読済みでも `read_at` を上書きしない（2回目以降の `PATCH` も `200` を返す）。他人の通知/不存在は更新0件としてAPI層が `404 NOT_FOUND` に変換し、両者を区別しない |
 | `sp_mark_all_notifications_read` の限定条件 | `WHERE user_id=:me AND read_at IS NULL` に限定するため既存の既読行の `read_at` は変化しない |
 | 通知作成の重複防止 | `sp_create_task` / `sp_update_task` 内の条件付きINSERTは `ON CONFLICT (user_id, dedupe_key) DO NOTHING` によりアトミックに「存在しなければ作る」を実現し、一意制約違反を例外として扱わない（詳細は§5） |
 | batch一括作成 | `batch/app/repository/notification_repository.py :: bulk_create_if_absent` が `NOTIFY_DUE_BATCH_CHUNK_SIZE`（既定500）件単位で `unnest` による複数行一括INSERTを行い、`ON CONFLICT DO NOTHING` で同一実行枠の再実行を無害化する。1チャンク＝1トランザクションとし長時間化を避ける |

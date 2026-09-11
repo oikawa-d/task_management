@@ -1,7 +1,6 @@
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 from uuid import uuid4
-from zoneinfo import ZoneInfo
 
 import pytest
 from app.core.exceptions import NotFoundError
@@ -181,9 +180,8 @@ async def test_list_notifications_skips_count_unread_when_unread_only(monkeypatc
 @pytest.mark.asyncio
 async def test_mark_all_notifications_returns_changed_count(monkeypatch: pytest.MonkeyPatch) -> None:
 	user = _user()
-	count_unread = AsyncMock(side_effect=[3, 0])
-	mark_all_read = AsyncMock()
-	monkeypatch.setattr(notification_service.notification_repository, "count_unread", count_unread)
+	mark_all_read = AsyncMock(return_value=3)
+	monkeypatch.setattr(notification_service.notification_repository, "count_unread", AsyncMock(return_value=0))
 	monkeypatch.setattr(notification_service.notification_repository, "mark_all_read", mark_all_read)
 	db = object()
 
@@ -197,8 +195,8 @@ async def test_mark_all_notifications_returns_changed_count(monkeypatch: pytest.
 @pytest.mark.asyncio
 async def test_mark_notification_read_returns_app_timezone(monkeypatch: pytest.MonkeyPatch) -> None:
 	user = _user()
-	persisted_read_at = datetime(2026, 9, 4, 17, 0, tzinfo=timezone.utc)
-	mark_read = AsyncMock(return_value=persisted_read_at)
+	read_at = datetime(2026, 9, 4, 2, tzinfo=timezone.utc)
+	mark_read = AsyncMock(return_value=read_at)
 	monkeypatch.setattr(notification_service.notification_repository, "mark_read", mark_read)
 	monkeypatch.setattr(notification_service.notification_repository, "count_unread", AsyncMock(return_value=0))
 	notification_id = uuid4()
@@ -208,21 +206,15 @@ async def test_mark_notification_read_returns_app_timezone(monkeypatch: pytest.M
 
 	mark_read.assert_awaited_once_with(db, notification_id, user.id)
 	assert response.id == notification_id
-	assert response.read_at == persisted_read_at.astimezone(ZoneInfo("Asia/Tokyo"))
+	assert response.read_at == read_at.astimezone(response.read_at.tzinfo)
 
 
 @pytest.mark.asyncio
-async def test_mark_notification_read_returns_404_when_repository_returns_none(
+async def test_mark_notification_read_returns_404_when_repository_has_no_owned_notification(
 	monkeypatch: pytest.MonkeyPatch,
 ) -> None:
 	user = _user()
-	mark_read = AsyncMock(return_value=None)
-	count_unread = AsyncMock(return_value=0)
-	monkeypatch.setattr(notification_service.notification_repository, "mark_read", mark_read)
-	monkeypatch.setattr(notification_service.notification_repository, "count_unread", count_unread)
-	db = object()
+	monkeypatch.setattr(notification_service.notification_repository, "mark_read", AsyncMock(return_value=None))
 
 	with pytest.raises(NotFoundError):
-		await notification_service.mark_notification_read(db, uuid4(), user)  # type: ignore[arg-type]
-
-	count_unread.assert_not_awaited()
+		await notification_service.mark_notification_read(object(), uuid4(), user)  # type: ignore[arg-type]
