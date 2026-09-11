@@ -27,7 +27,7 @@
 | 認証 | session モード：`cerberus_sid` Cookie ／ jwt モード：`Authorization: Bearer {access_token}` |
 | 認可 | プロジェクトメンバー（`require_project_member`。admin は無条件許可） |
 | CSRF検証 | 必要（session モードの更新系。`X-CSRF-Token` ヘッダ必須） |
-| Origin検証 | 不要（Cookie発行を伴わない一般更新系APIのため対象外。Origin検証はログイン・`/auth/refresh`・`/auth/logout`・OAuth交換に限定：[../../../basic_design/04_api.md](../../../basic_design/04_api.md) §1） |
+| Origin検証 | 必要（sessionモードの更新系API。jwtモードはAuthorizationヘッダのみのため不要） |
 | AUTH_MODE差異 | session時はCSRF検証あり、jwt時はAuthorizationヘッダのためCSRF検証不要。それ以外の業務ロジックに差異なし |
 | 冪等性 | なし（POSTのため同一リクエストの再送で複数タスクが作成され得る。冪等キーは設けない） |
 | レート制限 | 対象外 |
