@@ -28,8 +28,10 @@ __all__ = [
 	"delete_session",
 	"get_csrf_token",
 	"get_login_failure_count",
+	"get_login_failure_ttl",
 	"get_refresh_token",
 	"get_session",
+	"get_rate_limit_ttl",
 	"incr_login_failure",
 	"mark_email_verify_sent",
 	"ping",
@@ -145,6 +147,10 @@ async def get_login_failure_count(identifier: str, client_ip: str) -> int:
 	return await redis_store_security.get_login_failure_count(_redis(), _key_prefix(), identifier, client_ip)
 
 
+async def get_login_failure_ttl(identifier: str, client_ip: str) -> int:
+	return await redis_store_security.get_login_failure_ttl(_redis(), _key_prefix(), identifier, client_ip)
+
+
 async def incr_login_failure(identifier: str, client_ip: str, window: int) -> int:
 	return await redis_store_security.incr_login_failure(_redis(), _key_prefix(), identifier, client_ip, window)
 
@@ -155,6 +161,10 @@ async def reset_login_failure(identifier: str, client_ip: str) -> None:
 
 async def check_rate_limit(scope: str, value: str, max_requests: int, window: int) -> int:
 	return await redis_store_security.check_rate_limit(_redis(), _key_prefix(), scope, value, max_requests, window)
+
+
+async def get_rate_limit_ttl(scope: str, value: str) -> int:
+	return await redis_store_security.get_rate_limit_ttl(_redis(), _key_prefix(), scope, value)
 
 
 async def ping() -> bool:

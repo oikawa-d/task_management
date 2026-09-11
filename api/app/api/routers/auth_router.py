@@ -69,9 +69,10 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 async def register(
 	payload: RegisterRequest,
 	background: BackgroundTasks,
+	request: Request,
 	db: AsyncSession = Depends(get_db_session),
 ) -> RegisterResponse:
-	user = await auth_service.register(payload, background, db)
+	user = await auth_service.register(payload, background, request, db)
 	return RegisterResponse(id=user.id, email=user.email, message=REGISTER_ACCEPTED_MESSAGE)
 
 

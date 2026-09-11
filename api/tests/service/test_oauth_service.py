@@ -352,14 +352,16 @@ async def test_oauth_rate_limit_rejects_excess_requests(operation: str, monkeypa
 	monkeypatch.setattr(
 		auth_service.redis_store, "check_rate_limit", AsyncMock(return_value=settings.rate_limit_oauth_max_requests + 1)
 	)
+	monkeypatch.setattr(auth_service.redis_store, "get_rate_limit_ttl", AsyncMock(return_value=321))
 
-	with pytest.raises(TooManyAttemptsError):
+	with pytest.raises(TooManyAttemptsError) as raised:
 		if operation == "start":
 			await auth_service.oauth_start("/dashboard", request=_request(), response=Response(), settings=settings)
 		elif operation == "callback":
 			await auth_service.oauth_callback("code", "state", "state", _request(), Response(), settings=settings)
 		else:
 			await auth_service.oauth_exchange("code", _request(), Response(), settings=settings)
+	assert raised.value.retry_after == 321
 
 
 @pytest.mark.asyncio
@@ -370,6 +372,30 @@ async def test_oauth_rate_limit_redis_failure_returns_service_unavailable(
 	settings = _settings(auth_mode="jwt")
 	monkeypatch.setattr(
 		auth_service.redis_store, "check_rate_limit", AsyncMock(side_effect=RuntimeError("redis unavailable"))
+	)
+
+	with pytest.raises(ServiceUnavailableError):
+		if operation == "start":
+			await auth_service.oauth_start("/dashboard", request=_request(), response=Response(), settings=settings)
+		elif operation == "callback":
+			await auth_service.oauth_callback("code", "state", "state", _request(), Response(), settings=settings)
+		else:
+			await auth_service.oauth_exchange("code", _request(), Response(), settings=settings)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["start", "callback", "exchange"])
+async def test_oauth_rate_limit_ttl_failure_returns_service_unavailable(
+	operation: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+	settings = _settings(auth_mode="jwt")
+	monkeypatch.setattr(
+		auth_service.redis_store,
+		"check_rate_limit",
+		AsyncMock(return_value=settings.rate_limit_oauth_max_requests + 1),
+	)
+	monkeypatch.setattr(
+		auth_service.redis_store, "get_rate_limit_ttl", AsyncMock(side_effect=RuntimeError("redis unavailable"))
 	)
 
 	with pytest.raises(ServiceUnavailableError):
@@ -393,6 +419,7 @@ async def test_oauth_rate_limit_log_contains_audit_fields(
 		"check_rate_limit",
 		AsyncMock(return_value=settings.rate_limit_oauth_max_requests + 1),
 	)
+	monkeypatch.setattr(auth_service.redis_store, "get_rate_limit_ttl", AsyncMock(return_value=321))
 
 	with caplog.at_level("WARNING", logger="app.oauth"), pytest.raises(TooManyAttemptsError):
 		await auth_service.oauth_callback("code", "state", "state", request, Response(), settings=settings)
