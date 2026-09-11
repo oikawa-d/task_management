@@ -51,7 +51,7 @@ async def test_list_projects_filters_by_query_and_is_active(db_session: AsyncSes
 	# total_countはウィンドウ関数count(*) OVER()で算出される（該当行数と一致するはず）
 	assert all(row.total_count == len(by_query) for row in by_query)
 	assert all(row.total_count == len(by_active) for row in by_active)
-	assert by_query[0].member_count == 0
+	assert by_query[0].member_count == 1
 	assert by_query[0].task_count_todo == 0
 	assert by_query[0].task_count_in_progress == 0
 	assert by_query[0].task_count_done == 0
