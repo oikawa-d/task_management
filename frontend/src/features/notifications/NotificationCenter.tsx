@@ -34,10 +34,13 @@ export function NotificationCenter({
 }: NotificationCenterProps) {
 	const [isOpen, setIsOpen] = useState(false);
 	const [internalPage, setInternalPage] = useState(page);
+	const [mutationError, setMutationError] = useState<string | null>(null);
+	const [retryAction, setRetryAction] = useState<(() => Promise<void>) | null>(null);
 	const bellRef = useRef<HTMLButtonElement>(null);
 	const panelRef = useRef<HTMLDivElement>(null);
 	const currentPage = onPageChange ? page : internalPage;
-	const notificationQuery = useNotifications(currentPage, enableDataApi && isOpen && notifications === undefined);
+	const useDataApi = enableDataApi && notifications === undefined;
+	const notificationQuery = useNotifications(currentPage, useDataApi && isOpen);
 	const markReadMutation = useMarkNotificationRead();
 	const markAllMutation = useMarkAllNotificationsRead();
 
@@ -73,18 +76,42 @@ export function NotificationCenter({
 		};
 	}, [isOpen]);
 
-	const handleItemClick = (notification: NotificationItemData) => {
-		if (enableDataApi && notification.readAt === null) void markReadMutation.mutateAsync(notification.id);
+	const completeItemClick = (notification: NotificationItemData) => {
 		onItemClick?.(notification);
 		close();
+	};
+	const handleItemClick = (notification: NotificationItemData) => {
+		if (!useDataApi || notification.readAt !== null) {
+			completeItemClick(notification);
+			return;
+		}
+		onItemClick?.(notification);
+		const action = async () => {
+			await markReadMutation.mutateAsync(notification.id);
+			setMutationError(null);
+			setRetryAction(null);
+			close();
+		};
+		setRetryAction(() => action);
+		void action().catch(() => setMutationError("通知を既読にできませんでした。再試行してください。"));
 	};
 	const handlePageChange = (nextPage: number) => {
 		setInternalPage(nextPage);
 		onPageChange?.(nextPage);
 	};
 	const handleMarkAllRead = () => {
-		if (enableDataApi) void markAllMutation.mutateAsync();
-		onMarkAllRead?.();
+		if (!useDataApi) {
+			onMarkAllRead?.();
+			return;
+		}
+		const action = async () => {
+			await markAllMutation.mutateAsync();
+			setMutationError(null);
+			setRetryAction(null);
+			onMarkAllRead?.();
+		};
+		setRetryAction(() => action);
+		void action().catch(() => setMutationError("通知をすべて既読にできませんでした。再試行してください。"));
 	};
 	const displayNotifications = notifications ?? notificationQuery.data?.items ?? [];
 	const displayTotalPages = notifications ? totalPages : notificationQuery.data?.totalPages ?? 1;
@@ -107,9 +134,11 @@ export function NotificationCenter({
 					onPageChange={handlePageChange}
 					onItemClick={handleItemClick}
 					onMarkAllRead={handleMarkAllRead}
-					isLoading={enableDataApi && notificationQuery.isLoading}
-					errorMessage={enableDataApi && notificationQuery.isError ? "通知を読み込めませんでした。" : null}
-					onRetry={() => void notificationQuery.refetch()}
+					isLoading={useDataApi && notificationQuery.isLoading}
+					errorMessage={
+						mutationError ?? (useDataApi && notificationQuery.isError ? "通知を読み込めませんでした。" : null)
+					}
+					onRetry={retryAction ?? (() => void notificationQuery.refetch())}
 				/>
 			)}
 		</div>
