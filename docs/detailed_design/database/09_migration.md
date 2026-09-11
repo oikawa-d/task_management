@@ -92,6 +92,7 @@ flowchart LR
 ### 2.7 SP/FN適用順序
 
 `0010`、`0014`〜`0016`、`0019`、`0021`は、対象テーブルのDDLと既存のUUID/CHECK/FK定義が完了した後に適用する。`0016`では、`0010`が作成するtask SPの旧シグネチャを削除して、`db/procedures/`の現行SQLを再適用する。`0019`では、`0014`が作成した`fn_list_notifications`（戻り値`SETOF notifications`）を`DROP FUNCTION`で削除してから`TABLE(notification notifications, task_title VARCHAR, task_project_id UUID, total_count BIGINT)`を返す現行定義で再作成する。`0021`では、`sp_mark_notification_read`をDROPして`p_read_at`を返す現行定義へ再作成する。PostgreSQLは`CREATE OR REPLACE FUNCTION`で既存関数の戻り値型を変更できないため、戻り値型を変えるリビジョンは必ずDROP→CREATEの手順を取る。各リビジョンはSQL資材を読み込んで作成し、repositoryの直接CRUDを追加しない。
+`0010`、`0014`〜`0016`、`0019`、`0021`、`0022`は、対象テーブルのDDLと既存のUUID/CHECK/FK定義が完了した後に適用する。`0016`では、`0010`が作成するtask SPの旧シグネチャを削除して、`db/procedures/`の現行SQLを再適用する。`0019`では、`0014`が作成した`fn_list_notifications`（戻り値`SETOF notifications`）を`DROP FUNCTION`で削除してから`TABLE(notification notifications, task_title VARCHAR, task_project_id UUID, total_count BIGINT)`を返す現行定義で再作成する。`0021`では、`sp_mark_notification_read`をDROPして`p_read_at`を返す現行定義へ再作成する。`0022`では、`0020`が作成したadmin一覧FNを`DROP FUNCTION`で削除してからowner情報・集計値を含む現行定義で再作成する。PostgreSQLは`CREATE OR REPLACE FUNCTION`で既存関数の戻り値型を変更できないため、戻り値型を変えるリビジョンは必ずDROP→CREATEの手順を取る。各リビジョンはSQL資材を読み込んで作成し、repositoryの直接CRUDを追加しない。
 
 | リビジョン | 依存するテーブル | 適用内容 |
 |------------|------------------|----------|
@@ -101,6 +102,8 @@ flowchart LR
 | `0016` | `notifications`, `tasks` | APIから受け取るUTC日境界でtask SPの当日期限通知を判定。downgradeではlegacy task SPへ戻す |
 | `0019` | `notifications`, `tasks` | `fn_list_notifications`をDROP FUNCTIONしてtask情報・total_countを返す現行定義へ再作成し、`fn_count_notifications`を新設。downgradeではlegacy定義（`SETOF notifications`）へ戻す |
 | `0021` | `notifications` | `sp_mark_notification_read`の`p_read_at`をOUTで返す現行定義へ再作成。downgradeではlegacy定義へ戻す |
+| `0021` | `notifications` | `sp_mark_notification_read`の`p_read_at`をOUTで返す現行定義へ再作成。downgradeではlegacy定義へ戻す |
+| `0022` | `users`, `project_members`, `projects`, `tasks`, `login_history` | `fn_admin_list_projects`のowner情報・member/task集計と`fn_admin_list_login_history`のusers LEFT JOINを追加。downgradeでは`0020`時点のlegacy定義へ戻す |
 
 関数・プロシージャのDROPは依存するAPIが停止している環境でのみ行う。production CDではdowngradeを実行しない。
 

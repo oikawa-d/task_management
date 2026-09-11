@@ -5,6 +5,7 @@ CREATE OR REPLACE FUNCTION fn_admin_list_projects(
     p_offset INTEGER
 ) RETURNS TABLE (
     project projects,
+    owner users,
     member_count BIGINT,
     task_count_todo BIGINT,
     task_count_in_progress BIGINT,
@@ -24,6 +25,7 @@ AS $$
     )
     SELECT
         p AS project,
+        u AS owner,
         COALESCE(member_counts.member_count, 0) AS member_count,
         COALESCE(task_counts.task_count_todo, 0) AS task_count_todo,
         COALESCE(task_counts.task_count_in_progress, 0) AS task_count_in_progress,
@@ -31,6 +33,7 @@ AS $$
         s.total_count
     FROM scoped s
     JOIN projects p ON p.id = s.id
+    JOIN users u ON u.id = p.owner_id
     LEFT JOIN (
         SELECT project_id, count(*) AS member_count
         FROM project_members

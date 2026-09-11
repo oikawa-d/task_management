@@ -68,7 +68,7 @@ repository層は `CALL sp_xxx(...)` または `SELECT fn_xxx(...)` と戻り値�
 | 31 | プロシージャ | `sp_mark_all_notifications_read` | `p_user_id UUID` | なし | 本人の未読通知を一括既読化 |
 | 32 | 関数 | `fn_admin_list_users` | `p_query VARCHAR`, `p_role VARCHAR`, `p_is_active BOOLEAN`, `p_limit INTEGER`, `p_offset INTEGER` | `TABLE("user" users, total_count BIGINT)` | admin用ユーザー一覧。`count(*) OVER()`でページング前の総件数を1回の呼び出しで返す（#347レビュー対応） |
 | 32a | 関数 | `fn_count_admin_users` | `p_query VARCHAR`, `p_role VARCHAR`, `p_is_active BOOLEAN` | `BIGINT` | `fn_admin_list_users`の`total_count`が取得できない場合（該当0件）のフォールバック用件数取得 |
-| 33 | 関数 | `fn_admin_list_projects` | `p_query VARCHAR`, `p_is_active BOOLEAN`, `p_limit INTEGER`, `p_offset INTEGER` | `TABLE(project projects, member_count BIGINT, task_count_todo BIGINT, task_count_in_progress BIGINT, task_count_done BIGINT, total_count BIGINT)` | admin用プロジェクト一覧。member/task集計と`count(*) OVER()`による総件数を同時返却（#347/#348対応） |
+| 33 | 関数 | `fn_admin_list_projects` | `p_query VARCHAR`, `p_is_active BOOLEAN`, `p_limit INTEGER`, `p_offset INTEGER` | `TABLE(project projects, owner users, member_count BIGINT, task_count_todo BIGINT, task_count_in_progress BIGINT, task_count_done BIGINT, total_count BIGINT)` | admin用プロジェクト一覧。owner情報、member/task集計、`count(*) OVER()`による総件数を同時返却（#347/#348対応） |
 | 33a | 関数 | `fn_count_admin_projects` | `p_query VARCHAR`, `p_is_active BOOLEAN` | `BIGINT` | `fn_admin_list_projects`の`total_count`フォールバック用件数取得 |
 | 34 | 関数 | `fn_admin_list_login_history` | `p_user_id UUID`, `p_query VARCHAR`, `p_login_method VARCHAR`, `p_success BOOLEAN`, `p_from TIMESTAMPTZ`, `p_to TIMESTAMPTZ`, `p_limit INTEGER`, `p_offset INTEGER` | `TABLE(history login_history, "user" users, total_count BIGINT)` | admin用ログイン履歴一覧。usersをLEFT JOINし、表示用ユーザー情報と`count(*) OVER()`による総件数を同時返却（#347/#348対応） |
 | 34a | 関数 | `fn_count_admin_login_history` | `p_user_id UUID`, `p_query VARCHAR`, `p_login_method VARCHAR`, `p_success BOOLEAN`, `p_from TIMESTAMPTZ`, `p_to TIMESTAMPTZ` | `BIGINT` | `fn_admin_list_login_history`の`total_count`フォールバック用件数取得 |
@@ -361,7 +361,7 @@ $$;
 | `sp_mark_all_notifications_read` | user_id一致かつ未読の行を一括UPDATE | 既読は上書きしない |
 | `fn_admin_list_users` | role/status/queryをusersへ適用し、ウィンドウ関数`count(*) OVER()`によるページング前total_countとともに一覧返却 | admin APIからのみ呼ぶ。`total_count`は該当0件の場合は取得できない（`fn_count_admin_users`で別途取得） |
 | `fn_count_admin_users` | `fn_admin_list_users`と同一条件でCOUNTを返す | `fn_admin_list_users`の該当行が0件のときのフォールバックとしてのみ使用する |
-| `fn_admin_list_projects` | query/statusをprojectsへ適用し、project_members/tasksをproject_id単位で集計したmember_count・status別task_count、およびウィンドウ関数`count(*) OVER()`によるtotal_countとともに一覧返却 | admin APIからのみ呼ぶ。タスク件数は既存サービスの挙動に合わせてis_activeによる除外を行わない |
+| `fn_admin_list_projects` | query/statusをprojectsへ適用し、projects.owner_idでusersを結合する。project_members/tasksをproject_id単位で集計したmember_count・status別task_count、およびウィンドウ関数`count(*) OVER()`によるtotal_countとともに一覧返却 | admin APIからのみ呼ぶ。タスク件数は既存サービスの挙動に合わせてis_activeによる除外を行わない |
 | `fn_count_admin_projects` | `fn_admin_list_projects`と同一条件でCOUNTを返す | `fn_admin_list_projects`の該当行が0件のときのフォールバックとしてのみ使用する |
 | `fn_admin_list_login_history` | login_historyを条件（`created_at >= p_from`、`created_at < p_to`による期間絞り込みを含む）・created_at降順でページングし、usersをLEFT JOINした表示用ユーザー情報とウィンドウ関数`count(*) OVER()`によるtotal_countとともに返却 | admin APIからのみ呼ぶ。`api/admin/07_get_admin_login_history.md` §2.1のfrom/to確定仕様に対応。`total_count`は該当0件の場合は取得できない（`fn_count_admin_login_history`で別途取得） |
 | `fn_count_admin_login_history` | `fn_admin_list_login_history`と同一条件でCOUNTを返す | `fn_admin_list_login_history`の該当行が0件のときのフォールバックとしてのみ使用する |
