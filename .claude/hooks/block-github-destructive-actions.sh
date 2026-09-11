@@ -12,6 +12,11 @@ REPO_PLACEHOLDER="<owner>/<repo>"
 # 非ブロッキングエラーとしてツール実行を継続してしまうため、想定外の失敗でも確実にexit 2にする。
 trap 'echo "ブロック: hookスクリプト内で想定外のエラーが発生したため、安全側でブロックします。" >&2; exit 2' ERR
 
+if ! command -v jq >/dev/null 2>&1; then
+	echo "ブロック: hookの入力を検証するjqが見つからないため、fail-closeします。" >&2
+	exit 2
+fi
+
 input=$(cat)
 tool_name=$(jq -r '.tool_name // empty' <<<"$input")
 
@@ -135,6 +140,20 @@ if grep -Eq "${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+issue[[:space:]]+close
 		echo "ブロック: 対象issueに '${REVIEWED_LABEL}' ラベルがありません。.agents/review-policy.md に沿ったレビューで「受入可」のコメントを投稿したうえで、PR作成者以外がラベルを付与してください（例: gh api -X POST repos/${REPO_PLACEHOLDER}/issues/<Issue番号>/labels -f \"labels[]=${REVIEWED_LABEL}\"）。" >&2
 		exit 2
 	fi
+fi
+
+# `gh pr merge` の代替経路となるGitHub API直叩き(PUT .../pulls/<番号>/merge)を塞ぐ。
+# こちらはreviewedラベルの有無にかかわらず禁止し、mergeは `gh pr merge` に一本化する。
+api_put_regex="${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+api[^;&|[:cntrl:]]*((--method[=[:space:]]+|-X[[:space:]]+)PUT[^;&|[:cntrl:]]*repos/[^[:space:];|&]+/pulls/[0-9]+/merge|repos/[^[:space:];|&]+/pulls/[0-9]+/merge[^;&|[:cntrl:]]*((--method[=[:space:]]+|-X[[:space:]]+)PUT))"
+if grep -Eiq "$api_put_regex" <<<"$command_for_match"; then
+	echo "ブロック: GitHub API経由のPR mergeは禁止されています。レビュー完了後に '${REVIEWED_LABEL}' ラベルを付与し、gh pr merge を使用してください。" >&2
+	exit 2
+fi
+
+# `gh issue close` の代替経路となる `gh issue edit --state closed` を塞ぐ。
+if grep -Eiq "${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+issue[^;&|[:cntrl:]]*[[:space:]]+edit[^;&|[:cntrl:]]+[[:space:]]+--state([=[:space:]]+)closed([[:space:]]|\$)" <<<"$command_for_match"; then
+	echo "ブロック: --state closedによるIssue closeは禁止されています。レビュー完了後に '${REVIEWED_LABEL}' ラベルを付与し、gh issue close を使用してください。" >&2
+	exit 2
 fi
 
 exit 0

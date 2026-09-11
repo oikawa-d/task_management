@@ -41,6 +41,7 @@ def test_required_jobs_are_defined() -> None:
 		"batch-test",
 		"batch-container-integration",
 		"docker-build",
+		"hook-test",
 	}
 	assert required.issubset(jobs.keys())
 
@@ -97,3 +98,10 @@ def test_api_dev_requirements_cover_lint_and_test_tools() -> None:
 	}
 	# httpx2はfastapi.testclient（starlette.testclient）の実行に必須。
 	assert {"ruff", "mypy", "pytest", "pytest-cov", "pytest-asyncio", "httpx2"} <= packages
+
+
+def test_hook_test_runs_all_hook_tests() -> None:
+	job = _load_workflow()["jobs"]["hook-test"]
+	runs = [step.get("run", "") for step in job["steps"]]
+	hook_run = next(run for run in runs if ".claude/hooks/*.test.sh" in run)
+	assert 'bash "$test_file"' in hook_run
