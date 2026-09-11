@@ -20,7 +20,7 @@
 | 認証 | 必要 |
 | 認可 | プロジェクトメンバー（`require_project_member` 相当。タスク不存在・非所属はいずれも404） |
 | CSRF検証 | 必要（sessionモードの更新系。jwtモードはAuthorizationヘッダのため不要） |
-| Origin検証 | 必要（`basic_design/04_api.md` §1、更新系リクエストのため） |
+| Origin検証 | 必要（sessionモードのみ。jwtモードはAuthorizationヘッダのみのため不要） |
 | AUTH_MODE差異 | CSRF検証の要否のみ差異あり。それ以外は差異なし |
 | 冪等性 | なし（POSTのため。二重送信防止はフロント側でボタン非活性化により行う） |
 | レート制限 | 対象外（§13参照。現時点で基本設計に規定なし） |
@@ -96,7 +96,7 @@ sequenceDiagram
     autonumber
     participant FE as "React SPA"
     participant R as "comments_router"
-    participant V as "verify_origin/verify_csrf"
+    participant V as "verify_origin_if_session/verify_csrf_if_session"
     participant D as "deps.get_task_for_member"
     participant S as "task_service"
     participant TR as "task_repository"
@@ -204,7 +204,7 @@ flowchart LR
     R --> S["task_service.add_comment"]
     S --> TR["task_repository.add<br/>（sp_add_task_comment）"]
     TR --> DB[("PostgreSQL<br/>task_comments")]
-    R --> V["deps.verify_origin / verify_csrf"]
+    R --> V["deps.verify_origin_if_session / verify_csrf_if_session"]
 ```
 
 ## 8. データ遷移図

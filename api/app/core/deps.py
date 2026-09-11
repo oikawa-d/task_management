@@ -101,6 +101,17 @@ async def verify_origin(request: Request, settings: BackendSettings = Depends(ge
 		raise CsrfInvalidError()
 
 
+async def verify_origin_if_session(
+	request: Request,
+	strategy: AuthStrategy = Depends(get_auth_strategy),
+	settings: BackendSettings = Depends(get_backend_settings),
+) -> None:
+	"""通常APIの更新系エンドポイント向けOrigin検証。JWT方式では認証ヘッダのみのため検証しない。"""
+	if strategy.mode != "session":
+		return
+	await verify_origin(request, settings)
+
+
 def _origin_from_referer(referer: str | None) -> str | None:
 	if not referer:
 		return None

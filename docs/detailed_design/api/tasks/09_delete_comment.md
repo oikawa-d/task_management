@@ -19,7 +19,7 @@
 | 認証 | 必要 |
 | 認可 | 投稿者本人 または admin（判定順序は[08_patch_comment.md](./08_patch_comment.md) §3.1と同一） |
 | CSRF検証 | 必要（sessionモードの更新系） |
-| Origin検証 | 必要 |
+| Origin検証 | 必要（sessionモードのみ。jwtモードはAuthorizationヘッダのみのため不要） |
 | AUTH_MODE差異 | CSRF検証の要否のみ差異あり |
 | 冪等性 | なし（削除済みIDへの再リクエストは404となり、初回の204とは異なる応答になる。§13参照） |
 | レート制限 | 対象外 |
@@ -68,7 +68,7 @@ sequenceDiagram
     autonumber
     participant FE as "React SPA"
     participant R as "comments_router"
-    participant V as "verify_origin/verify_csrf"
+    participant V as "verify_origin_if_session/verify_csrf_if_session"
     participant D as "deps.get_comment_for_member"
     participant S as "task_service"
     participant TR as "task_repository"
@@ -177,7 +177,7 @@ flowchart LR
     S --> TR2["task_repository.delete<br/>（sp_delete_task_comment）"]
     TR1 --> DB[("PostgreSQL<br/>task_comments / tasks")]
     TR2 --> DB
-    R --> V["deps.verify_origin / verify_csrf"]
+    R --> V["deps.verify_origin_if_session / verify_csrf_if_session"]
 ```
 
 ## 8. データ遷移図

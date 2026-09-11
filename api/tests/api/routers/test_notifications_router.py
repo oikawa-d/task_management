@@ -161,7 +161,6 @@ def test_mark_notification_read_returns_service_result(client: TestClient, monke
 
 	res = client.patch(
 		f"/api/notifications/{notification_id}/read",
-		headers={"Origin": ALLOWED_ORIGIN},
 	)
 
 	assert res.status_code == 200
@@ -185,18 +184,23 @@ def test_mark_notification_read_other_users_notification_returns_404(
 	assert res.json()["error"]["code"] == "NOT_FOUND"
 
 
-def test_mark_notification_read_rejects_disallowed_origin(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_mark_notification_read_rejects_disallowed_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+	app = _build_app()
+	app.dependency_overrides[get_auth_strategy] = lambda: SimpleNamespace(mode="session")
+	monkeypatch.setattr(deps.redis_store, "check_rate_limit", AsyncMock(return_value=1))
 	mock_mark = AsyncMock()
 	monkeypatch.setattr(router_module.notification_service, "mark_notification_read", mock_mark)
 
-	res = client.patch(
-		f"/api/notifications/{uuid4()}/read",
-		headers={"Origin": "http://evil.example"},
-	)
+	with TestClient(app) as client:
+		res = client.patch(
+			f"/api/notifications/{uuid4()}/read",
+			headers={"Origin": "http://evil.example"},
+		)
 
 	assert res.status_code == 403
 	assert res.json()["error"]["code"] == "CSRF_INVALID"
 	mock_mark.assert_not_called()
+	app.dependency_overrides.clear()
 
 
 def test_mark_notification_read_session_mode_requires_csrf_header(monkeypatch: pytest.MonkeyPatch) -> None:

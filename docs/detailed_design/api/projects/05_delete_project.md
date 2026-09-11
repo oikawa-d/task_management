@@ -19,7 +19,7 @@
 | 認証 | 必要 |
 | 認可 | オーナー／admin（所属memberであっても非オーナーは不可） |
 | CSRF検証 | 必要（session モードの更新系） |
-| Origin検証 | 必要 |
+| Origin検証 | 必要（sessionモードのみ。jwtモードはAuthorizationヘッダのみのため不要） |
 | AUTH_MODE差異 | session: `X-CSRF-Token` 検証あり／jwt: ヘッダ方式のためCSRF検証なし |
 | 冪等性 | あり（既に`is_active=false`の対象への再実行も`UPDATE`が0件更新になるだけで200/204として扱い、副作用なく完了する。プロジェクト自体が存在しない場合のみ404） |
 | レート制限 | 対象外 |
@@ -72,7 +72,7 @@ sequenceDiagram
     participant PG as "PostgreSQL"
 
     FE->>R: DELETE /api/projects/{project_id}
-    R->>R: verify_origin / verify_csrf（session時）
+    R->>R: verify_origin_if_session / verify_csrf_if_session
     R->>D: 認証 + 所属チェック + オーナー判定（04_patch_project.mdと同一処理）
     D-->>R: Project（NotFoundError/ForbiddenErrorは404/403として応答）
     R->>S: deactivate_project(project)
@@ -88,7 +88,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart TB
-    A["リクエスト受信"] --> B["verify_origin"]
+    A["リクエスト受信"] --> B["verify_origin_if_session"]
     B -->|"不一致"| B1["403 CSRF_INVALID"]
     B -->|"OK"| C["session時のみ verify_csrf"]
     C -->|"不一致"| B1
