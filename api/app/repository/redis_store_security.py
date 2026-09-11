@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, datetime
+from typing import cast
 from uuid import UUID
 
 from redis.asyncio import Redis
@@ -21,6 +22,10 @@ async def mark_email_verify_sent(client: Redis, prefix: str, user_id: UUID, inte
 async def get_login_failure_count(client: Redis, prefix: str, identifier: str, client_ip: str) -> int:
 	value = await client.get(key("login_fail", prefix, identifier_hash(identifier, client_ip)))
 	return int(value) if value is not None else 0
+
+
+async def get_login_failure_ttl(client: Redis, prefix: str, identifier: str, client_ip: str) -> int:
+	return cast(int, await client.ttl(key("login_fail", prefix, identifier_hash(identifier, client_ip))))
 
 
 async def incr_login_failure(client: Redis, prefix: str, identifier: str, client_ip: str, window: int) -> int:
