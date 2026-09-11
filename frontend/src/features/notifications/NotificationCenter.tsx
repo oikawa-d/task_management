@@ -85,12 +85,11 @@ export function NotificationCenter({
 			completeItemClick(notification);
 			return;
 		}
-		onItemClick?.(notification);
 		const action = async () => {
 			await markReadMutation.mutateAsync(notification.id);
 			setMutationError(null);
 			setRetryAction(null);
-			close();
+			completeItemClick(notification);
 		};
 		setRetryAction(() => action);
 		void action().catch(() => setMutationError("通知を既読にできませんでした。再試行してください。"));
@@ -109,6 +108,7 @@ export function NotificationCenter({
 			setMutationError(null);
 			setRetryAction(null);
 			onMarkAllRead?.();
+			close();
 		};
 		setRetryAction(() => action);
 		void action().catch(() => setMutationError("通知をすべて既読にできませんでした。再試行してください。"));

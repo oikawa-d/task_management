@@ -89,9 +89,9 @@
 | 1 | マウント時／⑬ページ切替 | `GET /api/projects?page={page}&per_page={perPage}` | ページ番号・件数 | `items` をカード描画し、`meta.page` / `meta.total_pages` を⑬へ反映 | 401はAuthAdapterが処理、その他はエラー表示領域にリトライボタン | `queryKey: ['projects', { page, perPage }]` |
 | 2 | 「新規プロジェクトの作成」送信 | `POST /api/projects` | `{ name, description }` | `201` → モーダルを閉じ `invalidateQueries(['projects'])` → 作成された `projects.name` をトーストで通知 | 422はフィールドエラー表示、それ以外はトーストでエラー表示 | `mutationKey: ['createProject']` |
 | 3 | ヘッダー表示・ポーリング | `GET /api/notifications/unread-count` | なし | `unread_count` を⑬へ反映 | 401はAuthAdapter、503は次回ポーリングで再試行 | `queryKey: ['notifications', 'unread-count']` |
-| 4 | ⑭を開く | `GET /api/notifications?page=1&per_page=20` | クエリのみ | 通知一覧と未読件数を描画 | 401はAuthAdapter、その他はパネル内エラー | `queryKey: ['notifications', { page: 1 }]` |
-| 5 | 通知行クリック | `PATCH /api/notifications/{notification_id}/read` | なし | `read_at` と未読件数をキャッシュへ反映後、taskがあればボードへ遷移 | 404は対象行を再取得、その他はトースト | `mutationKey: ['notification-read']` |
-| 6 | 「すべて既読」クリック | `POST /api/notifications/read-all` | なし | `updated_count` / `unread_count` を反映 | 403/503はパネル内またはトースト表示 | `mutationKey: ['notifications-read-all']` |
+| 4 | ⑭を開く | `GET /api/notifications?page=1&per_page=20` | クエリのみ | 通知一覧と未読件数を描画 | 401はAuthAdapter、その他はパネル内エラー | `queryKey: ['notifications', 1]` |
+| 5 | 通知行クリック | `PATCH /api/notifications/{notification_id}/read` | なし | 成功後に`read_at`と未読件数をキャッシュへ反映し、パネルを閉じる。taskがあればボードへ遷移 | パネルを維持し、エラーと再試行ボタンを表示。成功するまで遷移しない | `mutationKey: ['notification-read']` |
+| 6 | 「すべて既読」クリック | `POST /api/notifications/read-all` | なし | 成功後に`updated_count` / `unread_count`を反映し、パネルを閉じる | パネルを維持し、エラーと再試行ボタンを表示 | `mutationKey: ['notifications-read-all']` |
 
 ## 5. 状態管理
 
@@ -103,7 +103,8 @@
 | Zustand（`uiStore`） | `sidebarOpen`, `fontScale` | `boolean` / `number` | localStorage復元値、無ければ `true` / `1.0` | ①操作、設定画面での変更 | localStorage |
 | Zustand（`authStore`） | `user.role` | `'member'\|'admin'` | `/auth/me` 由来 | ログイン/ログアウト | メモリのみ |
 | TanStack Query | `['projects', {page, perPage}]` | `Page<ProjectSummary>` | 未取得 | `page` / `perPage`変更時fetch、`createProject`成功時に`invalidate` | しない（[05_frontend.md §5](../../basic_design/05_frontend.md#5-状態管理)） |
-| TanStack Query | `['notifications', 'unread-count']` / `['notifications', {page}]` | 件数 / `NotificationListResponse` | 未取得 | ポーリング、パネル開閉、既読操作時 | しない |
+| TanStack Query | `['notifications', 'unread-count']` / `['notifications', page]` | 件数 / `NotificationListResponse` | 未取得 | ポーリング、パネル開閉、既読操作時 | しない |
+| ローカルstate | `mutationError` / `retryAction` | `string \| null` / `() => Promise<void> \| null` | `null` | 既読操作の失敗・再試行・成功時 | しない |
 
 ## 6. 画面状態遷移図
 

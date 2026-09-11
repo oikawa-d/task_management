@@ -16,6 +16,7 @@ export function useNotifications(page: number, enabled: boolean) {
 export function useMarkNotificationRead() {
 	const queryClient = useQueryClient();
 	return useMutation({
+		mutationKey: ["notification-read"],
 		mutationFn: markNotificationRead,
 		onSuccess: ({ unreadCount }) => {
 			queryClient.setQueryData(UNREAD_COUNT_QUERY_KEY, unreadCount);
@@ -27,6 +28,7 @@ export function useMarkNotificationRead() {
 export function useMarkAllNotificationsRead() {
 	const queryClient = useQueryClient();
 	return useMutation({
+		mutationKey: ["notifications-read-all"],
 		mutationFn: markAllNotificationsRead,
 		onSuccess: ({ unreadCount }) => {
 			queryClient.setQueryData(UNREAD_COUNT_QUERY_KEY, unreadCount);

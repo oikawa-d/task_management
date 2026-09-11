@@ -120,11 +120,13 @@ describe("NotificationCenter", () => {
 		fireEvent.click(await screen.findByText(notification.title));
 
 		await screen.findByRole("alert");
+		expect(props.onItemClick).not.toHaveBeenCalled();
 		expect(screen.getByRole("dialog", { name: "通知" })).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "再試行" }));
 
 		await waitFor(() => expect(props.onItemClick).toHaveBeenCalledWith(notification));
 		expect(apiMocks.markNotificationRead).toHaveBeenCalledTimes(2);
+		expect(screen.queryByRole("dialog", { name: "通知" })).not.toBeInTheDocument();
 	});
 
 	it("全件既読API失敗時は親の件数を更新せず再試行できる", async () => {
@@ -140,5 +142,6 @@ describe("NotificationCenter", () => {
 		fireEvent.click(screen.getByRole("button", { name: "再試行" }));
 
 		await waitFor(() => expect(props.onMarkAllRead).toHaveBeenCalledTimes(1));
+		expect(screen.queryByRole("dialog", { name: "通知" })).not.toBeInTheDocument();
 	});
 });
