@@ -193,6 +193,8 @@ def _auth_strategy(settings: BackendSettings, strategy: Any | None) -> Any:
 
 
 def _is_valid_jwt_login_result(login_result: Any) -> bool:
+	if getattr(login_result, "auth_mode", None) != "jwt":
+		return False
 	for field in ("access_token", "refresh_token", "csrf_token"):
 		value = getattr(login_result, field, None)
 		if not isinstance(value, str) or not value:

@@ -791,7 +791,7 @@ async def test_oauth_exchange_returns_token_and_records_login_history(monkeypatc
 			mode="jwt",
 			login=AsyncMock(
 				return_value=SimpleNamespace(
-					access_token="access", refresh_token="refresh", csrf_token="csrf", expires_in=900
+					auth_mode="jwt", access_token="access", refresh_token="refresh", csrf_token="csrf", expires_in=900
 				)
 			),
 		),
@@ -830,7 +830,7 @@ async def test_oauth_login_history_uses_resolved_client_ip(monkeypatch: pytest.M
 			mode="jwt",
 			login=AsyncMock(
 				return_value=SimpleNamespace(
-					access_token="access", refresh_token="refresh", csrf_token="csrf", expires_in=900
+					auth_mode="jwt", access_token="access", refresh_token="refresh", csrf_token="csrf", expires_in=900
 				)
 			),
 		),
@@ -923,6 +923,8 @@ async def test_oauth_exchange_rolls_back_when_login_result_is_incomplete(
 @pytest.mark.parametrize(
 	("field", "invalid_value"),
 	[
+		("auth_mode", "session"),
+		("auth_mode_missing", None),
 		("access_token", ""),
 		("refresh_token", ""),
 		("csrf_token", ""),
@@ -947,12 +949,16 @@ async def test_oauth_exchange_rolls_back_for_invalid_login_result_values(
 	)
 	monkeypatch.setattr(auth_service.user_repository, "get_by_id", AsyncMock(return_value=user))
 	login_result_values: dict[str, object] = {
+		"auth_mode": "jwt",
 		"access_token": "access",
 		"refresh_token": "refresh",
 		"csrf_token": "csrf",
 		"expires_in": 900,
 	}
-	login_result_values[field] = invalid_value
+	if field == "auth_mode_missing":
+		login_result_values.pop("auth_mode")
+	else:
+		login_result_values[field] = invalid_value
 	login_result = SimpleNamespace(**login_result_values)
 	login = AsyncMock(return_value=login_result)
 	rollback = AsyncMock()
