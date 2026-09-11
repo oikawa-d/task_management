@@ -113,6 +113,7 @@ class BackendSettings(BaseSettings):
 	health_check_timeout_seconds: float = 2
 	login_history_list_limit: int = 50
 	admin_search_query_max_length: int = 100
+	admin_list_count_query_limit: int = 10000
 
 	@field_validator(
 		"cors_allow_origins", "cors_allow_methods", "cors_allow_headers", "trusted_proxy_cidrs", mode="before"

@@ -285,7 +285,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | ユーザー列挙対策 | admin専用APIのため対象外 |
 | タイミング攻撃対策 | 該当なし |
 | レート制限 | なし |
-| fail-close方針 | PostgreSQL/Redis接続不能時は `503 SERVICE_UNAVAILABLE`。Redis失効を先に行うため、Redis失敗時にDBの無効化は実行されない。部分失効はERROR監査後に再実行する |
+| fail-close方針 | PostgreSQL/Redis接続不能時は `503 SERVICE_UNAVAILABLE`。DB更新を先に行うため、Redis失効が失敗してもDBの無効化はロールバックしない。部分失効はERROR監査後に同じuser_idで再実行できる |
 | sessionモードへの効果 | `session:{sid}` の即時DELにより、無効化直後のリクエストから `401 SESSION_EXPIRED` となる |
 | jwtモードへの効果 | アクセストークンはRedisを参照しない署名検証のみのため、`user_refresh` 配下のリフレッシュトークンを失効させても既発行のアクセストークンは失効しない。ただし `deps.get_current_user` は認証成立後に必ず `users` テーブルの `is_active` を再確認するため（[03_auth.md §9.2](../../../basic_design/03_auth.md#92-依存性関数coredepspy)）、無効化直後のリクエストからは `403 USER_INACTIVE` で拒否される。すなわち「アクセストークンの署名は有効だがDB確認により403で弾かれる」という形で実質的に即時遮断される |
 | 最後のadmin保護 | ロール変更API（[02](./02_patch_admin_user_role.md)）と同一の `pg_advisory_xact_lock` キーを用いた直列化で、無効化とロール変更が同時に発生しても有効adminが0人になることを防ぐ |
@@ -313,5 +313,5 @@ No.7〜9は本APIの中核（session/jwt双方での失効挙動の違い）で�
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 採用 | Redis失効をDB更新より先に実行する。Redis失敗時はDB更新なしの503、部分失効は同じuser_idで再実行できる | staleな認証状態を残さない |
+| 採用 | DB更新をRedis失効より先に実行する（判定順序の理由は4章参照）。Redis失効が失敗してもDBの無効化はロールバックせず、フェイルセーフ側（無効化済み）に倒す。部分失効はERROR監査後に同じuser_idで再実行できる | staleな認証状態を残さない |
 | 要検討 | ロール変更API（[02](./02_patch_admin_user_role.md)）と同一の `pg_advisory_xact_lock` キーを共有する設計としたが、ロック粒度（役割変更と無効化を同一キーで直列化するか、別キーにするか）は基本設計に記載がなく本書での提案 |
