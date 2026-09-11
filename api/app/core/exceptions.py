@@ -74,16 +74,6 @@ class LastAdminRequiredError(ConflictError):
 	message = "最後の管理者に対してこの操作は実行できません"
 
 
-class DuplicateUsernameError(ConflictError):
-	code = "DUPLICATE_USERNAME"
-	message = "このユーザーIDは既に使用されています"
-
-
-class DuplicateEmailError(ConflictError):
-	code = "DUPLICATE_EMAIL"
-	message = "このメールアドレスは既に使用されています"
-
-
 class UnauthenticatedError(AppError):
 	code = "UNAUTHENTICATED"
 	status_code = 401
@@ -155,12 +145,6 @@ class EmailNotVerifiedError(AppError):
 class InvalidCredentialsError(UnauthenticatedError):
 	code = "INVALID_CREDENTIALS"
 	message = "IDまたはパスワードが正しくありません"
-
-
-class EmailNotVerifiedError(AppError):
-	code = "EMAIL_NOT_VERIFIED"
-	status_code = 403
-	message = "メールアドレスの認証が完了していません"
 
 
 class TooManyAttemptsError(AppError):

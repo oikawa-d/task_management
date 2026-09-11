@@ -53,8 +53,10 @@
 | `0018_align_login_history_column_comments.py` | #276で付与した`id`コメントを設計書の定義に合わせて削除 |
 | `0019_update_fn_list_notifications_return_type.py` | `fn_list_notifications`の戻り値をtask情報・total_countを含む`TABLE`型へ変更（`DROP FUNCTION`後に再作成）し、`fn_count_notifications`を新設 |
 | `0020_add_admin_list_total_count_and_not_found.py` | admin一覧FNの総件数フォールバックと更新SPの対象不存在・OUT値を追加 |
-| `0021_return_notification_read_results.py` | 通知既読SPに既読日時・更新件数のOUT値を追加 |
-| `0022_add_calendar_task_function.py` | カレンダー表示用`fn_list_calendar_tasks`を追加 |
+| `0021_optimize_admin_list_functions.py` | admin一覧FNのN+1を解消し、集計値を返す |
+| `0020_update_sp_mark_notification_read_return_value.py`（revision `0022`） | 通知個別既読SPに既読日時のOUT値を追加 |
+| `0021_return_notification_read_results.py`（revision `0023`） | 通知全既読SPに更新件数のOUT値を追加 |
+| `0022_add_calendar_task_function.py`（revision `0024`） | カレンダー表示用`fn_list_calendar_tasks`を追加 |
 
 **要検討**：上記のリビジョン分割・命名例（`0001_...` 等の連番接頭辞）は本詳細設計での具体化であり、基本設計に明記された正の構成ではない。実装時にAlembicの自動生成ハッシュIDとの整合をどう取るか（`down_revision` チェーンの実ファイル名）は実装担当の裁量とする。
 
@@ -81,13 +83,15 @@ flowchart LR
     R17 --> R18["0018<br/>login_historyコメント整合"]
     R18 --> R19["0019<br/>fn_list_notifications<br/>戻り値変更"]
     R19 --> R20["0020<br/>admin一覧・更新SP整合"]
-    R20 --> R21["0021<br/>通知既読結果"]
-    R21 --> R22["0022<br/>カレンダータスクFN"]
+    R20 --> R21["0021<br/>admin一覧集計"]
+    R21 --> R22["0022<br/>個別既読日時"]
+    R22 --> R23["0023<br/>全既読件数"]
+    R23 --> R24["0024<br/>カレンダータスクFN"]
 ```
 
 ### 2.7 SP/FN適用順序
 
-`0010`、`0014`〜`0016`、`0019`、`0020`、`0021`は、対象テーブルのDDLと既存のUUID/CHECK/FK定義が完了した後に適用する。`0016`では、`0010`が作成するtask SPの旧シグネチャを削除して、`db/procedures/`の現行SQLを再適用する。`0019`では、`0014`が作成した`fn_list_notifications`（戻り値`SETOF notifications`）を`DROP FUNCTION`で削除してから`TABLE(notification notifications, task_title VARCHAR, task_project_id UUID, total_count BIGINT)`を返す現行定義で再作成する。PostgreSQLは`CREATE OR REPLACE FUNCTION`で既存関数の戻り値型を変更できないため、戻り値型を変えるリビジョンは必ずDROP→CREATEの手順を取る。各リビジョンはSQL資材を読み込んで作成し、repositoryの直接CRUDを追加しない。
+`0010`、`0014`〜`0016`、`0019`、`0020`〜`0024`は、対象テーブルのDDLと既存のUUID/CHECK/FK定義が完了した後に適用する。`0016`では、`0010`が作成するtask SPの旧シグネチャを削除して、`db/procedures/`の現行SQLを再適用する。`0019`では、`0014`が作成した`fn_list_notifications`（戻り値`SETOF notifications`）を`DROP FUNCTION`で削除してから`TABLE(notification notifications, task_title VARCHAR, task_project_id UUID, total_count BIGINT)`を返す現行定義で再作成する。PostgreSQLは`CREATE OR REPLACE FUNCTION`で既存関数の戻り値型を変更できないため、戻り値型を変えるリビジョンは必ずDROP→CREATEの手順を取る。`0021`以降は#377→#374→#379の順で統合し、revision IDは一意な連番へ再配置する。各リビジョンはSQL資材を読み込んで作成し、repositoryの直接CRUDを追加しない。
 
 | リビジョン | 依存するテーブル | 適用内容 |
 |------------|------------------|----------|
@@ -97,8 +101,10 @@ flowchart LR
 | `0016` | `notifications`, `tasks` | APIから受け取るUTC日境界でtask SPの当日期限通知を判定。downgradeではlegacy task SPへ戻す |
 | `0019` | `notifications`, `tasks` | `fn_list_notifications`をDROP FUNCTIONしてtask情報・total_countを返す現行定義へ再作成し、`fn_count_notifications`を新設。downgradeではlegacy定義（`SETOF notifications`）へ戻す |
 | `0020` | `users`, `projects`, `login_history` | admin一覧の総件数・更新SPの対象不存在とOUT値を現行定義へ再作成。downgradeではlegacy定義へ戻す |
-| `0021` | `notifications` | 個別既読の`p_read_at`、全既読の`p_updated_count`をOUTで返すSPへ再作成。downgradeでは旧SPへ戻す |
-| `0022` | `projects`, `tasks` | `fn_list_calendar_tasks`を追加し、APP_TIMEZONEから変換したUTC範囲・scope・有効状態で期限タスクを抽出 |
+| `0021` | `users`, `projects`, `login_history` | admin一覧FNのmember/task集計を追加し、ページ内N+1を解消。downgradeでは0020時点のlegacy定義へ戻す |
+| `0022` | `notifications` | 個別既読の`p_read_at`をOUTで返すSPへ再作成。downgradeでは`0014`時点の旧SPへ戻す |
+| `0023` | `notifications` | 全既読の`p_updated_count`と個別既読の対象なし判定を持つSPへ再作成。downgradeでは`0022`時点の`db/procedures/legacy/0022_*`へ戻す |
+| `0024` | `projects`, `tasks` | `fn_list_calendar_tasks`を追加し、APP_TIMEZONEから変換したUTC範囲・scope・有効状態で期限タスクを抽出 |
 
 関数・プロシージャのDROPは依存するAPIが停止している環境でのみ行う。production CDではdowngradeを実行しない。
 
@@ -315,7 +321,7 @@ flowchart LR
 | 環境 | 適用トリガ | 実行者 | 補足 |
 |------|-----------|--------|------|
 | ローカル開発 | `docker compose up` 時、backendコンテナのエントリポイント | Docker Compose | `basic_design/06_infra_cicd.md` §3.1「エントリポイント：`alembic upgrade head` → `uvicorn ...`」 |
-| CI（`backend-test`） | ジョブステップとして明示実行 | GitHub Actions | `services` で `postgres:17` / `redis:8` を起動後、`alembic upgrade head` → `pytest --cov=app --cov-report=xml`（`basic_design/06_infra_cicd.md` §5.2/5.3） |
+| CI（`backend-test`） | ジョブステップとして明示実行 | GitHub Actions | `services` で `postgres:17` / `redis:8` を起動後、`alembic upgrade head` → revision履歴検証（pytest / `alembic heads` / `alembic history`）→ `pytest --cov=app --cov-report=xml`（`basic_design/06_infra_cicd.md` §5.2/5.3） |
 | CD（本番相当） | `docker compose pull && docker compose up -d` 後、backendコンテナ起動時に自動実行 | self-hosted runner | 失敗時はbackendコンテナが起動失敗となり、deployジョブは失敗扱い（§5.2参照） |
 
 ### 4.3 CIでの適用コマンド例（`ci.yml` 抜粋、参考）
@@ -405,6 +411,8 @@ flowchart LR
 | 12 | 正常系 | `0013`適用後に`project_id`をNULLとしてタスクをINSERTする | NOT NULL制約違反にならず成功する | `test_migration_0013_allows_null_project_id_task` |
 | 13 | 異常系 | `project_id IS NULL`の行が存在する状態で`0013`をdowngradeする | `NOT NULL`制約違反で失敗する（想定どおりの挙動であることの確認） | `test_migration_0013_downgrade_fails_with_unassigned_tasks` |
 | 14 | 正常系 | 未所属タスクが存在しない状態で`0013`のupgrade→downgrade→upgradeを実行する | 最終的なスキーマが初回`upgrade head`と一致する | `test_migration_0013_roundtrip_without_unassigned_tasks` |
+| 15 | 正常系 | 全revisionのID・親・head・接続性をDBなしで検証する | 重複・分岐・孤立・欠番が検出されない | `test_alembic_revisions_are_unique_continuous_and_connected` |
+| 16 | 正常系 | `0023`のdowngradeが`0022`時点のSQL資材を参照する | `0022_sp_mark_notification_read.sql` / `0022_sp_mark_all_notifications_read.sql`が存在し、旧契約へ戻せる | `test_migration_0023_downgrade_assets_exist` |
 
 ## 9. 不明点・要検討事項
 

@@ -97,8 +97,10 @@ def test_auth_router_registers_all_endpoints() -> None:
 
 def test_register_returns_201_without_auth_cookie(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
 	user_id = uuid4()
+	calls: list[tuple[Any, ...]] = []
 
 	async def _register(*_args: Any, **_kwargs: Any) -> SimpleNamespace:
+		calls.append(_args)
 		return SimpleNamespace(id=user_id, email="taro@example.com")
 
 	monkeypatch.setattr(auth_router_module.auth_service, "register", _register)
@@ -112,6 +114,9 @@ def test_register_returns_201_without_auth_cookie(client: TestClient, monkeypatc
 		"message": auth_router_module.REGISTER_ACCEPTED_MESSAGE,
 	}
 	assert "set-cookie" not in response.headers
+	assert len(calls) == 1
+	assert len(calls[0]) == 4
+	assert calls[0][2].headers["origin"] == ALLOWED_ORIGIN
 
 
 def test_register_rejects_disallowed_origin(client: TestClient) -> None:

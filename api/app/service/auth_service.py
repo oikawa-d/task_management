@@ -104,22 +104,23 @@ async def register(payload: RegisterRequest, background: BackgroundTasks, reques
 		raise TooManyAttemptsError(retry_after=ttl if ttl > 0 else config.rate_limit_register_window_seconds)
 	try:
 		user_id = await user_repository.create(db, payload.username, payload.email, hash_password(payload.password))
+		await user_repository.update_profile(
+			db,
+			user_id,
+			payload.last_name,
+			payload.first_name,
+			payload.last_name_kana,
+			payload.first_name_kana,
+			payload.birth_date,
+		)
+		await db.commit()
 	except DBAPIError as exc:
+		await db.rollback()
 		if _db_sqlstate(exc) == "P0001":
 			raise DuplicateUsernameError() from exc
 		if _db_sqlstate(exc) == "P0002":
 			raise DuplicateEmailError() from exc
 		raise
-	await user_repository.update_profile(
-		db,
-		user_id,
-		payload.last_name,
-		payload.first_name,
-		payload.last_name_kana,
-		payload.first_name_kana,
-		payload.birth_date,
-	)
-	await db.commit()
 	user = await user_repository.get_by_id(db, user_id)
 	if user is None:
 		raise ServiceUnavailableError()
@@ -376,14 +377,6 @@ async def reset_password(token: str, new_password: str, db: AsyncSession) -> Non
 	password_hash = hash_password(new_password)
 	await user_repository.update_password(db, user_id, password_hash)
 	await db.commit()
-
-
-async def refresh(request: Request, response: Response, strategy: AuthStrategy) -> LoginResult:
-	"""access tokenを再発行する。モード差異はStrategyへ委譲する（06_post_auth_refresh.md §6.2）。
-
-	sessionモードのStrategyは`NotSupportedInModeError`を送出し405となる。
-	"""
-	return await strategy.refresh(request, response)
 
 
 def normalize_redirect_to(raw: str | None, settings: BackendSettings | None = None) -> str:

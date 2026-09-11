@@ -604,7 +604,7 @@ sequenceDiagram
 
 | 関数 | 引数 | 戻り値 | 処理概要 |
 |------|------|--------|----------|
-| `register` | `payload: RegisterRequest`, `background: BackgroundTasks` | `User` | 重複チェックと `CALL sp_register_user` → パスワードハッシュ化 → 認証トークン発行 → 確認メール送信予約。**Strategy.login は呼ばない** |
+| `register` | `payload: RegisterRequest`, `background: BackgroundTasks`, `request: Request` | `User` | IP単位Rate Limit確認 → `CALL sp_register_user` → パスワードハッシュ化 → 認証トークン発行 → 確認メール送信予約。**Strategy.login は呼ばない** |
 | `verify_email` | `token: str` | `None` | Redis のトークンをワンタイム消費 → `CALL sp_verify_user_email`。無効なら 400 |
 | `resend_verification` | `email: str`, `background: BackgroundTasks` | `None` | 未認証ユーザーかつ再送間隔外の場合のみ再送。該当しなくても例外を出さない |
 | `login` | `identifier: str`, `password: str`, `request`, `response` | `LoginResult` | レート制限確認 → `SELECT fn_find_user_by_identifier` → パスワード検証 → `is_active` / `email_verified_at` 確認 → Strategy.login → `CALL sp_record_login_history` |
