@@ -240,7 +240,6 @@ flowchart TB
     U --> T["ログイン対象ユーザー"]
     V --> T
     R --> T
-    Q -->|Yes| T
     T --> X{"AUTH_MODE"}
     X -->|session| R1["SessionAuthStrategy.login()<br/>login_history INSERT<br/>302 #redirect_to"]
     X -->|jwt| R2["oauth_handoff発行<br/>302 #code&redirect_to"]
