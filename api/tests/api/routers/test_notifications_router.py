@@ -52,6 +52,7 @@ def app_and_mocks(monkeypatch: pytest.MonkeyPatch):
 	app = _build_app()
 	app.dependency_overrides[get_auth_strategy] = lambda: SimpleNamespace(mode="jwt")
 	monkeypatch.setattr(deps.redis_store, "check_rate_limit", AsyncMock(return_value=1))
+	monkeypatch.setattr(deps.redis_store, "get_rate_limit_ttl", AsyncMock(return_value=60))
 	yield app
 	app.dependency_overrides.clear()
 
@@ -140,6 +141,7 @@ def test_list_notifications_rate_limited_returns_429(client: TestClient, monkeyp
 
 	assert res.status_code == 429
 	assert res.json()["error"]["code"] == "TOO_MANY_ATTEMPTS"
+	assert res.headers["retry-after"] == "60"
 	mock_list.assert_not_called()
 
 
@@ -282,4 +284,5 @@ def test_mark_all_notifications_read_write_rate_limited_returns_429(
 
 	assert res.status_code == 429
 	assert res.json()["error"]["code"] == "TOO_MANY_ATTEMPTS"
+	assert res.headers["retry-after"] == "60"
 	mock_mark_all.assert_not_called()
