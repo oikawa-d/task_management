@@ -53,7 +53,7 @@
 | 区分 | 内容 |
 |------|------|
 | 入力（開始） | `GET /api/auth/oauth/google?redirect_to=` のクエリ、`GOOGLE_CLIENT_ID`等の環境変数 |
-| 入力（コールバック） | `GET /api/auth/oauth/google/callback?code&state`、`cerberus_oauth_state` Cookie |
+| 入力（コールバック） | `GET /api/auth/oauth/google/callback?code&state` または `?error&state`、`cerberus_oauth_state` Cookie |
 | 入力（交換） | `POST /api/auth/oauth/exchange` の一時code（jwtモードのみ） |
 | 出力（開始） | `302 Location: {Google認可URL}` + `Set-Cookie(cerberus_oauth_state)` + Redis `SETEX oauth_state:{state}` |
 | 出力（コールバック・session） | `302 Location: {FRONTEND_BASE_URL}/oauth/callback#redirect_to=...` + セッションCookie（[01_session_auth.md](./01_session_auth.md)） |
@@ -197,7 +197,7 @@ stateDiagram-v2
 | シグネチャ / 定義 | `async def oauth_callback(code: str | None, state: str | None, state_cookie: str | None, request: Request, response: Response, db: AsyncSession | None = None, *, settings: BackendSettings | None = None, provider: GoogleOAuthProvider | None = None, strategy: Any | None = None) -> OAuthCallbackResult` |
 | 引数 / 入力 | クエリの `code`/`state`、Cookie `cerberus_oauth_state` |
 | 戻り値 / 出力 | `OAuthCallbackResult{auth_mode, redirect_to, handoff_code}`（ルーターが302で返す） |
-| 送出例外 / 失敗条件 | `InvalidStateError`、`OAuthFailedError`、`OAuthEmailUnverifiedError`、`ServiceUnavailableError`（ルーターが302リダイレクトへ変換） |
+| 送出例外 / 失敗条件 | `InvalidStateError`、`OAuthFailedError`、`OAuthEmailUnverifiedError`、`TooManyAttemptsError`、`UserInactiveError`、`ServiceUnavailableError`（ルーターが302リダイレクトへ変換） |
 | 処理内容 | 1. callbackレート制限を確認 2. Cookieのstateとクエリのstateを比較 3. `redis_store.consume_oauth_state(state)`（GETDEL） 4. 値がNoneなら`InvalidStateError` 5. `GoogleOAuthProvider.exchange_code(code, code_verifier)` 6. `verify_id_token(id_token, nonce)` 7. `fetch_userinfo(access_token)` とsub一致確認 8. `_resolve_or_create_user(db, userinfo)` 9. `AUTH_MODE` に応じてsession確立 or handoff発行 10. sessionモードでは`login_history`へ`login_identifier=user.email`を設定してINSERT |
 | 副作用 | Redis削除・書き込み、PostgreSQL INSERT/UPDATE、Cookie設定（sessionモード） |
 
@@ -241,8 +241,8 @@ stateDiagram-v2
 | シグネチャ / 定義 | `async def oauth_exchange(code: str, request: Request, response: Response, db: AsyncSession | None = None, *, settings: BackendSettings | None = None, strategy: Any | None = None) -> OAuthExchangeResponse` |
 | 引数 / 入力 | fragmentから渡された一時 `code` |
 | 戻り値 / 出力 | `OAuthExchangeResponse{access_token, token_type, expires_in, redirect_to}` |
-| 送出例外 / 失敗条件 | `OAuthHandoffInvalidError`（400 `OAUTH_HANDOFF_INVALID`）：`consume_oauth_handoff` がNoneを返した場合 |
-| 処理内容 | 1. `redis_store.consume_oauth_handoff(code)`（GETDEL） 2. Noneなら例外 3. `user_id` から現在の有効ユーザーを再取得（`is_active`確認） 4. `JwtAuthStrategy.login(user, request, response)` 5. `login_history` へINSERT（method='oauth_google', `login_identifier=user.email`） 6. 正規化済み `redirect_to` を含めて返す |
+| 送出例外 / 失敗条件 | `OAuthHandoffInvalidError`（400 `OAUTH_HANDOFF_INVALID`）：`consume_oauth_handoff` がNoneを返した場合。その他、`UserInactiveError`、`OAuthFailedError`、`TooManyAttemptsError`、`ServiceUnavailableError` |
+| 処理内容 | 1. callbackレート制限を確認 2. `redis_store.consume_oauth_handoff(code)`（GETDEL） 3. Noneなら例外 4. `user_id` から現在の有効ユーザーを再取得（`is_active`確認） 5. `JwtAuthStrategy.login(user, request, response)` 6. `login_history` へINSERT（method='oauth_google', `login_identifier=user.email`） 7. 正規化済み `redirect_to` を含めて返す |
 | 副作用 | Redis削除、Cookie設定（refresh/CSRF）、PostgreSQL INSERT |
 
 OAuthの `login_identifier` は監査・検索用に保存する検証済みGoogle emailであり、OAuthアカウントの認証・紐付けキーではない。アカウントの不変な識別には `oauth_accounts.provider_user_id`（Googleの `sub`）を使用する。パスワード、OAuth code、access token、refresh tokenは保存しない。カラムの共通定義は [basic_design/01_database.md §3.7](../../basic_design/01_database.md#37-login_history) を正とする。

@@ -161,7 +161,7 @@ flowchart TB
 | シグネチャ | `async def oauth_google_start(response: Response, request: Request, redirect_to: str | None = Query(default=None)) -> RedirectResponse` |
 | 引数 | `redirect_to`: クエリパラメータ、任意のフロントパス文字列（未検証のまま渡ってくる） |
 | 戻り値 | `RedirectResponse`（302、`Set-Cookie` 付き） |
-| 送出例外 | `ServiceUnavailableError` → 503（例外ハンドラで変換） |
+| 送出例外 | `TooManyAttemptsError` → 429、`ServiceUnavailableError` → 503（例外ハンドラで変換） |
 | 処理内容 | 1. `redirect_to`、`request`、`response`を`auth_service.oauth_start`に渡す 2. 戻り値の`authorize_url`を`Location`に設定 3. serviceが設定した`cerberus_oauth_state` Cookieをレスポンスへ引き継ぐ 4. `RedirectResponse(status_code=302)`を返す |
 | 副作用 | Cookie発行のみ（Redis更新はservice層で発生） |
 
@@ -172,7 +172,7 @@ flowchart TB
 | シグネチャ | `async def oauth_start(redirect_to: str | None, request: Request, response: Response) -> OAuthStartResult` |
 | 引数 | `redirect_to`: 表 6.1 と同じ（未正規化）、`request`/`response`: レート制限・Cookie操作用 |
 | 戻り値 | `OAuthStartResult`（`authorize_url: str`, `state: str`） |
-| 送出例外 | `ServiceUnavailableError`（Redis接続不能時） |
+| 送出例外 | `TooManyAttemptsError`（レート制限超過）、`ServiceUnavailableError`（Redis接続不能時） |
 | 処理内容 | 1. requestのIP単位レート制限を確認 2. `normalize_redirect_to(redirect_to)` で正規化 3. `secrets.token_urlsafe(32)` で `state` 生成 4. `secrets.token_urlsafe(64)` で `code_verifier` 生成 5. PKCE S256で `code_challenge` を導出 6. `secrets.token_urlsafe(32)` で `nonce` 生成 7. `redis_store.save_oauth_state(state, redirect_to, code_verifier, nonce, settings.oauth_state_ttl_seconds)` を呼ぶ 8. `response`へstate Cookieを設定し、`GoogleOAuthProvider.build_authorize_url(state, code_challenge, nonce)`を呼び `OAuthStartResult`を返す |
 | 副作用 | Redis書き込み（`oauth_state:{state}`） |
 

@@ -133,24 +133,29 @@ sequenceDiagram
         G-->>R: GET /api/auth/oauth/google/callback?code&state
         R->>R: cerberus_oauth_state Cookie取得
         R->>S: oauth_callback(code, state, state_cookie, request, response)
-        S->>RS: consume_oauth_state(state)
-        RS->>RD: GETDEL oauth_state:{state}
-    alt state不一致/期限切れ/Cookie不一致
-        RD-->>RS: nil または不一致
-        RS-->>S: None
+        S->>S: stateとCookieの一致確認
+    alt state不一致/Cookie欠落
         S-->>R: InvalidStateError
         R-->>FE: 302 /login?error=invalid_state
-    else 検証OK
-        RD-->>RS: {redirect_to, code_verifier, nonce}
-        RS-->>S: OAuthStateData
-        S->>OA: exchange_code(code, code_verifier)
-        OA->>G: POST /token
-        alt code交換失敗
-            G-->>OA: 4xx/5xx
-            OA-->>S: OAuthFailedError
-            S-->>R: OAuthFailedError
-            R-->>FE: 302 /login?error=oauth_failed
-        else 成功
+    else state一致
+        S->>RS: consume_oauth_state(state)
+        RS->>RD: GETDEL oauth_state:{state}
+        alt 期限切れ/消費済み
+            RD-->>RS: nil
+            RS-->>S: None
+            S-->>R: InvalidStateError
+            R-->>FE: 302 /login?error=invalid_state
+        else Redis値あり
+            RD-->>RS: {redirect_to, code_verifier, nonce}
+            RS-->>S: OAuthStateData
+            S->>OA: exchange_code(code, code_verifier)
+            OA->>G: POST /token
+            alt code交換失敗
+                G-->>OA: 4xx/5xx
+                OA-->>S: OAuthFailedError
+                S-->>R: OAuthFailedError
+                R-->>FE: 302 /login?error=oauth_failed
+            else 成功
             G-->>OA: id_token / access_token
             OA-->>S: OAuthTokenResponse
             S->>S: id_token検証（署名/aud/iss/exp/nonce, JWKS）
@@ -194,6 +199,7 @@ sequenceDiagram
                     R-->>FE: 302 /oauth/callback#code=...&redirect_to=...
                 end
             end
+            end
         end
         end
     end
@@ -208,28 +214,34 @@ flowchart TB
     C -->|state不正| Z1["302 /login?error=invalid_state"]
     C -->|Redis障害/制限超過| Z2["302 /login?error=oauth_failed または too_many_attempts"]
     C -->|成功| ZD["302 /login?error=oauth_denied"]
-    B -->|No| D["consume_oauth_state(state)"]
-    D --> E{"Redis値あり<br/>かつCookie一致?"}
-    E -->|No| Z3["302 /login?error=invalid_state"]
-    E -->|Yes| F["exchange_code(code, code_verifier)"]
-    F --> G{"交換成功?"}
-    G -->|No| Z4["302 /login?error=oauth_failed"]
-    G -->|Yes| H["id_token検証(署名/aud/iss/exp/nonce)"]
-    H --> I{"検証OK?"}
-    I -->|No| Z4
-    I -->|Yes| J["fetch_userinfo → sub一致確認"]
-    J --> K{"sub一致?"}
-    K -->|No| Z4
-    K -->|Yes| Q{"oauth_accountsに<br/>紐付け済み?"}
-    Q -->|Yes| P["既存ユーザーを採用"]
-    Q -->|No| L{"同一emailの<br/>既存ユーザーあり?"}
-    L -->|Yes| M{"email_verified=true?"}
-    M -->|No| Z5["302 /login?error=oauth_email_unverified<br/>400 OAUTH_EMAIL_UNVERIFIED相当"]
-    M -->|Yes| N["oauth_accounts追加紐付け<br/>email_verified_at更新"]
-    L -->|No| O["users + oauth_accounts 新規作成"]
-    N --> P
-    O --> P
-    P --> X{"AUTH_MODE"}
+    B -->|No| D{"stateとCookieが一致?"}
+    D -->|No| Z3["302 /login?error=invalid_state"]
+    D -->|Yes| E["consume_oauth_state(state)"]
+    E --> F{"Redis値あり?"}
+    F -->|No| Z4["302 /login?error=invalid_state"]
+    F -->|Yes| G{"codeあり?"}
+    G -->|No| Z5["302 /login?error=oauth_failed"]
+    G -->|Yes| H["exchange_code(code, code_verifier)"]
+    H --> I{"交換成功?"}
+    I -->|No| Z5
+    I -->|Yes| J["id_token検証(署名/aud/iss/exp/nonce)"]
+    J --> K{"検証OK?"}
+    K -->|No| Z5
+    K -->|Yes| L["fetch_userinfo → sub一致確認"]
+    L --> M{"sub一致?"}
+    M -->|No| Z5
+    M -->|Yes| Q{"oauth_accountsに<br/>紐付け済み?"}
+    Q -->|Yes| U["既存ユーザーを採用"]
+    Q -->|No| N{"同一emailの<br/>既存ユーザーあり?"}
+    N -->|Yes| O{"email_verified=true?"}
+    O -->|No| Z6["302 /login?error=oauth_email_unverified<br/>400 OAUTH_EMAIL_UNVERIFIED相当"]
+    O -->|Yes| V["oauth_accounts追加紐付け<br/>email_verified_at更新"]
+    N -->|No| R["users + oauth_accounts 新規作成"]
+    U --> T["ログイン対象ユーザー"]
+    V --> T
+    R --> T
+    Q -->|Yes| T
+    T --> X{"AUTH_MODE"}
     X -->|session| R1["SessionAuthStrategy.login()<br/>login_history INSERT<br/>302 #redirect_to"]
     X -->|jwt| R2["oauth_handoff発行<br/>302 #code&redirect_to"]
 ```
@@ -368,7 +380,7 @@ stateDiagram-v2
 
 | スキーマ／項目 | フィールド | 制約 | フロント（zod）との整合 |
 |-----------------|-----------|------|--------------------------|
-| クエリパラメータ | `code` | pydantic `str | None`。存在しなければ`oauth_denied`扱い | フロントは本APIを直接呼ばない（ブラウザ遷移のため） |
+| クエリパラメータ | `code` | pydantic `str | None`。`error`クエリがある場合は拒否処理、それ以外で存在しなければ`oauth_failed`扱い | フロントは本APIを直接呼ばない（ブラウザ遷移のため） |
 | クエリパラメータ | `state` | pydantic `str | None`。`state_cookie`との一致を必須とする | 同上 |
 | id_token検証 | `aud` | `GOOGLE_CLIENT_ID`と完全一致 | - |
 | id_token検証 | `iss` | `https://accounts.google.com` または `accounts.google.com` | - |
