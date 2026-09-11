@@ -397,7 +397,7 @@ stateDiagram-v2
 | ユーザー列挙対策 | 該当なし（本APIはGoogleとの検証結果に基づく処理であり、ユーザー入力に応じたエラー分岐をブラウザに露出しない） |
 | タイミング攻撃対策 | `state`・`nonce`の比較は`secrets.compare_digest`を使用 |
 | オープンリダイレクト対策 | `redirect_to`は11番ファイルで正規化済みの値をRedisから取得するのみで、本APIでは再検証しない（改ざん不可能なRedis保存値のため） |
-| アカウント乗っ取り対策 | `email_verified=false`の場合は既存ユーザーへの紐付けを行わず400/`oauth_email_unverified`とする（`basic_design/03_auth.md` §5.3） |
+| アカウント乗っ取り対策 | `email_verified=false`の場合は既存ユーザーへの紐付けを行わず、service内部では400 `OAuthEmailUnverifiedError`、callback外部では302 `/login?error=oauth_email_unverified`とする（`basic_design/03_auth.md` §5.3） |
 | CSRF対策 | state + Cookie一致検証により、第三者が発行したcodeを被害者のブラウザに注入する攻撃を防ぐ |
 | レート制限 | `oauth callback` はIP単位10回/900秒。Google認可コードの高エントロピー性に依存せず汎用IP制限を適用する |
 | fail-close方針 | Redis接続不能時は503 `SERVICE_UNAVAILABLE`として共通エラーハンドラへ送出し、認可を成立させない |

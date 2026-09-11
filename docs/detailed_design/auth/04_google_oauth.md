@@ -142,7 +142,7 @@ flowchart TB
     H -->|Yes| I["既存ユーザーでログイン"]
     H -->|No| J{"同一emailの<br/>既存ユーザー存在?"}
     J -->|Yes かつ email_verified=true| K["既存ユーザーに紐付け<br/>email_verified_atをnowに更新"]
-    J -->|Yes かつ email_verified=false| Z3["400 OAUTH_EMAIL_UNVERIFIED"]
+    J -->|Yes かつ email_verified=false| Z3["service内部: 400 OAUTH_EMAIL_UNVERIFIED<br/>callback外部: 302 /login?error=oauth_email_unverified"]
     J -->|No| L["users + oauth_accounts を新規作成<br/>email_verified_at=now"]
     I --> M{"AUTH_MODE"}
     K --> M
@@ -280,7 +280,7 @@ flowchart LR
 | CSRF/リプレイ | stateはワンタイム消費（GETDEL）+ Cookie照合の二重検証 | [../../basic_design/03_auth.md](../../basic_design/03_auth.md) 5.1 |
 | リプレイ（OIDC） | nonceをid_token claimと照合 | 認可コード横取り・トークン再利用対策 |
 | open redirect | `redirect_to` は同一オリジン相対パスのみ許可。違反時は既定値`OAUTH_DEFAULT_REDIRECT_TO`（既定`/dashboard`） | [../../basic_design/03_auth.md](../../basic_design/03_auth.md) 5.1 |
-| アカウント乗っ取り | `email_verified=false` は紐付け拒否（400） | 5.3節 |
+| アカウント乗っ取り | `email_verified=false` は紐付け拒否（service内部400、callback外部302） | 5.3節 |
 | トークン露出防止 | jwtモードのaccess_tokenをURLに載せず、handoffコード＋fragment経由で受け渡す | 5.4節 |
 | ログ出力 | `code`/`id_token`/`access_token`/`code_verifier` は平文ログに出さない。stateは検証結果（成功/失敗）のみINFO出力 | 共通ルール |
 | fail-close | Google側（token/userinfo/JWKS）が不通の場合はログインを成立させず失敗リダイレクト | 要検討：具体的なHTTPステータス／リトライ方針は未定義 |
@@ -293,7 +293,7 @@ flowchart LR
 | 1 | 単体 | `build_authorize_url` が必須クエリを含む | なし | scope/state/code_challenge等が含まれる | `test_build_authorize_url_includes_required_params` |
 | 2 | 結合 | 正常系（新規ユーザー） | Google token/userinfoを`respx`でモック | usersとoauth_accountsが作成され302 | `test_oauth_callback_creates_new_user` |
 | 3 | 結合 | 既存email・email_verified=true | 同上 | 既存ユーザーに紐付き、email_verified_atが更新される | `test_oauth_callback_links_existing_verified_email` |
-| 4 | 結合 | 既存email・email_verified=false | 同上 | 400 `OAUTH_EMAIL_UNVERIFIED` | `test_oauth_callback_rejects_unverified_email` |
+| 4 | 結合 | 既存email・email_verified=false | 同上 | service内部で`OAuthEmailUnverifiedError`（callback経由時は302 `/login?error=oauth_email_unverified`） | `test_oauth_callback_rejects_unverified_email` |
 | 5 | 結合 | state不一致 | Cookieと異なるstateを送信 | 302 `/login?error=invalid_state` | `test_oauth_callback_rejects_state_mismatch` |
 | 6 | 結合 | nonce不一致 | id_tokenのnonceを改変 | 302 `/login?error=oauth_failed` | `test_oauth_callback_rejects_nonce_mismatch` |
 | 7 | 結合 | userinfo.sub不一致 | userinfoモックのsubを変更 | 302 `/login?error=oauth_failed` | `test_oauth_callback_rejects_sub_mismatch` |
