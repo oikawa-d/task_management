@@ -262,7 +262,7 @@ flowchart TB
 | シグネチャ | `async def oauth_callback(code: str | None, state: str | None, state_cookie: str | None, request: Request, response: Response, db: AsyncSession | None = None, *, settings: BackendSettings | None = None, provider: GoogleOAuthProvider | None = None, strategy: Any | None = None) -> OAuthCallbackResult` |
 | 引数 | `code`/`state`/`state_cookie`：表6.1参照。`request`/`response`：Strategy.loginへ引き渡す |
 | 戻り値 | `OAuthCallbackResult`（`auth_mode`, `redirect_to`, `handoff_code: str | None`） |
-| 送出例外 | `InvalidStateError`（400/302マッピングは`invalid_state`）、`OAuthFailedError`（`oauth_failed`）、`OAuthEmailUnverifiedError`（400/`oauth_email_unverified`）、`ServiceUnavailableError`（Redis接続不能） |
+| 送出例外 | `InvalidStateError`（400/302マッピングは`invalid_state`）、`OAuthFailedError`（`oauth_failed`）、`OAuthEmailUnverifiedError`（400/`oauth_email_unverified`）、`TooManyAttemptsError`（レート制限超過）、`UserInactiveError`（無効ユーザー）、`ServiceUnavailableError`（Redis接続不能） |
 | 処理内容 | 1. callbackレート制限を確認 2. `state is None or state_cookie is None or state != state_cookie` なら`InvalidStateError` 3. `redis_store.consume_oauth_state(state)`を呼び`None`なら`InvalidStateError` 4. `oauth_provider.exchange_code(code, data.code_verifier)`を呼ぶ 5. id_tokenをJWKSで検証（署名・`aud==GOOGLE_CLIENT_ID`・`iss`・`exp`・`nonce==data.nonce`） 6. `oauth_provider.fetch_userinfo(access_token)`を呼ぶ 7. `userinfo.sub == id_token.sub`を確認 8. `_resolve_or_create_user(db, userinfo)`を呼ぶ 9. `AUTH_MODE`により分岐し、sessionなら`strategy.login()`＋`login_history(login_identifier=user.email)`記録、jwtなら`handoff_code`発行 |
 | 副作用 | PostgreSQL：`users`/`oauth_accounts`のINSERT/UPDATE、`login_history`INSERT（sessionモードのみ）。Redis：`oauth_state`削除（consume時点）、`oauth_handoff`新規作成（jwtモードのみ）。Cookie：sessionモードは`login()`内で発行 |
 

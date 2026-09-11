@@ -207,7 +207,7 @@ flowchart TB
 | シグネチャ | `async def oauth_exchange(code: str, request: Request, response: Response, db: AsyncSession | None = None, *, settings: BackendSettings | None = None, strategy: Any | None = None) -> OAuthExchangeResponse` |
 | 引数 | `code`：一時ハンドオフコード。`request`/`response`：Strategy.loginへ引き渡す。`db`：ユーザー・履歴参照用。`settings`/`strategy`：実行設定・テスト差し替え用 |
 | 戻り値 | `OAuthExchangeResponse`（`access_token`, `token_type`, `expires_in`, `redirect_to`） |
-| 送出例外 | `OAuthHandoffInvalidError`、`UserInactiveError`、`ServiceUnavailableError` |
+| 送出例外 | `OAuthHandoffInvalidError`、`UserInactiveError`、`OAuthFailedError`、`TooManyAttemptsError`、`NotSupportedInModeError`、`ServiceUnavailableError` |
 | 処理内容 | 1. `redis_store.consume_oauth_handoff(code)`を呼び`None`なら`OAuthHandoffInvalidError` 2. `user_repository.get_by_id(db, handoff.user_id)`で現在の有効ユーザーを取得（Redisに保存されたuser_idのみを信頼し、role等は再取得しない） 3. 取得できなければ`UserInactiveError` 4. `_auth_strategy(settings, strategy)`で認証戦略を取得し`JwtAuthStrategy.login(user, request, response)`を呼び`LoginResult(auth_mode, access_token, refresh_token, csrf_token, expires_in)`を得る 5. `auth_mode='jwt'`、access/refresh/CSRFが非空文字列、`expires_in`がboolではない1以上のintであることを検証する 6. 検証失敗時は`login_history`記録前に`rollback_login`でRedis認証状態とCookieを補償削除し、`OAuthFailedError`を送出する 7. 検証成功後に`login_history_repository.create(db, user_id=user.id, login_identifier=user.email, login_method='oauth_google', success=True, failure_reason=None)`を呼ぶ 8. `handoff.redirect_to`（正規化済み）とともに結果を返す。ここでの`login_identifier`は解決済みユーザーの検証済みGoogle emailであり、OAuthアカウントの`sub`ではない |
 | 副作用 | PostgreSQL：`login_history`INSERT。Redis：`refresh:{hash}`/`user_refresh:{uid}`新規作成（`JwtAuthStrategy.login`内）。Cookie：`cerberus_rt`/`cerberus_csrf`発行 |
 
@@ -324,7 +324,7 @@ PostgreSQLの`users`/`oauth_accounts`は本APIでは更新しない（12番フ�
 | 12 | 結合 | `redirect_to`の伝播 | 11番ファイルで`redirect_to=/projects/1`を保存 → 12番でhandoffへ引き継ぎ | レスポンスの`redirect_to`が`/projects/1` | `test_oauth_exchange_returns_propagated_redirect_to` |
 | 13 | 単体 | `LoginResult`完全性検証（`auth_mode`不一致/欠落、access/refresh/CSRFの空文字・非文字列、`expires_in`の0・負数・非整数） | `JwtAuthStrategy.login`が不正な値を返す | `login_history`前に`rollback_login`を呼び、`OAuthFailedError`を送出 | `test_oauth_exchange_rolls_back_for_invalid_login_result_values` |
 
-網羅できない範囲：なし（本APIは外部通信を行わないため、Google関連の手動確認対象は11・12番ファイル側に集約される）。
+網羅できない範囲：ローカルのHTTP結合テストではRedis・PostgreSQLをモックしているため、実RedisのGETDEL/SETEX、実PostgreSQLの`fn_get_user`/`sp_record_login_history`との接続・トランザクションまでは検証しない。実環境の境界確認はCIまたは統合環境で別途実施する。
 
 ## 13. 不明点・要検討事項
 
