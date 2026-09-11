@@ -36,7 +36,7 @@
 | `is_owner` | あり（自分がオーナーかどうかをダッシュボードで表示するため） | なし（管理者視点の一覧であり「自分のプロジェクトか」は無関係） |
 | 検索 (`q`) | なし | あり（プロジェクト名の部分一致） |
 | 削除操作との連携 | なし（削除は `DELETE /projects/{id}` でオーナー/admin向け） | あり（`DELETE /admin/projects/{project_id}` と対になる管理者専用の削除導線） |
-| 内部実装 | `project_repository.fn_admin_list_projects`（`query=None`で呼び出し） | 同じFNを`query`付きで呼び出す（クエリ実装を共有し重複実装しない） |
+| 内部実装 | `admin_repository.list_projects`（`query=None`で呼び出し） | 同じFNを`query`付きで呼び出す（クエリ実装を共有し重複実装しない） |
 
 ## 2. 入出力仕様
 
@@ -157,8 +157,8 @@ flowchart TB
     E -->|"role != admin"| E1["403 FORBIDDEN"]
     E -->|"OK"| F["SELECT fn_admin_list_projects(query)"]
     F --> G["FN結果をDTOへ写像"]
-    G --> H["project_idsで member_count / task_counts をバッチ集計"]
-    H --> I["AdminProjectSummaryへマージ"]
+    G --> H["FNのmember_count / task_countsをDTOへ写像"]
+    H --> I["AdminProjectSummaryへ変換"]
     I --> J["200 {items, meta}"]
     F -.->|"DB接続不能"| K["503 SERVICE_UNAVAILABLE"]
 ```
@@ -184,7 +184,7 @@ flowchart TB
 | 引数 | `query`: 検索・ページング条件 / `db`: DBセッション |
 | 戻り値 | `AdminProjectListResponse`（`items`, `meta`） |
 | 送出例外 | `ServiceUnavailableError`（PostgreSQL接続不能時）→503 |
-| 処理内容 | 1. `admin_repository.list_projects` を1回呼び、該当ページの行と`total_count`（ウィンドウ関数`count(*) OVER()`）を同時に取得する 2. 該当ページが0件の場合のみ`admin_repository.count_projects`で総件数を別途取得する 3. `project_member_repository.list_by_project` / `task_repository.list_board` をプロジェクトごとに呼び出し、`member_count`/`task_counts`を集計して`AdminProjectSummary`へマージする（#347レビューで総件数取得方式を確定。member_count/task_counts集計のN+1はissue #348で対応予定） |
+| 処理内容 | 1. `admin_repository.list_projects` を1回呼び、プロジェクト本体・member_count・status別task_count・`total_count`（ウィンドウ関数`count(*) OVER()`）を取得する 2. 該当ページが0件の場合のみ`admin_repository.count_projects`で総件数を別途取得する 3. FNが返した集計値を`AdminProjectSummary`へ写像する（issue #348対応。ページ内件数に比例する追加クエリは発行しない） |
 | 副作用 | なし（読み取りのみ） |
 
 ### 6.3 `repository/admin_repository.py :: list_projects`
@@ -193,9 +193,9 @@ flowchart TB
 |------|------|
 | シグネチャ | `async def list_projects(db: AsyncSession, q: str \| None, is_active: bool \| None, limit: int, offset: int) -> list[AdminProjectListItem]` |
 | 引数 | `q`: プロジェクト名の部分一致条件（`None` なら全件対象） / `is_active`: admin一覧では常に`None`（全件対象） / `limit`, `offset`: ページング |
-| 戻り値 | `AdminProjectListItem`（`project: Project`, `total_count: int`）のリスト |
+| 戻り値 | `AdminProjectListItem`（`project: Project`, `member_count: int`, status別task_count、`total_count: int`）のリスト |
 | 送出例外 | `OperationalError`（DB不通） |
-| 処理内容 | `SELECT (project).*, total_count FROM fn_admin_list_projects(:query, :is_active, :limit, :offset)` を実行する。`q`によるフィルタ・`ORDER BY created_at DESC`・`LIMIT/OFFSET`・`count(*) OVER()`によるtotal_countの算出はいずれもFN内部で行う |
+| 処理内容 | `SELECT (project).*, member_count, task_count_todo, task_count_in_progress, task_count_done, total_count FROM fn_admin_list_projects(:query, :is_active, :limit, :offset)` を実行する。`q`によるフィルタ・集計・`ORDER BY created_at DESC`・`LIMIT/OFFSET`・`count(*) OVER()`によるtotal_countの算出はいずれもFN内部で行う |
 | 副作用 | なし |
 
 ### 6.4 `repository/admin_repository.py :: count_projects`
@@ -216,13 +216,10 @@ flowchart LR
     R["admin_router.list_admin_projects"] --> S["admin_project_service.list_projects"]
     S --> RP1["admin_repository.list_projects"]
     S -.->|"該当ページ0件のときのみ"| RP2["admin_repository.count_projects"]
-    S --> RP3["project_member_repository.list_by_project（プロジェクトごと）"]
-    S --> RP4["task_repository.list_board（プロジェクトごと）"]
     RP1 --> M["models.Project"]
     RP2 --> M
-    RP1 --> MO["models.User(owner、遅延ロード）"]
-    RP3 --> MPM["models.ProjectMember"]
-    RP4 --> MT["models.Task"]
+    RP1 --> MA["member_count / status別task_count"]
+    RP1 --> MO["models.User(owner）"]
 ```
 
 ## 8. データ遷移図
@@ -237,10 +234,10 @@ flowchart LR
         T3["tasks"]
         T4["users（owner）"]
     end
-    S["admin_project_service.list_projects"] -->|"SELECT / COUNT"| T1
-    S -->|"SELECT（件数集計）"| T2
-    S -->|"SELECT（status別集計）"| T3
-    S -->|"SELECT（owner表示名）"| T4
+    S["admin_project_service.list_projects"] -->|"SELECT fn_admin_list_projects"| T1
+    T1 -.->|"FN内部で集計"| T2
+    T1 -.->|"FN内部で集計"| T3
+    T1 -.->|"FN内部でowner参照"| T4
 ```
 
 ## 9. SP/FNデータアクセス一覧
@@ -251,7 +248,7 @@ flowchart LR
 
 | 種別 | 契約 | 説明 |
 |------|------|------|
-| fn_admin_list_projects | `fn_admin_list_projects(p_query, p_is_active, p_limit, p_offset)` | fn_admin_list_projectsを呼び出し、結果（project行＋total_count）をレスポンスへ写像する |
+| fn_admin_list_projects | `fn_admin_list_projects(p_query, p_is_active, p_limit, p_offset)` | fn_admin_list_projectsを呼び出し、結果（project行＋member_count＋status別task_count＋total_count）をレスポンスへ写像する |
 | fn_count_admin_projects | `fn_count_admin_projects(p_query, p_is_active)` | fn_admin_list_projectsのtotal_countが取得できない場合（該当0件）のフォールバック |
 
 repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
@@ -263,8 +260,8 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | projects | SELECT | `q` 指定時は `name` 部分一致、なければ全件 | `ORDER BY created_at DESC LIMIT/OFFSET` |
 | projects | SELECT COUNT | 同上 | `meta.total` 算出用 |
 | users | SELECT | `projects.owner_id` に対する eager load | owner表示用、N+1回避 |
-| project_members | SELECT + GROUP BY | `project_id = ANY(:ids)` | `member_count` 集計 |
-| tasks | SELECT + GROUP BY | `project_id = ANY(:ids)` | `task_counts` 集計 |
+| project_members | SELECT + GROUP BY | FN内部で対象プロジェクトを集計 | `member_count` |
+| tasks | SELECT + GROUP BY | FN内部で対象プロジェクト・status別に集計 | `task_counts`（有効・無効を含む） |
 
 **Redis**
 
@@ -289,7 +286,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | タイミング攻撃対策 | 該当なし |
 | レート制限 | なし |
 | fail-close方針 | PostgreSQL接続不能時は `503 SERVICE_UNAVAILABLE` |
-| N+1対策・クエリ回数 | 非空ページでは `count` 1回 + 一覧主クエリ1回 + ownerの`FN結果の一括マッピング`追加SELECT 1回 + member/task集計各1回の計5回。owner取得は同一ラウンドトリップではないが、プロジェクト件数に比例しない。空ページでは集計と関連追加SELECTを発行せず、計2回を基本とする（[01_get_projects.md](../projects/01_get_projects.md) と同じ方針） |
+| N+1対策・クエリ回数 | 非空ページでは一覧FN 1回。FN内部でmember/task集計も完了するため、プロジェクト件数に比例する追加クエリを発行しない。空ページでは一覧FN 1回と`count_projects` 1回を基本とする |
 
 ## 12. テスト設計
 
@@ -303,7 +300,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 6 | 結合 | ページングが正しく機能する | プロジェクト25件を作成 | 1ページ目20件、`total=25`、`total_pages=2` | `test_list_admin_projects_pagination` |
 | 7 | 結合 | member（オーナー含む）はアクセス不可 | 一般メンバー・オーナーのCurrentUserでGET | `403 FORBIDDEN` | `test_list_admin_projects_forbidden_for_owner_non_admin` |
 | 8 | 結合 | 未認証は401 | Cookie/Bearerなし | `401 UNAUTHENTICATED` | `test_list_admin_projects_unauthenticated` |
-| 9 | 結合 | N+1が発生しないことの確認 | プロジェクト10件、SQLAlchemyの実DBの呼び出し回数を検証 | 発行クエリ数が定数（プロジェクト件数に比例しない） | `test_list_admin_projects_query_count_constant` |
+| 9 | 単体・結合 | N+1が発生しないことの確認 | プロジェクト10件、一覧FNの戻り値とサービスの依存呼び出し回数を検証 | 発行クエリ数が定数（プロジェクト件数に比例しない） | `test_list_admin_projects_query_count_constant` |
 
 `AUTH_MODE=session` / `jwt` の両方で No.8（401判定経路の違い：`SESSION_EXPIRED` と `TOKEN_EXPIRED`）をパラメータ化して実施する。
 

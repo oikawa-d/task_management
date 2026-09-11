@@ -9,7 +9,6 @@ CREATE OR REPLACE FUNCTION fn_admin_list_login_history(
     p_offset INTEGER
 ) RETURNS TABLE (
     history login_history,
-    "user" users,
     total_count BIGINT
 )
 LANGUAGE sql
@@ -27,9 +26,8 @@ AS $$
         ORDER BY h.created_at DESC
         LIMIT p_limit OFFSET p_offset
     )
-    SELECT h AS history, u AS "user", s.total_count
+    SELECT h AS history, s.total_count
     FROM scoped s
     JOIN login_history h ON h.id = s.id
-    LEFT JOIN users u ON u.id = h.user_id
     ORDER BY h.created_at DESC;
 $$;
