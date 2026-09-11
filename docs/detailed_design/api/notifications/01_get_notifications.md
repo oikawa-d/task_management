@@ -27,7 +27,7 @@
 | Origin検証 | 不要（Cookie発行・更新系ではないため） |
 | AUTH_MODE差異 | 差異なし（`deps.get_current_user` が方式差を吸収する） |
 | 冪等性 | あり（GET） |
-| レート制限 | user_id + 解決済みIP単位で120回/60秒。超過時は429 `TOO_MANY_ATTEMPTS`（`Retry-After`付き）、Redis障害時は503 |
+| レート制限 | user_id + 解決済みIP単位で`RATE_LIMIT_NOTIFICATION_READ_MAX_REQUESTS`（既定120）回/`RATE_LIMIT_NOTIFICATION_WINDOW_SECONDS`（既定60）秒。超過時は429 `TOO_MANY_ATTEMPTS`（`Retry-After`付き）、Redis障害時は503 |
 | トランザクション境界 | 単一の読み取りトランザクション（更新なし） |
 
 ## 2. 入出力仕様
@@ -279,7 +279,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | ログ出力 | 監査ログ対象外（参照系）。アクセスログに `user_id`, `page`, `per_page`, `unread_only`, `X-Request-ID` を構造化出力 |
 | ユーザー列挙対策 | 該当なし（`user_id = current_user.id` 固定で他人のデータへは到達しない設計。パスパラメータで他人のIDを渡す余地がないAPIのため404隠蔽は不要） |
 | タイミング攻撃対策 | 該当なし |
-| レート制限 | user_id + 解決済みIP単位で120回/60秒。フロントのポーリング間隔に依存せずサーバー側で制限する |
+| レート制限 | user_id + 解決済みIP単位で`RATE_LIMIT_NOTIFICATION_READ_MAX_REQUESTS`（既定120）回/`RATE_LIMIT_NOTIFICATION_WINDOW_SECONDS`（既定60）秒。フロントのポーリング間隔に依存せずサーバー側で制限する |
 | fail-close方針 | PostgreSQL接続不能時は `503 SERVICE_UNAVAILABLE`。空配列を返して隠蔽しない |
 | N+1対策・クエリ回数 | 通常時（該当行が1件以上）：`fn_list_notifications` 1回のみ（内部でtask情報・`total_count`までLEFT JOIN／ウィンドウ関数で算出済みのため、通知件数に応じた追加SELECTは発生しない）。`unread_only=false` の場合は `fn_count_unread_notifications` 1回を加える。`unread_only=true` は `total_count` が未読総数と一致するため `fn_count_unread_notifications` を追加で呼ばない。該当行が0件（pageが総ページ数を超えた場合等）のときのみ `fn_count_notifications` を1回追加し、`meta.total`（`unread_only=true`時は`unread_count`も兼ねる）を確定する |
 | 個人情報の取り扱い | `title`/`body` はタスク作成者・担当者にのみ関わる業務情報であり、本人以外には返さない（本APIの認可自体がその境界を保証する） |
