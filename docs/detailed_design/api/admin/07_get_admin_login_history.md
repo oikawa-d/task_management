@@ -152,11 +152,11 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def list_admin_login_history(query: AdminLoginHistoryQuery = Depends(), user: CurrentUser = Depends(require_admin), db: AsyncSession = Depends(get_db)) -> AdminLoginHistoryListResponse` |
+| シグネチャ | `async def list_admin_login_history(query: AdminLoginHistoryQuery = Depends(), user: CurrentUser = Depends(require_admin), db: AsyncSession = Depends(get_db)) -> list[LoginHistory]`（現行Repository契約） |
 | 引数 | `query`: `page`/`per_page`/`user_id`/`q`/`login_method`/`success`/`from`/`to`（クエリ） / `user`: admin確認済みユーザー / `db`: DBセッション |
 | 戻り値 | `LoginHistory`一覧（現行Repository契約）。`AdminLoginHistoryListResponse`への写像は目標契約 |
 | 送出例外 | なし（サービス層の例外を `AppError` としてそのまま伝播） |
-| 処理内容 | 1. `require_admin` により403判定を完了させる 2. `admin_login_history_service.search` を呼び出す 3. 戻り値をそのままレスポンスとして返す |
+| 処理内容 | 1. `require_admin` により403判定を完了させる 2. `admin_login_history_service.search` を呼び出す 3. 現行契約では`LoginHistory`一覧を返す。`AdminLoginHistoryListResponse`への写像は目標契約として別Issueで確定する |
 | 副作用 | なし |
 
 ### 6.2 `service/admin_login_history_service.py :: search`
