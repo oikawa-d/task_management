@@ -154,7 +154,7 @@ flowchart TB
 | `RATE_LIMIT_EMAIL_VERIFY_MAX_REQUESTS` / `RATE_LIMIT_EMAIL_VERIFY_RESEND_MAX_REQUESTS` | `10` / `5` | メール認証・再送のIP単位Rate Limit |
 | `RATE_LIMIT_PASSWORD_FORGOT_MAX_REQUESTS` / `RATE_LIMIT_PASSWORD_RESET_MAX_REQUESTS` | `5` / `10` | パスワード再設定要求・実行のIP単位Rate Limit |
 | `RATE_LIMIT_OAUTH_MAX_REQUESTS` / `RATE_LIMIT_OAUTH_WINDOW_SECONDS` | `10` / `900` | OAuth開始・callback・exchangeの各IP単位Rate Limit |
-| `RATE_LIMIT_NOTIFICATION_READ_MAX_REQUESTS` / `RATE_LIMIT_NOTIFICATION_WRITE_MAX_REQUESTS` | `120` / `60` | 通知APIのuser_id + IP単位Rate Limit（時間窓60秒） |
+| `RATE_LIMIT_NOTIFICATION_READ_MAX_REQUESTS` / `RATE_LIMIT_NOTIFICATION_WRITE_MAX_REQUESTS` / `RATE_LIMIT_NOTIFICATION_WINDOW_SECONDS` | `120` / `60` / `60` | 通知APIのuser_id + IP単位Rate Limit |
 | `TRUSTED_PROXY_CIDRS` | 空 | `X-Forwarded-For`を信頼するProxyのCIDR。空の場合は接続元IPのみ使用 |
 | `CORS_ALLOW_ORIGINS` | `http://localhost:5173` | カンマ区切り |
 | `CORS_ALLOW_METHODS` | `GET,POST,PUT,PATCH,DELETE,OPTIONS` | カンマ区切り。CORSミドルウェアが許可するHTTPメソッド |
@@ -177,6 +177,7 @@ flowchart TB
 | `OAUTH_STATE_TTL_SECONDS` | `600` | state のTTL |
 | `OAUTH_HANDOFF_TTL_SECONDS` | `60` | jwtモードのOAuth一時コードTTL |
 | `OAUTH_DEFAULT_REDIRECT_TO` | `/dashboard` | OAuth完了後の既定遷移先 |
+| `OAUTH_REDIRECT_TO_MAX_LENGTH` | `2048` | OAuth `redirect_to` の最大文字数 |
 | `FRONTEND_BASE_URL` | `http://localhost:5173` | メール内リンク・OAuth後のリダイレクト先 |
 | `SMTP_HOST` / `SMTP_PORT` | `mailpit` / `1025` | 開発は Mailpit |
 | `SMTP_USER` / `SMTP_PASSWORD` | 空 | 本番SMTP利用時のみ（**Secret**） |

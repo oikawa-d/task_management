@@ -48,6 +48,7 @@ class BackendSettings(BaseSettings):
 	rate_limit_oauth_window_seconds: int = 900
 	rate_limit_notification_read_max_requests: int = 120
 	rate_limit_notification_write_max_requests: int = 60
+	rate_limit_notification_window_seconds: int = 60
 	trusted_proxy_cidrs: Annotated[list[str], NoDecode] = []
 	argon2_time_cost: int = 3
 	argon2_memory_cost: int = 65536
@@ -87,6 +88,7 @@ class BackendSettings(BaseSettings):
 	oauth_state_ttl_seconds: int = 600
 	oauth_handoff_ttl_seconds: int = 60
 	oauth_default_redirect_to: str = "/dashboard"
+	oauth_redirect_to_max_length: int = 2048
 
 	# メール（SMTP/Mailpit）
 	smtp_host: str = "mailpit"
