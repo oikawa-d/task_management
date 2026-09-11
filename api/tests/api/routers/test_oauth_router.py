@@ -303,6 +303,31 @@ def test_callback_denied_route_consumes_state_and_deletes_cookie(
 	)
 
 
+def test_callback_route_deletes_state_cookie_on_service_failure(
+	client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+	class _Provider:
+		async def exchange_code(self, _code: str, _verifier: str) -> Any:
+			raise RuntimeError("provider unavailable")
+
+	monkeypatch.setattr(oauth_router_module.auth_service.redis_store, "check_rate_limit", AsyncMock(return_value=1))
+	monkeypatch.setattr(
+		oauth_router_module.auth_service.redis_store,
+		"consume_oauth_state",
+		AsyncMock(return_value=OAuthStateData("/dashboard", "verifier", "nonce", None)),
+	)
+	monkeypatch.setattr(oauth_router_module.auth_service, "GoogleOAuthProvider", lambda _settings: _Provider())
+	client.cookies.set("cerberus_oauth_state", "state-value")
+
+	response = client.get("/api/auth/oauth/google/callback", params={"code": "auth-code", "state": "state-value"})
+
+	assert response.status_code == 302
+	assert response.headers["location"] == f"{FRONTEND_BASE_URL}/login?error=oauth_failed"
+	assert any(
+		"cerberus_oauth_state=" in value and "Max-Age=0" in value for value in response.headers.get_list("set-cookie")
+	)
+
+
 @pytest.mark.parametrize(
 	("error", "expected"),
 	[

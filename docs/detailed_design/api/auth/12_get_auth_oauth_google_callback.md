@@ -147,12 +147,12 @@ sequenceDiagram
         OA->>G: POST /token
         alt code交換失敗
             G-->>OA: 4xx/5xx
-            OA-->>S: OAuthExchangeError
+            OA-->>S: OAuthFailedError
             S-->>R: OAuthFailedError
             R-->>FE: 302 /login?error=oauth_failed
         else 成功
             G-->>OA: id_token / access_token
-            OA-->>S: TokenResponse
+            OA-->>S: OAuthTokenResponse
             S->>S: id_token検証（署名/aud/iss/exp/nonce, JWKS）
             S->>OA: fetch_userinfo(access_token)
             OA->>G: GET /userinfo
@@ -163,7 +163,7 @@ sequenceDiagram
                 S-->>R: OAuthFailedError
                 R-->>FE: 302 /login?error=oauth_failed
             else 検証OK
-                S->>UR: find_by_oauth(provider='google', sub)
+                S->>UR: get_by_provider_identity(db, provider='google', sub)
                 UR->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
                 alt 紐付け済み
                     PG-->>UR: user
@@ -172,12 +172,12 @@ sequenceDiagram
                         S-->>R: OAuthEmailUnverifiedError
                         R-->>FE: 302 /login?error=oauth_email_unverified
                     else email_verified=true
-                        S->>UR: link_oauth_account(user, provider, sub)
+                        S->>UR: upsert(db, user.id, provider='google', sub)
                         UR->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
                         PG-->>UR: user
                     end
                 else 完全な新規
-                    S->>UR: create_oauth_user(userinfo)
+                    S->>UR: user_repository.create / oauth_account_repository.upsert
                     UR->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
                     PG-->>UR: user
                 end
@@ -281,18 +281,18 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def exchange_code(self, code: str, code_verifier: str) -> TokenResponse` |
+| シグネチャ | `async def exchange_code(self, code: str, code_verifier: str) -> OAuthTokenResponse` |
 | 引数 | `code`：Googleからの認可コード。`code_verifier`：state発行時に保存したPKCE検証値 |
-| 戻り値 | `TokenResponse`（`id_token`, `access_token`） |
-| 送出例外 | `OAuthExchangeError`（HTTPエラー・タイムアウト） |
+| 戻り値 | `OAuthTokenResponse`（`id_token`, `access_token`） |
+| 送出例外 | `OAuthFailedError`（HTTPエラー・タイムアウト） |
 | 処理内容 | 1. Googleの`/token`エンドポイントへ`code`/`code_verifier`/`client_id`/`client_secret`/`redirect_uri`/`grant_type=authorization_code`をPOST 2. レスポンスをパースし返す |
 | 副作用 | 外部HTTP通信 |
 
-### 6.5 `api/app/auth/oauth.py :: GoogleOAuthProvider.fetch_userinfo` / `_verify_id_token`
+### 6.5 `api/app/auth/oauth.py :: GoogleOAuthProvider.fetch_userinfo` / `verify_id_token`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def fetch_userinfo(self, access_token: str) -> GoogleUserInfo` / `def _verify_id_token(self, id_token: str, nonce: str) -> IdTokenClaims` |
+| シグネチャ | `async def fetch_userinfo(self, access_token: str) -> GoogleUserInfo` / `async def verify_id_token(self, id_token: str, nonce: str) -> IdTokenClaims` |
 | 引数 | `access_token`：交換で得たトークン。`id_token`/`nonce`：署名・nonce検証用 |
 | 戻り値 | `GoogleUserInfo` / `IdTokenClaims` |
 | 送出例外 | `OAuthFailedError`（署名不正・aud/iss不一致・exp切れ・nonce不一致・userinfo取得失敗） |
@@ -306,16 +306,16 @@ flowchart LR
     R["oauth_router.oauth_google_callback"] --> S["auth_service.oauth_callback"]
     S --> RS1["redis_store.consume_oauth_state"]
     S --> OA1["GoogleOAuthProvider.exchange_code"]
-    S --> OA2["GoogleOAuthProvider._verify_id_token"]
+    S --> OA2["GoogleOAuthProvider.verify_id_token"]
     S --> OA3["GoogleOAuthProvider.fetch_userinfo"]
     S --> RES["_resolve_or_create_user"]
-    RES --> URP1["user_repository.fn_find_oauth_account"]
-    RES --> URP2["user_repository.fn_find_user_by_email"]
-    RES --> URP3["user_repository.link_oauth_account"]
-    RES --> URP4["user_repository.sp_upsert_oauth_account"]
+    RES --> URP1["oauth_account_repository.get_by_provider_identity"]
+    RES --> URP2["user_repository.get_by_email"]
+    RES --> URP3["oauth_account_repository.upsert"]
+    RES --> URP4["user_repository.create"]
     S --> SESS["SessionAuthStrategy.login"]
     S --> RS2["redis_store.save_oauth_handoff"]
-    S --> LRP["login_history_repository.sp_record_login_history"]
+    S --> LRP["login_history_repository.create"]
     RS1 --> RD[("Redis")]
     RS2 --> RD
     URP1 --> PG[("PostgreSQL")]
@@ -407,6 +407,7 @@ stateDiagram-v2
 | 12 | 結合 | OAuth新規ユーザーのプロフィール状態 | 完全新規作成 | `profile_completed=false`、`last_name`/`first_name`がGoogle値、フリガナ・生年月日が`NULL` | `test_oauth_callback_new_user_profile_incomplete` |
 | 13 | 結合 | sessionモードのルートから認証確立まで | Google/Redis/DB境界を差し替え | 302 `#redirect_to`、session/CSRF Cookie、state Cookie削除 | `test_callback_session_route_establishes_authentication` |
 | 14 | 結合 | jwtモードのexchangeルートから認証確立まで | Redis/DB/Strategy境界を差し替え | 200 token response、refresh/CSRF Cookie、`Cache-Control: no-store` | `test_exchange_route_establishes_jwt_authentication` |
+| 15 | 結合 | 通常callbackのサービス失敗時 | Google/Redis境界を差し替え | 302 `/login?error=oauth_failed`、state Cookie削除 | `test_callback_route_deletes_state_cookie_on_service_failure` |
 
 網羅できない範囲：Google実サーバーとの実通信（JWKS取得含む）は`respx`でモックし、実際のGoogleアカウントでの手動確認を別途行う。
 

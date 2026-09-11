@@ -253,7 +253,7 @@ flowchart LR
     S --> RS1["redis_store.consume_oauth_handoff"]
     S --> URP["user_repository.get_by_id"]
     S --> JWTS["JwtAuthStrategy.login"]
-    S --> LRP["login_history_repository.sp_record_login_history"]
+    S --> LRP["login_history_repository.create"]
     JWTS --> RS2["redis_store.store_refresh_token"]
     RS1 --> RD[("Redis")]
     RS2 --> RD
@@ -310,7 +310,7 @@ PostgreSQLの`users`/`oauth_accounts`は本APIでは更新しない（12番フ�
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 単体 | `oauth_exchange`：正常系 | モック`redis_store`/`user_repository`/`JwtAuthStrategy` | `LoginResult`相当の値が返り、`login_history_repository.sp_record_login_history`が1回呼ばれる | `test_oauth_exchange_success_calls_login_and_records_history` |
+| 1 | 単体 | `oauth_exchange`：正常系 | モック`redis_store`/`user_repository`/`JwtAuthStrategy` | `LoginResult`相当の値が返り、`login_history_repository.create`が1回呼ばれる | `test_oauth_exchange_success_calls_login_and_records_history` |
 | 2 | 単体 | `oauth_exchange`：handoff無効 | `consume_oauth_handoff`が`None`を返す | `OAuthHandoffInvalidError`送出 | `test_oauth_exchange_raises_on_invalid_handoff` |
 | 3 | 単体 | `oauth_exchange`：ユーザー無効化済み | `get_by_id`が`None`を返す | `UserInactiveError`送出 | `test_oauth_exchange_raises_on_inactive_user` |
 | 4 | 結合 | `AUTH_MODE=session`で呼び出し | - | 405 `NOT_SUPPORTED_IN_MODE` | `test_oauth_exchange_returns_405_in_session_mode` |
