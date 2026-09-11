@@ -133,7 +133,7 @@ sequenceDiagram
             else 有効
                 RD-->>RS: {user_id, redirect_to}
                 RS-->>S: OAuthHandoffData
-                S->>UR: get_active_user(user_id)
+                S->>UR: get_by_id(db, user_id)
                 UR->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
                 alt ユーザーが無効/不存在
                     PG-->>UR: None
@@ -176,7 +176,7 @@ flowchart TB
     D -->|jwt| E["consume_oauth_handoff(code)"]
     E --> F{"有効?"}
     F -->|No| Z4["400 OAUTH_HANDOFF_INVALID"]
-    F -->|Yes| G["get_active_user(user_id)"]
+    F -->|Yes| G["get_by_id(db, user_id)"]
     G --> H{"is_active?"}
     H -->|No| Z5["403 USER_INACTIVE"]
     H -->|Yes| I["JwtAuthStrategy.login()\nLoginResult発行・Redis/Cookie作成"]
@@ -193,7 +193,7 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def oauth_exchange(payload: OAuthExchangeRequest, request: Request, response: Response, db: AsyncSession = Depends(get_db_session), settings: BackendSettings = Depends(get_backend_settings), _: None = Depends(verify_origin)) -> OAuthExchangeResponse` |
+| シグネチャ | `async def oauth_exchange(payload: OAuthExchangeRequest, request: Request, response: Response, db: AsyncSession = Depends(get_db_session), settings: BackendSettings = Depends(get_backend_settings)) -> OAuthExchangeResponse`（ルートデコレーターで`dependencies=[Depends(verify_origin)]`を指定） |
 | 引数 | `payload`：`code`を含むリクエストボディ。`request`/`response`：Cookie操作用 |
 | 戻り値 | `OAuthExchangeResponse`（200） |
 | 送出例外 | `NotSupportedInModeError`（405）、`OAuthHandoffInvalidError`（400）、`UserInactiveError`（403）、`CsrfInvalidError`（403、`verify_origin`内） |
@@ -208,18 +208,18 @@ flowchart TB
 | 引数 | `code`：一時ハンドオフコード。`request`/`response`：Strategy.loginへ引き渡す。`db`：ユーザー・履歴参照用。`settings`/`strategy`：実行設定・テスト差し替え用 |
 | 戻り値 | `OAuthExchangeResponse`（`access_token`, `token_type`, `expires_in`, `redirect_to`） |
 | 送出例外 | `OAuthHandoffInvalidError`、`UserInactiveError`、`ServiceUnavailableError` |
-| 処理内容 | 1. `redis_store.consume_oauth_handoff(code)`を呼び`None`なら`OAuthHandoffInvalidError` 2. `user_repository.fn_get_user(data.user_id)`で現在の有効ユーザーを取得（Redisに保存されたuser_idのみを信頼し、role等は再取得しない） 3. 取得できなければ`UserInactiveError` 4. `jwt_strategy.login(user, request, response)`を呼び`LoginResult(auth_mode, access_token, refresh_token, csrf_token, expires_in)`を得る 5. `auth_mode='jwt'`、access/refresh/CSRFが非空文字列、`expires_in`がboolではない1以上のintであることを検証する 6. 検証失敗時は`login_history`記録前に`rollback_login`でRedis認証状態とCookieを補償削除し、`OAuthFailedError`を送出する 7. 検証成功後に`login_history_repository.sp_record_login_history(user.id, login_identifier=user.email, method='oauth_google', success=True)`を呼ぶ 8. `data.redirect_to`（正規化済み）とともに結果を返す。ここでの`login_identifier`は解決済みユーザーの検証済みGoogle emailであり、OAuthアカウントの`sub`ではない |
+| 処理内容 | 1. `redis_store.consume_oauth_handoff(code)`を呼び`None`なら`OAuthHandoffInvalidError` 2. `user_repository.get_by_id(db, handoff.user_id)`で現在の有効ユーザーを取得（Redisに保存されたuser_idのみを信頼し、role等は再取得しない） 3. 取得できなければ`UserInactiveError` 4. `_auth_strategy(settings, strategy)`で認証戦略を取得し`JwtAuthStrategy.login(user, request, response)`を呼び`LoginResult(auth_mode, access_token, refresh_token, csrf_token, expires_in)`を得る 5. `auth_mode='jwt'`、access/refresh/CSRFが非空文字列、`expires_in`がboolではない1以上のintであることを検証する 6. 検証失敗時は`login_history`記録前に`rollback_login`でRedis認証状態とCookieを補償削除し、`OAuthFailedError`を送出する 7. 検証成功後に`login_history_repository.create(db, user_id=user.id, login_identifier=user.email, login_method='oauth_google', success=True, failure_reason=None)`を呼ぶ 8. `handoff.redirect_to`（正規化済み）とともに結果を返す。ここでの`login_identifier`は解決済みユーザーの検証済みGoogle emailであり、OAuthアカウントの`sub`ではない |
 | 副作用 | PostgreSQL：`login_history`INSERT。Redis：`refresh:{hash}`/`user_refresh:{uid}`新規作成（`JwtAuthStrategy.login`内）。Cookie：`cerberus_rt`/`cerberus_csrf`発行 |
 
-### 6.3 `repository/user_repository.py :: fn_get_user`
+### 6.3 `repository/user_repository.py :: get_by_id`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def get_active_user(user_id: UUID) -> User | None` |
+| シグネチャ | `async def get_by_id(db: AsyncSession, user_id: UUID) -> User | None` |
 | 引数 | `user_id`：Redisの`oauth_handoff`に保存されていたUUID |
 | 戻り値 | `User`。該当なし・`is_active=false`の場合は`None` |
 | 送出例外 | なし |
-| 処理内容 | `SELECT fn_get_user(:user_id)` を実行し、`is_active` は取得済みユーザーデータで判定する |
+| 処理内容 | `SELECT * FROM fn_get_user(:user_id)` を実行し、`is_active` は取得済みユーザーデータで判定する |
 | 副作用 | なし（読み取りのみ） |
 
 ### 6.4 `auth/jwt_auth.py :: JwtAuthStrategy.login`
@@ -251,7 +251,7 @@ flowchart LR
     R["oauth_router.oauth_exchange"] --> D["deps.verify_origin"]
     R --> S["auth_service.oauth_exchange"]
     S --> RS1["redis_store.consume_oauth_handoff"]
-    S --> URP["user_repository.fn_get_user"]
+    S --> URP["user_repository.get_by_id"]
     S --> JWTS["JwtAuthStrategy.login"]
     S --> LRP["login_history_repository.sp_record_login_history"]
     JWTS --> RS2["redis_store.store_refresh_token"]
@@ -312,7 +312,7 @@ PostgreSQLの`users`/`oauth_accounts`は本APIでは更新しない（12番フ�
 |----|------|--------|------|----------|-----------------|
 | 1 | 単体 | `oauth_exchange`：正常系 | モック`redis_store`/`user_repository`/`JwtAuthStrategy` | `LoginResult`相当の値が返り、`login_history_repository.sp_record_login_history`が1回呼ばれる | `test_oauth_exchange_success_calls_login_and_records_history` |
 | 2 | 単体 | `oauth_exchange`：handoff無効 | `consume_oauth_handoff`が`None`を返す | `OAuthHandoffInvalidError`送出 | `test_oauth_exchange_raises_on_invalid_handoff` |
-| 3 | 単体 | `oauth_exchange`：ユーザー無効化済み | `get_active_user`が`None`を返す | `UserInactiveError`送出 | `test_oauth_exchange_raises_on_inactive_user` |
+| 3 | 単体 | `oauth_exchange`：ユーザー無効化済み | `get_by_id`が`None`を返す | `UserInactiveError`送出 | `test_oauth_exchange_raises_on_inactive_user` |
 | 4 | 結合 | `AUTH_MODE=session`で呼び出し | - | 405 `NOT_SUPPORTED_IN_MODE` | `test_oauth_exchange_returns_405_in_session_mode` |
 | 5 | 結合 | 正常系（`AUTH_MODE=jwt`） | 12番ファイルの処理で`oauth_handoff`をRedisに事前投入 | 200、`access_token`あり、`Set-Cookie: cerberus_rt`（HttpOnly）/`cerberus_csrf`（非HttpOnly）、`refresh:{hash}`がRedisに存在 | `test_oauth_exchange_success_sets_cookies_and_returns_token` |
 | 6 | 結合 | 同一`code`を2回送信 | 1回目成功後に2回目を送信 | 2回目は400 `OAUTH_HANDOFF_INVALID` | `test_oauth_exchange_rejects_replayed_code` |

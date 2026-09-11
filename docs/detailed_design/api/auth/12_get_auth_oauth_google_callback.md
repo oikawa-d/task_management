@@ -220,17 +220,18 @@ flowchart TB
     I -->|Yes| J["fetch_userinfo → sub一致確認"]
     J --> K{"sub一致?"}
     K -->|No| Z4
-    K -->|Yes| P["既存ユーザーを採用"]
-    K -->|No| L{"同一emailの<br/>既存ユーザーあり?"}
+    K -->|Yes| Q{"oauth_accountsに<br/>紐付け済み?"}
+    Q -->|Yes| P["既存ユーザーを採用"]
+    Q -->|No| L{"同一emailの<br/>既存ユーザーあり?"}
     L -->|Yes| M{"email_verified=true?"}
     M -->|No| Z5["302 /login?error=oauth_email_unverified<br/>400 OAUTH_EMAIL_UNVERIFIED相当"]
     M -->|Yes| N["oauth_accounts追加紐付け<br/>email_verified_at更新"]
     L -->|No| O["users + oauth_accounts 新規作成"]
     N --> P
     O --> P
-    P --> Q{"AUTH_MODE"}
-    Q -->|session| R1["SessionAuthStrategy.login()<br/>login_history INSERT<br/>302 #redirect_to"]
-    Q -->|jwt| R2["oauth_handoff発行<br/>302 #code&redirect_to"]
+    P --> X{"AUTH_MODE"}
+    X -->|session| R1["SessionAuthStrategy.login()<br/>login_history INSERT<br/>302 #redirect_to"]
+    X -->|jwt| R2["oauth_handoff発行<br/>302 #code&redirect_to"]
 ```
 
 ## 6. 関数詳細
@@ -258,7 +259,7 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def oauth_callback(code: str | None, state: str | None, state_cookie: str | None, request: Request, response: Response) -> OAuthCallbackResult` |
+| シグネチャ | `async def oauth_callback(code: str | None, state: str | None, state_cookie: str | None, request: Request, response: Response, db: AsyncSession | None = None, *, settings: BackendSettings | None = None, provider: GoogleOAuthProvider | None = None, strategy: Any | None = None) -> OAuthCallbackResult` |
 | 引数 | `code`/`state`/`state_cookie`：表6.1参照。`request`/`response`：Strategy.loginへ引き渡す |
 | 戻り値 | `OAuthCallbackResult`（`auth_mode`, `redirect_to`, `handoff_code: str | None`） |
 | 送出例外 | `InvalidStateError`（400/302マッピングは`invalid_state`）、`OAuthFailedError`（`oauth_failed`）、`OAuthEmailUnverifiedError`（400/`oauth_email_unverified`）、`ServiceUnavailableError`（Redis接続不能） |
@@ -276,7 +277,7 @@ flowchart TB
 | 処理内容 | 1. `SELECT fn_find_oauth_account('google', userinfo.sub)`で紐付け済みか確認し、あれば返す 2. 無ければ`SELECT fn_find_user_by_email(userinfo.email)`で既存ユーザーを検索 3. 既存ユーザーがあり`userinfo.email_verified=false`なら`OAuthEmailUnverifiedError`を送出 4. `CALL sp_upsert_oauth_account(...)`で既存ユーザーの検証日時・OAuth紐付け、または新規ユーザー作成を同一トランザクションで実行する |
 | 副作用 | PostgreSQL：`users`/`oauth_accounts`のINSERTまたはUPDATE（同一トランザクション） |
 
-### 6.4 `auth/oauth.py :: GoogleOAuthProvider.exchange_code`
+### 6.4 `api/app/auth/oauth.py :: GoogleOAuthProvider.exchange_code`
 
 | 項目 | 内容 |
 |------|------|
@@ -287,7 +288,7 @@ flowchart TB
 | 処理内容 | 1. Googleの`/token`エンドポイントへ`code`/`code_verifier`/`client_id`/`client_secret`/`redirect_uri`/`grant_type=authorization_code`をPOST 2. レスポンスをパースし返す |
 | 副作用 | 外部HTTP通信 |
 
-### 6.5 `auth/oauth.py :: GoogleOAuthProvider.fetch_userinfo` / `_verify_id_token`
+### 6.5 `api/app/auth/oauth.py :: GoogleOAuthProvider.fetch_userinfo` / `_verify_id_token`
 
 | 項目 | 内容 |
 |------|------|

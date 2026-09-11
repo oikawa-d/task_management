@@ -438,62 +438,63 @@ async def oauth_callback(
 	strategy: Any | None = None,
 ) -> OAuthCallbackResult:
 	config = settings or get_backend_settings()
-	client_info = await _check_oauth_rate_limit(
-		request, _OAUTH_RATE_LIMIT_SCOPE["callback"], "/api/auth/oauth/google/callback", config
-	)
-	if not state or not state_cookie or not secrets.compare_digest(state, state_cookie):
-		raise InvalidStateError()
 	try:
-		state_data = await redis_store.consume_oauth_state(state)
-	except Exception as exc:
-		raise ServiceUnavailableError() from exc
-	if state_data is None:
-		raise InvalidStateError()
-	if not code or db is None:
-		raise OAuthFailedError()
-	oauth_provider = provider or GoogleOAuthProvider(config)
-	tokens = await oauth_provider.exchange_code(code, state_data.code_verifier)
-	claims = await oauth_provider.verify_id_token(tokens.id_token, state_data.nonce)
-	userinfo = await oauth_provider.fetch_userinfo(tokens.access_token)
-	if not secrets.compare_digest(claims.sub, userinfo.sub):
-		raise OAuthFailedError()
-	user = await _resolve_or_create_user(db, userinfo)
-	if not user.is_active:
-		raise UserInactiveError()
-	if config.auth_mode == "session":
-		auth_strategy = _auth_strategy(config, strategy)
-		login_result = await auth_strategy.login(user, request, response)
-		try:
-			await _record_oauth_login(db, user, request, client_info)
-		except Exception as exc:
-			_log_login_history_write_failed(request, user, client_info)
-			try:
-				await _rollback_oauth_login(
-					auth_strategy,
-					user,
-					login_result,
-					response,
-					config,
-					clear_state_cookie=True,
-					request=request,
-					client_info=client_info,
-					operation="oauth_callback_session",
-				)
-			except Exception as rollback_exc:
-				raise ServiceUnavailableError() from rollback_exc
-			raise ServiceUnavailableError() from exc
-		_delete_oauth_state_cookie(response, config)
-		return OAuthCallbackResult(auth_mode="session", redirect_to=state_data.redirect_to)
-
-	handoff_code = secrets.token_urlsafe(32)
-	try:
-		await redis_store.save_oauth_handoff(
-			handoff_code, user.id, state_data.redirect_to, config.oauth_handoff_ttl_seconds
+		client_info = await _check_oauth_rate_limit(
+			request, _OAUTH_RATE_LIMIT_SCOPE["callback"], "/api/auth/oauth/google/callback", config
 		)
-	except Exception as exc:
-		raise ServiceUnavailableError() from exc
-	_delete_oauth_state_cookie(response, config)
-	return OAuthCallbackResult(auth_mode="jwt", redirect_to=state_data.redirect_to, handoff_code=handoff_code)
+		if not state or not state_cookie or not secrets.compare_digest(state, state_cookie):
+			raise InvalidStateError()
+		try:
+			state_data = await redis_store.consume_oauth_state(state)
+		except Exception as exc:
+			raise ServiceUnavailableError() from exc
+		if state_data is None:
+			raise InvalidStateError()
+		if not code or db is None:
+			raise OAuthFailedError()
+		oauth_provider = provider or GoogleOAuthProvider(config)
+		tokens = await oauth_provider.exchange_code(code, state_data.code_verifier)
+		claims = await oauth_provider.verify_id_token(tokens.id_token, state_data.nonce)
+		userinfo = await oauth_provider.fetch_userinfo(tokens.access_token)
+		if not secrets.compare_digest(claims.sub, userinfo.sub):
+			raise OAuthFailedError()
+		user = await _resolve_or_create_user(db, userinfo)
+		if not user.is_active:
+			raise UserInactiveError()
+		if config.auth_mode == "session":
+			auth_strategy = _auth_strategy(config, strategy)
+			login_result = await auth_strategy.login(user, request, response)
+			try:
+				await _record_oauth_login(db, user, request, client_info)
+			except Exception as exc:
+				_log_login_history_write_failed(request, user, client_info)
+				try:
+					await _rollback_oauth_login(
+						auth_strategy,
+						user,
+						login_result,
+						response,
+						config,
+						clear_state_cookie=False,
+						request=request,
+						client_info=client_info,
+						operation="oauth_callback_session",
+					)
+				except Exception as rollback_exc:
+					raise ServiceUnavailableError() from rollback_exc
+				raise ServiceUnavailableError() from exc
+			return OAuthCallbackResult(auth_mode="session", redirect_to=state_data.redirect_to)
+
+		handoff_code = secrets.token_urlsafe(32)
+		try:
+			await redis_store.save_oauth_handoff(
+				handoff_code, user.id, state_data.redirect_to, config.oauth_handoff_ttl_seconds
+			)
+		except Exception as exc:
+			raise ServiceUnavailableError() from exc
+		return OAuthCallbackResult(auth_mode="jwt", redirect_to=state_data.redirect_to, handoff_code=handoff_code)
+	finally:
+		_delete_oauth_state_cookie(response, config)
 
 
 async def oauth_exchange(

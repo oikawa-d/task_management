@@ -98,7 +98,7 @@ def test_start_redirects_to_google_with_state_cookie(client: TestClient, monkeyp
 
 
 def test_callback_session_mode_redirects_with_redirect_to_fragment(
-	client: TestClient, monkeypatch: pytest.MonkeyPatch
+	session_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
 	async def _oauth_callback(*_args: Any, **_kwargs: Any) -> OAuthCallbackResult:
 		_args[4].set_cookie("cerberus_sid", "session-id")
@@ -108,7 +108,9 @@ def test_callback_session_mode_redirects_with_redirect_to_fragment(
 
 	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_callback", _oauth_callback)
 
-	response = client.get("/api/auth/oauth/google/callback", params={"code": "auth-code", "state": "state-value"})
+	response = session_client.get(
+		"/api/auth/oauth/google/callback", params={"code": "auth-code", "state": "state-value"}
+	)
 
 	assert response.status_code == 302
 	assert response.headers["location"] == f"{FRONTEND_BASE_URL}/oauth/callback#redirect_to=/dashboard"
@@ -255,6 +257,20 @@ def test_callback_rejects_inconsistent_auth_mode_result(client: TestClient, monk
 	assert response.headers["location"] == f"{FRONTEND_BASE_URL}/login?error=oauth_failed"
 
 
+def test_callback_rejects_result_mode_different_from_settings(
+	client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+	async def _oauth_callback(*_args: Any, **_kwargs: Any) -> OAuthCallbackResult:
+		return OAuthCallbackResult(auth_mode="session", redirect_to="/dashboard")
+
+	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_callback", _oauth_callback)
+
+	response = client.get("/api/auth/oauth/google/callback", params={"code": "auth-code", "state": "state-value"})
+
+	assert response.status_code == 302
+	assert response.headers["location"] == f"{FRONTEND_BASE_URL}/login?error=oauth_failed"
+
+
 def test_callback_rejects_jwt_result_without_handoff(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
 	async def _oauth_callback(*_args: Any, **_kwargs: Any) -> OAuthCallbackResult:
 		return OAuthCallbackResult(auth_mode="jwt", redirect_to="/dashboard")
@@ -265,6 +281,26 @@ def test_callback_rejects_jwt_result_without_handoff(client: TestClient, monkeyp
 
 	assert response.status_code == 302
 	assert response.headers["location"] == f"{FRONTEND_BASE_URL}/login?error=oauth_failed"
+
+
+def test_callback_denied_route_consumes_state_and_deletes_cookie(
+	client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+	monkeypatch.setattr(oauth_router_module.auth_service.redis_store, "check_rate_limit", AsyncMock(return_value=1))
+	monkeypatch.setattr(
+		oauth_router_module.auth_service.redis_store,
+		"consume_oauth_state",
+		AsyncMock(return_value=OAuthStateData("/dashboard", "verifier", "nonce", None)),
+	)
+	client.cookies.set("cerberus_oauth_state", "state-value")
+
+	response = client.get("/api/auth/oauth/google/callback", params={"error": "access_denied", "state": "state-value"})
+
+	assert response.status_code == 302
+	assert response.headers["location"] == f"{FRONTEND_BASE_URL}/login?error=oauth_denied"
+	assert any(
+		"cerberus_oauth_state=" in value and "Max-Age=0" in value for value in response.headers.get_list("set-cookie")
+	)
 
 
 @pytest.mark.parametrize(

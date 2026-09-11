@@ -187,7 +187,7 @@ flowchart TB
 | 処理内容 | 1. `raw` が `None` または空文字なら既定値を返す 2. `raw` が `/` で始まらない、または `//` で始まる場合は既定値を返す（プロトコル相対URL対策） 3. `urlparse` でスキーム・ホストが含まれないことを確認し、含まれる場合は既定値を返す 4. 上記をすべて満たす場合のみ `raw` をそのまま返す |
 | 副作用 | なし |
 
-### 6.4 `auth/oauth.py :: GoogleOAuthProvider.build_authorize_url`
+### 6.4 `api/app/auth/oauth.py :: GoogleOAuthProvider.build_authorize_url`
 
 | 項目 | 内容 |
 |------|------|

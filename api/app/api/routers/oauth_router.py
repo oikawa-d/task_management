@@ -88,7 +88,7 @@ async def oauth_google_callback(
 		)
 		return _login_error_redirect(_callback_error_value(exc), settings, response)
 
-	if (result.auth_mode == "jwt") != (result.handoff_code is not None):
+	if result.auth_mode != settings.auth_mode or (result.auth_mode == "jwt") != (result.handoff_code is not None):
 		logger.error(
 			"OAuth callback returned inconsistent auth state",
 			extra={"operation": "oauth_callback", "event": "oauth_callback_invalid_result"},

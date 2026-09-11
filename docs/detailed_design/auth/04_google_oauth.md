@@ -9,7 +9,7 @@
 
 | 項目 | 内容 |
 |------|------|
-| 対象 | `auth/oauth.py :: GoogleOAuthProvider`（Authorization Code Flow + PKCE(S256) による Google ログイン） |
+| 対象 | `api/app/auth/oauth.py :: GoogleOAuthProvider`（Authorization Code Flow + PKCE(S256) による Google ログイン） |
 | 責務 | 認可URLの組み立て、state/PKCE/nonceの発行と検証、token/userinfoエンドポイント呼び出し、id_token検証（JWKS）、ユーザー解決・新規作成、jwtモード向けhandoffコード発行 |
 | 適用条件 | `AUTH_MODE` に関わらず常時有効。`GOOGLE_LOGIN_ENABLED` で無効化可能（認証設定APIに反映） |
 | 依存先 | Redis（`oauth_state` / `oauth_handoff`）、PostgreSQL（`users` / `oauth_accounts`）、Google 認可サーバー・token/userinfo/JWKSエンドポイント |
@@ -168,7 +168,7 @@ stateDiagram-v2
 
 ## 8. 関数・処理詳細
 
-### 8.1 `auth/oauth.py :: build_authorize_url`
+### 8.1 `api/app/auth/oauth.py :: GoogleOAuthProvider.build_authorize_url`
 
 | 項目 | 内容 |
 |------|------|
@@ -201,7 +201,7 @@ stateDiagram-v2
 | 処理内容 | 1. callbackレート制限を確認 2. Cookieのstateとクエリのstateを比較 3. `redis_store.consume_oauth_state(state)`（GETDEL） 4. 値がNoneなら`InvalidStateError` 5. `GoogleOAuthProvider.exchange_code(code, code_verifier)` 6. `verify_id_token(id_token, nonce)` 7. `fetch_userinfo(access_token)` とsub一致確認 8. `_resolve_or_create_user(db, userinfo)` 9. `AUTH_MODE` に応じてsession確立 or handoff発行 10. sessionモードでは`login_history`へ`login_identifier=user.email`を設定してINSERT |
 | 副作用 | Redis削除・書き込み、PostgreSQL INSERT/UPDATE、Cookie設定（sessionモード） |
 
-### 8.4 `service/auth_service.py :: resolve_or_create_user`
+### 8.4 `service/auth_service.py :: _resolve_or_create_user`
 
 | 項目 | 内容 |
 |------|------|
@@ -212,25 +212,25 @@ stateDiagram-v2
 | 処理内容 | 1. `oauth_accounts` を `provider='google' AND provider_user_id=sub` で検索 2. 存在すれば紐付け先 `users` を返す 3. なければ `email` で `users` を検索 4. 存在し `email_verified=true` なら `oauth_accounts` を追加し、`email_verified_at` がNULLなら`now()`へ更新 5. 存在し `email_verified=false` なら例外を送出 6. どちらも該当なければ新規 `users`（`password_hash=NULL`, `email_verified_at=now()`, `username='google_' + sha256(sub)[:16]`）と `oauth_accounts` を作成 |
 | 副作用 | PostgreSQL INSERT/UPDATE |
 
-### 8.5 `auth/oauth.py :: verify_id_token`
+### 8.5 `api/app/auth/oauth.py :: GoogleOAuthProvider.verify_id_token`
 
 | 項目 | 内容 |
 |------|------|
 | シグネチャ / 定義 | `async def verify_id_token(id_token: str, expected_nonce: str) -> IdTokenClaims` |
 | 引数 / 入力 | `id_token`（JWT文字列）、開始時にRedisへ保存した`nonce` |
 | 戻り値 / 出力 | `IdTokenClaims{sub, email, email_verified, given_name, family_name, ...}` |
-| 送出例外 / 失敗条件 | `InvalidTokenError`：署名不正・`aud != GOOGLE_CLIENT_ID`・`iss` が `accounts.google.com`/`https://accounts.google.com` 以外・`exp` 切れ・`nonce` 不一致のいずれか |
+| 送出例外 / 失敗条件 | `OAuthFailedError`：署名不正・`aud != GOOGLE_CLIENT_ID`・`iss` が `accounts.google.com`/`https://accounts.google.com` 以外・`exp` 切れ・`nonce` 不一致のいずれか |
 | 処理内容 | 1. `_get_jwks()` でJWKSを取得（キャッシュ利用） 2. `kid` に対応する鍵で署名検証 3. `aud`/`iss`/`exp`/`nonce` を検証 4. claimsを返す |
 | 副作用 | JWKS未キャッシュ時のみ外部HTTP取得 |
 
-### 8.6 `auth/oauth.py :: _get_jwks`
+### 8.6 `api/app/auth/oauth.py :: GoogleOAuthProvider._get_jwks`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ / 定義 | `async def _get_jwks() -> JWKSet`（モジュール内プライベート） |
+| シグネチャ / 定義 | `async def _get_jwks(self) -> dict[str, Any]`（Provider内プライベート） |
 | 引数 / 入力 | なし |
-| 戻り値 / 出力 | JWKSet（鍵集合） |
-| 送出例外 / 失敗条件 | `OAuthProviderUnavailableError`：Google側への接続不可時（呼び出し元で502相当として扱うか、要検討） |
+| 戻り値 / 出力 | `dict[str, Any]`（鍵集合） |
+| 送出例外 / 失敗条件 | `OAuthFailedError`：Google側への接続不可時 |
 | 処理内容 | 1. プロセス内メモリキャッシュの有効期限（`GOOGLE_JWKS_CACHE_TTL_SECONDS`）を確認 2. 期限内ならキャッシュを返す 3. 期限切れなら `GOOGLE_JWKS_URI` から再取得しキャッシュを更新 |
 | 副作用 | プロセスメモリの更新（Redisは使用しない。複数ワーカー間では共有されず個別にキャッシュされる） |
 

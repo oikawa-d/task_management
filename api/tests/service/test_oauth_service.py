@@ -531,6 +531,7 @@ async def test_oauth_callback_rejects_inactive_resolved_user(monkeypatch: pytest
 	)
 	monkeypatch.setattr(auth_service, "_resolve_or_create_user", AsyncMock(return_value=user))
 	login = AsyncMock()
+	response = Response()
 
 	with pytest.raises(UserInactiveError):
 		await auth_service.oauth_callback(
@@ -538,13 +539,14 @@ async def test_oauth_callback_rejects_inactive_resolved_user(monkeypatch: pytest
 			"state",
 			"state",
 			_request(),
-			Response(),
+			response,
 			db=SimpleNamespace(commit=AsyncMock()),
 			settings=_settings(),
 			provider=provider,
 			strategy=SimpleNamespace(mode="session", login=login),
 		)
 	login.assert_not_awaited()
+	assert any(b"cerberus_oauth_state=" in value and b"Max-Age=0" in value for key, value in response.raw_headers)
 
 
 @pytest.mark.asyncio
