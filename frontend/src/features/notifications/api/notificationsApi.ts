@@ -1,4 +1,5 @@
 import { fetchWithAuth } from "../../../api/authAdapter/client";
+import { NOTIFICATION_LIST_DEFAULT_PER_PAGE } from "../config/notificationsConfig";
 import type { NotificationItemData } from "../types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api";
@@ -43,7 +44,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export async function getNotifications(page: number): Promise<{ items: NotificationItemData[]; totalPages: number }> {
-	const response = await request<NotificationListResponse>(`/notifications?page=${page}&per_page=20`);
+	const response = await request<NotificationListResponse>(
+		`/notifications?page=${page}&per_page=${NOTIFICATION_LIST_DEFAULT_PER_PAGE}`,
+	);
 	return { items: response.items.map(toItem), totalPages: response.meta.total_pages };
 }
 

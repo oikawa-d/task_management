@@ -263,7 +263,7 @@ flowchart TB
 
 ### 9.4 未実装・実装予定の統合機能
 
-`useDashboard`、`getCalendarTasks`、`projectStore`、`ProjectCreateModal`、`Calendar`は設計上の予定であり、現行developには実装されていない。これらを実装ファイルとして参照する変更は、別Issueで受入条件を定義してから行う。
+`useDashboard`、`projectStore`、`ProjectCreateModal`は設計上の予定であり、現行developには実装されていない。これらを実装ファイルとして参照する変更は、別Issueで受入条件を定義してから行う。
 
 ## 10. バリデーション
 
