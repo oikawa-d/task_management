@@ -26,10 +26,14 @@ async def test_list_users_filters_by_query_role_and_is_active(db_session: AsyncS
 	by_role = await admin_repository.list_users(db_session, None, "admin", None, 50, 0)
 	by_active = await admin_repository.list_users(db_session, None, None, False, 50, 0)
 
-	assert {u.id for u in by_query} == {member_id}
-	assert admin_id in {u.id for u in by_role}
-	assert member_id not in {u.id for u in by_role}
-	assert {u.id for u in by_active} == {inactive_id}
+	assert {row.user.id for row in by_query} == {member_id}
+	assert admin_id in {row.user.id for row in by_role}
+	assert member_id not in {row.user.id for row in by_role}
+	assert {row.user.id for row in by_active} == {inactive_id}
+
+	# total_countはウィンドウ関数count(*) OVER()で算出される（該当行数と一致するはず）
+	assert all(row.total_count == len(by_query) for row in by_query)
+	assert all(row.total_count == len(by_active) for row in by_active)
 
 
 async def test_list_projects_filters_by_query_and_is_active(db_session: AsyncSession) -> None:
@@ -41,8 +45,12 @@ async def test_list_projects_filters_by_query_and_is_active(db_session: AsyncSes
 	by_query = await admin_repository.list_projects(db_session, "alpha", None, 50, 0)
 	by_active = await admin_repository.list_projects(db_session, None, False, 50, 0)
 
-	assert {p.id for p in by_query} == {active_id}
-	assert {p.id for p in by_active} == {inactive_id}
+	assert {row.project.id for row in by_query} == {active_id}
+	assert {row.project.id for row in by_active} == {inactive_id}
+
+	# total_countはウィンドウ関数count(*) OVER()で算出される（該当行数と一致するはず）
+	assert all(row.total_count == len(by_query) for row in by_query)
+	assert all(row.total_count == len(by_active) for row in by_active)
 
 
 async def test_list_login_history_filters_by_user_method_and_success(db_session: AsyncSession) -> None:
@@ -59,11 +67,17 @@ async def test_list_login_history_filters_by_user_method_and_success(db_session:
 	by_success = await admin_repository.list_login_history(db_session, None, None, None, False, None, None, 50, 0)
 	by_query = await admin_repository.list_login_history(db_session, None, "hist-user2", None, None, None, None, 50, 0)
 
-	assert {h.user_id for h in by_user} == {user_id}
+	assert {row.history.user_id for row in by_user} == {user_id}
 	assert len(by_user) == 2
-	assert all(h.login_method == "jwt" for h in by_method)
-	assert all(h.success is False for h in by_success)
-	assert {h.user_id for h in by_query} == {other_id}
+	assert all(row.history.login_method == "jwt" for row in by_method)
+	assert all(row.history.success is False for row in by_success)
+	assert {row.history.user_id for row in by_query} == {other_id}
+
+	# total_countはウィンドウ関数count(*) OVER()で算出される（該当行数と一致するはず）
+	assert all(row.total_count == len(by_user) for row in by_user)
+	assert all(row.total_count == len(by_method) for row in by_method)
+	assert all(row.total_count == len(by_success) for row in by_success)
+	assert all(row.total_count == len(by_query) for row in by_query)
 
 
 async def test_list_login_history_filters_by_created_at_range(db_session: AsyncSession) -> None:
@@ -94,7 +108,11 @@ async def test_list_login_history_filters_by_created_at_range(db_session: AsyncS
 
 	assert len(recent_only) == 2
 	assert len(old_only) == 1
-	assert all(history.id != old_only[0].id for history in recent_only)
+	assert all(row.history.id != old_only[0].history.id for row in recent_only)
+
+	# total_countはウィンドウ関数count(*) OVER()で算出される（該当行数と一致するはず）
+	assert all(row.total_count == len(recent_only) for row in recent_only)
+	assert old_only[0].total_count == len(old_only)
 
 
 async def test_update_user_role_self_modification_raises_p0007(db_session: AsyncSession) -> None:

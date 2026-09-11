@@ -82,6 +82,18 @@ async def test_fn_list_tasks_unassigned_visible_only_to_creator(db_session: Asyn
 	assert task_id not in {r.task.id for r in other}
 
 
+async def test_fn_list_tasks_admin_sees_all_unassigned_tasks(db_session: AsyncSession) -> None:
+	creator_id = await user_repository.create(db_session, "frank-admin-owner", "frank-admin-owner@example.com", "hash")
+	admin_id = await user_repository.create(db_session, "grace-admin", "grace-admin@example.com", "hash")
+	await db_session.execute(text("UPDATE users SET role = 'admin' WHERE id = :id"), {"id": admin_id})
+	first_task_id = await task_repository.create(db_session, None, creator_id, None, "first", None, "todo", None, None)
+	second_task_id = await task_repository.create(db_session, None, admin_id, None, "second", None, "todo", None, None)
+
+	results = await task_repository.list_for_user(db_session, admin_id, None, None, False, 50, 0)
+
+	assert {result.task.id for result in results} >= {first_task_id, second_task_id}
+
+
 async def test_fn_list_tasks_non_member_cannot_see_project_scoped_tasks(db_session: AsyncSession) -> None:
 	owner_id = await user_repository.create(db_session, "heidi", "heidi@example.com", "hash")
 	stranger_id = await user_repository.create(db_session, "ivan", "ivan@example.com", "hash")
