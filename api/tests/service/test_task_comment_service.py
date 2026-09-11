@@ -41,6 +41,20 @@ async def test_list_comments_returns_author_and_count(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_comments_checks_project_membership_once(monkeypatch) -> None:
+	user = _user()
+	task = _task(uuid4(), project_id=uuid4())
+	exists = AsyncMock(return_value=True)
+	monkeypatch.setattr(authorization_service.project_member_repository, "exists", exists)
+	monkeypatch.setattr(task_comment_service.task_comment_repository, "list_by_task", AsyncMock(return_value=[]))
+	db = AsyncMock()
+
+	await task_comment_service.list_comments(task, user, db)
+
+	exists.assert_awaited_once_with(db, task.project_id, user.id)
+
+
+@pytest.mark.asyncio
 async def test_update_comment_rejects_other_member(monkeypatch) -> None:
 	owner = _user()
 	other = _user()
