@@ -5,7 +5,13 @@ from uuid import uuid4
 
 import pytest
 from app.auth.base import AuthContext
-from app.core.deps import get_current_user, get_current_user_optional, require_admin
+from app.core.config import get_backend_settings
+from app.core.deps import (
+	get_current_user,
+	get_current_user_optional,
+	require_admin,
+	verify_csrf_for_logout,
+)
 from app.core.exceptions import ForbiddenError, UnauthenticatedError, UserInactiveError
 from app.schemas.auth import CurrentUser
 
@@ -75,3 +81,39 @@ async def test_get_current_user_rejects_missing_context_and_require_admin_reject
 @pytest.mark.asyncio
 async def test_get_current_user_optional_returns_none_for_unauthenticated_request() -> None:
 	assert await get_current_user_optional(None, _Strategy(None), _Db()) is None
+
+
+class _CsrfRequest:
+	def __init__(self, cookies: dict[str, str]) -> None:
+		self.cookies = cookies
+		self.headers: dict[str, str] = {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["session", "jwt"])
+async def test_verify_csrf_for_logout_skips_without_auth_cookie(monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+	verify_mock = AsyncMock()
+	monkeypatch.setattr("app.core.deps.verify_csrf", verify_mock)
+	settings = get_backend_settings()
+
+	await verify_csrf_for_logout(_CsrfRequest({}), SimpleNamespace(mode=mode), settings)
+
+	verify_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+	("mode", "cookie_name"),
+	[("session", "cookie_name_session"), ("jwt", "cookie_name_refresh")],
+)
+async def test_verify_csrf_for_logout_validates_with_auth_cookie(
+	monkeypatch: pytest.MonkeyPatch, mode: str, cookie_name: str
+) -> None:
+	verify_mock = AsyncMock()
+	monkeypatch.setattr("app.core.deps.verify_csrf", verify_mock)
+	settings = get_backend_settings()
+	request = _CsrfRequest({getattr(settings, cookie_name): "value"})
+
+	await verify_csrf_for_logout(request, SimpleNamespace(mode=mode), settings)
+
+	verify_mock.assert_awaited_once()
