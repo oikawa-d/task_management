@@ -169,3 +169,20 @@ async def get_comment_for_member(
 			raise NotFoundError()
 	comment.task = task
 	return comment
+
+
+async def verify_csrf_for_logout(
+	request: Request,
+	strategy: AuthStrategy = Depends(get_auth_strategy),
+	settings: BackendSettings = Depends(get_backend_settings),
+) -> None:
+	"""ログアウト専用のCSRF検証。
+
+	ログアウトは冪等APIであり、認証Cookieが無い場合はCookie破棄だけを行って204を返す。
+	そのため検証対象のCookie（session:`cookie_name_session` / jwt:`cookie_name_refresh`）が
+	存在する場合に限りCSRFトークンを検証する（03_post_auth_logout.md §1）。
+	"""
+	cookie_name = settings.cookie_name_session if strategy.mode == "session" else settings.cookie_name_refresh
+	if not request.cookies.get(cookie_name):
+		return
+	await verify_csrf(request, strategy, settings)
