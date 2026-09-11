@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { resetApiClient } from "../../../api/client";
 import { ApiError } from "../../../api/errors";
-import { createProject, getProjects } from "./projectsApi";
+import { createProject, getCalendarTasks, getProjects } from "./projectsApi";
 import type { ProjectSummary } from "./types";
 
 function createMockClient(): AxiosInstance {
@@ -103,5 +103,14 @@ describe("projectsApi", () => {
 			status: 422,
 			details: [{ field: "name", message: "プロジェクト名を1〜100文字で入力してください" }],
 		});
+	});
+
+	it("getCalendarTasks: 日付範囲とscopeを指定してタスク配列を返す", async () => {
+		const client = createMockClient();
+		const tasks = [{ id: "task-1", project_id: null, title: "期限", due_at: "2026-09-10T00:00:00Z", status: "todo" as const }];
+		(client.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: tasks });
+
+		await expect(getCalendarTasks({ from: "2026-09-01", to: "2026-09-30", scope: "me" }, client)).resolves.toEqual(tasks);
+		expect(client.get).toHaveBeenCalledWith("/tasks/calendar", { params: { from: "2026-09-01", to: "2026-09-30", scope: "me" } });
 	});
 });

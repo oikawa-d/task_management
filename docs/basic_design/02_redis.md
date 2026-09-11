@@ -158,7 +158,8 @@ stateDiagram-v2
 | `get_login_failure_ttl` | `identifier: str`, `client_ip: str` | `int` | `TTL login_fail:{key_hash}`。キーの残り秒数を返し、未存在時はRedisの負値をそのまま返す |
 | `incr_login_failure` | `identifier: str`, `client_ip: str`, `window: int` | `int`（現在の失敗回数） | lower/trimした識別子と確定済みIPからキーを作り、`INCR` → 初回のみ `EXPIRE` |
 | `reset_login_failure` | `identifier: str`, `client_ip: str` | `None` | 同じキーの `DEL` |
-| `check_rate_limit` | `scope: str`, `key: str`, `limit: int`, `window: int` | `int` | `rate_limit:{scope}:{hash}`を原子的に加算し、超過時は429判定用の残秒数を返す |
+| `check_rate_limit` | `scope: str`, `key: str`, `limit: int`, `window: int` | `int` | `rate_limit:{scope}:{hash}`を原子的に加算し、現在の回数を返す |
+| `get_rate_limit_ttl` | `scope: str`, `key: str` | `int` | `rate_limit:{scope}:{hash}`の残りTTL（秒）を返す。超過時の`Retry-After`に使用する |
 | `ping` | なし | `bool` | ヘルスチェック（`/api/health` から使用） |
 
 ### 5.4 関数相関図

@@ -21,7 +21,7 @@
 | ガード | 公開（認証不要） |
 | 対応要件 | `basic_design/05_frontend.md` §2 No.5／§7.3 |
 | 主なユースケース | 確認メール内リンクからの到達→トークン検証→ログイン画面へ自動遷移。トークン無効時の再送 |
-| 実装ファイル | `frontend/src/features/auth/VerifyEmailPage.tsx` |
+| 実装ファイル | `frontend/src/features/auth/pages/VerifyEmailPage.tsx`、`frontend/src/features/auth/components/VerifyEmailPanel.tsx` |
 
 確認メール本文のURLは `basic_design/03_auth.md` §7.2 のとおり `{FRONTEND_BASE_URL}/verify-email#token=...` であり、query stringではなくfragmentを使う。fragment（`#`以降）はHTTPリクエストに含まれず、サーバーのアクセスログやReferer・中間プロキシのログにも記録されないため、メール認証トークンの露出経路を最小化できる。本画面はfragmentから取得したトークンを、画面遷移を伴わない `history.replaceState` で速やかにURLから除去し、以降はPOST本文でのみサーバーへ送る。
 

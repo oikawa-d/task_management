@@ -127,6 +127,24 @@ async def list_for_user(
 	return [_build_task_with_project_status(row) for row in result.mappings().all()]
 
 
+async def list_calendar(
+	db: AsyncSession,
+	user_id: uuid.UUID,
+	from_utc: datetime,
+	to_utc: datetime,
+	scope: str,
+	project_id: uuid.UUID | None,
+) -> list[TaskWithProjectStatus]:
+	result = await db.execute(
+		text(
+			"SELECT (task).*, project_is_active FROM fn_list_calendar_tasks("
+			":user_id, :from_utc, :to_utc, :scope, :project_id)"
+		),
+		{"user_id": user_id, "from_utc": from_utc, "to_utc": to_utc, "scope": scope, "project_id": project_id},
+	)
+	return [_build_task_with_project_status(row) for row in result.mappings().all()]
+
+
 async def update(
 	db: AsyncSession,
 	task_id: uuid.UUID,

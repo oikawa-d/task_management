@@ -57,6 +57,10 @@ def identifier_hash(identifier: str, client_ip: str) -> str:
 	return hashlib.sha256(f"{normalized}:{client_ip}".encode()).hexdigest()
 
 
+def rate_limit_key(scope: str, value: str, prefix: str) -> str:
+	return key("rate_limit", prefix, scope, hashlib.sha256(value.encode()).hexdigest())
+
+
 def parse_json(value: str | bytes | None) -> dict[str, Any] | None:
 	if value is None:
 		return None

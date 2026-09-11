@@ -179,7 +179,7 @@ flowchart TB
 | ベルアイコン | `aria-label="通知"`、`aria-expanded` でパネルの開閉状態を伝える |
 | 未読バッジ | `unread_count >= 1` のときだけ描画。100件以上は `99+` と表示。`aria-label="未読 {n} 件"` |
 | パネル | ベルの下にポップオーバー表示。`Escape` キーと外側クリックで閉じ、閉じたらベルへフォーカスを戻す |
-| 通知行 | クリックで `/projects/{project_id}` へ遷移し、対象タスクの詳細モーダルを開く。遷移と同時に `PATCH /notifications/{id}/read` を実行する。`task` が `null`（タスク削除済み）の行は遷移せず、既読化のみ行う |
+| 通知行 | 未読行は `PATCH /notifications/{id}/read` の成功後にパネルを閉じ、`/projects/{project_id}` へ遷移して対象タスクの詳細モーダルを開く。`task` が `null`（タスク削除済み）の行は遷移せず、既読化成功後にパネルを閉じる。API失敗時はパネルを維持して再試行できる |
 | すべて既読ボタン | `POST /notifications/read-all`。`unread_count === 0` のときは非活性 |
 | 空状態 | 通知0件のとき「通知はありません」を表示する |
 | ページネーション | `GET /notifications?page={page}&per_page=20&unread_only={unreadOnly}` の `meta.page` / `meta.total_pages` を使い、2ページ以上のときだけ表示する。ページ番号変更で一覧を再取得し、`unreadOnly`変更時は`page=1`へ戻す |
@@ -234,7 +234,7 @@ flowchart TB
 
     DP --> DVT["DashboardViewTabs<br/>（カード / カレンダー）"]
     DP --> PCL["ProjectCardList"]
-    DP --> PCM["ProjectCreateModal"]
+    DP --> PCF["ProjectCreateForm"]
     DP --> CV["CalendarView<br/>（表示範囲切替・月送り）"]
     CV --> CG["CalendarGrid"]
     CG --> CDC["CalendarDayCell x42"]
@@ -257,7 +257,7 @@ flowchart TB
 |--------|----------|--------|------|
 | `authStore`（Zustand） | `user`, `status`（`loading` / `authenticated` / `unauthenticated`）, `googleLoginEnabled` | **しない**（メモリのみ） | JWTのアクセストークンは`AuthAdapter`へ注入したメモリ上の`TokenStore`が保持し、authStoreには保持しない。adapterと`googleLoginEnabled`は`GET /auth/config`の実行時設定から選択・保持する（`authBootstrap`が起動時に設定） |
 | `uiStore`（Zustand + persist） | `fontScale`, `sidebarOpen`, `dashboardView`（`"cards"` / `"calendar"`） | localStorage | 文字サイズ・サイドバー開閉・ダッシュボードの表示モードはクライアント側のみで保持。次回起動時も選択中の表示モードを復元する |
-| 通知（React Query） | `['notifications','unread-count']` / `['notifications', page, unreadOnly]` | しない | 未読件数はポーリング、一覧はパネルを開いたときに取得。パネルの開閉状態のみコンポーネントのローカルstateで持つ |
+| 通知（React Query） | `['notifications','unread-count']` / `['notifications', page]` | しない | 未読件数はポーリング、一覧はパネルを開いたときに取得。既読操作の失敗はパネル内で再試行でき、パネルの開閉状態と再試行状態はコンポーネントのローカルstateで持つ |
 | TanStack Query | プロジェクト一覧・ボード・ユーザー一覧 | しない | `queryKey` は `['projects']` / `['board', projectId]`。タスク詳細コメントは`taskDetailStore`で管理する（下段参照） |
 | `taskDetailStore`（singleton） | タスク詳細・コメント詳細の取得結果、更新中/エラー、`notFound`、`closeRequested`、`boardRefreshToken` | しない | タスク詳細モーダルは既存実装との互換性を優先し、`subscribe`/`getSnapshot`を`useSyncExternalStore`から購読する。TanStack Queryへ移行しない方針は[タスク詳細モーダル詳細設計](../detailed_design/screen/08_task_detail_modal.md)を正とする |
 | カレンダー（React Query） | `['tasks-calendar', scope, projectId, from, to]` | しない | 表示中の月（前後の見切れ週を含む`from`〜`to`）が変わるたびに取得し直す。`scope`/`projectId`の切替時も同様に再取得する |
@@ -511,7 +511,7 @@ flowchart TB
 ### 7.8 通知
 
 - ベルアイコン・未読バッジ・通知パネル・「すべて既読」ボタン（仕様は§3.1）
-- 通知行から対象タスクへ遷移し、遷移と同時に既読化する
+- 通知行は既読化成功後に対象タスクへ遷移する。既読化に失敗した場合はパネルを維持して再試行できる
 - ポーリング間隔は `VITE_NOTIFICATION_POLL_INTERVAL_MS` から取得し、コンポーネントに直書きしない
 
 ## 8. アクセシビリティ設定（文字サイズ）
