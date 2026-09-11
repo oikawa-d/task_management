@@ -43,6 +43,7 @@
 | `GOOGLE_JWKS_CACHE_TTL_SECONDS` | int | `3600` | JWKSキャッシュの有効期間 | `.env` |
 | `OAUTH_STATE_TTL_SECONDS` | int | `600` | `oauth_state:{state}` のTTL | `.env`（[08_redis_store.md](./08_redis_store.md)参照） |
 | `OAUTH_HANDOFF_TTL_SECONDS` | int | `60` | `oauth_handoff:{code}` のTTL | `.env` |
+| `OAUTH_REDIRECT_TO_MAX_LENGTH` | int | `2048` | `redirect_to` の最大文字数。超過時は既定の相対パスへ戻す | `.env` |
 | `COOKIE_NAME_OAUTH_STATE` | str | `cerberus_oauth_state` | state保持用Cookie名 | `.env` |
 | `COOKIE_SECURE` | bool | 環境依存 | state Cookieの`Secure`フラグ | `.env` |
 | `FRONTEND_BASE_URL` | str | なし（必須） | `redirect_to`検証・コールバックURL組み立て | `.env` |

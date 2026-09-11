@@ -113,18 +113,23 @@ sequenceDiagram
     R->>D: 認証 + admin確認
     D-->>R: CurrentUser(role=admin)
     R->>S: search(query, page, per_page)
-    S->>LRP: fn_admin_list_login_history(user_id, q, login_method, success, from, to)
+    S->>LRP: list_login_history(user_id, q, login_method, success, from, to, page, per_page)
     LRP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-    PG-->>LRP: total
-    S->>LRP: fn_admin_list_login_history(user_id, q, login_method, success, from, to, page, per_page)
-    LRP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-    PG-->>LRP: login_history行（user_idはFKのみ、JOINしない）
-    LRP-->>S: LoginHistory一覧
+    PG-->>LRP: login_history行の一覧＋total_count（ウィンドウ関数。user_idはFKのみ、JOINしない）
+    LRP-->>S: AdminLoginHistoryListItem一覧（total_count込み）
+    alt 該当ページが0件（総件数を超えるページ指定等）
+        S->>LRP: count_login_history(user_id, q, login_method, success, from, to)
+        LRP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
+        PG-->>LRP: total
+        LRP-->>S: total
+    end
     S->>S: user_id IS NOT NULLの行から重複排除したuser_idリストを作成
-    S->>URP: fn_admin_list_login_history(user_ids)
-    URP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-    PG-->>URP: user行
-    URP-->>S: dict[user_id, User]
+    loop 重複排除済みuser_idごと
+        S->>URP: get_by_id(user_id)
+        URP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
+        PG-->>URP: user行
+        URP-->>S: User \| None
+    end
     S->>S: 各行にuser情報をマージ（存在しなければnull）
     S-->>R: Page[AdminLoginHistoryItem]
     R-->>FE: 200 {items, meta}
@@ -171,35 +176,35 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def search(query: AdminLoginHistoryQuery, db: AsyncSession) -> Page[AdminLoginHistoryItem]` |
+| シグネチャ | `async def search(query: AdminLoginHistoryQuery, db: AsyncSession) -> AdminLoginHistoryListResponse` |
 | 引数 | `query`: 検索・ページング条件 / `db`: DBセッション |
-| 戻り値 | `Page[AdminLoginHistoryItem]`（`items: list[AdminLoginHistoryItem]`, `total: int`） |
+| 戻り値 | `AdminLoginHistoryListResponse`（`items`, `meta`） |
 | 送出例外 | `ServiceUnavailableError`（PostgreSQL接続不能時）→503 |
-| 処理内容 | `SELECT fn_admin_list_login_history(:user_id, :query, :login_method, :success, :limit, :offset)` を1回呼び出し、履歴と表示用ユーザー情報を含むFN結果を`AdminLoginHistoryItem`へ写像する。件数とページングもFN結果から取得する |
+| 処理内容 | 1. `admin_repository.list_login_history` を1回呼び、該当ページの行と`total_count`（ウィンドウ関数`count(*) OVER()`）を同時に取得する 2. 該当ページが0件の場合のみ`admin_repository.count_login_history`で総件数を別途取得する 3. `user_id` が非NULLの行から重複排除したuser_idごとに`user_repository.get_by_id`を呼び出し、`dict[user_id, User]`を作成する 4. 各行にuser情報をマージ（存在しなければ`null`）し`AdminLoginHistoryItem`へ詰め替える（#347レビューで総件数取得方式を確定。ユーザー情報バッチ取得のN+1はissue #348で対応予定） |
 | 副作用 | なし（読み取りのみ） |
 
-### 6.3 `repository/login_history_repository.py :: fn_admin_list_login_history`
+### 6.3 `repository/admin_repository.py :: list_login_history`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def fn_admin_list_login_history(db: AsyncSession, user_id: UUID \| None, q: str \| None, login_method: str \| None, success: bool \| None, created_from: datetime \| None, created_to: datetime \| None, page: int, per_page: int) -> list[LoginHistory]` ／ `async def fn_admin_list_login_history(db: AsyncSession, ...同上（page/per_page除く）) -> int` |
-| 引数 | 各絞り込み条件（すべて任意） / `page`, `per_page`: ページング（`fn_admin_list_login_history` のみ） |
-| 戻り値 | `LoginHistory` エンティティのリスト ／ 該当件数 |
+| シグネチャ | `async def list_login_history(db: AsyncSession, user_id: UUID \| None, q: str \| None, login_method: str \| None, success: bool \| None, created_from: datetime \| None, created_to: datetime \| None, limit: int, offset: int) -> list[AdminLoginHistoryListItem]` |
+| 引数 | 各絞り込み条件（すべて任意） / `limit`, `offset`: ページング |
+| 戻り値 | `AdminLoginHistoryListItem`（`history: LoginHistory`, `total_count: int`）のリスト |
 | 送出例外 | `OperationalError`（DB不通） |
-| 処理内容 | 1. `user_id` 指定時は等価条件 2. `q` 指定時は `lower(login_identifier) LIKE '%' \|\| lower(:q) \|\| '%'`（部分一致。issue #40で確定） 3. `login_method`/`success` は等価条件 4. `created_from`/`created_to` は `created_at >= :from` / `created_at < :to` 5. `ORDER BY created_at DESC` 6. `OFFSET (page-1)*per_page LIMIT per_page`（`fn_admin_list_login_history` はページングなし） 7. `users` へのJOINは行わずN+1を避ける（ユーザー情報はサービス層でバッチ取得） |
+| 処理内容 | `SELECT (history).*, total_count FROM fn_admin_list_login_history(:user_id, :query, :login_method, :success, :created_from, :created_to, :limit, :offset)` を実行する。1. `user_id` 指定時は等価条件 2. `q` 指定時は `lower(login_identifier) LIKE '%' \|\| lower(:q) \|\| '%'`（部分一致。issue #40で確定） 3. `login_method`/`success` は等価条件 4. `created_from`/`created_to` は `created_at >= :from` / `created_at < :to` 5. `ORDER BY created_at DESC` 6. `LIMIT/OFFSET`・`count(*) OVER()`によるtotal_countの算出はいずれもFN内部で行う 7. `users` へのJOINは行わずN+1を避ける（ユーザー情報はサービス層で取得） |
 | 副作用 | なし |
 
 [../../database/03_table_login_history.md §8.3](../../database/03_table_login_history.md) の `list_all`（フィルタなし全件版）を、絞り込み条件を持つ本関数で置き換える形で拡張する（既存の呼び出し元がなければ `list_all` は本関数に統合してよい。13章参照）。
 
-### 6.4 service層のDTO写像
+### 6.4 `repository/admin_repository.py :: count_login_history`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def fn_admin_list_login_history(db: AsyncSession, user_ids: list[UUID]) -> list[User]` |
-| 引数 | `user_ids`: 当該ページの `login_history` 行から抽出した重複排除済みユーザーIDリスト |
-| 戻り値 | 該当する `User` エンティティのリスト |
+| シグネチャ | `async def count_login_history(db: AsyncSession, user_id: UUID \| None, q: str \| None, login_method: str \| None, success: bool \| None, created_from: datetime \| None, created_to: datetime \| None) -> int` |
+| 引数 | `list_login_history` と同じ絞り込み条件（ページング除く） |
+| 戻り値 | 該当件数 |
 | 送出例外 | `OperationalError` |
-| 処理内容 | `SELECT fn_admin_list_login_history(:user_id, :query, :login_method, :success, :limit, :offset)` を1回実行する。履歴と表示用ユーザー情報の結合はFN内部で行い、repositoryの追加SELECTは発行しない |
+| 処理内容 | `SELECT fn_count_admin_login_history(:user_id, :query, :login_method, :success, :created_from, :created_to)` を実行する。`list_login_history`が返す`total_count`は該当ページが0件のとき取得できないため、そのフォールバックとしてのみ使用する |
 | 副作用 | なし |
 
 ## 7. 関数相関図
@@ -207,9 +212,9 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["admin_router.list_admin_login_history"] --> S["admin_login_history_service.search"]
-    S --> LRP1["login_history_repository.fn_admin_list_login_history"]
-    S --> LRP2["login_history_repository.fn_admin_list_login_history"]
-    S --> URP["user_repository.fn_admin_list_login_history"]
+    S --> LRP1["admin_repository.list_login_history"]
+    S -.->|"該当ページ0件のときのみ"| LRP2["admin_repository.count_login_history"]
+    S --> URP["user_repository.get_by_id（重複排除済みuser_idごと）"]
     LRP1 --> M1["models.LoginHistory"]
     LRP2 --> M1
     URP --> M2["models.User"]
@@ -236,7 +241,8 @@ flowchart LR
 
 | 種別 | 契約 | 説明 |
 |------|------|------|
-| fn_admin_list_login_history | `fn_admin_list_login_history(p_user_id, p_query, p_login_method, p_success, p_limit, p_offset)` | fn_admin_list_login_historyを呼び出し、結果をレスポンスへ写像する |
+| fn_admin_list_login_history | `fn_admin_list_login_history(p_user_id, p_query, p_login_method, p_success, p_from, p_to, p_limit, p_offset)` | fn_admin_list_login_historyを呼び出し、結果（history行＋total_count）をレスポンスへ写像する |
+| fn_count_admin_login_history | `fn_count_admin_login_history(p_user_id, p_query, p_login_method, p_success, p_from, p_to)` | fn_admin_list_login_historyのtotal_countが取得できない場合（該当0件）のフォールバック |
 
 repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 

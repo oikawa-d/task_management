@@ -2,8 +2,9 @@ import "@testing-library/jest-dom/vitest";
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { useAuthStore } from "../../../auth/authStore";
 import { ROUTES } from "../../../routes";
 import { AuthFormsProvider, type AuthFormSlots } from "./authFormSlots";
 import { LoginPage } from "./LoginPage";
@@ -32,6 +33,10 @@ function renderLoginPage(options: {
 }
 
 describe("LoginPage", () => {
+	afterEach(() => {
+		useAuthStore.getState().reset();
+	});
+
 	it("/loginで表示され、ログインフォームのスロットを描画する", () => {
 		renderLoginPage();
 
@@ -69,12 +74,15 @@ describe("LoginPage", () => {
 	});
 
 	it("googleLoginButtonスロットが無い場合はGoogleログイン導線を表示しない", () => {
+		useAuthStore.getState().setGoogleLoginEnabled(true);
+
 		renderLoginPage();
 
 		expect(screen.queryByRole("button", { name: /Google/ })).not.toBeInTheDocument();
 	});
 
-	it("googleLoginButtonスロットが接続された場合は描画する", () => {
+	it("googleLoginButtonスロットが接続され、google_login_enabled=trueの場合は描画する", () => {
+		useAuthStore.getState().setGoogleLoginEnabled(true);
 		const googleLoginButton = vi.fn(({ label }: { label: string }) => (
 			<button type="button">{label}</button>
 		));
@@ -83,6 +91,20 @@ describe("LoginPage", () => {
 
 		expect(googleLoginButton).toHaveBeenCalledWith({ label: "Googleでログイン" });
 		expect(screen.getByRole("button", { name: "Googleでログイン" })).toBeInTheDocument();
+	});
+
+	// design doc: docs/detailed_design/screen/01_login.md §14 No.9 "LoginPage hides Google button when disabled"
+	it("LoginPage hides Google button when disabled", () => {
+		useAuthStore.getState().setGoogleLoginEnabled(false);
+		const googleLoginButton = vi.fn(({ label }: { label: string }) => (
+			<button type="button">{label}</button>
+		));
+
+		renderLoginPage({ slots: { googleLoginButton } });
+
+		expect(googleLoginButton).not.toHaveBeenCalled();
+		expect(screen.queryByRole("button", { name: /Google/ })).not.toBeInTheDocument();
+		expect(screen.queryByText("または")).not.toBeInTheDocument();
 	});
 
 	it("新規会員登録とパスワード再設定へのリンクを表示する", () => {

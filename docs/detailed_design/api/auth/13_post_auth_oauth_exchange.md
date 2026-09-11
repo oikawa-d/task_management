@@ -90,6 +90,7 @@ Set-Cookie 一覧
 | HTTP | code | 発生条件 | メッセージ | 備考 |
 |------|------|----------|------------|------|
 | 400 | `OAUTH_HANDOFF_INVALID` | `code`が無効・期限切れ・使用済み | ログインセッションの有効期限が切れました。もう一度お試しください | `consume_oauth_handoff`が`None`を返す |
+| 400 | `OAUTH_FAILED` | `LoginResult`の`auth_mode`またはaccess/refresh/CSRF/expires_inの完全性検証に失敗 | OAuth認証に失敗しました | `login_history`記録前に認証状態を補償rollbackする |
 | 403 | `CSRF_INVALID` | `Origin`ヘッダが`CORS_ALLOW_ORIGINS`のいずれとも一致しない | 不正なリクエストです | `verify_origin`失敗 |
 | 403 | `USER_INACTIVE` | ハンドオフに紐づく`user_id`が`is_active=false` | アカウントが無効化されています | コールバックからexchangeまでの間に管理者が無効化した場合 |
 | 405 | `NOT_SUPPORTED_IN_MODE` | `AUTH_MODE=session`で呼び出された | このAPIは現在のモードでは利用できません | `basic_design/04_api.md` §4.2 |
@@ -145,10 +146,17 @@ sequenceDiagram
                     S->>JWTS: login(user, request, response)
                     JWTS->>RS: store_refresh_token(token, user_id, family_id, ttl)
                     RS->>RD: SETEX refresh:{hash} / SADD user_refresh:{uid}
-                    JWTS-->>S: LoginResult(access_token, expires_in)
-                    S->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
-                    S-->>R: OAuthExchangeResult(access_token, expires_in, redirect_to)
-                    R-->>FE: 200 {access_token, redirect_to}<br/>Set-Cookie(cerberus_rt, cerberus_csrf)
+                    JWTS-->>S: LoginResult(auth_mode, access_token, refresh_token, csrf_token, expires_in)
+                    S->>S: LoginResult完全性検証（auth_mode='jwt'、access/refresh/CSRFは非空str、expires_inはint>=1）
+                    alt 検証失敗
+                        S->>JWTS: rollback_login（refresh失効・Cookie破棄）
+                        S-->>R: OAuthFailedError（login_history前に終了）
+                        R-->>FE: 400 OAUTH_FAILED
+                    else 検証成功
+                        S->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
+                        S-->>R: OAuthExchangeResult(access_token, expires_in, redirect_to)
+                        R-->>FE: 200 {access_token, redirect_to}<br/>Set-Cookie(cerberus_rt, cerberus_csrf)
+                    end
                 end
             end
         end
@@ -171,9 +179,11 @@ flowchart TB
     F -->|Yes| G["get_active_user(user_id)"]
     G --> H{"is_active?"}
     H -->|No| Z5["403 USER_INACTIVE"]
-    H -->|Yes| I["JwtAuthStrategy.login()"]
-    I --> J["refresh/CSRF Cookie発行"]
-    J --> K["login_history INSERT"]
+    H -->|Yes| I["JwtAuthStrategy.login()\nLoginResult発行・Redis/Cookie作成"]
+    I --> J{"LoginResult完全性検証\nauth_mode='jwt'\naccess/refresh/CSRFは非空str\nexpires_inはint(>=1)"}
+    J -->|失敗| R["rollback_login\nrefresh失効・Cookie破棄"]
+    R --> Z6["400 OAUTH_FAILED\nlogin_history前に終了"]
+    J -->|成功| K["login_history INSERT"]
     K --> L["200 {access_token, redirect_to}"]
 ```
 
@@ -198,7 +208,7 @@ flowchart TB
 | 引数 | `code`：一時ハンドオフコード。`request`/`response`：Strategy.loginへ引き渡す |
 | 戻り値 | `OAuthExchangeResult`（`access_token`, `expires_in`, `redirect_to`） |
 | 送出例外 | `OAuthHandoffInvalidError`、`UserInactiveError`、`ServiceUnavailableError` |
-| 処理内容 | 1. `redis_store.consume_oauth_handoff(code)`を呼び`None`なら`OAuthHandoffInvalidError` 2. `user_repository.fn_get_user(data.user_id)`で現在の有効ユーザーを取得（Redisに保存されたuser_idのみを信頼し、role等は再取得しない） 3. 取得できなければ`UserInactiveError` 4. `jwt_strategy.login(user, request, response)`を呼び`LoginResult`を得る 5. `login_history_repository.sp_record_login_history(user.id, login_identifier=user.email, method='oauth_google', success=True)`を呼ぶ 6. `data.redirect_to`（正規化済み）とともに結果を返す。ここでの`login_identifier`は解決済みユーザーの検証済みGoogle emailであり、OAuthアカウントの`sub`ではない |
+| 処理内容 | 1. `redis_store.consume_oauth_handoff(code)`を呼び`None`なら`OAuthHandoffInvalidError` 2. `user_repository.fn_get_user(data.user_id)`で現在の有効ユーザーを取得（Redisに保存されたuser_idのみを信頼し、role等は再取得しない） 3. 取得できなければ`UserInactiveError` 4. `jwt_strategy.login(user, request, response)`を呼び`LoginResult(auth_mode, access_token, refresh_token, csrf_token, expires_in)`を得る 5. `auth_mode='jwt'`、access/refresh/CSRFが非空文字列、`expires_in`がboolではない1以上のintであることを検証する 6. 検証失敗時は`login_history`記録前に`rollback_login`でRedis認証状態とCookieを補償削除し、`OAuthFailedError`を送出する 7. 検証成功後に`login_history_repository.sp_record_login_history(user.id, login_identifier=user.email, method='oauth_google', success=True)`を呼ぶ 8. `data.redirect_to`（正規化済み）とともに結果を返す。ここでの`login_identifier`は解決済みユーザーの検証済みGoogle emailであり、OAuthアカウントの`sub`ではない |
 | 副作用 | PostgreSQL：`login_history`INSERT。Redis：`refresh:{hash}`/`user_refresh:{uid}`新規作成（`JwtAuthStrategy.login`内）。Cookie：`cerberus_rt`/`cerberus_csrf`発行 |
 
 ### 6.3 `repository/user_repository.py :: fn_get_user`
@@ -312,6 +322,7 @@ PostgreSQLの`users`/`oauth_accounts`は本APIでは更新しない（12番フ�
 | 10 | 結合 | `code`未指定 | ボディに`code`なし | 422 `VALIDATION_ERROR` | `test_oauth_exchange_requires_code_field` |
 | 11 | 結合 | 交換成功後の`login_history` | 正常系 | `login_history`に`method='oauth_google', login_identifier=user.email, success=true`の行が1件追加される | `test_oauth_exchange_records_login_history` |
 | 12 | 結合 | `redirect_to`の伝播 | 11番ファイルで`redirect_to=/projects/1`を保存 → 12番でhandoffへ引き継ぎ | レスポンスの`redirect_to`が`/projects/1` | `test_oauth_exchange_returns_propagated_redirect_to` |
+| 13 | 単体 | `LoginResult`完全性検証（`auth_mode`不一致/欠落、access/refresh/CSRFの空文字・非文字列、`expires_in`の0・負数・非整数） | `JwtAuthStrategy.login`が不正な値を返す | `login_history`前に`rollback_login`を呼び、`OAuthFailedError`を送出 | `test_oauth_exchange_rolls_back_for_invalid_login_result_values` |
 
 網羅できない範囲：なし（本APIは外部通信を行わないため、Google関連の手動確認対象は11・12番ファイル側に集約される）。
 

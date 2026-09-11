@@ -14,7 +14,12 @@ AS $$
           SELECT 1 FROM project_members pm
           WHERE pm.project_id = p_project_id AND pm.user_id = u.id
       )
-      AND (p_query IS NULL OR p_query = '' OR u.username ILIKE p_query || '%')
+      AND (
+          p_query IS NULL
+          OR p_query = ''
+          OR u.username ILIKE p_query || '%'
+          OR concat_ws(' ', u.last_name, u.first_name) ILIKE p_query || '%'
+      )
     ORDER BY u.username
     LIMIT p_limit OFFSET p_offset;
 $$;

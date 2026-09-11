@@ -1,12 +1,12 @@
 CREATE OR REPLACE PROCEDURE sp_admin_update_user_role(
     p_actor_id UUID,
     p_target_id UUID,
-    p_new_role VARCHAR
+    p_new_role VARCHAR,
+    OUT p_old_role VARCHAR
 )
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_current_role VARCHAR;
     v_current_is_active BOOLEAN;
     v_other_active_admins BIGINT;
 BEGIN
@@ -19,10 +19,15 @@ BEGIN
     -- admin保護判定専用の固定キーでrole/status変更全体を直列化する。
     PERFORM pg_advisory_xact_lock(hashtext('admin_protection'));
 
-    SELECT role, is_active INTO v_current_role, v_current_is_active
-    FROM users WHERE id = p_target_id;
+    SELECT role, is_active INTO p_old_role, v_current_is_active
+    FROM users WHERE id = p_target_id
+    FOR UPDATE;
 
-    IF v_current_role = 'admin' AND v_current_is_active = true AND p_new_role <> 'admin' THEN
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'target user not found' USING ERRCODE = 'P0010';
+    END IF;
+
+    IF p_old_role = 'admin' AND v_current_is_active = true AND p_new_role <> 'admin' THEN
         SELECT count(*) INTO v_other_active_admins
         FROM users WHERE role = 'admin' AND is_active = true AND id <> p_target_id;
 

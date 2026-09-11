@@ -7,11 +7,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.base import AuthStrategy
 from app.auth.factory import get_auth_strategy
 from app.core.config import BackendSettings, get_backend_settings
-from app.core.exceptions import CsrfInvalidError, ForbiddenError, NotFoundError, UnauthenticatedError, UserInactiveError
+from app.core.exceptions import (
+	CsrfInvalidError,
+	ForbiddenError,
+	NotFoundError,
+	TooManyAttemptsError,
+	UnauthenticatedError,
+	UserInactiveError,
+)
 from app.core.security import csrf_tokens_match
 from app.db import get_db_session
 from app.models.project import Project
-from app.repository import project_repository, redis_store, user_repository
+from app.models.task import Task
+from app.models.task_comment import TaskComment
+from app.repository import (
+	project_member_repository,
+	project_repository,
+	redis_store,
+	task_comment_repository,
+	task_repository,
+	user_repository,
+)
 from app.schemas.auth import CurrentUser
 
 
@@ -111,3 +127,99 @@ async def verify_csrf(
 		cookie_token = request.cookies.get(settings.cookie_name_csrf)
 	if cookie_token is None or not csrf_tokens_match(cookie_token, header):
 		raise CsrfInvalidError()
+
+
+async def verify_csrf_if_session(
+	request: Request,
+	strategy: AuthStrategy = Depends(get_auth_strategy),
+	settings: BackendSettings = Depends(get_backend_settings),
+) -> None:
+	"""通常APIの更新系エンドポイント向けCSRF検証。
+
+	CSRFはsessionモードの更新系エンドポイントでのみ必須であり、
+	jwtモードの通常APIはAuthorizationヘッダで認証されるため検証しない。
+	"""
+	if strategy.mode != "session":
+		return
+	await verify_csrf(request, strategy, settings)
+
+
+async def get_task_for_member(
+	task_id: UUID,
+	user: CurrentUser = Depends(get_current_user),
+	db: AsyncSession = Depends(get_db_session),
+) -> Task:
+	task_with_status = await task_repository.get_by_id(db, task_id)
+	if task_with_status is None:
+		raise NotFoundError()
+	task = task_with_status.task
+	if user.role != "admin" and task.project_id is not None:
+		if not await project_member_repository.exists(db, task.project_id, user.id):
+			raise NotFoundError()
+	return task
+
+
+async def get_comment_for_member(
+	comment_id: UUID,
+	user: CurrentUser = Depends(get_current_user),
+	db: AsyncSession = Depends(get_db_session),
+) -> TaskComment:
+	comment = await task_comment_repository.get_by_id(db, comment_id)
+	if comment is None:
+		raise NotFoundError()
+	task_with_status = await task_repository.get_by_id(db, comment.task_id)
+	if task_with_status is None:
+		raise NotFoundError()
+	task = task_with_status.task
+	if user.role != "admin" and task.project_id is not None:
+		if not await project_member_repository.exists(db, task.project_id, user.id):
+			raise NotFoundError()
+	comment.task = task
+	return comment
+
+
+def _resolved_client_ip(request: Request) -> str:
+	return request.client.host if request.client else "unknown"
+
+
+async def _enforce_rate_limit(
+	request: Request,
+	user: CurrentUser,
+	scope: str,
+	max_requests: int,
+	window: int,
+) -> None:
+	value = f"{user.id}:{_resolved_client_ip(request)}"
+	count = await redis_store.check_rate_limit(scope, value, max_requests, window)
+	if count > max_requests:
+		raise TooManyAttemptsError()
+
+
+async def enforce_notification_read_rate_limit(
+	request: Request,
+	user: CurrentUser = Depends(get_current_user),
+	settings: BackendSettings = Depends(get_backend_settings),
+) -> None:
+	"""通知参照系（一覧・未読件数）APIのレート制限。user_id+解決済みIP単位で判定する。"""
+	await _enforce_rate_limit(
+		request,
+		user,
+		"notification_read",
+		settings.rate_limit_notification_read_max_requests,
+		settings.rate_limit_notification_window_seconds,
+	)
+
+
+async def enforce_notification_write_rate_limit(
+	request: Request,
+	user: CurrentUser = Depends(get_current_user),
+	settings: BackendSettings = Depends(get_backend_settings),
+) -> None:
+	"""通知更新系（個別既読・全既読）APIのレート制限。user_id+解決済みIP単位で判定する。"""
+	await _enforce_rate_limit(
+		request,
+		user,
+		"notification_write",
+		settings.rate_limit_notification_write_max_requests,
+		settings.rate_limit_notification_window_seconds,
+	)
