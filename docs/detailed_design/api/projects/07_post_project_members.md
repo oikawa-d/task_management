@@ -20,7 +20,7 @@
 | 認証 | session モード：`cerberus_sid` Cookie ／ jwt モード：`Authorization: Bearer {access_token}` |
 | 認可 | オーナー / admin（`require_project_owner`） |
 | CSRF検証 | 必要（sessionモードの更新系リクエストは `X-CSRF-Token` ヘッダ必須。jwtモードはAuthorizationヘッダのため不要） |
-| Origin検証 | 不要（Cookieを新規発行しないリクエストのため。`basic_design/04_api.md` §1 の対象リストに本APIは含まれない） |
+| Origin検証 | 必要（sessionモードのみ。jwtモードはAuthorizationヘッダのみのため不要） |
 | AUTH_MODE差異 | CSRF検証の要否のみ（session: 必要 / jwt: 不要）。それ以外の業務ロジックは差異なし |
 | 冪等性 | なし（同一user_idを2回送ると2回目は409） |
 | レート制限 | 対象外 |
@@ -302,4 +302,3 @@ T11は実運用ではまれなケースだが、`exists`チェックとINSERTの
 | 区分 | 内容 | 影響 |
 |------|------|------|
 | 要検討 | `users.is_active=false` のユーザーをメンバーとして追加できるかどうか、基本設計に制約の明記がない。本設計では制限を設けず追加可能とした（無効化はログイン可否の制御であり、プロジェクト参加権とは独立と解釈） | 制限が必要な場合は `403`系の新規エラーコード追加を要検討 |
-| 要検討 | Origin検証の要否について、`basic_design/04_api.md` §1 は「Cookieを発行・利用する更新系API」を対象と定義しており、本APIはCookieを新規発行しないため対象外と判断したが、明示列挙はされていない | 方針変更時はOrigin検証ミドルウェアの対象パス追加が必要 |
