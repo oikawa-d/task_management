@@ -120,18 +120,19 @@ sequenceDiagram
     R->>D: 認証 + admin確認
     D-->>R: CurrentUser(role=admin)
     R->>S: list_projects(query, page, per_page)
-    S->>RP: fn_admin_list_projects(q)
+    S->>RP: list_projects(q, is_active=None, page, per_page)
     RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-    PG-->>RP: total
-    S->>RP: fn_admin_list_projects(q, page, per_page)
+    PG-->>RP: project行の一覧＋total_count（ウィンドウ関数、単一クエリ）
+    RP-->>S: AdminProjectListItem一覧（total_count込み）
+    alt 該当ページが0件（総件数を超えるページ指定等）
+        S->>RP: count_projects(q, is_active=None)
+        RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
+        PG-->>RP: total
+        RP-->>S: total
+    end
+    S->>RP: project_member_repository.list_by_project（プロジェクトごと）
     RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-    PG-->>RP: project行
-    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-    PG-->>RP: owner行
-    RP-->>S: Project一覧
-    S->>RP: fn_admin_list_projects(project_ids)
-    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-    S->>RP: fn_admin_list_projects(project_ids)
+    S->>RP: task_repository.list_board（プロジェクトごと）
     RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     S->>S: 集計結果をAdminProjectSummaryへマージ
     S-->>R: Page[AdminProjectSummary]
@@ -179,40 +180,47 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def list_projects(query: AdminProjectListQuery, db: AsyncSession) -> Page[AdminProjectSummary]` |
+| シグネチャ | `async def list_projects(query: AdminProjectListQuery, db: AsyncSession) -> AdminProjectListResponse` |
 | 引数 | `query`: 検索・ページング条件 / `db`: DBセッション |
-| 戻り値 | `Page[AdminProjectSummary]`（`items: list[AdminProjectSummary]`, `total: int`） |
+| 戻り値 | `AdminProjectListResponse`（`items`, `meta`） |
 | 送出例外 | `ServiceUnavailableError`（PostgreSQL接続不能時）→503 |
-| 処理内容 | `SELECT fn_admin_list_projects(:query, :is_active, :limit, :offset)` を1回呼び出し、関連集計・件数・ページングを含むFN結果を`AdminProjectSummary`へ写像する |
+| 処理内容 | 1. `admin_repository.list_projects` を1回呼び、該当ページの行と`total_count`（ウィンドウ関数`count(*) OVER()`）を同時に取得する 2. 該当ページが0件の場合のみ`admin_repository.count_projects`で総件数を別途取得する 3. `project_member_repository.list_by_project` / `task_repository.list_board` をプロジェクトごとに呼び出し、`member_count`/`task_counts`を集計して`AdminProjectSummary`へマージする（#347レビューで総件数取得方式を確定。member_count/task_counts集計のN+1はissue #348で対応予定） |
 | 副作用 | なし（読み取りのみ） |
 
-### 6.3 `repository/project_repository.py :: fn_admin_list_projects`
+### 6.3 `repository/admin_repository.py :: list_projects`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def fn_admin_list_projects(db: AsyncSession, q: str \| None = None) -> int` ／ `async def fn_admin_list_projects(db: AsyncSession, q: str \| None = None, page: int = 1, per_page: int = 20) -> list[Project]` |
-| 引数 | `q`: プロジェクト名の部分一致条件（`None` なら全件対象） / `page`, `per_page`: ページング |
-| 戻り値 | 件数 ／ `owner` を eager load 済みの `Project` エンティティのリスト |
+| シグネチャ | `async def list_projects(db: AsyncSession, q: str \| None, is_active: bool \| None, limit: int, offset: int) -> list[AdminProjectListItem]` |
+| 引数 | `q`: プロジェクト名の部分一致条件（`None` なら全件対象） / `is_active`: admin一覧では常に`None`（全件対象） / `limit`, `offset`: ページング |
+| 戻り値 | `AdminProjectListItem`（`project: Project`, `total_count: int`）のリスト |
 | 送出例外 | `OperationalError`（DB不通） |
-| 処理内容 | 1. [01_get_projects.md §6.3](../projects/01_get_projects.md) で定義済みの `fn_admin_list_projects`（admin向け全件取得）に `q` 引数を追加する形で拡張し、`GET /projects` のadmin分岐と本APIで実装を共有する 2. `q` 指定時は `lower(name) LIKE '%' || lower(:q) || '%'`（部分一致。issue #40で確定）を `WHERE` に追加 3. `ORDER BY created_at DESC` 4. `OFFSET (page-1)*per_page LIMIT per_page`（`fn_admin_list_projects` はページングなし） |
+| 処理内容 | `SELECT (project).*, total_count FROM fn_admin_list_projects(:query, :is_active, :limit, :offset)` を実行する。`q`によるフィルタ・`ORDER BY created_at DESC`・`LIMIT/OFFSET`・`count(*) OVER()`によるtotal_countの算出はいずれもFN内部で行う |
 | 副作用 | なし |
 
-### 6.4 service層のDTO写像
+### 6.4 `repository/admin_repository.py :: count_projects`
 
-[01_get_projects.md §6.4](../projects/01_get_projects.md) と同一の既存関数をそのまま再利用する（実装の重複を避ける）。
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `async def count_projects(db: AsyncSession, q: str \| None, is_active: bool \| None) -> int` |
+| 引数 | `list_projects` と同じ絞り込み条件（ページング除く） |
+| 戻り値 | 該当件数 |
+| 送出例外 | `OperationalError` |
+| 処理内容 | `SELECT fn_count_admin_projects(:query, :is_active)` を実行する。`list_projects`が返す`total_count`は該当ページが0件のとき取得できないため、そのフォールバックとしてのみ使用する |
+| 副作用 | なし |
 
 ## 7. 関数相関図
 
 ```mermaid
 flowchart LR
     R["admin_router.list_admin_projects"] --> S["admin_project_service.list_projects"]
-    S --> RP1["project_repository.fn_admin_list_projects"]
-    S --> RP2["project_repository.fn_admin_list_projects"]
-    S --> RP3["project_repository.fn_admin_list_projects"]
-    S --> RP4["project_repository.fn_admin_list_projects"]
+    S --> RP1["admin_repository.list_projects"]
+    S -.->|"該当ページ0件のときのみ"| RP2["admin_repository.count_projects"]
+    S --> RP3["project_member_repository.list_by_project（プロジェクトごと）"]
+    S --> RP4["task_repository.list_board（プロジェクトごと）"]
     RP1 --> M["models.Project"]
     RP2 --> M
-    RP2 --> MO["models.User(owner)"]
+    RP1 --> MO["models.User(owner、遅延ロード）"]
     RP3 --> MPM["models.ProjectMember"]
     RP4 --> MT["models.Task"]
 ```
@@ -243,7 +251,8 @@ flowchart LR
 
 | 種別 | 契約 | 説明 |
 |------|------|------|
-| fn_admin_list_projects | `fn_admin_list_projects(p_query, p_is_active, p_limit, p_offset)` | fn_admin_list_projectsを呼び出し、結果をレスポンスへ写像する |
+| fn_admin_list_projects | `fn_admin_list_projects(p_query, p_is_active, p_limit, p_offset)` | fn_admin_list_projectsを呼び出し、結果（project行＋total_count）をレスポンスへ写像する |
+| fn_count_admin_projects | `fn_count_admin_projects(p_query, p_is_active)` | fn_admin_list_projectsのtotal_countが取得できない場合（該当0件）のフォールバック |
 
 repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
