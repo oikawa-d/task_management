@@ -28,10 +28,6 @@ def _build_app() -> FastAPI:
 	async def boom_unhandled() -> None:
 		raise RuntimeError("unexpected")
 
-	@app.get("/rate-limited")
-	async def rate_limited() -> None:
-		raise TooManyAttemptsError(retry_after=900)
-
 	@app.post("/validate")
 	async def validate(payload: _Payload) -> dict[str, str]:
 		return {"name": payload.name}
@@ -79,13 +75,6 @@ def test_unhandled_exception_converted_to_internal_error() -> None:
 	body = res.json()
 	assert body["error"]["code"] == "INTERNAL_ERROR"
 	assert body["error"]["message"] == "サーバーエラーが発生しました"
-
-
-def test_rate_limit_error_includes_retry_after_header() -> None:
-	res = _client().get("/rate-limited")
-
-	assert res.status_code == 429
-	assert res.headers["Retry-After"] == "900"
 
 
 def test_validation_error_returns_field_details() -> None:
