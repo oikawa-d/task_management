@@ -186,12 +186,10 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["admin_router.list_admin_login_history"] --> S["admin_login_history_service.search"]
-    S --> LRP1["login_history_repository.fn_admin_list_login_history"]
-    S --> LRP2["login_history_repository.fn_admin_list_login_history"]
-    S --> URP["user_repository.fn_admin_list_login_history"]
-    LRP1 --> M1["models.LoginHistory"]
-    LRP2 --> M1
-    URP --> M2["models.User"]
+    S --> ARP["admin_repository.list_login_history"]
+    ARP --> FN["fn_admin_list_login_history"]
+    FN --> M1["models.LoginHistory"]
+    S --> DTO["AdminLoginHistoryItemへ写像"]
 ```
 
 ## 8. データ遷移図
@@ -204,7 +202,7 @@ flowchart LR
         T1["login_history"]
         T2["users"]
     end
-    S["admin_login_history_service.search"] -->|"SELECT fn_admin_list_login_history"| T1
+    ARP["admin_repository.list_login_history"] -->|"SELECT fn_admin_list_login_history"| T1
 ```
 
 ## 9. SP/FNデータアクセス一覧
@@ -215,7 +213,7 @@ flowchart LR
 
 | 種別 | 契約 | 説明 |
 |------|------|------|
-| fn_admin_list_login_history | `fn_admin_list_login_history(p_user_id, p_query, p_login_method, p_success, p_limit, p_offset)` | fn_admin_list_login_historyを呼び出し、結果をレスポンスへ写像する |
+| `admin_repository.list_login_history` | `SELECT * FROM fn_admin_list_login_history(p_user_id, p_query, p_login_method, p_success, p_from, p_to, p_limit, p_offset)` | `login_history`行を`LoginHistory` ORMモデルへ写像する。ユーザー情報の補完と件数取得は現行FNの戻り値に含まれないため、本Issueの対象外として要検討に残す |
 
 repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
@@ -223,7 +221,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 
 | テーブル | 操作 | 条件 | 備考 |
 |----------|------|------|------|
-| `fn_admin_list_login_history` | FN | `user_id`/`query`/`login_method`/`success`/page | 履歴・表示用ユーザー情報の結合、絞り込み、件数をFN内部で処理 |
+| `fn_admin_list_login_history` | FN | `user_id`/`query`/`login_method`/`success`/`from`/`to`/`limit`/`offset` | `login_history`の絞り込み・並び順・ページングを処理し、`SETOF login_history`を返す。ユーザー情報の結合・総件数の返却は行わない |
 
 **Redis**
 
@@ -256,7 +254,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | タイミング攻撃対策 | 該当なし |
 | レート制限 | なし |
 | fail-close方針 | PostgreSQL接続不能時は `503 SERVICE_UNAVAILABLE` |
-| N+1対策 | `users` へのJOINは行わず、当該ページの `user_id` を重複排除した上で `fn_admin_list_login_history` による1回のバッチクエリに集約する |
+| 取得単位 | 管理者向け履歴は`admin_repository.list_login_history`が1回のFN呼び出しで取得する。ユーザー情報の補完が必要な場合の一括取得方法は、FNの戻り値・総件数の扱いと合わせて要検討とする |
 
 ## 12. テスト設計
 
@@ -265,13 +263,13 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 1 | 単体 | 一般ユーザーはアクセス不可 | `role=member` のCurrentUser | `403 FORBIDDEN`、リポジトリ未呼び出し | `test_list_admin_login_history_forbidden_for_member` |
 | 2 | 単体 | `from >= to` は422 | `from="2026-09-02", to="2026-09-01"` | `422 VALIDATION_ERROR` | `test_list_admin_login_history_invalid_date_range` |
 | 3 | 単体 | user未登録行（user_id=NULL）は `user: null` になる | repositoryが `user_id=NULL` の行を返すようモック | レスポンスの該当行が `user: null` | `test_list_admin_login_history_null_user_for_unregistered_identifier` |
-| 4 | 結合（実DB・実SP） | user情報のバッチ取得が1回のクエリで行われる | 実DB・実SPで検証しuser_idを3件重複させて返す | `user_repository.fn_admin_list_login_history` が重複排除済み2件で1回だけ呼ばれる | `test_list_admin_login_history_batches_user_lookup` |
+| 4 | 単体 | `admin_repository.list_login_history`がDB関数を呼ぶ | 検索条件を指定する | `fn_admin_list_login_history`へ全条件・limit・offsetを渡し、`LoginHistory` ORMモデル一覧を返す | `test_admin_list_login_history_applies_filters` |
 | 5 | 結合 | 検索条件なしで全ユーザーの履歴が返る | 2ユーザー分のログイン試行を作成 | 全件が返る | `test_list_admin_login_history_returns_all_users` |
 | 6 | 結合 | user_idによる絞り込みが機能する | 2ユーザー分の履歴を作成 | 指定した`user_id`の行のみ返る | `test_list_admin_login_history_filter_by_user_id` |
 | 7 | 結合 | qによるlogin_identifier部分一致検索が機能する | 未登録メールでの失敗試行を含む | `q`一致行のみ返る | `test_list_admin_login_history_search_by_identifier` |
 | 8 | 結合 | success/login_methodの組み合わせ絞り込みが機能する | 成功/失敗、各方式のデータを作成 | 条件に一致する行のみ返る | `test_list_admin_login_history_filter_by_success_and_method` |
 | 9 | 結合 | 期間指定（from/to）が機能する | 異なる日時の履歴を複数作成 | 期間内の行のみ返る | `test_list_admin_login_history_filter_by_date_range` |
-| 10 | 結合 | ページングが正しく機能する | 履歴25件を作成 | 1ページ目20件、`total=25`、`total_pages=2` | `test_list_admin_login_history_pagination` |
+| 10 | 結合 | ページングが正しく機能する | 履歴25件を作成 | 1ページ目20件を取得する。総件数・総ページ数の取得方法は要検討 | `test_list_admin_login_history_pagination` |
 | 11 | 結合 | 未認証は401 | Cookie/Bearerなし | `401 UNAUTHENTICATED` | `test_list_admin_login_history_unauthenticated` |
 | 12 | 性能 | 大量件数（例：10,000件）投入時のcreated_at降順一覧応答 | `ix_login_history_created` を使用 | 実行計画にIndex Scanが現れ、LIMIT付きで高速応答する | `test_list_admin_login_history_uses_index_with_large_dataset` |
 
@@ -284,4 +282,4 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 要検討 | `login_method`/`success` を単独または組み合わせで絞り込む際の専用インデックス（例：部分インデックス）の要否は、基本設計・[03_table_login_history.md](../../database/03_table_login_history.md) のいずれにも規定がない。件数増加時の性能劣化リスクとして11章に記載したが、追加要否はDB担当・運用側との協議が必要 |
 | 要検討 | 本APIの「監査ログの閲覧」自体を別途記録する（誰がいつ閲覧したか）かどうかは基本設計に規定がなく、本書での提案に留めた。個人情報を大量に扱うAPIであるため運用ポリシー次第では要実装 |
 | 確定 | `q` によるログイン識別子検索仕様（部分一致・大文字小文字区別なし）はissue #40で[`basic_design/04_api.md` §2.5](../../../basic_design/04_api.md#25-管理者apiadmin)へ集約定義された |
-| 要検討 | `login_history_repository.list_all`（[03_table_login_history.md §8.3](../../database/03_table_login_history.md)、フィルタなし全件版）と本書の `fn_admin_list_login_history`（フィルタあり）の統合方針は、DB担当ドキュメントとの整合を別途取る必要がある |
+| 要検討 | `AdminLoginHistoryItem.user` の表示用ユーザー情報とレスポンスの総件数・総ページ数は、現行の`fn_admin_list_login_history`（`SETOF login_history`）と`admin_repository.list_login_history`だけでは取得できない。ユーザー情報の一括取得方法、件数用FN追加、またはAPIレスポンス契約の見直しを別Issueで決定する |
