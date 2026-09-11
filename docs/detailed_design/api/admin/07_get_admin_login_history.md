@@ -141,7 +141,7 @@ flowchart TB
     E -->|"role != admin"| E1["403 FORBIDDEN"]
     E -->|"OK"| F["admin_repository.list_login_history"]
     F --> G["fn_admin_list_login_historyで絞り込み"]
-    G --> H["LoginHistory ORMモデル一覧をDTOへ写像"]
+    G --> H["LoginHistory ORMモデル一覧（現行契約）"]
     H --> I["200（レスポンス契約確定後）"]
     F -.->|"DB接続不能"| J["503 SERVICE_UNAVAILABLE"]
 ```
