@@ -27,11 +27,32 @@ case "$cmd" in
 		if [[ "${GH_STUB_GRAPHQL_EXIT:-0}" != "0" ]]; then
 			exit "${GH_STUB_GRAPHQL_EXIT}"
 		fi
-		# JSONに `}` を含むため `${VAR:-default}` のデフォルト値では書けない。
-		if [[ -z "${GH_STUB_GRAPHQL_JSON:-}" ]]; then
-			GH_STUB_GRAPHQL_JSON='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"nodes":[]}}}}}'
+		graphql_number=""
+		graphql_repo=""
+		graphql_cursor=""
+		for arg in "$@"; do
+			case "$arg" in
+				number=*) graphql_number="${arg#number=}" ;;
+				owner=*) graphql_repo="${arg#owner=}"/"$graphql_repo" ;;
+				repo=*) graphql_repo="${graphql_repo%%/*}"/"${arg#repo=}" ;;
+				cursor=*) graphql_cursor="${arg#cursor=}" ;;
+			 esac
+		done
+		if [[ -n "${GH_STUB_GRAPHQL_EXPECT_NUMBER:-}" && "$graphql_number" != "$GH_STUB_GRAPHQL_EXPECT_NUMBER" ]]; then
+			exit 1
 		fi
-		printf '%s' "$GH_STUB_GRAPHQL_JSON"
+		if [[ -n "${GH_STUB_GRAPHQL_EXPECT_REPO:-}" && "$graphql_repo" != "$GH_STUB_GRAPHQL_EXPECT_REPO" ]]; then
+			exit 1
+		fi
+		# JSONに `}` を含むため `${VAR:-default}` のデフォルト値では書けない。
+		json="${GH_STUB_GRAPHQL_JSON:-}"
+		if [[ -n "$graphql_cursor" ]]; then
+			json="${GH_STUB_GRAPHQL_NEXT_JSON:-$json}"
+		fi
+		if [[ -z "$json" ]]; then
+			json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}'
+		fi
+		printf '%s' "$json"
 		exit 0
 		;;
 esac
@@ -136,9 +157,11 @@ export GH_STUB_EXIT="0"
 
 # 5. issue close は「issueを閉じるPR」のreviewedラベルで判定する(#401)
 # issue自身のラベルでは判定しないため、issueにreviewedが付いていても許可してはならない。
-linked_reviewed_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"nodes":[{"number":362,"labels":{"nodes":[{"name":"reviewed"}]}}]}}}}}'
-linked_unreviewed_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"nodes":[{"number":374,"labels":{"nodes":[{"name":"review-requested"}]}}]}}}}}'
-linked_none_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"nodes":[]}}}}}'
+linked_reviewed_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"number":362,"labels":{"nodes":[{"name":"reviewed"}]}}]}}}}}'
+linked_unreviewed_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"number":374,"labels":{"nodes":[{"name":"review-requested"}]}}]}}}}}'
+linked_none_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}'
+linked_page_one_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"},"nodes":[{"number":374,"labels":{"nodes":[{"name":"review-requested"}]}}]}}}}}'
+linked_page_two_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"number":375,"labels":{"nodes":[{"name":"reviewed"}]}}]}}}}}'
 
 # 5-1. リンクPRにreviewedあり -> exit 0
 export GH_STUB_GRAPHQL_JSON="$linked_reviewed_json"
@@ -174,7 +197,28 @@ unset GH_STUB_REPO_EXIT
 # 5-7. issue番号を特定できない -> exit 2 (fail-close)
 assert_blocked "gh issue close"
 
-unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON GH_STUB_GRAPHQL_JSON
+# 5-8. オプション値の数値をIssue番号にせず、実際の位置引数を照会する
+export GH_STUB_GRAPHQL_JSON="$linked_reviewed_json" GH_STUB_GRAPHQL_EXPECT_NUMBER="456"
+assert_allowed "gh issue close --comment 123 456"
+assert_allowed "gh issue close --comment=123 456"
+unset GH_STUB_GRAPHQL_EXPECT_NUMBER
+
+# 5-9. コメント内の偽repo指定を実引数として解釈しない
+export GH_STUB_GRAPHQL_EXPECT_REPO="oikawa-d/task_management"
+assert_allowed "gh issue close 456 --comment '--repo attacker/other-repo'"
+unset GH_STUB_GRAPHQL_EXPECT_REPO
+
+# 5-10. GitHub Issue URL形式を受け付ける
+export GH_STUB_GRAPHQL_EXPECT_NUMBER="456" GH_STUB_GRAPHQL_EXPECT_REPO="oikawa-d/task_management"
+assert_allowed "gh issue close https://github.com/oikawa-d/task_management/issues/456"
+unset GH_STUB_GRAPHQL_EXPECT_NUMBER GH_STUB_GRAPHQL_EXPECT_REPO
+
+# 5-11. リンクPRをページングしてreviewedを検索する
+export GH_STUB_GRAPHQL_JSON="$linked_page_one_json" GH_STUB_GRAPHQL_NEXT_JSON="$linked_page_two_json"
+assert_allowed "gh issue close 123"
+unset GH_STUB_GRAPHQL_NEXT_JSON
+
+unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON GH_STUB_GRAPHQL_JSON GH_STUB_GRAPHQL_NEXT_JSON
 
 # 6. heredoc本文にコマンド名を含むだけのコマンド -> exit 0 (#388の回帰テスト)
 heredoc_cmd=$(printf '%s\n' \
