@@ -1,17 +1,24 @@
 import uuid
 
 from sqlalchemy import select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import AlreadyMemberError
 from app.models.project_member import ProjectMember
 from app.models.user import User
 
 
 async def create(db: AsyncSession, project_id: uuid.UUID, user_id: uuid.UUID, invited_by: uuid.UUID | None) -> None:
-	await db.execute(
-		text("CALL sp_add_project_member(:project_id, :user_id, :invited_by)"),
-		{"project_id": project_id, "user_id": user_id, "invited_by": invited_by},
-	)
+	try:
+		await db.execute(
+			text("CALL sp_add_project_member(:project_id, :user_id, :invited_by)"),
+			{"project_id": project_id, "user_id": user_id, "invited_by": invited_by},
+		)
+	except DBAPIError as exc:
+		if getattr(exc.orig, "sqlstate", None) == "P0003":
+			raise AlreadyMemberError() from exc
+		raise
 
 
 async def exists(db: AsyncSession, project_id: uuid.UUID, user_id: uuid.UUID) -> bool:
