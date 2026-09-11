@@ -34,6 +34,20 @@ export type RegisterSubmitPayload = Omit<RegisterFormValues, "birth_year" | "bir
 	birth_date: string;
 };
 
+/** POST /api/auth/login のレスポンス（session: 204で本文なし / jwt: 200でaccess_token等） */
+export interface LoginResponse {
+	access_token?: string;
+	token_type?: string;
+	expires_in?: number;
+}
+
+/** POST /api/auth/register のレスポンス（201） */
+export interface RegisterResponse {
+	id: string;
+	email: string;
+	message: string;
+}
+
 /** 422 VALIDATION_ERROR の details 1件分 */
 export interface ApiFieldError {
 	field: string;

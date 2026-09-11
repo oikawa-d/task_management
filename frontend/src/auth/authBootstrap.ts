@@ -1,3 +1,4 @@
+import { setAuthAdapter } from "../api/authAdapter/client";
 import {
 	AUTH_CONFIG_ENDPOINT,
 	AUTH_ME_ENDPOINT,
@@ -26,6 +27,8 @@ export async function bootstrapAuth(): Promise<AuthUser | null> {
 		httpClient: client,
 	});
 	useAuthStore.getState().setAuthAdapter(adapter);
+	useAuthStore.getState().setGoogleLoginEnabled(config.google_login_enabled);
+	setAuthAdapter(adapter);
 
 	configureApiClient(client, {
 		authAdapter: adapter,

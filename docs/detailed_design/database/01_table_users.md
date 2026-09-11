@@ -193,16 +193,18 @@ stateDiagram-v2
 
 ## 8. リポジトリ関数詳細
 
+repository層はSQL関数・プロシージャの結果をORMモデル、ORMモデル一覧、UUIDまたは`None`へ写像する薄い層であり、`is_active`や`email_verified_at`に基づくログイン可否・認証可否の業務判定は行わない。無効・未認証ユーザーを拒否する責務はservice/deps層にある。
+
 ### 8.1 `repository/user_repository.py :: get_by_id`
 
 | 項目 | 内容 |
 |------|------|
 | シグネチャ | `async def get_by_id(db: AsyncSession, user_id: UUID) -> User \| None` |
 | 引数 / 戻り値 | `user_id`：対象ユーザーID / 該当行または `None` |
-| 発行SQL | `SELECT * FROM users WHERE id = :user_id` |
-| 使用インデックス | `pk_users` |
-| 送出例外 | なし（`None` を返す。呼び出し元（service）が `NotFoundError` に変換） |
-| 処理内容 | 1. `id` で1件取得 2. 存在しなければ `None` を返す |
+| 発行SQL | `SELECT * FROM fn_get_user(:user_id)` |
+| 使用インデックス | `pk_users`（`fn_get_user`内部） |
+| 送出例外 | なし（`None` を返す。存在・`is_active`・`email_verified_at`の判定はservice/deps層） |
+| 処理内容 | 1. `fn_get_user`の結果を`User` ORMモデルへ写像 2. 存在しなければ`None`を返す 3. 無効ユーザー・未認証ユーザーをrepositoryで除外しない |
 
 ### 8.2 `repository/user_repository.py :: get_by_login_identifier`
 
@@ -210,54 +212,80 @@ stateDiagram-v2
 |------|------|
 | シグネチャ | `async def get_by_login_identifier(db: AsyncSession, identifier: str) -> User \| None` |
 | 引数 / 戻り値 | `identifier`：ログインフォームに入力された username または email / 該当行または `None` |
-| 発行SQL | `SELECT * FROM users WHERE lower(username) = lower(:identifier) OR lower(email) = lower(:identifier)` |
-| 使用インデックス | `uq_users_username`, `uq_users_email` |
+| 発行SQL | `SELECT * FROM fn_find_user_by_identifier(:identifier)` |
+| 使用インデックス | `uq_users_username`, `uq_users_email`（関数内部） |
 | 送出例外 | なし |
-| 処理内容 | 1. usernameまたはemailの小文字一致で1件取得 2. `basic_design/01_database.md` Q-1に対応 |
+| 処理内容 | 1. `fn_find_user_by_identifier`の結果を`User` ORMモデルへ写像 2. usernameまたはemailの小文字一致で1件取得 3. `is_active`・`email_verified_at`の判定はservice/deps層 |
 
-### 8.3 `repository/user_repository.py :: create`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def create(db: AsyncSession, data: UserCreateInput) -> User` |
-| 引数 / 戻り値 | `data`：INSERT対象フィールド一式 / 作成後の `User` |
-| 発行SQL | `INSERT INTO users (username, email, password_hash, last_name, first_name, last_name_kana, first_name_kana, birth_date, email_verified_at) VALUES (:username, :email, :password_hash, ...) RETURNING *` |
-| 使用インデックス | `uq_users_username`, `uq_users_email`（一意制約違反検出） |
-| 送出例外 | `IntegrityError`（`uq_users_username` / `uq_users_email` 違反時。service層で `ConflictError` に変換） |
-| 処理内容 | 1. 通常登録：`password_hash` 設定・`email_verified_at=NULL` 2. OAuth新規登録：`password_hash=NULL`・`email_verified_at=now()`・`username` はサーバー生成値 |
-
-### 8.4 `repository/user_repository.py :: update_profile`
+### 8.3 `repository/user_repository.py :: get_by_email`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def update_profile(db: AsyncSession, user_id: UUID, data: UserProfileUpdateInput) -> User` |
-| 引数 / 戻り値 | 更新対象の部分フィールド / 更新後の `User` |
-| 発行SQL | `UPDATE users SET last_name=:last_name, first_name=:first_name, ... WHERE id=:user_id RETURNING *`（`updated_at` はトリガで更新） |
+| シグネチャ | `async def get_by_email(db: AsyncSession, email: str) -> User \| None` |
+| 引数 / 戻り値 | `email`：検索対象メールアドレス / 該当する`User` ORMモデルまたは`None` |
+| 発行SQL | `SELECT * FROM fn_find_user_by_email(:email)` |
+| 使用インデックス | `uq_users_email`（`fn_find_user_by_email`内部） |
+| 送出例外 | なし |
+| 処理内容 | 1. 関数結果を`User` ORMモデルへ写像 2. メールアドレスの小文字一致で1件取得 3. `is_active`・`email_verified_at`の判定はservice/deps層 |
+
+### 8.4 `repository/user_repository.py :: create`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `async def create(db: AsyncSession, username: str, email: str, password_hash: str \| None) -> UUID` |
+| 引数 / 戻り値 | `username`・`email`・`password_hash`：`sp_register_user`の入力 / OUTパラメータ`p_user_id`のUUID |
+| 発行SQL | `CALL sp_register_user(:username, :email, :password_hash, NULL)` |
+| 使用インデックス | `uq_users_username`, `uq_users_email`（`sp_register_user`内部） |
+| 送出例外 | `DBAPIError`（`sp_register_user`がSQLSTATE `P0001` / `P0002`を返す。service層で`ConflictError`へ変換） |
+| 処理内容 | 1. `sp_register_user`がDB側でUUIDを採番し、OUTパラメータを返す 2. 通常登録は`password_hash`を渡す 3. OAuth新規登録は`password_hash=NULL`で呼び出し、メール認証日時の確定はservice層の`mark_email_verified`で行う |
+
+### 8.5 `repository/user_repository.py :: update_profile`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `async def update_profile(db: AsyncSession, user_id: UUID, last_name: str \| None, first_name: str \| None, last_name_kana: str \| None, first_name_kana: str \| None, birth_date: date \| None) -> None` |
+| 引数 / 戻り値 | 更新対象の各フィールド / なし |
+| 発行SQL | `CALL sp_update_user_profile(:user_id, :last_name, :first_name, :last_name_kana, :first_name_kana, :birth_date)` |
 | 使用インデックス | `pk_users` |
-| 送出例外 | なし（対象0件時は呼び出し元で `NotFoundError`） |
-| 処理内容 | 1. `PATCH /api/users/me` から渡された非NULLフィールドのみ更新 |
+| 送出例外 | なし（対象0件の判定が必要な場合は呼び出し元で事前に検索） |
+| 処理内容 | 1. `PATCH /api/users/me` のserviceが現在値とpayloadをマージ 2. repositoryは6引数をSPへ渡し、更新後のORMモデルを返さない |
 
-### 8.5 `repository/user_repository.py :: update_role_and_status`
+### 8.6 `repository/user_repository.py :: update_password`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def update_role_and_status(db: AsyncSession, user_id: UUID, role: str \| None, is_active: bool \| None) -> User` |
-| 引数 / 戻り値 | 管理者操作による変更値（いずれかまたは両方） / 更新後の `User` |
-| 発行SQL | `UPDATE users SET role = COALESCE(:role, role), is_active = COALESCE(:is_active, is_active) WHERE id = :user_id RETURNING *` |
+| シグネチャ | `async def update_password(db: AsyncSession, user_id: UUID, password_hash: str) -> None` |
+| 引数 / 戻り値 | 対象ユーザーID・新しいパスワードハッシュ / なし |
+| 発行SQL | `CALL sp_update_user_password(:user_id, :password_hash)` |
 | 使用インデックス | `pk_users` |
 | 送出例外 | なし |
-| 処理内容 | 1. 管理者APIから `role` または `is_active` を個別に更新 2. CHECK制約 `ck_users_role` で不正値を防止 |
+| 処理内容 | 1. パスワードハッシュのみをSPへ渡す 2. 認証状態の失効はservice層がRedisで行う |
 
-### 8.6 `repository/user_repository.py :: mark_email_verified`
+### 8.7 `repository/user_repository.py :: mark_email_verified`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def mark_email_verified(db: AsyncSession, user_id: UUID) -> User` |
-| 引数 / 戻り値 | 対象ユーザーID / 更新後の `User` |
-| 発行SQL | `UPDATE users SET email_verified_at = now() WHERE id = :user_id RETURNING *` |
+| シグネチャ | `async def mark_email_verified(db: AsyncSession, user_id: UUID) -> None` |
+| 引数 / 戻り値 | 対象ユーザーID / なし |
+| 発行SQL | `CALL sp_verify_user_email(:user_id)` |
 | 使用インデックス | `pk_users` |
 | 送出例外 | なし |
-| 処理内容 | 1. `POST /api/auth/verify-email` トークン検証成功後に呼び出し |
+| 処理内容 | 1. `POST /api/auth/verify-email`またはGoogle OAuthの検証済みemail確定後に呼び出す 2. email認証済みか、対象ユーザーが有効かの業務判定はservice/deps層が行う |
+
+### 8.8 管理者ユーザー状態更新（`admin_repository`）
+
+管理者のrole/is_active更新は`user_repository`の複合関数ではなく、`admin_repository.update_user_role`および`admin_repository.update_user_status`が担当する。いずれも`sp_admin_update_user_role` / `sp_admin_update_user_status`を呼び、戻り値は`None`である。更新後ユーザーの状態確認や認可判定はservice/deps層の責務とする。
+
+### 8.9 `admin_repository.py :: list_users`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `async def list_users(db: AsyncSession, query: str \| None, role: str \| None, is_active: bool \| None, limit: int, offset: int) -> list[User]` |
+| 引数 / 戻り値 | 管理者一覧の検索・role・有効状態・件数・オフセット / `User` ORMモデル一覧 |
+| 発行SQL | `SELECT * FROM fn_admin_list_users(:query, :role, :is_active, :limit, :offset)` |
+| 使用インデックス | `ix_users_role`, `ix_users_created_at`（関数内部） |
+| 送出例外 | なし |
+| 処理内容 | 1. 関数結果を`User` ORMモデル一覧へ写像 2. 管理者認可はservice/deps層が担う 3. `is_active`は検索条件としてDB関数へ渡すが、呼び出し元の認証可否判定とは分離する |
 
 ## 9. 関数相関図
 
@@ -265,15 +293,18 @@ stateDiagram-v2
 flowchart LR
     AS["auth_service"] --> URP["user_repository"]
     US["user_service"] --> URP
-    ADS["admin_service<br/>（担当外）"] --> URP
-    URP --> T["users テーブル"]
+    ADS["admin_service<br/>（担当外）"] --> ARP["admin_repository"]
+    URP --> UFN["fn_get_user / fn_find_user_*"]
+    ARP --> AFN["fn_admin_list_users"]
+    UFN --> T["users テーブル"]
+    AFN --> T
 ```
 
 ## 10. 想定クエリと性能
 
 | No | ユースケース | クエリ概要 | 使用インデックス | 想定計画 |
 |----|--------------|-----------|-------------------|----------|
-| Q-1 | ログイン | `WHERE lower(email)=:v OR lower(username)=:v AND is_active` | `uq_users_email` / `uq_users_username` | Bitmap Or→Index Scan（件数が少なく実質フルスキャンでも許容範囲） |
+| Q-1 | ログイン | `fn_find_user_by_identifier(:identifier)` | `uq_users_email` / `uq_users_username`（関数内部） | Bitmap Or→Index Scan（件数が少なく実質フルスキャンでも許容範囲） |
 | Q-5 | 管理者ユーザー一覧 | `ORDER BY created_at DESC LIMIT/OFFSET` | `ix_users_created_at` | Index Scan Backward |
 | - | 未認証ユーザー棚卸し | `WHERE email_verified_at IS NULL` | `ix_users_email_verified_at`（部分インデックス） | Index Scan |
 | - | ロールフィルタ | `WHERE role = 'admin'` | `ix_users_role` | Index Scan（件数が少ないため実運用ではSeq Scanに落ちる可能性あり） |
@@ -285,15 +316,15 @@ flowchart LR
 | 外部キーCASCADE | `users` は他テーブルから参照される側。`oauth_accounts.user_id` は `ON DELETE CASCADE`、`login_history.user_id` は `ON DELETE SET NULL`、`projects.owner_id` は `ON DELETE RESTRICT`、`tasks.assignee_id` は `ON DELETE SET NULL`、`tasks.created_by` / `task_comments.user_id` は `ON DELETE RESTRICT`（各詳細は参照元テーブルの詳細設計） |
 | 楽観ロック | なし（`version` カラムを持たない）。同時更新はプロフィール更新・管理者による権限変更のいずれも「最後の書き込みが勝つ」方式で許容する（同時実行頻度が低いため） |
 | advisory lock | 使用しない |
-| トランザクション境界 | `create`（会員登録）・`update_role_and_status`（管理者操作）はいずれも単一UPDATE/INSERTのため明示的なトランザクション制御は不要。service層の呼び出し単位でコミットする |
-| 一意制約違反時の扱い | `uq_users_username` / `uq_users_email` 違反は `IntegrityError` を捕捉し `409 CONFLICT`（`DUPLICATE_USERNAME` / `DUPLICATE_EMAIL`）に変換する |
+| トランザクション境界 | `create`（会員登録）・`update_profile`・`update_password`・`mark_email_verified`は単一SP呼び出し。管理者更新も`admin_repository`の単一SP呼び出しであり、service層の呼び出し単位でコミットする |
+| 一意性違反時の扱い | `sp_register_user` が返すSQLSTATE `P0001` / `P0002`をservice層で捕捉し、`409 CONFLICT`（`DUPLICATE_USERNAME` / `DUPLICATE_EMAIL`）に変換する。通常のテーブル制約違反は`IntegrityError`として扱う |
 
 ## 12. テスト設計
 
 | No | 区分 | ケース | 期待結果 | テスト名案 |
 |----|------|--------|----------|-----------|
-| 1 | 制約 | `username` 重複でINSERT | `IntegrityError`（`uq_users_username`） | `test_create_user_duplicate_username_raises` |
-| 2 | 制約 | `email` 重複でINSERT（大文字小文字違い） | `IntegrityError`（`uq_users_email`、`lower()`一致） | `test_create_user_duplicate_email_case_insensitive_raises` |
+| 1 | 制約 | `username` 重複で登録SPを呼び出す | `DBAPIError`（SQLSTATE `P0001`） | `test_create_user_duplicate_username_raises` |
+| 2 | 制約 | `email` 重複で登録SPを呼び出す（大文字小文字違い） | `DBAPIError`（SQLSTATE `P0002`、`lower()`一致） | `test_create_user_duplicate_email_case_insensitive_raises` |
 | 3 | 制約 | `role` に `'member'`/`'admin'` 以外を設定 | `IntegrityError`（`ck_users_role`） | `test_users_role_check_constraint` |
 | 4 | 制約 | `username` に許可外文字（例：スペース）を設定 | `IntegrityError`（`ck_users_username_format`） | `test_users_username_format_check_constraint` |
 | 5 | CASCADE | `users` 削除時に `oauth_accounts` が連動削除されるか | `oauth_accounts` の該当行が0件になる | `test_delete_user_cascades_oauth_accounts`（削除APIは未提供のためDBレベルの検証のみ） |
@@ -301,6 +332,8 @@ flowchart LR
 | 7 | トリガ | UPDATE時に `updated_at` が更新されるか | 更新前後で `updated_at` が変化 | `test_users_updated_at_trigger` |
 | 8 | 並行更新 | 同一ユーザーへ同時に `update_profile` を2回発行 | 後勝ちで最終状態が一貫する（例外なし） | `test_update_profile_concurrent_last_write_wins` |
 | 9 | リポジトリ | `get_by_login_identifier` にusername/emailそれぞれで取得 | 同一ユーザーが取得できる | `test_get_by_login_identifier_by_username_and_email` |
+| 10 | リポジトリ | `create`が`sp_register_user`のOUT UUIDを返す | `UUID`が返り、`User` ORMモデルや入力DTOを返さない | `test_user_repository_create_returns_uuid` |
+| 11 | リポジトリ | `mark_email_verified` / `update_profile`が更新SPを呼ぶ | 戻り値は`None` | `test_user_repository_update_methods_return_none` |
 
 ## 13. 不明点・要検討事項
 

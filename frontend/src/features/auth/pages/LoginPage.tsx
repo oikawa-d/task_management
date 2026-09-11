@@ -1,6 +1,7 @@
 import { useContext } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
+import { useAuthStore } from "../../../auth/authStore";
 import { ROUTES } from "../../../routes";
 import { AuthFormsContext, LoginFormPlaceholder } from "./authFormSlots";
 
@@ -20,6 +21,7 @@ export function LoginPage() {
 	const navigate = useNavigate();
 	const location = useLocation();
 	const formSlots = useContext(AuthFormsContext);
+	const googleLoginEnabled = useAuthStore((state) => state.googleLoginEnabled);
 	const registeredEmail = (location.state as LoginLocationState | null)?.registeredEmail;
 
 	const handleLoginSuccess = () => {
@@ -30,11 +32,13 @@ export function LoginPage() {
 		? formSlots.loginForm({ onSuccess: handleLoginSuccess })
 		: <LoginFormPlaceholder onSuccess={handleLoginSuccess} />;
 
-	// GoogleログインはauthConfig.google_login_enabledがtrueの場合のみ表示する（#149の認証状態実装と接続予定）。
-	// スロットが未接続の間は非表示とする。
-	const googleLoginButton = formSlots.googleLoginButton
-		? formSlots.googleLoginButton({ label: "Googleでログイン" })
-		: null;
+	// design doc: docs/detailed_design/screen/01_login.md §3⑦
+	// authStore.googleLoginEnabled（AuthProvider起動時にGET /auth/configから設定）がtrue、
+	// かつスロット接続済みの場合のみ「または」区切りとGoogleログイン導線を表示する。
+	const googleLoginButton =
+		formSlots.googleLoginButton && googleLoginEnabled
+			? formSlots.googleLoginButton({ label: "Googleでログイン" })
+			: null;
 
 	return (
 		<section aria-labelledby="login-heading">

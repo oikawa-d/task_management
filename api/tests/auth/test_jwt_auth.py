@@ -1,9 +1,11 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import jwt
 import pytest
+from app.auth.base import LoginResult
 from app.auth.jwt_auth import JwtAuthStrategy
 from app.core.config import BackendSettings
 from app.core.exceptions import TokenInvalidError, TokenRevokedError
@@ -173,6 +175,24 @@ async def test_refresh_without_cookie_is_invalid_and_logout_clears_cookies(monke
 	response = Response()
 	await strategy.logout(_request(cookie="cerberus_rt=missing"), response)
 	assert len([header for key, header in response.raw_headers if key == b"set-cookie"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_rollback_login_revokes_refresh_token_and_clears_cookies(monkeypatch: pytest.MonkeyPatch) -> None:
+	revoke = AsyncMock()
+	monkeypatch.setattr("app.auth.jwt_auth.redis_store.revoke_refresh_token", revoke)
+	strategy = JwtAuthStrategy(_settings())
+	response = Response()
+	result = LoginResult("jwt", "access-token", "refresh-token", "csrf-token", 60)
+	user = _user()
+	strategy._set_cookies(response, result.refresh_token or "", result.csrf_token or "")
+
+	await strategy.rollback_login(user, result, response)
+
+	revoke.assert_awaited_once_with(result.refresh_token, user.id)
+	deleted = [header for key, header in response.raw_headers if key == b"set-cookie"][2:]
+	assert len(deleted) == 2
+	assert all(b"Max-Age=0" in header for header in deleted)
 
 
 @pytest.mark.asyncio

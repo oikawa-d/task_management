@@ -2,6 +2,7 @@ import uuid
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.task_comment import TaskComment
 
@@ -20,6 +21,7 @@ async def list_by_task(db: AsyncSession, task_id: uuid.UUID) -> list[TaskComment
 		select(TaskComment)
 		.from_statement(text("SELECT * FROM fn_list_task_comments(:task_id)"))
 		.params(task_id=task_id)
+		.options(selectinload(TaskComment.author))
 		.execution_options(populate_existing=True)
 	)
 	return list(result.scalars().all())
@@ -30,6 +32,7 @@ async def get_by_id(db: AsyncSession, comment_id: uuid.UUID) -> TaskComment | No
 		select(TaskComment)
 		.from_statement(text("SELECT * FROM fn_get_comment_with_task(:comment_id)"))
 		.params(comment_id=comment_id)
+		.options(selectinload(TaskComment.author), selectinload(TaskComment.task))
 		.execution_options(populate_existing=True)
 	)
 	return result.scalars().one_or_none()
