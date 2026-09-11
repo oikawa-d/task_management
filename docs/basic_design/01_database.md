@@ -569,7 +569,7 @@ flowchart LR
 | Q-3 | カンバン取得 | `SELECT fn_get_project_board(:pid, false)`。`todo` → `in_progress` → `done`、position昇順 | `uq_tasks_project_status_position` |
 | Q-4 | タスク詳細 | `SELECT fn_get_task(:task_id)` + `SELECT fn_list_task_comments(:task_id)` | `ix_task_comments_task_created` |
 | Q-5 | 管理者ユーザー一覧 | `SELECT fn_admin_list_users(...)` | `ix_users_created_at` |
-| Q-6 | ログイン履歴 | `SELECT fn_admin_list_login_history(:uid, ..., 50, 0)` | `ix_login_history_user_created` |
+| Q-6 | ログイン履歴 | `SELECT fn_admin_list_login_history(:uid, ..., 50, 0)`（履歴と表示用usersを一括取得） | `ix_login_history_user_created` |
 | Q-7 | 期限通知バッチ | `SELECT fn_list_due_notification_tasks(:threshold)`（`:threshold` = 翌日10:00 JST をUTCへ変換した値） | `ix_tasks_due_at_open` |
 | Q-8 | 未読通知件数 | `SELECT fn_count_unread_notifications(:me)` | `ix_notifications_user_unread` |
 | Q-9 | 通知一覧 | `SELECT fn_list_notifications(:me, :unread_only, :limit, :offset)` | `ix_notifications_user_created` |
