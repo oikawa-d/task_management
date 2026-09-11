@@ -79,7 +79,11 @@ async def oauth_google_callback(
 		except Exception as exc:
 			logger.warning(
 				"OAuth callback denial cleanup failed",
-				extra={"operation": "oauth_callback", "event": "oauth_callback_failed", "error": type(exc).__name__},
+				extra={
+					"operation": "oauth_callback",
+					"event": "oauth_callback_failed",
+					"failure_reason": type(exc).__name__,
+				},
 			)
 			return _login_error_redirect(_callback_error_value(exc), settings, response)
 		return _login_error_redirect(OAUTH_ERROR_DENIED, settings, response)
@@ -93,7 +97,11 @@ async def oauth_google_callback(
 	except Exception as exc:
 		logger.warning(
 			"OAuth callback failed",
-			extra={"operation": "oauth_callback", "event": "oauth_callback_failed", "error": type(exc).__name__},
+			extra={
+				"operation": "oauth_callback",
+				"event": "oauth_callback_failed",
+				"failure_reason": type(exc).__name__,
+			},
 		)
 		return _login_error_redirect(_callback_error_value(exc), settings, response)
 

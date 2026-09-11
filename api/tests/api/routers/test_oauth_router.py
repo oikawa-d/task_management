@@ -7,6 +7,8 @@ service層はモックし、routerの責務（302のLocation・fragment・Cookie
 
 from __future__ import annotations
 
+import json
+import logging
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -26,6 +28,7 @@ from app.core.exceptions import (
 	TooManyAttemptsError,
 	register_error_handling,
 )
+from app.core.logger import JsonFormatter
 from app.db import get_db_session
 from app.repository.redis_store_common import OAuthHandoffData, OAuthStateData
 from app.schemas.oauth import OAuthCallbackResult, OAuthExchangeResponse, OAuthStartResult
@@ -503,3 +506,46 @@ def test_oauth_endpoints_are_published_in_openapi() -> None:
 	assert set(paths["/api/auth/oauth/google"]) == {"get"}
 	assert set(paths["/api/auth/oauth/google/callback"]) == {"get"}
 	assert set(paths["/api/auth/oauth/exchange"]) == {"post"}
+
+
+def _formatted_oauth_logs(records: list[logging.LogRecord]) -> list[dict[str, Any]]:
+	formatter = JsonFormatter()
+	return [json.loads(formatter.format(record)) for record in records if record.name == "app.oauth"]
+
+
+def test_callback_failure_log_keeps_failure_reason_after_formatting(
+	client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+	async def _oauth_callback(*_args: Any, **_kwargs: Any) -> OAuthCallbackResult:
+		raise InvalidStateError()
+
+	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_callback", _oauth_callback)
+
+	with caplog.at_level(logging.WARNING, logger="app.oauth"):
+		response = client.get("/api/auth/oauth/google/callback", params={"code": "auth-code", "state": "state-value"})
+
+	assert response.status_code == 302
+	payloads = _formatted_oauth_logs(caplog.records)
+	assert len(payloads) == 1
+	# extraのキーは_SAFE_AUDIT_FIELDSに含まれる必要があり、含まれない場合は値が捨てられる。
+	assert payloads[0]["event"] == "oauth_callback_failed"
+	assert payloads[0]["failure_reason"] == "InvalidStateError"
+
+
+def test_denied_callback_cleanup_failure_log_keeps_failure_reason_after_formatting(
+	client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+	async def _oauth_callback_denied(*_args: Any, **_kwargs: Any) -> None:
+		raise InvalidStateError()
+
+	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_callback_denied", _oauth_callback_denied)
+
+	with caplog.at_level(logging.WARNING, logger="app.oauth"):
+		response = client.get(
+			"/api/auth/oauth/google/callback", params={"error": "access_denied", "state": "state-value"}
+		)
+
+	assert response.status_code == 302
+	payloads = _formatted_oauth_logs(caplog.records)
+	assert len(payloads) == 1
+	assert payloads[0]["failure_reason"] == "InvalidStateError"

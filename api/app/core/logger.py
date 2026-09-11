@@ -17,6 +17,7 @@ _SAFE_AUDIT_FIELDS = (
 	"request_id",
 	"user_id",
 	"login_method",
+	"failure_reason",
 	"deleted_session_count",
 	"deleted_refresh_count",
 )

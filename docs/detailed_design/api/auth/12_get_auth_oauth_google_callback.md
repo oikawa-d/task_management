@@ -100,7 +100,7 @@ Cookie
 | 302 | - | Googleとのtoken交換（`POST /token`）失敗 | `oauth_failed` | ネットワークエラー・4xx/5xx |
 | 429 | `TOO_MANY_ATTEMPTS` | callbackのレート制限超過 | - | `Retry-After`に残り秒数を設定し、認証処理を行わない |
 | 503 | `SERVICE_UNAVAILABLE` | Redis接続不能（レート制限判定・`consume_oauth_state`・`save_oauth_handoff`） | - | fail-close。認証処理を行わない |
-| 302 | - | 未捕捉例外 | `oauth_failed` | ログにのみ詳細を出力 |
+| 302 | - | 未捕捉例外 | `oauth_failed` | ログにのみ詳細を出力。`event=oauth_callback_failed`、`failure_reason=<例外クラス名>`をWARNで出力する |
 
 `basic_design/04_api.md` §4.2のコード体系（`INVALID_STATE`/`OAUTH_EMAIL_UNVERIFIED`）はサーバー内部の例外クラス・ログ記録に用い、ブラウザへの応答は上表の`error`クエリ値に変換する。
 
