@@ -231,6 +231,7 @@ async def test_login_failures_and_rate_limit_are_hashed_and_expiring(redis: _Fak
 	assert (first, second) == (1, 2)
 	assert next(key for key in redis.values if key.startswith("test:login_fail:"))
 	assert await redis_store.get_login_failure_count("user@example.com", "127.0.0.1") == 2
+	assert await redis_store.get_login_failure_ttl("user@example.com", "127.0.0.1") == 60
 
 	await redis_store.reset_login_failure("user@example.com", "127.0.0.1")
 	assert not [key for key in redis.values if key.startswith("test:login_fail:")]

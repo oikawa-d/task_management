@@ -120,8 +120,8 @@ sequenceDiagram
             S->>TR: "add(task_id, user_id, body)"
             TR->>PG: "CALL sp_add_task_comment(...)（comment_idをOUTパラメータで採番・INSERT）"
             PG-->>TR: "p_comment_id（OUT）"
-            TR->>PG: "SELECT fn_list_task_comments(task_id)"
-            PG-->>TR: "comment行"
+            TR->>PG: "SELECT fn_get_comment_with_task(comment_id)"
+            PG-->>TR: "comment行（author含む）"
             TR-->>S: "Comment"
             S-->>R: "CommentResponse"
             R-->>FE: "201 {comment}"
@@ -179,9 +179,9 @@ flowchart TB
 |------|------|
 | シグネチャ | `async def add_comment(task: Task, payload: CommentCreateRequest, user: CurrentUser, db: AsyncSession) -> Comment` |
 | 引数 | `task`：対象タスク／`payload`：検証済み入力／`user`：投稿者／`db`：DBセッション |
-| 戻り値 | 作成された `Comment`（`author` は `user` から構築、追加SELECTなし） |
+| 戻り値 | 作成後に`get_by_id`で再取得した `Comment`（`author`を含む） |
 | 送出例外 | なし（バリデーションはルーター層のpydanticで完了済み） |
-| 処理内容 | 1. `task_repository.add(task.id, user.id, payload.body)`（`CALL sp_add_task_comment(...)`）を呼ぶ。SPは`gen_random_uuid()`で採番した`comment_id`をOUTパラメータで返す 2. 採番された`comment_id`をキーに`SELECT fn_list_task_comments(task.id)`から該当行を抽出し、`author`情報付きで写像して返す |
+| 処理内容 | 1. `task_comment_repository.create(db, task.id, user.id, payload.body)`（`CALL sp_add_task_comment(...)`）を呼ぶ。SPは`gen_random_uuid()`で採番した`comment_id`をOUTパラメータで返す 2. `task_comment_repository.get_by_id(db, comment_id)`（`SELECT fn_get_comment_with_task(:comment_id)`）で作成行を再取得し、DBから取得した`author`情報付きで写像して返す。再取得結果が存在しない場合は`NotFoundError`とする |
 | 副作用 | `task_comments` への1行INSERT（SP内部） |
 
 ### 6.4 `repository/task_repository.py :: add`
@@ -202,8 +202,10 @@ flowchart LR
     R["comments_router.create_task_comment"] --> Sch["schemas.CommentCreateRequest"]
     R --> D["deps.get_task_for_member"]
     R --> S["task_service.add_comment"]
-    S --> TR["task_repository.add<br/>（sp_add_task_comment）"]
+    S --> TR["task_comment_repository.create<br/>（sp_add_task_comment）"]
+    S --> GET["task_comment_repository.get_by_id<br/>（fn_get_comment_with_task）"]
     TR --> DB[("PostgreSQL<br/>task_comments")]
+    GET --> DB
     R --> V["deps.verify_origin / verify_csrf"]
 ```
 

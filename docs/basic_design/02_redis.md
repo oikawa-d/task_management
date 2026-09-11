@@ -154,6 +154,8 @@ stateDiagram-v2
 | `replace_email_verify_token` | `token: str`, `user_id: UUID`, `ttl: int` | `None` | Luaまたは同一トランザクション相当の処理で旧 `emailverify:{old_hash}` を削除し、新tokenと `emailverify_current:{uid}` を登録 |
 | `consume_email_verify_token` | `token: str` | `UUID \| None` | `GETDEL emailverify:{hash}` → user_id を返す（ワンタイム消費） |
 | `mark_email_verify_sent` | `user_id: UUID`, `interval: int` | `bool` | `SET emailverify_sent:{uid} NX EX interval`。`False` なら再送間隔内のため送信しない |
+| `get_login_failure_count` | `identifier: str`, `client_ip: str` | `int` | `GET login_fail:{key_hash}`。キーが存在しない場合は`0` |
+| `get_login_failure_ttl` | `identifier: str`, `client_ip: str` | `int` | `TTL login_fail:{key_hash}`。キーの残り秒数を返し、未存在時はRedisの負値をそのまま返す |
 | `incr_login_failure` | `identifier: str`, `client_ip: str`, `window: int` | `int`（現在の失敗回数） | lower/trimした識別子と確定済みIPからキーを作り、`INCR` → 初回のみ `EXPIRE` |
 | `reset_login_failure` | `identifier: str`, `client_ip: str` | `None` | 同じキーの `DEL` |
 | `check_rate_limit` | `scope: str`, `key: str`, `limit: int`, `window: int` | `int` | `rate_limit:{scope}:{hash}`を原子的に加算し、現在の回数を返す |
