@@ -9,6 +9,7 @@ from app.repository import admin_repository
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 ADMIN_MIGRATION = REPOSITORY_ROOT / "api/alembic/versions/0015_create_admin_functions.py"
 ADMIN_TOTAL_COUNT_MIGRATION = REPOSITORY_ROOT / "api/alembic/versions/0020_add_admin_list_total_count_and_not_found.py"
+ADMIN_AGGREGATE_MIGRATION = REPOSITORY_ROOT / "api/alembic/versions/0021_optimize_admin_list_functions.py"
 
 FUNCTION_FILES = (
 	"fn_admin_list_users.sql",
@@ -28,7 +29,12 @@ PROCEDURE_FILES = (
 def test_admin_migration_references_existing_sql_sources() -> None:
 	assert ADMIN_MIGRATION.is_file()
 	assert ADMIN_TOTAL_COUNT_MIGRATION.is_file()
+	assert ADMIN_AGGREGATE_MIGRATION.is_file()
 	assert all((REPOSITORY_ROOT / "db/functions" / filename).is_file() for filename in FUNCTION_FILES)
+	assert all(
+		(REPOSITORY_ROOT / "db/functions/legacy" / filename).is_file()
+		for filename in ("0020_fn_admin_list_projects.sql", "0020_fn_admin_list_login_history.sql")
+	)
 	assert all((REPOSITORY_ROOT / "db/procedures" / filename).is_file() for filename in PROCEDURE_FILES)
 
 
@@ -37,6 +43,19 @@ def test_admin_list_functions_return_total_count_via_window_function() -> None:
 		sql = (REPOSITORY_ROOT / "db/functions" / filename).read_text(encoding="utf-8")
 		assert "count(*) OVER ()" in sql
 		assert "total_count BIGINT" in sql
+
+
+def test_admin_list_functions_return_aggregates_and_joined_user() -> None:
+	projects_sql = (REPOSITORY_ROOT / "db/functions/fn_admin_list_projects.sql").read_text(encoding="utf-8")
+	assert "member_count BIGINT" in projects_sql
+	assert "task_count_todo BIGINT" in projects_sql
+	assert "count(*) FILTER (WHERE status = 'todo')" in projects_sql
+	assert "FROM project_members" in projects_sql
+	assert "FROM tasks" in projects_sql
+
+	history_sql = (REPOSITORY_ROOT / "db/functions/fn_admin_list_login_history.sql").read_text(encoding="utf-8")
+	assert '"user" users' in history_sql
+	assert "LEFT JOIN users u" in history_sql
 
 
 def test_admin_user_update_procedures_lock_target_rows_and_detect_not_found() -> None:
@@ -105,6 +124,10 @@ def _project_row(**overrides: object) -> dict[str, object]:
 		"end_at": None,
 		"created_at": datetime.now(timezone.utc),
 		"updated_at": datetime.now(timezone.utc),
+		"member_count": 2,
+		"task_count_todo": 3,
+		"task_count_in_progress": 4,
+		"task_count_done": 5,
 		"total_count": 1,
 	}
 	defaults.update(overrides)
@@ -122,6 +145,10 @@ def _login_history_row(**overrides: object) -> dict[str, object]:
 		"success": True,
 		"failure_reason": None,
 		"created_at": datetime.now(timezone.utc),
+		"user_info_id": uuid4(),
+		"user_info_username": "taro",
+		"user_info_last_name": "山田",
+		"user_info_first_name": "太郎",
 		"total_count": 1,
 	}
 	defaults.update(overrides)
@@ -169,8 +196,17 @@ async def test_admin_repository_list_projects_maps_total_count() -> None:
 
 	statement = db.execute.await_args.args[0]
 	assert "fn_admin_list_projects" in str(statement)
+	assert "member_count" in str(statement)
+	assert "task_count_todo" in str(statement)
+	assert "task_count_in_progress" in str(statement)
+	assert "task_count_done" in str(statement)
 	assert db.execute.await_args.args[1] == {"query": "project", "is_active": True, "limit": 10, "offset": 30}
 	assert items[0].total_count == 3
+	assert items[0].member_count == 2
+	assert items[0].task_count_todo == 3
+	assert items[0].task_count_in_progress == 4
+	assert items[0].task_count_done == 5
+	assert db.execute.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -206,6 +242,9 @@ async def test_admin_repository_list_login_history_maps_total_count() -> None:
 		"offset": 15,
 	}
 	assert items[0].total_count == 7
+	assert items[0].user is not None
+	assert items[0].user.username == "taro"
+	assert db.execute.await_count == 1
 
 
 @pytest.mark.asyncio

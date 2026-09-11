@@ -1,16 +1,4 @@
-"""管理者による全ユーザーのログイン履歴検索の業務ロジック。
-
-参照設計書:
-- docs/detailed_design/api/admin/07_get_admin_login_history.md
-
-`fn_admin_list_login_history`はuser_idの表示情報をJOINしないため、当該ページの
-user_idを重複排除したうえで`user_repository.get_by_id`をユーザーIDごとに呼び出す。
-repositoryにIN句によるバッチ取得FNが存在しないため、設計書§11「N+1対策」が想定する
-単一バッチクエリではなく、重複排除済みユーザー数に比例したクエリになる
-（issue #348で対応予定。本PRでは対象外）。
-"""
-
-from uuid import UUID
+"""管理者による全ユーザーのログイン履歴検索の業務ロジック。"""
 
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import ServiceUnavailableError
 from app.models.login_history import LoginHistory
 from app.models.user import User
-from app.repository import admin_repository, user_repository
+from app.repository import admin_repository
 from app.schemas.admin import (
 	AdminLoginHistoryItem,
 	AdminLoginHistoryListResponse,
@@ -32,8 +20,7 @@ def _display_name(user: User) -> str:
 	return " ".join(part for part in (user.last_name, user.first_name) if part) or user.username
 
 
-def _to_item(history: LoginHistory, users_by_id: dict[UUID, User]) -> AdminLoginHistoryItem:
-	user = users_by_id.get(history.user_id) if history.user_id is not None else None
+def _to_item(history: LoginHistory, user: User | None) -> AdminLoginHistoryItem:
 	return AdminLoginHistoryItem(
 		id=history.id,
 		user=AdminLoginHistoryUser(id=user.id, username=user.username, display_name=_display_name(user))
@@ -77,18 +64,7 @@ async def search(query: AdminLoginHistoryQuery, db: AsyncSession) -> AdminLoginH
 	except DBAPIError as exc:
 		raise ServiceUnavailableError() from exc
 
-	histories = [row.history for row in rows]
-	user_ids = sorted({history.user_id for history in histories if history.user_id is not None}, key=str)
-	users_by_id: dict[UUID, User] = {}
-	try:
-		for user_id in user_ids:
-			user = await user_repository.get_by_id(db, user_id)
-			if user is not None:
-				users_by_id[user_id] = user
-	except DBAPIError as exc:
-		raise ServiceUnavailableError() from exc
-
-	items = [_to_item(history, users_by_id) for history in histories]
+	items = [_to_item(row.history, row.user) for row in rows]
 	total_pages = (total + query.per_page - 1) // query.per_page if total else 0
 	return AdminLoginHistoryListResponse(
 		items=items,
