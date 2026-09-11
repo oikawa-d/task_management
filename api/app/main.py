@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routers.admin_router import router as admin_router
+from app.api.routers.auth_router import router as auth_router
 from app.api.routers.comment_router import router as comment_router
 from app.api.routers.notifications_router import router as notifications_router
 from app.api.routers.projects_router import router as projects_router
@@ -54,6 +55,7 @@ app.add_middleware(
 	max_age=settings.cors_max_age_seconds,
 )
 app.include_router(system_router)
+app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(projects_router)
 app.include_router(tasks_router)
