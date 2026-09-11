@@ -4,6 +4,11 @@ set -euo pipefail
 
 REVIEWED_LABEL="reviewed"
 
+# 想定外のエラー(パイプラインの異常終了等)は必ずブロック側に倒す(fail-close)。
+# Claude CodeのPreToolUse hookはexit 2のみをブロックとして扱い、それ以外の非ゼロ終了は
+# 非ブロッキングエラーとしてツール実行を継続してしまうため、想定外の失敗でも確実にexit 2にする。
+trap 'echo "ブロック: hookスクリプト内で想定外のエラーが発生したため、安全側でブロックします。" >&2; exit 2' ERR
+
 input=$(cat)
 tool_name=$(jq -r '.tool_name // empty' <<<"$input")
 
@@ -44,10 +49,8 @@ if grep -Eq '(^|[^[:alnum:]_-])gh[^;&|[:cntrl:]]*[[:space:]]+pr[[:space:]]+merge
 	merge_segment=$(grep -Eo 'gh[^;&|[:cntrl:]]*[[:space:]]+pr[[:space:]]+merge[^;&|[:cntrl:]]*' <<<"$command" | head -1)
 	pr_number=$(grep -Eo '[0-9]+' <<<"$merge_segment" | head -1 || true)
 
-	set +e
-	has_reviewed_label "pr" "$pr_number"
-	status=$?
-	set -e
+	status=0
+	has_reviewed_label "pr" "$pr_number" || status=$?
 
 	if [[ "$status" -eq 0 ]]; then
 		exit 0
@@ -65,10 +68,8 @@ if grep -Eq '(^|[^[:alnum:]_-])gh[^;&|[:cntrl:]]*[[:space:]]+issue[[:space:]]+cl
 	close_segment=$(grep -Eo 'gh[^;&|[:cntrl:]]*[[:space:]]+issue[[:space:]]+close[^;&|[:cntrl:]]*' <<<"$command" | head -1)
 	issue_number=$(grep -Eo '[0-9]+' <<<"$close_segment" | head -1 || true)
 
-	set +e
-	has_reviewed_label "issue" "$issue_number"
-	status=$?
-	set -e
+	status=0
+	has_reviewed_label "issue" "$issue_number" || status=$?
 
 	if [[ "$status" -eq 0 ]]; then
 		exit 0

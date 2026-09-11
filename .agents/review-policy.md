@@ -23,4 +23,5 @@
 
 - `reviewed`ラベルは、PRを作成した本人以外がこの方針に沿ったレビューを行い、PR上に「受入可」のコメントを投稿したうえで付与します。
 - PRを作成したエージェントは、自身が作成したPRに`reviewed`ラベルを付与してはいけません。
+- `reviewed`ラベル付与済み、かつCIの全チェックが成功したPRは、PR作成者以外が都度のユーザー承認なしにsquash mergeしてよく、Issue closeも同様です。
 - `gh pr merge`・`gh issue close`は`.claude/hooks/block-github-destructive-actions.sh`により、対象に`reviewed`ラベルが無い場合はブロックされます（fail-close）。
