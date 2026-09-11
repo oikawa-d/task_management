@@ -4,7 +4,7 @@
 
 ## 関連Issue
 
-<!-- 例: Closes #123 -->
+<!-- 必須: 本文に `Closes #123` を記載してissueとリンクしてください。記載が無いとマージ時の自動closeも `gh issue close` による手動closeもできません（.agents/review-policy.md）。 -->
 
 ## 変更内容
 

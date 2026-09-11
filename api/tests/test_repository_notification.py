@@ -169,17 +169,19 @@ async def test_mark_read_is_idempotent(db_session: AsyncSession) -> None:
 	user_id = await user_repository.create(db_session, "notifread1", "notifread1@example.com", "hash")
 	notification_id = await _create_notification(db_session, user_id, "k6")
 
-	await notification_repository.mark_read(db_session, notification_id, user_id)
+	first_result = await notification_repository.mark_read(db_session, notification_id, user_id)
 	first_read_at = (
 		await db_session.execute(text("SELECT read_at FROM notifications WHERE id = :id"), {"id": notification_id})
 	).scalar_one()
 
-	await notification_repository.mark_read(db_session, notification_id, user_id)
+	second_result = await notification_repository.mark_read(db_session, notification_id, user_id)
 	second_read_at = (
 		await db_session.execute(text("SELECT read_at FROM notifications WHERE id = :id"), {"id": notification_id})
 	).scalar_one()
 
 	assert first_read_at is not None
+	assert first_result == first_read_at
+	assert second_result == second_read_at
 	assert first_read_at == second_read_at
 
 
@@ -188,11 +190,12 @@ async def test_mark_read_other_users_notification_does_not_update(db_session: As
 	other_id = await user_repository.create(db_session, "notifread3", "notifread3@example.com", "hash")
 	notification_id = await _create_notification(db_session, owner_id, "k7")
 
-	await notification_repository.mark_read(db_session, notification_id, other_id)
+	result = await notification_repository.mark_read(db_session, notification_id, other_id)
 
 	read_at = (
 		await db_session.execute(text("SELECT read_at FROM notifications WHERE id = :id"), {"id": notification_id})
 	).scalar_one()
+	assert result is None
 	assert read_at is None
 
 
