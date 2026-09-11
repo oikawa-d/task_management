@@ -192,7 +192,7 @@ repositoryは下表のSP/FN呼び出しとDTO写像だけを行い、`notificati
 | `count_notifications` | `SELECT fn_count_notifications(:user_id, :unread_only)` | `fn_list_notifications`の該当行が0件（pageが総ページ数を超えた場合等）で`total_count`が取得できないときのフォールバック |
 | `count_unread` | `SELECT fn_count_unread_notifications(:user_id)` | 未読件数。`unread_only=false`の場合のみ呼び出す（`unread_only=true`時は`total_count`が未読総数と一致するため再利用し、追加では呼ばない） |
 | `mark_read` | `CALL sp_mark_notification_read(:notification_id, :user_id, NULL)` | `OUT p_read_at`で永続化後の既読時刻を返す。他人/不存在はNULLとして404。既読済みは上書きしない |
-| `mark_all_read` | `CALL sp_mark_all_notifications_read(:user_id)` | `read_at IS NULL` の行だけ更新 |
+| `mark_all_read` | `CALL sp_mark_all_notifications_read(:user_id, NULL)` | OUTの`p_updated_count`で更新件数を返し、`read_at IS NULL`の行だけ更新 |
 | `create_if_absent` / `bulk_create_if_absent` | `sp_create_task` / `sp_update_task` / batch内部のdedupe INSERT | `(user_id, dedupe_key)`競合は `ON CONFLICT DO NOTHING` |
 | `purge_expired` | `CALL sp_purge_notifications(:retention_days)` | 未読・既読を問わず期限超過を削除 |
 

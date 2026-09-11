@@ -2,6 +2,8 @@ import { createContext, useContext, useState, type PropsWithChildren, type React
 import { useLocation } from "react-router-dom";
 
 import styles from "./SettingsPage.module.css";
+import { FontSizeSelector } from "../components/FontSizeSelector";
+import { LoginHistoryTable } from "../components/LoginHistoryTable";
 
 type SettingsTab = "profile" | "password" | "display" | "history";
 
@@ -120,8 +122,8 @@ export function SettingsPage({
 				<h2 id={`${activeTab}-heading`}>{activeLabel}</h2>
 				{activeTab === "profile" ? renderedProfileForm : null}
 				{activeTab === "password" ? renderedPasswordChangeForm : null}
-				{activeTab === "display" ? <p>文字サイズ設定は準備中です。</p> : null}
-				{activeTab === "history" ? <p>ログイン履歴は準備中です。</p> : null}
+				{activeTab === "display" ? <FontSizeSelector /> : null}
+				{activeTab === "history" ? <LoginHistoryTable /> : null}
 			</div>
 		</section>
 	);
