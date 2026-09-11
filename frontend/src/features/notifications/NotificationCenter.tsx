@@ -4,15 +4,17 @@ import styles from "./NotificationCenter.module.css";
 import { NotificationBell } from "./NotificationBell";
 import { NotificationPanel } from "./NotificationPanel";
 import type { NotificationItemData } from "./types";
+import { useMarkAllNotificationsRead, useMarkNotificationRead, useNotifications } from "./hooks/useNotifications";
 
 export interface NotificationCenterProps {
 	unreadCount: number;
-	notifications: NotificationItemData[];
-	page: number;
-	totalPages: number;
-	onPageChange: (page: number) => void;
-	onItemClick: (notification: NotificationItemData) => void;
-	onMarkAllRead: () => void;
+	notifications?: NotificationItemData[];
+	page?: number;
+	totalPages?: number;
+	onPageChange?: (page: number) => void;
+	onItemClick?: (notification: NotificationItemData) => void;
+	onMarkAllRead?: () => void;
+	enableDataApi?: boolean;
 }
 
 /**
@@ -23,15 +25,21 @@ export interface NotificationCenterProps {
 export function NotificationCenter({
 	unreadCount,
 	notifications,
-	page,
-	totalPages,
+	page = 1,
+	totalPages = 1,
 	onPageChange,
 	onItemClick,
 	onMarkAllRead,
+	enableDataApi = false,
 }: NotificationCenterProps) {
 	const [isOpen, setIsOpen] = useState(false);
+	const [internalPage, setInternalPage] = useState(page);
 	const bellRef = useRef<HTMLButtonElement>(null);
 	const panelRef = useRef<HTMLDivElement>(null);
+	const currentPage = onPageChange ? page : internalPage;
+	const notificationQuery = useNotifications(currentPage, enableDataApi && isOpen && notifications === undefined);
+	const markReadMutation = useMarkNotificationRead();
+	const markAllMutation = useMarkAllNotificationsRead();
 
 	const close = () => {
 		setIsOpen(false);
@@ -66,9 +74,20 @@ export function NotificationCenter({
 	}, [isOpen]);
 
 	const handleItemClick = (notification: NotificationItemData) => {
-		onItemClick(notification);
+		if (enableDataApi && notification.readAt === null) void markReadMutation.mutateAsync(notification.id);
+		onItemClick?.(notification);
 		close();
 	};
+	const handlePageChange = (nextPage: number) => {
+		setInternalPage(nextPage);
+		onPageChange?.(nextPage);
+	};
+	const handleMarkAllRead = () => {
+		if (enableDataApi) void markAllMutation.mutateAsync();
+		onMarkAllRead?.();
+	};
+	const displayNotifications = notifications ?? notificationQuery.data?.items ?? [];
+	const displayTotalPages = notifications ? totalPages : notificationQuery.data?.totalPages ?? 1;
 
 	return (
 		<div className={styles.wrapper}>
@@ -81,13 +100,16 @@ export function NotificationCenter({
 			{isOpen && (
 				<NotificationPanel
 					ref={panelRef}
-					notifications={notifications}
+					notifications={displayNotifications}
 					unreadCount={unreadCount}
-					page={page}
-					totalPages={totalPages}
-					onPageChange={onPageChange}
+					page={currentPage}
+					totalPages={displayTotalPages}
+					onPageChange={handlePageChange}
 					onItemClick={handleItemClick}
-					onMarkAllRead={onMarkAllRead}
+					onMarkAllRead={handleMarkAllRead}
+					isLoading={enableDataApi && notificationQuery.isLoading}
+					errorMessage={enableDataApi && notificationQuery.isError ? "通知を読み込めませんでした。" : null}
+					onRetry={() => void notificationQuery.refetch()}
 				/>
 			)}
 		</div>

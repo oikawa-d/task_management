@@ -21,7 +21,7 @@
 | ガード | 不要。`AuthProvider`は本パスに限り未認証でも先行して`/login`へリダイレクトしない例外パスとして扱う（[05_frontend.md §6.1](../../basic_design/05_frontend.md#61-interceptorの流れ)「OAuth callbackの優先」） |
 | 対応要件 | 要件書§3.1（認証機能、Google OAuth2ログイン）。[05_frontend.md §2](../../basic_design/05_frontend.md#2-画面一覧とルーティング) ルーティング一覧No.11 |
 | 主なユースケース | Google認可後のリダイレクト先として、認証状態を確定させ本来の遷移先へ中継する。ユーザーが直接操作する要素は持たない |
-| 実装ファイル | `src/features/auth/pages/OAuthCallbackPage.tsx` |
+| 実装ファイル | `frontend/src/features/auth/pages/OAuthCallbackPage.tsx` |
 
 ## 2. 画面レイアウト
 
@@ -223,7 +223,7 @@ flowchart TB
 
 zodによるフォーム入力は存在しない（本画面はフォームを持たない）。`redirect_to`の安全性検証は9.3の`isSafeRelativePath`（プレーンなTypeScript関数）で行い、zodスキーマ化はしない。
 
-`isSafeRelativePath`が`false`を返した場合のフォールバック先は`ROUTES.DASHBOARD`（`/dashboard`）とし、パスは直書きせず`src/routes.ts`の定数を参照する。`/`は`/login`へのリダイレクト専用パスであり画面を持たないため、フォールバック先には使わない（[05_frontend.md 2.1](../../basic_design/05_frontend.md#21-ルートパス--の扱い)）。
+`isSafeRelativePath`が`false`を返した場合のフォールバック先は`ROUTES.DASHBOARD`（`/dashboard`）とし、パスは直書きせず`frontend/src/routes.ts`の定数を参照する。`/`は`/login`へのリダイレクト専用パスであり画面を持たないため、フォールバック先には使わない（[05_frontend.md 2.1](../../basic_design/05_frontend.md#21-ルートパス--の扱い)）。
 
 ## 11. エラーハンドリング
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { getProjectTasks } from "../api";
 import type { BoardResponse } from "../types";
@@ -10,31 +10,16 @@ const EMPTY_BOARD: BoardResponse = {
 };
 
 export function useBoard(projectId: string | undefined) {
-	const [board, setBoard] = useState<BoardResponse>(EMPTY_BOARD);
-	const [isLoading, setIsLoading] = useState(Boolean(projectId));
-	const [error, setError] = useState<Error | null>(null);
+	const query = useQuery({
+		queryKey: ["board", projectId],
+		queryFn: () => getProjectTasks(projectId as string),
+		enabled: Boolean(projectId),
+	});
 
-	useEffect(() => {
-		if (!projectId) {
-			return;
-		}
-		let active = true;
-		setIsLoading(true);
-		setError(null);
-		void getProjectTasks(projectId)
-			.then((response) => {
-				if (active) setBoard(response);
-			})
-			.catch((reason: unknown) => {
-				if (active) setError(reason instanceof Error ? reason : new Error("API_ERROR"));
-			})
-			.finally(() => {
-				if (active) setIsLoading(false);
-			});
-		return () => {
-			active = false;
-		};
-	}, [projectId]);
-
-	return { board, isLoading, error };
+	return {
+		board: query.data ?? EMPTY_BOARD,
+		isLoading: Boolean(projectId) && query.isLoading,
+		error: query.error instanceof Error ? query.error : null,
+		refetch: query.refetch,
+	};
 }

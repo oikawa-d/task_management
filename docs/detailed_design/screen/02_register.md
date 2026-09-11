@@ -19,7 +19,7 @@
 | ガード | 未認証のみ |
 | 対応要件 | 要件書§2-2 |
 | 主なユースケース | メール/パスワードでの新規登録、Google新規登録への導線 |
-| 実装ファイル | `src/features/auth/pages/RegisterPage.tsx`、`src/features/auth/components/RegisterForm.tsx` |
+| 実装ファイル | `frontend/src/features/auth/pages/RegisterPage.tsx`、`frontend/src/features/auth/components/RegisterForm.tsx` |
 
 ## 2. 画面レイアウト
 
@@ -223,7 +223,7 @@ flowchart TB
 | `last_name_kana` / `first_name_kana` | 同上 | `z.string().min(1).max(30).regex(/^[ぁ-んァ-ヶー0-9]+$/)`（ひらがな・カタカナ・数字のみ） | 「ひらがな・カタカナ・数字で入力してください」 | `last_name_kana` / `first_name_kana` |
 | `birth_date`（⑥⑦⑧統合） | `registerSchema.birth_date` | `z.string()`（3プルダウンから合成した `YYYY-MM-DD`）＋未来日不可 | 「正しい生年月日を選択してください」 | `birth_date`（未来日不可） |
 
-zodスキーマは `registerSchema`（`src/features/auth/schemas/registerSchema.ts`）に集約し、バックエンドの pydantic 規則（[04_api.md §3.1](../../basic_design/04_api.md#31-認証)）と1対1で対応させる。規則を変更する場合は両方を同時に更新する運用とする。
+zodスキーマは `registerSchema`（`frontend/src/features/auth/validation.ts`）に集約し、バックエンドの pydantic 規則（[04_api.md §3.1](../../basic_design/04_api.md#31-認証)）と1対1で対応させる。規則を変更する場合は両方を同時に更新する運用とする。
 
 ## 11. エラーハンドリング
 
