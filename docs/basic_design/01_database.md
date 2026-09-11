@@ -538,7 +538,7 @@ projects、project_members、tasks、task_comments、notifications、admin操作
 | DB責務 | 正となる呼び出し |
 |--------|------------------|
 | プロジェクト・所属 | `fn_get_project` / `fn_list_projects` / `fn_is_project_member` / `fn_search_member_candidates` / `fn_list_project_members`、`sp_create_project` / `sp_update_project` / `sp_deactivate_project` / `sp_add_project_member` / `sp_remove_project_member` |
-| タスク・コメント | `fn_get_project_board` / `fn_get_task` / `fn_list_tasks` / `fn_list_task_comments` / `fn_get_comment_with_task`、`sp_create_task` / `sp_update_task` / `sp_deactivate_task` / `sp_add_task_comment` / `sp_update_task_comment` / `sp_delete_task_comment` |
+| タスク・コメント | `fn_get_project_board` / `fn_get_task` / `fn_list_tasks` / `fn_list_calendar_tasks` / `fn_list_task_comments` / `fn_get_comment_with_task`、`sp_create_task` / `sp_update_task` / `sp_deactivate_task` / `sp_add_task_comment` / `sp_update_task_comment` / `sp_delete_task_comment` |
 | 通知 | `fn_list_notifications` / `fn_count_unread_notifications`、`sp_mark_notification_read` / `sp_mark_all_notifications_read` |
 | admin | `fn_admin_list_users` / `fn_admin_list_projects` / `fn_admin_list_login_history`、`sp_admin_update_user_role` / `sp_admin_update_user_status` / `sp_admin_deactivate_project` |
 

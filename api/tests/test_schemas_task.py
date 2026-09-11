@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 from app.schemas.task import (
 	BoardResponse,
+	CalendarTaskQuery,
 	TaskCreateFlatRequest,
 	TaskCreateRequest,
 	TaskDetailResponse,
@@ -106,6 +107,31 @@ def test_task_list_query_applies_defaults() -> None:
 	assert query.include_inactive is False
 	assert query.sort == "created_at"
 	assert query.order == "desc"
+
+
+def test_calendar_task_query_accepts_date_alias_and_project_scope() -> None:
+	project_id = uuid4()
+	query = CalendarTaskQuery(
+		**{"from": "2026-09-01", "to": "2026-09-30", "scope": "project", "project_id": project_id}
+	)
+
+	assert query.from_date.isoformat() == "2026-09-01"
+	assert query.to_date.isoformat() == "2026-09-30"
+	assert query.project_id == project_id
+
+
+@pytest.mark.parametrize(
+	"payload",
+	[
+		{"from": "2026-09-01", "to": "2026-11-03", "scope": "me"},
+		{"from": "2026-09-02", "to": "2026-09-01", "scope": "me"},
+		{"from": "2026-09-01", "to": "2026-09-02", "scope": "project"},
+		{"from": "2026-09-01", "to": "2026-09-02", "scope": "me", "project_id": str(uuid4())},
+	],
+)
+def test_calendar_task_query_rejects_invalid_range_or_scope(payload: dict[str, object]) -> None:
+	with pytest.raises(ValidationError):
+		CalendarTaskQuery(**payload)
 
 
 def test_task_list_query_normalizes_null_project_filter() -> None:

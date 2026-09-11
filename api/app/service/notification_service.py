@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_backend_settings
+from app.core.exceptions import NotFoundError
 from app.repository import notification_repository
 from app.repository.notification_repository import NotificationListItem
 from app.schemas.auth import CurrentUser
@@ -88,16 +89,17 @@ async def get_unread_count(db: AsyncSession, user: CurrentUser) -> UnreadCountRe
 async def mark_notification_read(
 	db: AsyncSession, notification_id: UUID, user: CurrentUser
 ) -> NotificationReadResponse:
-	await notification_repository.mark_read(db, notification_id, user.id)
+	read_at = await notification_repository.mark_read(db, notification_id, user.id)
+	if read_at is None:
+		raise NotFoundError("通知が見つかりません")
 	return NotificationReadResponse(
 		id=notification_id,
-		read_at=datetime.now(timezone.utc).astimezone(ZoneInfo(get_backend_settings().app_timezone)),
+		read_at=_to_app_timezone(read_at),
 		unread_count=await notification_repository.count_unread(db, user.id),
 	)
 
 
 async def mark_all_notifications_read(db: AsyncSession, user: CurrentUser) -> NotificationReadAllResponse:
-	before = await notification_repository.count_unread(db, user.id)
-	await notification_repository.mark_all_read(db, user.id)
+	updated_count = await notification_repository.mark_all_read(db, user.id)
 	after = await notification_repository.count_unread(db, user.id)
-	return NotificationReadAllResponse(updated_count=max(before - after, 0), unread_count=after)
+	return NotificationReadAllResponse(updated_count=updated_count, unread_count=after)

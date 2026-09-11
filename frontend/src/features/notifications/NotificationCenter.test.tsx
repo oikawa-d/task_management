@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -17,7 +18,8 @@ function renderCenter(overrides: Partial<Parameters<typeof NotificationCenter>[0
 		onMarkAllRead: vi.fn(),
 		...overrides,
 	};
-	const utils = render(<NotificationCenter {...props} />);
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+	const utils = render(<QueryClientProvider client={queryClient}><NotificationCenter {...props} /></QueryClientProvider>);
 	return { ...utils, props };
 }
 
@@ -36,7 +38,8 @@ describe("NotificationCenter", () => {
 		fireEvent.click(screen.getByRole("button", { name: "すべて既読" }));
 		expect(props.onMarkAllRead).toHaveBeenCalledTimes(1);
 
-		rerender(<NotificationCenter {...props} unreadCount={0} />);
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		rerender(<QueryClientProvider client={queryClient}><NotificationCenter {...props} unreadCount={0} /></QueryClientProvider>);
 
 		expect(screen.queryByText(/未読/)).not.toBeInTheDocument();
 	});

@@ -6,6 +6,7 @@ import pytest
 from app.models.task import Task
 from app.repository.task_repository import TaskWithProjectStatus
 from app.schemas.auth import CurrentUser
+from app.schemas.task import CalendarTaskQuery
 from app.service import task_service
 
 
@@ -58,3 +59,29 @@ async def test_create_task_calls_repository_and_returns_response(monkeypatch: py
 
 	assert response.id == item.task.id
 	create.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_list_calendar_tasks_converts_app_dates_to_utc_and_checks_membership(
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	user = _user()
+	item = _item(user)
+	project_id = item.task.project_id
+	list_calendar = AsyncMock(return_value=[item])
+	is_member = AsyncMock(return_value=True)
+	monkeypatch.setattr(task_service.task_repository, "list_calendar", list_calendar)
+	monkeypatch.setattr(task_service.project_repository, "is_member", is_member)
+	query = CalendarTaskQuery(
+		**{"from": "2026-09-01", "to": "2026-09-01", "scope": "project", "project_id": project_id}
+	)
+
+	response = await task_service.list_calendar_tasks(user, query, AsyncMock())
+
+	is_member.assert_awaited_once()
+	list_calendar.assert_awaited_once()
+	args = list_calendar.await_args.args
+	assert args[1] == user.id
+	assert args[2].isoformat() == "2026-08-31T15:00:00+00:00"
+	assert args[3].isoformat() == "2026-09-01T15:00:00+00:00"
+	assert response[0].id == item.task.id
