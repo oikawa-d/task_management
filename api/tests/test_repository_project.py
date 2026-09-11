@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
-from app.repository import project_repository, user_repository
+from app.repository import project_member_repository, project_repository, user_repository
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,8 +13,6 @@ async def _create_owner(db: AsyncSession, username: str) -> uuid.UUID:
 
 
 async def test_create_project_registers_owner_as_member(db_session: AsyncSession) -> None:
-	from app.repository import project_member_repository
-
 	owner_id = await _create_owner(db_session, "alice")
 
 	project_id = await project_repository.create(db_session, owner_id, "Project A", "desc", None, None)
@@ -128,6 +126,46 @@ async def test_list_for_user_include_inactive(db_session: AsyncSession) -> None:
 	assert len(active_only) == 0
 	assert len(with_inactive) == 1
 	assert with_inactive[0].project.is_active is False
+
+
+async def test_list_for_user_include_inactive_excludes_project_owned_by_other_user(
+	db_session: AsyncSession,
+) -> None:
+	owner_id = await _create_owner(db_session, "inactive-owner")
+	member_id = await _create_owner(db_session, "inactive-member")
+	project_id = await project_repository.create(db_session, owner_id, "Project H2", None, None, None)
+	await project_member_repository.create(db_session, project_id, member_id, owner_id)
+	await project_repository.set_active(db_session, project_id, False)
+
+	items = await project_repository.list_for_user(db_session, member_id, True, 10, 0)
+
+	assert items == []
+
+
+async def test_list_for_user_applies_paging_and_returns_total_count(db_session: AsyncSession) -> None:
+	owner_id = await _create_owner(db_session, "paged-owner")
+	for suffix in ("1", "2", "3"):
+		await project_repository.create(db_session, owner_id, f"Paged project {suffix}", None, None, None)
+
+	items = await project_repository.list_for_user(db_session, owner_id, False, 1, 1)
+
+	assert len(items) == 1
+	assert items[0].total_count == 3
+
+
+async def test_create_project_converts_timezone_aware_period_to_utc(db_session: AsyncSession) -> None:
+	from zoneinfo import ZoneInfo
+
+	owner_id = await _create_owner(db_session, "period-owner")
+	start = datetime(2026, 2, 1, 9, tzinfo=ZoneInfo("Asia/Tokyo"))
+	end = datetime(2026, 2, 2, 18, tzinfo=ZoneInfo("Asia/Tokyo"))
+
+	project_id = await project_repository.create(db_session, owner_id, "Period project", None, start, end)
+	project = await project_repository.get_by_id(db_session, project_id)
+
+	assert project is not None
+	assert project.start_at == start.astimezone(timezone.utc)
+	assert project.end_at == end.astimezone(timezone.utc)
 
 
 async def test_list_for_user_admin_sees_all_projects(db_session: AsyncSession) -> None:

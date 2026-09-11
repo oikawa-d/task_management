@@ -22,7 +22,9 @@ AS $$
               EXISTS (SELECT 1 FROM users u WHERE u.id = p_user_id AND u.role = 'admin')
               OR EXISTS (
                   SELECT 1 FROM project_members pm
-                  WHERE pm.project_id = sp.id AND pm.user_id = p_user_id
+                  WHERE pm.project_id = sp.id
+                    AND pm.user_id = p_user_id
+                    AND (sp.is_active = true OR sp.owner_id = p_user_id)
               )
           )
         ORDER BY sp.created_at DESC

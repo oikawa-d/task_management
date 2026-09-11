@@ -21,7 +21,13 @@ AS $$
           (
               p_project_id IS NULL
               AND (
-                  (t.project_id IS NULL AND t.created_by = p_user_id)
+                  (
+                      t.project_id IS NULL
+                      AND (
+                          EXISTS (SELECT 1 FROM users u WHERE u.id = p_user_id AND u.role = 'admin')
+                          OR t.created_by = p_user_id
+                      )
+                  )
                   OR (
                       t.project_id IS NOT NULL
                       AND (
