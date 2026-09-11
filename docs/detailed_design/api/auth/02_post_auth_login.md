@@ -120,9 +120,13 @@ sequenceDiagram
         R-->>FE: 403 CSRF_INVALID
     else Origin一致
         R->>S: login(identifier, password, request, response)
-        S->>RS: incr_login_failure相当のGETで現在値確認
+        S->>RS: get_login_failure_count(identifier, client_ip)
         RS->>RD: GET login_fail:{key_hash}
+        RD-->>RS: 失敗回数
         alt 失敗回数が上限超過
+            S->>RS: get_login_failure_ttl(identifier, client_ip)
+            RS->>RD: TTL login_fail:{key_hash}
+            RD-->>RS: 残りTTL（秒）
             S-->>R: TooManyAttemptsError
             R-->>FE: 429 TOO_MANY_ATTEMPTS
         else 継続可能
@@ -263,7 +267,7 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["auth_router.login"] --> S["auth_service.login"]
-    S --> RS1["redis_store.incr/reset_login_failure"]
+    S --> RS1["redis_store.get_login_failure_count / get_login_failure_ttl<br/>incr/reset_login_failure"]
     S --> URP["user_repository.fn_find_user_by_identifier"]
     S --> SEC["core/security.verify_password"]
     S --> FACT["auth/factory.get_auth_strategy"]
