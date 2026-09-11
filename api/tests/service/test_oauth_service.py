@@ -352,14 +352,16 @@ async def test_oauth_rate_limit_rejects_excess_requests(operation: str, monkeypa
 	monkeypatch.setattr(
 		auth_service.redis_store, "check_rate_limit", AsyncMock(return_value=settings.rate_limit_oauth_max_requests + 1)
 	)
+	monkeypatch.setattr(auth_service.redis_store, "get_rate_limit_ttl", AsyncMock(return_value=42))
 
-	with pytest.raises(TooManyAttemptsError):
+	with pytest.raises(TooManyAttemptsError) as exc_info:
 		if operation == "start":
 			await auth_service.oauth_start("/dashboard", request=_request(), response=Response(), settings=settings)
 		elif operation == "callback":
 			await auth_service.oauth_callback("code", "state", "state", _request(), Response(), settings=settings)
 		else:
 			await auth_service.oauth_exchange("code", _request(), Response(), settings=settings)
+	assert exc_info.value.retry_after == 42
 
 
 @pytest.mark.asyncio
@@ -393,6 +395,7 @@ async def test_oauth_rate_limit_log_contains_audit_fields(
 		"check_rate_limit",
 		AsyncMock(return_value=settings.rate_limit_oauth_max_requests + 1),
 	)
+	monkeypatch.setattr(auth_service.redis_store, "get_rate_limit_ttl", AsyncMock(return_value=42))
 
 	with caplog.at_level("WARNING", logger="app.oauth"), pytest.raises(TooManyAttemptsError):
 		await auth_service.oauth_callback("code", "state", "state", request, Response(), settings=settings)
@@ -439,6 +442,7 @@ async def test_oauth_callback_denied_deletes_cookie_when_rate_limited(monkeypatc
 		"check_rate_limit",
 		AsyncMock(return_value=settings.rate_limit_oauth_max_requests + 1),
 	)
+	monkeypatch.setattr(auth_service.redis_store, "get_rate_limit_ttl", AsyncMock(return_value=42))
 	response = Response()
 
 	with pytest.raises(TooManyAttemptsError):

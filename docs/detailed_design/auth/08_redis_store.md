@@ -187,7 +187,8 @@ stateDiagram-v2
 |------|-----------|----------|
 | `incr_login_failure` | `async def incr_login_failure(identifier: str, client_ip: str, window: int) -> int` | `key_hash = build_login_fail_key(identifier, client_ip)`（[./07_password_security.md](./07_password_security.md) §8.4） → `INCR login_fail:{key_hash}` → 戻り値が`1`（初回）なら`EXPIRE login_fail:{key_hash} window`を追加実行 → 現在の失敗回数を返す |
 | `reset_login_failure` | `async def reset_login_failure(identifier: str, client_ip: str) -> None` | 同一`key_hash`で`DEL login_fail:{key_hash}` |
-| `check_rate_limit` | `async def check_rate_limit(scope: str, key: str, max_requests: int, window: int) -> int` | `rate_limit:{scope}:{key_hash}`を原子的に加算し、超過時は残りTTLとともに拒否する |
+| `check_rate_limit` | `async def check_rate_limit(scope: str, key: str, max_requests: int, window: int) -> int` | `rate_limit:{scope}:{key_hash}`を原子的に加算し、現在の回数を返す |
+| `get_rate_limit_ttl` | `async def get_rate_limit_ttl(scope: str, key: str) -> int` | `rate_limit:{scope}:{key_hash}`の残りTTL（秒）を返し、超過時の`Retry-After`に使用する |
 | `ping` | `async def ping() -> bool` | `redis.ping()`の成否を返す。`/api/health`から呼ばれる |
 
 ## 9. 原子性（GETDELとLuaスクリプト）

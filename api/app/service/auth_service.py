@@ -215,6 +215,10 @@ async def _check_oauth_rate_limit(request: Request, scope: str, route: str, sett
 	except Exception as exc:
 		raise ServiceUnavailableError() from exc
 	if count > settings.rate_limit_oauth_max_requests:
+		try:
+			retry_after = await redis_store.get_rate_limit_ttl(scope, client_info.client_ip)
+		except Exception as exc:
+			raise ServiceUnavailableError() from exc
 		logger.warning(
 			"OAuth rate limit rejected",
 			extra={
@@ -230,7 +234,9 @@ async def _check_oauth_rate_limit(request: Request, scope: str, route: str, sett
 				"request_id": _request_id(request),
 			},
 		)
-		raise TooManyAttemptsError()
+		raise TooManyAttemptsError(
+			retry_after=retry_after if retry_after > 0 else settings.rate_limit_oauth_window_seconds
+		)
 	return client_info
 
 

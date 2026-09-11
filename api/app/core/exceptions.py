@@ -135,6 +135,10 @@ class TooManyAttemptsError(AppError):
 	status_code = 429
 	message = "試行回数が多いため、しばらく待ってから再度お試しください"
 
+	def __init__(self, message: str | None = None, details: Any = None, retry_after: int | None = None) -> None:
+		super().__init__(message, details)
+		self.retry_after = retry_after
+
 
 class InvalidVerifyTokenError(AppError):
 	code = "INVALID_VERIFY_TOKEN"
@@ -183,9 +187,13 @@ def register_error_handling(app: FastAPI) -> None:
 	@app.exception_handler(AppError)
 	async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
 		request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+		headers = {}
+		if isinstance(exc, TooManyAttemptsError) and exc.retry_after is not None:
+			headers["Retry-After"] = str(exc.retry_after)
 		return JSONResponse(
 			status_code=exc.status_code,
 			content=_build_error_body(exc.code, exc.message, exc.details, request_id),
+			headers=headers,
 		)
 
 	@app.exception_handler(RequestValidationError)
