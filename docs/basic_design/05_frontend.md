@@ -234,7 +234,7 @@ flowchart TB
 
     DP --> DVT["DashboardViewTabs<br/>（カード / カレンダー）"]
     DP --> PCL["ProjectCardList"]
-    DP --> PCM["ProjectCreateModal"]
+    DP --> PCF["ProjectCreateForm"]
     DP --> CV["CalendarView<br/>（表示範囲切替・月送り）"]
     CV --> CG["CalendarGrid"]
     CG --> CDC["CalendarDayCell x42"]

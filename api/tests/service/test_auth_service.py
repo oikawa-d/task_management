@@ -36,6 +36,9 @@ class _FakeDb:
 	async def commit(self) -> None:
 		self.calls.append("db.commit")
 
+	async def rollback(self) -> None:
+		self.calls.append("db.rollback")
+
 
 def _request() -> Request:
 	return Request(
@@ -426,6 +429,26 @@ async def test_login_records_success_and_uses_strategy(monkeypatch: pytest.Monke
 	record_mock.assert_awaited_once()
 
 
+async def test_login_records_success_for_jwt_strategy(monkeypatch: pytest.MonkeyPatch) -> None:
+	user = SimpleNamespace(
+		id=uuid4(), password_hash="hash", is_active=True, email_verified_at=datetime.now(), email="taro@example.com"
+	)
+	result = LoginResult("jwt", access_token="access", refresh_token="refresh", csrf_token="csrf", expires_in=900)
+	strategy = SimpleNamespace(mode="jwt", login=AsyncMock(return_value=result), rollback_login=AsyncMock())
+	monkeypatch.setattr(auth_service.user_repository, "get_by_login_identifier", AsyncMock(return_value=user))
+	monkeypatch.setattr(auth_service, "verify_password", lambda password, password_hash: True)
+	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
+	monkeypatch.setattr(auth_service.redis_store, "reset_login_failure", AsyncMock())
+	monkeypatch.setattr(auth_service.login_history_repository, "create", AsyncMock())
+
+	actual = await auth_service.login(
+		"taro", "Password1!", _request(), Response(), _FakeDb(), strategy, settings=_settings(auth_mode="jwt")
+	)
+
+	assert actual is result
+	strategy.login.assert_awaited_once()
+
+
 @pytest.mark.parametrize(
 	("active", "verified", "expected"),
 	[(False, True, UserInactiveError), (True, False, EmailNotVerifiedError)],
@@ -513,6 +536,26 @@ async def test_login_rolls_back_auth_state_when_history_record_fails(
 	strategy.rollback_login.assert_awaited_once_with(user, result, ANY)
 	events = {record.event for record in caplog.records}
 	assert events == {"login_attempt", "login_history_write_failed", "auth_state_revoke_failed"}
+
+
+async def test_login_rolls_back_auth_state_successfully_when_history_record_fails(
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	user = SimpleNamespace(id=uuid4(), password_hash="hash", is_active=True, email_verified_at=datetime.now())
+	result = LoginResult("jwt", access_token="access", refresh_token="refresh", csrf_token="csrf", expires_in=900)
+	strategy = SimpleNamespace(mode="jwt", login=AsyncMock(return_value=result), rollback_login=AsyncMock())
+	monkeypatch.setattr(auth_service.user_repository, "get_by_login_identifier", AsyncMock(return_value=user))
+	monkeypatch.setattr(auth_service, "verify_password", lambda password, password_hash: True)
+	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
+	monkeypatch.setattr(auth_service.redis_store, "reset_login_failure", AsyncMock())
+	monkeypatch.setattr(auth_service.login_history_repository, "create", AsyncMock(side_effect=RuntimeError("db down")))
+
+	with pytest.raises(auth_service.ServiceUnavailableError):
+		await auth_service.login(
+			"taro", "Password1!", _request(), Response(), _FakeDb(), strategy, settings=_settings(auth_mode="jwt")
+		)  # type: ignore[arg-type]
+
+	strategy.rollback_login.assert_awaited_once_with(user, result, ANY)
 
 
 async def test_login_rejects_strategy_mode_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -73,7 +73,7 @@
 | POST | `/projects/{project_id}/tasks` | タスク作成 | プロジェクトメンバー |
 | GET | `/tasks` | タスク横断一覧（`project_id`で絞込可、`project_id=null`で未所属タスクのみ） | 本人が参照可能な範囲（所属プロジェクト全部＋自分の未所属タスク。adminは全件） |
 | POST | `/tasks` | タスク作成（`project_id`任意。未指定・`null`ならプロジェクト未所属タスクとして作成） | member |
-| GET | `/tasks/calendar?from=&to=&scope=&project_id=` | カレンダー表示用タスク一覧（`due_at`が期間内かつ非NULLのタスクのみ、ページングなし。issue #38で新設） | scope=`me`：ログイン済みなら誰でも（自分担当分のみ）／scope=`project`：プロジェクトメンバー |
+| GET | `/tasks/calendar?from=&to=&scope=&project_id=` | カレンダー表示用タスク一覧（`due_at`が期間内かつ非NULLのタスクのみ、ページングなし。issue #38で新設） | scope=`me`：ログイン済みなら誰でも（自分担当分＋自分の未所属分）／scope=`project`：プロジェクトメンバー |
 | GET | `/tasks/{task_id}` | タスク詳細 | プロジェクトメンバー（`project_id`がNULLの場合は作成者本人） |
 | PATCH | `/tasks/{task_id}` | タスク更新（title/description/status/assignee/position/due_at/version/`is_active`） | プロジェクトメンバー（`project_id`がNULLの場合は作成者本人）。`is_active`の変更のみ作成者本人/プロジェクトオーナー/adminに限定 |
 | DELETE | `/tasks/{task_id}` | タスク論理削除（`is_active=false`。position詰めは行わない） | プロジェクトメンバー（`project_id`がNULLの場合は作成者本人） |
@@ -604,7 +604,7 @@ sequenceDiagram
 
 | 関数 | 引数 | 戻り値 | 処理概要 |
 |------|------|--------|----------|
-| `register` | `payload: RegisterRequest`, `background: BackgroundTasks` | `User` | 重複チェックと `CALL sp_register_user` → パスワードハッシュ化 → 認証トークン発行 → 確認メール送信予約。**Strategy.login は呼ばない** |
+| `register` | `payload: RegisterRequest`, `background: BackgroundTasks`, `request: Request` | `User` | IP単位Rate Limit確認 → `CALL sp_register_user` → パスワードハッシュ化 → 認証トークン発行 → 確認メール送信予約。**Strategy.login は呼ばない** |
 | `verify_email` | `token: str` | `None` | Redis のトークンをワンタイム消費 → `CALL sp_verify_user_email`。無効なら 400 |
 | `resend_verification` | `email: str`, `background: BackgroundTasks` | `None` | 未認証ユーザーかつ再送間隔外の場合のみ再送。該当しなくても例外を出さない |
 | `login` | `identifier: str`, `password: str`, `request`, `response` | `LoginResult` | レート制限確認 → `SELECT fn_find_user_by_identifier` → パスワード検証 → `is_active` / `email_verified_at` 確認 → Strategy.login → `CALL sp_record_login_history` |

@@ -1,7 +1,6 @@
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import cast
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -82,11 +81,12 @@ async def mark_read(db: AsyncSession, notification_id: uuid.UUID, user_id: uuid.
 		text("CALL sp_mark_notification_read(:notification_id, :user_id, NULL)"),
 		{"notification_id": notification_id, "user_id": user_id},
 	)
-	return cast(datetime | None, result.mappings().one()["p_read_at"])
+	return result.scalar_one_or_none()
 
 
-async def mark_all_read(db: AsyncSession, user_id: uuid.UUID) -> None:
-	await db.execute(text("CALL sp_mark_all_notifications_read(:user_id)"), {"user_id": user_id})
+async def mark_all_read(db: AsyncSession, user_id: uuid.UUID) -> int:
+	result = await db.execute(text("CALL sp_mark_all_notifications_read(:user_id, NULL)"), {"user_id": user_id})
+	return int(result.scalar_one())
 
 
 async def purge_expired(db: AsyncSession, retention_days: int) -> None:

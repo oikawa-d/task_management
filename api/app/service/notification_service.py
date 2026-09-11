@@ -91,7 +91,7 @@ async def mark_notification_read(
 ) -> NotificationReadResponse:
 	read_at = await notification_repository.mark_read(db, notification_id, user.id)
 	if read_at is None:
-		raise NotFoundError()
+		raise NotFoundError("通知が見つかりません")
 	return NotificationReadResponse(
 		id=notification_id,
 		read_at=_to_app_timezone(read_at),
@@ -100,7 +100,6 @@ async def mark_notification_read(
 
 
 async def mark_all_notifications_read(db: AsyncSession, user: CurrentUser) -> NotificationReadAllResponse:
-	before = await notification_repository.count_unread(db, user.id)
-	await notification_repository.mark_all_read(db, user.id)
+	updated_count = await notification_repository.mark_all_read(db, user.id)
 	after = await notification_repository.count_unread(db, user.id)
-	return NotificationReadAllResponse(updated_count=max(before - after, 0), unread_count=after)
+	return NotificationReadAllResponse(updated_count=updated_count, unread_count=after)

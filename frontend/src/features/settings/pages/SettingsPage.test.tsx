@@ -50,6 +50,18 @@ describe("SettingsPage", () => {
 		expect(screen.queryByRole("form", { name: "プロフィール編集フォーム" })).not.toBeInTheDocument();
 	});
 
+	it("表示設定で4段階の文字サイズを選択できる", () => {
+		renderPage();
+
+		fireEvent.click(screen.getByRole("tab", { name: "表示設定" }));
+
+		expect(screen.getAllByRole("radio")).toHaveLength(4);
+		expect(screen.getByText("標準")).toBeInTheDocument();
+		fireEvent.click(screen.getByLabelText("大"));
+		expect(document.documentElement.style.getPropertyValue("--font-scale")).toBe("1.125");
+		fireEvent.click(screen.getByLabelText("標準"));
+	});
+
 	it("矢印キーでタブを移動し、選択中タブへフォーカスする", () => {
 		renderPage();
 		const profileTab = screen.getByRole("tab", { name: "プロフィール" });

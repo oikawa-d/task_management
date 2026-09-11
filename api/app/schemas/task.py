@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import UUID4, BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -8,6 +8,7 @@ from app.core.config import get_backend_settings
 TaskStatus = Literal["todo", "in_progress", "done"]
 TaskSort = Literal["created_at", "due_at"]
 TaskOrder = Literal["asc", "desc"]
+CalendarScope = Literal["me", "project"]
 
 
 def _default_per_page() -> int:
@@ -163,3 +164,20 @@ class TaskListMeta(BaseModel):
 class TaskListResponse(BaseModel):
 	items: list[TaskListItem]
 	meta: TaskListMeta
+
+
+class CalendarTaskQuery(BaseModel):
+	from_date: date = Field(alias="from")
+	to_date: date = Field(alias="to")
+	scope: CalendarScope
+	project_id: UUID4 | None = None
+
+	@model_validator(mode="after")
+	def validate_range_and_scope(self) -> "CalendarTaskQuery":
+		if self.to_date < self.from_date or (self.to_date - self.from_date).days > 62:
+			raise ValueError("calendar range must be within 62 days")
+		if self.scope == "project" and self.project_id is None:
+			raise ValueError("project_id is required for project scope")
+		if self.scope == "me" and self.project_id is not None:
+			raise ValueError("project_id is not allowed for me scope")
+		return self

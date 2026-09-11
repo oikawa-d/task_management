@@ -14,6 +14,9 @@ export interface NotificationPanelProps {
 	onPageChange: (page: number) => void;
 	onItemClick: (notification: NotificationItemData) => void;
 	onMarkAllRead: () => void;
+	isLoading?: boolean;
+	errorMessage?: string | null;
+	onRetry?: () => void;
 }
 
 /**
@@ -22,7 +25,7 @@ export interface NotificationPanelProps {
  */
 export const NotificationPanel = forwardRef<HTMLDivElement, NotificationPanelProps>(
 	function NotificationPanel(
-		{ notifications, unreadCount, page, totalPages, onPageChange, onItemClick, onMarkAllRead },
+		{ notifications, unreadCount, page, totalPages, onPageChange, onItemClick, onMarkAllRead, isLoading, errorMessage, onRetry },
 		ref,
 	) {
 		return (
@@ -31,20 +34,14 @@ export const NotificationPanel = forwardRef<HTMLDivElement, NotificationPanelPro
 					<span>通知</span>
 					<MarkAllReadButton unreadCount={unreadCount} onClick={onMarkAllRead} />
 				</div>
+				{isLoading ? <p role="status">通知を読み込み中...</p> : null}
+				{errorMessage ? <p role="alert">{errorMessage}<button type="button" onClick={onRetry}>再試行</button></p> : null}
 
-				{notifications.length === 0 ? (
-					<p className={styles.empty}>通知はありません</p>
-				) : (
-					<ul className={styles.list}>
-						{notifications.map((notification) => (
-							<NotificationItem
-								key={notification.id}
-								notification={notification}
-								onClick={onItemClick}
-							/>
-						))}
+				{!isLoading && !errorMessage ? (
+					notifications.length === 0 ? <p className={styles.empty}>通知はありません</p> : <ul className={styles.list}>
+						{notifications.map((notification) => <NotificationItem key={notification.id} notification={notification} onClick={onItemClick} />)}
 					</ul>
-				)}
+				) : null}
 
 				{totalPages >= 2 && (
 					<div className={styles.footer}>

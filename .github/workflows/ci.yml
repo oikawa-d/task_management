@@ -147,6 +147,13 @@ jobs:
         working-directory: api
         run: alembic upgrade head
 
+      - name: Alembic revision履歴検証
+        working-directory: api
+        run: |
+          pytest tests/test_alembic_revision_history.py -q
+          alembic heads
+          alembic history
+
       - name: pytest --cov（80%未満で失敗）
         working-directory: api
         run: pytest --cov=app --cov-report=term-missing --cov-report=xml --cov-fail-under=80

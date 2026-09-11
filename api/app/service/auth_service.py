@@ -1,6 +1,8 @@
-"""ログイン失敗レート制限（ブルートフォース対策）と、メール認証・パスワードリセットのトークン発行・消費オーケストレーション。
+"""会員登録・ログイン・ログアウトと、メール認証・パスワードリセットのトークン発行・消費オーケストレーション。
 
-参照設計書: docs/detailed_design/auth/06_token_mail.md
+参照設計書:
+- docs/detailed_design/api/auth/01_post_auth_register.md〜05_get_auth_config.md
+- docs/detailed_design/auth/06_token_mail.md
 """
 
 from __future__ import annotations
@@ -62,8 +64,8 @@ async def ensure_login_not_rate_limited(identifier: str, client_ip: str, setting
 	"""現在の失敗回数が上限に達している場合は`TooManyAttemptsError`を送出する。"""
 	failure_count = await redis_store.get_login_failure_count(identifier, client_ip)
 	if failure_count >= settings.login_max_attempts:
-		retry_after = max(await redis_store.get_login_failure_ttl(identifier, client_ip), 0)
-		raise TooManyAttemptsError(retry_after=retry_after)
+		ttl = await redis_store.get_login_failure_ttl(identifier, client_ip)
+		raise TooManyAttemptsError(retry_after=ttl if ttl > 0 else settings.login_lock_window_seconds)
 
 
 async def record_login_failure(identifier: str, client_ip: str, settings: BackendSettings) -> int:
@@ -102,22 +104,23 @@ async def register(payload: RegisterRequest, background: BackgroundTasks, reques
 		raise TooManyAttemptsError(retry_after=ttl if ttl > 0 else config.rate_limit_register_window_seconds)
 	try:
 		user_id = await user_repository.create(db, payload.username, payload.email, hash_password(payload.password))
+		await user_repository.update_profile(
+			db,
+			user_id,
+			payload.last_name,
+			payload.first_name,
+			payload.last_name_kana,
+			payload.first_name_kana,
+			payload.birth_date,
+		)
+		await db.commit()
 	except DBAPIError as exc:
+		await db.rollback()
 		if _db_sqlstate(exc) == "P0001":
 			raise DuplicateUsernameError() from exc
 		if _db_sqlstate(exc) == "P0002":
 			raise DuplicateEmailError() from exc
 		raise
-	await user_repository.update_profile(
-		db,
-		user_id,
-		payload.last_name,
-		payload.first_name,
-		payload.last_name_kana,
-		payload.first_name_kana,
-		payload.birth_date,
-	)
-	await db.commit()
 	user = await user_repository.get_by_id(db, user_id)
 	if user is None:
 		raise ServiceUnavailableError()
@@ -257,6 +260,11 @@ async def logout(request: Request, response: Response, strategy: AuthStrategy) -
 	await strategy.logout(request, response)
 
 
+async def refresh(request: Request, response: Response, strategy: AuthStrategy) -> LoginResult:
+	"""access tokenを再発行する。モード差異はStrategyへ委譲する。"""
+	return await strategy.refresh(request, response)
+
+
 async def get_me(current_user: CurrentUser, db: AsyncSession, settings: BackendSettings | None = None) -> MeResponse:
 	"""現在ユーザーの最新DB情報とOAuth providerをレスポンスへ変換する。"""
 	config = settings or get_backend_settings()
@@ -323,6 +331,7 @@ async def verify_email(token: str, db: AsyncSession) -> None:
 	if user_id is None:
 		raise InvalidVerifyTokenError()
 	await user_repository.mark_email_verified(db, user_id)
+	await db.commit()
 
 
 async def resend_verification(email: str, background: BackgroundTasks, db: AsyncSession) -> None:

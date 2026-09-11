@@ -41,12 +41,12 @@ async def test_ensure_login_not_rate_limited_raises_too_many_attempts_at_limit(
 	monkeypatch: pytest.MonkeyPatch,
 ) -> None:
 	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=5))
-	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_ttl", AsyncMock(return_value=742))
+	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_ttl", AsyncMock(return_value=321))
 
-	with pytest.raises(TooManyAttemptsError) as exc_info:
+	with pytest.raises(TooManyAttemptsError) as raised:
 		await auth_service.ensure_login_not_rate_limited("user@example.com", "127.0.0.1", _settings())
 
-	assert exc_info.value.retry_after == 742
+	assert raised.value.retry_after == 321
 
 
 async def test_record_login_failure_increments_with_configured_window(monkeypatch: pytest.MonkeyPatch) -> None:
