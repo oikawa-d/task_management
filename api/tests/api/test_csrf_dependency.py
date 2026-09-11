@@ -3,7 +3,8 @@
 app.main の実アプリではプロジェクト作成等がDB/Redisに依存するため、
 CSRF検証の依存関係(DI)配線のみを対象にした最小限のFastAPIアプリを都度組み立てて検証する。
 - 安全なmethod(GET)にはCSRF依存が配線されないこと（既存routerと同じ配線パターン）
-- 更新系(POST等)はverify_origin/verify_csrfの両方が揃って初めて通過すること
+- Cookie利用APIはverify_origin/verify_csrfの両方が揃って初めて通過すること
+- 通常APIはverify_origin_if_session/verify_csrf_if_sessionでsessionモードだけ検証すること
 - OAuth callback(GET/ブラウザリダイレクト)とOAuth exchange相当(POST、ログイン前でCSRF Cookie未発行)は
   verify_originのみが適用され、verify_csrfは適用されない例外パターンであること
   (`docs/detailed_design/auth/03_csrf.md` §6, §12: ログイン・OAuth交換はCSRF検証対象外)
@@ -16,7 +17,7 @@ from typing import Any
 
 import pytest
 from app.auth.factory import get_auth_strategy
-from app.core.deps import verify_csrf, verify_origin
+from app.core.deps import verify_csrf, verify_csrf_if_session, verify_origin, verify_origin_if_session
 from app.core.exceptions import register_error_handling
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
@@ -34,6 +35,10 @@ def _build_app() -> FastAPI:
 
 	@app.post("/protected", dependencies=[Depends(verify_origin), Depends(verify_csrf)])
 	async def protected_endpoint() -> dict[str, Any]:
+		return {"ok": True}
+
+	@app.post("/normal-protected", dependencies=[Depends(verify_origin_if_session), Depends(verify_csrf_if_session)])
+	async def normal_protected_endpoint() -> dict[str, Any]:
 		return {"ok": True}
 
 	@app.get("/oauth/callback")
@@ -117,6 +122,12 @@ def test_protected_post_rejects_missing_origin(client: TestClient) -> None:
 
 	assert res.status_code == 403
 	assert res.json()["error"]["code"] == "CSRF_INVALID"
+
+
+def test_jwt_normal_post_skips_origin_and_csrf_without_headers_or_cookies(client: TestClient) -> None:
+	res = client.post("/normal-protected")
+
+	assert res.status_code == 200
 
 
 def test_oauth_callback_get_is_exempt_from_csrf_and_origin_checks(client: TestClient) -> None:
