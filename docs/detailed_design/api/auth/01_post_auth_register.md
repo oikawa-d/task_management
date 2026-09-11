@@ -105,7 +105,7 @@ sequenceDiagram
         R-->>FE: 403 CSRF_INVALID
     else Origin一致
         R->>R: RegisterRequestで入力検証(422はFastAPIが自動応答)
-        R->>S: register(payload, background, request)
+        R->>S: register(payload, background)
         S->>RP: exists_by_username_or_email(username, email)
         RP->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
         PG-->>RP: 行 or なし
@@ -169,10 +169,10 @@ flowchart TB
 | 項目 | 内容 |
 |------|------|
 | シグネチャ | `async def register(payload: RegisterRequest, background: BackgroundTasks, request: Request, db: AsyncSession) -> User` |
-| 引数 | `payload: RegisterRequest`、`background: BackgroundTasks`、`db: AsyncSession` |
+| 引数 | `payload: RegisterRequest`、`background: BackgroundTasks`、`request: Request`（IP単位Rate Limit用）、`db: AsyncSession` |
 | 戻り値 | 作成された `User`（ORMモデル） |
 | 送出例外 | `DuplicateUsernameError` / `DuplicateEmailError`（409） |
-| 処理内容 | 1. `core/security.hash_password` でargon2idハッシュ生成 2. API側で`user_id`を生成し、`CALL sp_register_user(user_id, username, email, password_hash)` を呼ぶ 3. `token_urlsafe(32)` を生成 4. `redis_store.replace_email_verify_token` でRedis登録（TTL=`EMAIL_VERIFY_TTL_SECONDS`） 5. `redis_store.mark_email_verify_sent` で送信済みマーカー設定 6. `background.add_task(mail_service.send_email_verification_mail, ...)` を登録 7. `SELECT fn_get_user(user_id)` で応答を取得 8. **`AuthStrategy.login` は呼ばない** |
+| 処理内容 | 1. `request`から解決したIP単位で`RATE_LIMIT_REGISTER_MAX_REQUESTS` / `RATE_LIMIT_REGISTER_WINDOW_SECONDS`を検証 2. `core/security.hash_password` でargon2idハッシュ生成 3. `sp_register_user`を呼び、プロフィールSPで入力値を更新 4. `token_urlsafe(32)` を生成 5. `redis_store.replace_email_verify_token` でRedis登録（TTL=`EMAIL_VERIFY_TTL_SECONDS`） 6. `redis_store.mark_email_verify_sent` で送信済みマーカー設定 7. `background.add_task(mail_service.send_email_verification_mail, ...)` を登録 8. **`AuthStrategy.login` は呼ばない** |
 | 副作用 | DB: `users` INSERT。Redis: `emailverify:{hash}` / `emailverify_current:{uid}` / `emailverify_sent:{uid}` 作成。メール送信（非同期） |
 
 ### 6.3 `repository/user_repository.py :: fn_find_user_by_identifier`

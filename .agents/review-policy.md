@@ -56,4 +56,6 @@ gh issue view <番号> --json labels --jq '[.labels[].name]|join(", ")'
 - `reviewed`ラベルは、PRを作成した本人以外がこの方針に沿ったレビューを行い、PR上に「受入可」のコメントを投稿したうえで付与します。
 - PRを作成したエージェントは、自身が作成したPRに`reviewed`ラベルを付与してはいけません。
 - `reviewed`ラベル付与済み、かつCIの全チェックが成功したPRは、PR作成者以外が都度のユーザー承認なしにsquash mergeしてよく、Issue closeも同様です。
-- `gh pr merge`・`gh issue close`は`.claude/hooks/block-github-destructive-actions.sh`により、対象に`reviewed`ラベルが無い場合はブロックされます（fail-close）。
+- `gh pr merge`は`.claude/hooks/block-github-destructive-actions.sh`により、対象PRに`reviewed`ラベルが無い場合はブロックされます（fail-close）。
+- `gh issue close`は同hookにより、**そのissueを閉じるPR**（本文の`Closes #<Issue番号>`でリンクされたPR）に`reviewed`ラベルが無い場合はブロックされます（fail-close）。`reviewed`はPRに付与するラベルであり、issueには付与しません。
+- 上記のとおりissue closeの可否はPRとのリンクを前提とするため、PR本文の「関連Issue」欄には必ず`Closes #<Issue番号>`を記載してください。記載があればマージ時にissueは自動closeされ、手動closeは不要です。
