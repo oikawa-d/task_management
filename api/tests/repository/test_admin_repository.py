@@ -196,6 +196,10 @@ async def test_admin_repository_list_projects_maps_total_count() -> None:
 
 	statement = db.execute.await_args.args[0]
 	assert "fn_admin_list_projects" in str(statement)
+	assert "member_count" in str(statement)
+	assert "task_count_todo" in str(statement)
+	assert "task_count_in_progress" in str(statement)
+	assert "task_count_done" in str(statement)
 	assert db.execute.await_args.args[1] == {"query": "project", "is_active": True, "limit": 10, "offset": 30}
 	assert items[0].total_count == 3
 	assert items[0].member_count == 2

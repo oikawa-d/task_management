@@ -115,7 +115,11 @@ async def list_projects(
 	db: AsyncSession, query: str | None, is_active: bool | None, limit: int, offset: int
 ) -> list[AdminProjectListItem]:
 	result = await db.execute(
-		text("SELECT (project).*, total_count FROM fn_admin_list_projects(:query, :is_active, :limit, :offset)"),
+		text(
+			"SELECT (project).*, member_count, task_count_todo, task_count_in_progress, "
+			"task_count_done, total_count "
+			"FROM fn_admin_list_projects(:query, :is_active, :limit, :offset)"
+		),
 		{"query": query, "is_active": is_active, "limit": limit, "offset": offset},
 	)
 	return [
