@@ -219,3 +219,31 @@ async def test_advisory_lock_prevents_position_collision_under_concurrency(db_se
 		positions.append(result.task.position)
 
 	assert sorted(positions) == [0, 1, 2, 3, 4]
+
+
+async def test_concurrent_status_moves_do_not_deadlock(db_session: AsyncSession) -> None:
+	owner_id, project_id = await _setup_project(db_session, "concurrent-move")
+	first_id = await task_repository.create(db_session, project_id, owner_id, None, "first", None, "todo", None, None)
+	second_id = await task_repository.create(db_session, project_id, owner_id, None, "second", None, "todo", None, None)
+	await db_session.commit()
+
+	settings = get_backend_settings()
+	engine = create_async_engine(settings.database_url)
+	session_factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+
+	async def _move(task_id: uuid.UUID, title: str) -> None:
+		async with session_factory() as session:
+			await task_repository.update(session, task_id, owner_id, 1, title, None, "in_progress", None, None, None)
+			await session.commit()
+
+	try:
+		await asyncio.wait_for(
+			asyncio.gather(_move(first_id, "first-moved"), _move(second_id, "second-moved")),
+			timeout=5,
+		)
+	finally:
+		await engine.dispose()
+
+	results = await task_repository.list_board(db_session, project_id, False)
+	assert {result.task.id for result in results} == {first_id, second_id}
+	assert {result.task.status for result in results} == {"in_progress"}

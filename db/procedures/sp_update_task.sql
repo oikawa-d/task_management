@@ -25,15 +25,39 @@ DECLARE
     v_new_key TEXT;
     v_placeholder CONSTANT TEXT := '00000000-0000-0000-0000-000000000000';
 BEGIN
-    SELECT project_id, status, position, version, due_at
-      INTO v_project_id, v_old_status, v_old_position, v_old_version, v_old_due_at
+    -- Advisory lockは対象行のロックより先に取得する。行ロックを先に取得すると、
+    -- 同じ列を並行更新したトランザクションが互いの行を更新しようとしてdeadlockする。
+    SELECT project_id, status, position
+      INTO v_project_id, v_old_status, v_old_position
       FROM tasks
-     WHERE id = p_task_id
-     FOR UPDATE;
+     WHERE id = p_task_id;
 
     IF NOT FOUND THEN
         RETURN;
     END IF;
+
+    v_status_changed := (p_status IS DISTINCT FROM v_old_status);
+
+    IF v_status_changed OR (p_position IS NOT NULL AND p_position <> v_old_position) THEN
+        v_old_key := COALESCE(v_project_id::text, v_placeholder) || ':' || v_old_status;
+        v_new_key := COALESCE(v_project_id::text, v_placeholder) || ':' || p_status;
+
+        IF v_old_key = v_new_key THEN
+            PERFORM pg_advisory_xact_lock(hashtextextended(v_old_key, 0));
+        ELSIF v_old_key < v_new_key THEN
+            PERFORM pg_advisory_xact_lock(hashtextextended(v_old_key, 0));
+            PERFORM pg_advisory_xact_lock(hashtextextended(v_new_key, 0));
+        ELSE
+            PERFORM pg_advisory_xact_lock(hashtextextended(v_new_key, 0));
+            PERFORM pg_advisory_xact_lock(hashtextextended(v_old_key, 0));
+        END IF;
+    END IF;
+
+    SELECT position, version, due_at
+      INTO v_old_position, v_old_version, v_old_due_at
+      FROM tasks
+     WHERE id = p_task_id
+     FOR UPDATE;
 
     IF v_old_version <> p_version THEN
         RAISE EXCEPTION 'task version conflict' USING ERRCODE = 'P0005';
@@ -47,16 +71,6 @@ BEGIN
     v_status_changed := (p_status IS DISTINCT FROM v_old_status);
 
     IF v_status_changed THEN
-        v_old_key := COALESCE(v_project_id::text, v_placeholder) || ':' || v_old_status;
-        v_new_key := COALESCE(v_project_id::text, v_placeholder) || ':' || p_status;
-
-        IF v_old_key <= v_new_key THEN
-            PERFORM pg_advisory_xact_lock(hashtextextended(v_old_key, 0));
-            PERFORM pg_advisory_xact_lock(hashtextextended(v_new_key, 0));
-        ELSE
-            PERFORM pg_advisory_xact_lock(hashtextextended(v_new_key, 0));
-            PERFORM pg_advisory_xact_lock(hashtextextended(v_old_key, 0));
-        END IF;
 
         -- 旧列：移動対象より後続のpositionを-1で詰める
         UPDATE tasks
@@ -77,9 +91,6 @@ BEGIN
                AND position >= v_new_position;
         END IF;
     ELSIF p_position IS NOT NULL AND p_position <> v_old_position THEN
-        v_old_key := COALESCE(v_project_id::text, v_placeholder) || ':' || v_old_status;
-        PERFORM pg_advisory_xact_lock(hashtextextended(v_old_key, 0));
-
         IF p_position > v_old_position THEN
             UPDATE tasks
                SET position = position - 1
