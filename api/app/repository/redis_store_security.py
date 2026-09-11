@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, datetime
+from typing import cast
 from uuid import UUID
 
 from redis.asyncio import Redis
@@ -24,7 +25,7 @@ async def get_login_failure_count(client: Redis, prefix: str, identifier: str, c
 
 
 async def get_login_failure_ttl(client: Redis, prefix: str, identifier: str, client_ip: str) -> int:
-	return int(await client.ttl(key("login_fail", prefix, identifier_hash(identifier, client_ip))))
+	return cast(int, await client.ttl(key("login_fail", prefix, identifier_hash(identifier, client_ip))))
 
 
 async def incr_login_failure(client: Redis, prefix: str, identifier: str, client_ip: str, window: int) -> int:

@@ -21,7 +21,6 @@ from app.models.project import Project
 from app.models.task import Task
 from app.models.task_comment import TaskComment
 from app.repository import (
-	project_member_repository,
 	project_repository,
 	redis_store,
 	task_comment_repository,
@@ -146,22 +145,16 @@ async def verify_csrf_if_session(
 
 async def get_task_for_member(
 	task_id: UUID,
-	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
 ) -> Task:
 	task_with_status = await task_repository.get_by_id(db, task_id)
 	if task_with_status is None:
 		raise NotFoundError()
-	task = task_with_status.task
-	if user.role != "admin" and task.project_id is not None:
-		if not await project_member_repository.exists(db, task.project_id, user.id):
-			raise NotFoundError()
-	return task
+	return task_with_status.task
 
 
 async def get_comment_for_member(
 	comment_id: UUID,
-	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
 ) -> TaskComment:
 	comment = await task_comment_repository.get_by_id(db, comment_id)
@@ -171,9 +164,6 @@ async def get_comment_for_member(
 	if task_with_status is None:
 		raise NotFoundError()
 	task = task_with_status.task
-	if user.role != "admin" and task.project_id is not None:
-		if not await project_member_repository.exists(db, task.project_id, user.id):
-			raise NotFoundError()
 	comment.task = task
 	return comment
 

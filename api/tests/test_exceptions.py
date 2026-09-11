@@ -20,6 +20,10 @@ def _build_app() -> FastAPI:
 	async def boom_forbidden() -> None:
 		raise ForbiddenError(message="権限がありません", details={"reason": "role"})
 
+	@app.get("/boom-rate-limit")
+	async def boom_rate_limit() -> None:
+		raise TooManyAttemptsError(retry_after=123)
+
 	@app.get("/boom-unhandled")
 	async def boom_unhandled() -> None:
 		raise RuntimeError("unexpected")
@@ -59,6 +63,13 @@ def test_app_error_with_details() -> None:
 	body = res.json()
 	assert body["error"]["code"] == "FORBIDDEN"
 	assert body["error"]["details"] == {"reason": "role"}
+
+
+def test_rate_limit_error_includes_retry_after_header() -> None:
+	res = _client().get("/boom-rate-limit")
+
+	assert res.status_code == 429
+	assert res.headers["Retry-After"] == "123"
 
 
 def test_unhandled_exception_converted_to_internal_error() -> None:

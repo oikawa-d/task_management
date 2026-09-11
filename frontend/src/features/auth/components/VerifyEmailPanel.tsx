@@ -9,6 +9,7 @@ export type VerifyEmailPhase = "noToken" | "verifying" | "success" | "error";
 
 export interface VerifyEmailPanelProps {
 	phase: VerifyEmailPhase;
+	errorMessage?: string;
 	/** phase==="success"時、即時遷移リンククリックで呼ばれる（自動遷移タイマーは呼び出し元が管理） */
 	onRedirectNow?: () => void;
 }
@@ -17,7 +18,7 @@ export interface VerifyEmailPanelProps {
  * メール認証結果表示コンポーネント（検証中/成功/失敗の表示 + 認証メール再送フォーム）。
  * docs/detailed_design/screen/05_verify_email.md
  */
-export function VerifyEmailPanel({ phase, onRedirectNow }: VerifyEmailPanelProps) {
+export function VerifyEmailPanel({ phase, errorMessage, onRedirectNow }: VerifyEmailPanelProps) {
 	const resendEmailRef = useRef<HTMLInputElement>(null);
 
 	useEffect(() => {
@@ -41,7 +42,7 @@ export function VerifyEmailPanel({ phase, onRedirectNow }: VerifyEmailPanelProps
 				</div>
 			)}
 			{phase === "error" && (
-				<p role="alert">リンクの有効期限が切れているか、既に使用済みです</p>
+				<p role="alert">{errorMessage ?? "リンクの有効期限が切れているか、既に使用済みです"}</p>
 			)}
 			{phase === "noToken" && <p>リンクが不正です</p>}
 			{(phase === "error" || phase === "noToken") && (
