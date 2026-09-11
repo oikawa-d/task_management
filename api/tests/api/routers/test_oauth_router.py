@@ -22,6 +22,7 @@ from app.core.exceptions import (
 	InvalidStateError,
 	OAuthEmailUnverifiedError,
 	OAuthHandoffInvalidError,
+	ServiceUnavailableError,
 	TooManyAttemptsError,
 	register_error_handling,
 )
@@ -333,7 +334,6 @@ def test_callback_route_deletes_state_cookie_on_service_failure(
 	[
 		(InvalidStateError(), "invalid_state"),
 		(OAuthEmailUnverifiedError(), "oauth_email_unverified"),
-		(TooManyAttemptsError(), "too_many_attempts"),
 		(RuntimeError("redis down"), "oauth_failed"),
 	],
 )
@@ -351,6 +351,42 @@ def test_callback_maps_exception_to_login_error(
 	assert response.headers["location"] == f"{FRONTEND_BASE_URL}/login?error={expected}"
 	# 失敗の詳細（例外メッセージ等）はブラウザへ返さない。
 	assert "redis down" not in response.headers["location"]
+
+
+@pytest.mark.parametrize(
+	("error", "status_code", "error_code"),
+	[
+		(TooManyAttemptsError(retry_after=42), 429, "TOO_MANY_ATTEMPTS"),
+		(ServiceUnavailableError(), 503, "SERVICE_UNAVAILABLE"),
+	],
+)
+def test_callback_preserves_rate_limit_and_redis_errors(
+	client: TestClient, monkeypatch: pytest.MonkeyPatch, error: Exception, status_code: int, error_code: str
+) -> None:
+	async def _oauth_callback(*_args: Any, **_kwargs: Any) -> OAuthCallbackResult:
+		raise error
+
+	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_callback", _oauth_callback)
+
+	response = client.get("/api/auth/oauth/google/callback", params={"code": "auth-code", "state": "state-value"})
+
+	assert response.status_code == status_code
+	assert response.json()["error"]["code"] == error_code
+	if isinstance(error, TooManyAttemptsError):
+		assert response.headers["Retry-After"] == "42"
+
+
+def test_denied_callback_preserves_rate_limit_error(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	async def _oauth_callback_denied(*_args: Any, **_kwargs: Any) -> None:
+		raise TooManyAttemptsError(retry_after=42)
+
+	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_callback_denied", _oauth_callback_denied)
+
+	response = client.get("/api/auth/oauth/google/callback", params={"error": "access_denied", "state": "state-value"})
+
+	assert response.status_code == 429
+	assert response.json()["error"]["code"] == "TOO_MANY_ATTEMPTS"
+	assert response.headers["Retry-After"] == "42"
 
 
 def test_exchange_returns_tokens_in_jwt_mode(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

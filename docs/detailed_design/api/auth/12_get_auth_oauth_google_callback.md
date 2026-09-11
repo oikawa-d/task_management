@@ -26,7 +26,7 @@
 | Origin検証 | 不要（Googleからのブラウザリダイレクトのため、通常Originヘッダは付与されない） |
 | AUTH_MODE差異 | **あり**。sessionモードはここで`SessionAuthStrategy.login()`を完了させCookieを発行する。jwtモードはログインを完了させず、`oauth_handoff:{code}` を発行してフロントの`/oauth/exchange`呼び出しを待つ |
 | 冪等性 | 冪等ではない（`state`はワンタイム消費。同一codeでの再実行はGoogle側で失敗する） |
-| レート制限 | `oauth callback` はIP単位で10回/900秒。超過時は429相当のエラー表示へ遷移し、Redis障害時は503相当で認可を成立させない |
+| レート制限 | `oauth callback` はIP単位で10回/900秒。超過時は429 `TOO_MANY_ATTEMPTS` と残り秒数の`Retry-After`を返し、Redis障害時は503 `SERVICE_UNAVAILABLE` として認可を成立させない。その他の検証失敗は302で`/login`へ遷移する |
 | トランザクション境界 | ユーザー解決/作成（`users` INSERT または `oauth_accounts` INSERT）は1トランザクション。session モードでは同トランザクション確定後に `login_history` を別途INSERTする |
 
 ## 2. 入出力仕様
@@ -55,7 +55,7 @@ Cookie
 
 ### 2.2 レスポンス
 
-本APIは常にリダイレクト（302）で応答し、JSONボディは返さない。
+本APIの正常系・通常の検証失敗はリダイレクト（302）で応答する。レート制限超過・Redis障害は共通エラー形式の429/503 JSONを返す。
 
 **正常系（session モード）**
 
@@ -86,11 +86,11 @@ Cookie
 | `oauth_email_unverified` | Google側`email_verified=false` |
 | `oauth_failed` | 上記以外の検証失敗（id_token署名不正、userinfo.sub不一致、code交換失敗等） |
 
-本APIはブラウザの直接ナビゲーションを受けるため、エラー時もJSON形式のエラーボディではなく`/login`へのリダイレクトで通知する（`basic_design/04_api.md` §4のエラーコード体系は、フロントが表示する`error`クエリ値のマッピング元として使用する）。
+本APIはブラウザの直接ナビゲーションを受けるため、通常の検証エラーはJSON形式のエラーボディではなく`/login`へのリダイレクトで通知する。一方、レート制限超過・Redis障害は要件に従い429/503の共通JSONエラーを返す（`basic_design/04_api.md` §4のエラーコード体系を使用する）。
 
 ## 3. エラー仕様
 
-| HTTP | code（内部判定用。レスポンスはリダイレクト） | 発生条件 | フロント側`error`値 | 備考 |
+| HTTP | code（内部判定用） | 発生条件 | フロント側`error`値 | 備考 |
 |------|------|----------|------------------------|------|
 | 302 | `INVALID_STATE` | state不一致・期限切れ・Cookie欠落 | `invalid_state` | `redis_store.consume_oauth_state`が`None`を返す、またはCookie値とクエリ値が不一致 |
 | 302 | - | Googleが`error`クエリを付与（同意拒否等） | `oauth_denied` | `code`が存在しない |
@@ -98,7 +98,8 @@ Cookie
 | 302 | - | id_token署名・aud・iss・exp・nonce検証失敗 | `oauth_failed` | JWKS取得失敗を含む |
 | 302 | - | `userinfo.sub`と`id_token.sub`の不一致 | `oauth_failed` | なりすまし対策 |
 | 302 | - | Googleとのtoken交換（`POST /token`）失敗 | `oauth_failed` | ネットワークエラー・4xx/5xx |
-| 302 | - | Redis接続不能（`consume_oauth_state`/`save_oauth_handoff`） | `oauth_failed` | fail-close。本来503が望ましいがブラウザ直接遷移のため302+`error`で代替（§13要検討） |
+| 429 | `TOO_MANY_ATTEMPTS` | callbackのレート制限超過 | - | `Retry-After`に残り秒数を設定し、認証処理を行わない |
+| 503 | `SERVICE_UNAVAILABLE` | Redis接続不能（レート制限判定・`consume_oauth_state`・`save_oauth_handoff`） | - | fail-close。認証処理を行わない |
 | 302 | - | 未捕捉例外 | `oauth_failed` | ログにのみ詳細を出力 |
 
 `basic_design/04_api.md` §4.2のコード体系（`INVALID_STATE`/`OAUTH_EMAIL_UNVERIFIED`）はサーバー内部の例外クラス・ログ記録に用い、ブラウザへの応答は上表の`error`クエリ値に変換する。
@@ -212,7 +213,8 @@ flowchart TB
     A["GET /api/auth/oauth/google/callback"] --> B{"error クエリあり?"}
     B -->|Yes| C["oauth_callback_denied<br/>レート制限・state検証・state GETDEL・Cookie削除"]
     C -->|state不正| Z1["302 /login?error=invalid_state"]
-    C -->|Redis障害/制限超過| Z2["302 /login?error=oauth_failed または too_many_attempts"]
+    C -->|Redis障害| Z2["503 SERVICE_UNAVAILABLE"]
+    C -->|制限超過| Z2R["429 TOO_MANY_ATTEMPTS<br/>Retry-After: 残り秒数"]
     C -->|成功| ZD["302 /login?error=oauth_denied"]
     B -->|No| D{"stateとCookieが一致?"}
     D -->|No| Z3["302 /login?error=invalid_state"]
@@ -253,9 +255,9 @@ flowchart TB
 |------|------|
 | シグネチャ | `async def oauth_google_callback(request: Request, response: Response, code: str | None = Query(default=None), state: str | None = Query(default=None), error: str | None = Query(default=None), db: AsyncSession = Depends(get_db_session), settings: BackendSettings = Depends(get_backend_settings)) -> RedirectResponse` |
 | 引数 | `code`/`state`/`error`：クエリパラメータ。`request`：Cookie読み取り用 |
-| 戻り値 | `RedirectResponse`（302固定） |
-| 送出例外 | 送出しない（`service.oauth_callback`内の例外を全てキャッチし、対応する`/login?error=...`へのリダイレクトに変換する。本エンドポイントはユーザー向けリダイレクトのため、通常のAppErrorハンドラを経由させない） |
-| 処理内容 | 1. `error`クエリがあれば`auth_service.oauth_callback_denied`へstate・Cookie・request・responseを渡す 2. serviceがstateを検証・消費し、callbackレート制限を適用してstate Cookieを削除する 3. 失敗時は例外の種別に応じ`error`クエリ値をマッピング 4. 通常callbackでは`auth_service.oauth_callback`を呼ぶ 5. 成功時は`OAuthCallbackResult`の`auth_mode`とhandoff codeの整合性を確認しfragment付きURLを組み立てる |
+| 戻り値 | `RedirectResponse`（正常系・通常失敗時は302） |
+| 送出例外 | `TooManyAttemptsError`（429、`Retry-After`付与）、`ServiceUnavailableError`（503）以外は対応する`/login?error=...`への302リダイレクトに変換する |
+| 処理内容 | 1. `error`クエリがあれば`auth_service.oauth_callback_denied`へstate・Cookie・request・responseを渡す 2. serviceがstateを検証・消費し、callbackレート制限を適用してstate Cookieを削除する 3. 通常の失敗は例外の種別に応じ`error`クエリ値をマッピングし、レート制限超過・Redis障害は共通429/503ハンドラへ送出する 4. 通常callbackでは`auth_service.oauth_callback`を呼ぶ 5. 成功時は`OAuthCallbackResult`の`auth_mode`とhandoff codeの整合性を確認しfragment付きURLを組み立てる |
 | 副作用 | Cookie発行（sessionモード時）、Cookie削除（`cerberus_oauth_state`。Google拒否時も含む） |
 
 ### 6.1.1 `service/auth_service.py :: oauth_callback_denied`
@@ -398,7 +400,7 @@ stateDiagram-v2
 | アカウント乗っ取り対策 | `email_verified=false`の場合は既存ユーザーへの紐付けを行わず400/`oauth_email_unverified`とする（`basic_design/03_auth.md` §5.3） |
 | CSRF対策 | state + Cookie一致検証により、第三者が発行したcodeを被害者のブラウザに注入する攻撃を防ぐ |
 | レート制限 | `oauth callback` はIP単位10回/900秒。Google認可コードの高エントロピー性に依存せず汎用IP制限を適用する |
-| fail-close方針 | Redis接続不能時は`oauth_failed`として`/login`へリダイレクトする（503の代わりにブラウザ向けエラー表示。§13要検討） |
+| fail-close方針 | Redis接続不能時は503 `SERVICE_UNAVAILABLE`として共通エラーハンドラへ送出し、認可を成立させない |
 
 ## 12. テスト設計
 
@@ -419,6 +421,8 @@ stateDiagram-v2
 | 13 | 結合 | sessionモードのルートから認証確立まで | Google/Redis/DB境界を差し替え | 302 `#redirect_to`、session/CSRF Cookie、state Cookie削除 | `test_callback_session_route_establishes_authentication` |
 | 14 | 結合 | jwtモードのexchangeルートから認証確立まで | Redis/DB/Strategy境界を差し替え | 200 token response、refresh/CSRF Cookie、`Cache-Control: no-store` | `test_exchange_route_establishes_jwt_authentication` |
 | 15 | 結合 | 通常callbackのサービス失敗時 | Google/Redis境界を差し替え | 302 `/login?error=oauth_failed`、state Cookie削除 | `test_callback_route_deletes_state_cookie_on_service_failure` |
+| 16 | 結合 | callbackレート制限超過 | `TooManyAttemptsError(retry_after=42)`を差し替え | 429 `TOO_MANY_ATTEMPTS`、`Retry-After: 42` | `test_callback_preserves_rate_limit_and_redis_errors` |
+| 17 | 結合 | callbackのRedis障害 | `ServiceUnavailableError`を差し替え | 503 `SERVICE_UNAVAILABLE` | `test_callback_preserves_rate_limit_and_redis_errors` |
 
 網羅できない範囲：Google実サーバーとの実通信（JWKS取得含む）は`respx`でモックし、実際のGoogleアカウントでの手動確認を別途行う。
 
@@ -426,7 +430,6 @@ stateDiagram-v2
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 要検討 | Redis接続不能時、他APIは503を返す方針だが、本APIはブラウザ直接遷移のため`/login?error=oauth_failed`とした。ユーザーには「503」と「認証失敗」の区別がつかない | UXおよび障害切り分けに影響。フロント側で`error`値ごとのメッセージ出し分けを検討する必要がある |
 | 要検討 | `GOOGLE_JWKS_CACHE_TTL_SECONDS`の既定値が基本設計に明記されていない | JWKSキャッシュの鮮度と外部通信頻度のトレードオフに影響。実装時に確定が必要 |
 | 不明 | Googleの`family_name`/`given_name`が未提供（スコープ上取得できない場合）だった場合の`last_name`/`first_name`の扱いが基本設計に記載がない | 新規ユーザー作成時にNULL許容とするか空文字にするか要確認 |
 

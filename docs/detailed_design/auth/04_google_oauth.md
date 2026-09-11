@@ -196,8 +196,8 @@ stateDiagram-v2
 |------|------|
 | シグネチャ / 定義 | `async def oauth_callback(code: str | None, state: str | None, state_cookie: str | None, request: Request, response: Response, db: AsyncSession | None = None, *, settings: BackendSettings | None = None, provider: GoogleOAuthProvider | None = None, strategy: Any | None = None) -> OAuthCallbackResult` |
 | 引数 / 入力 | クエリの `code`/`state`、Cookie `cerberus_oauth_state` |
-| 戻り値 / 出力 | `OAuthCallbackResult{auth_mode, redirect_to, handoff_code}`（ルーターが302で返す） |
-| 送出例外 / 失敗条件 | `InvalidStateError`、`OAuthFailedError`、`OAuthEmailUnverifiedError`、`TooManyAttemptsError`、`UserInactiveError`、`ServiceUnavailableError`（ルーターが302リダイレクトへ変換） |
+| 戻り値 / 出力 | `OAuthCallbackResult{auth_mode, redirect_to, handoff_code}`（ルーターが正常系で302に設定） |
+| 送出例外 / 失敗条件 | `InvalidStateError`、`OAuthFailedError`、`OAuthEmailUnverifiedError`、`UserInactiveError`（ルーターが302リダイレクトへ変換）。`TooManyAttemptsError`は429（`Retry-After`付与）、`ServiceUnavailableError`は503として共通エラーハンドラへ送出 |
 | 処理内容 | 1. callbackレート制限を確認 2. Cookieのstateとクエリのstateを比較 3. `redis_store.consume_oauth_state(state)`（GETDEL） 4. 値がNoneなら`InvalidStateError` 5. `GoogleOAuthProvider.exchange_code(code, code_verifier)` 6. `verify_id_token(id_token, nonce)` 7. `fetch_userinfo(access_token)` とsub一致確認 8. `_resolve_or_create_user(db, userinfo)` 9. `AUTH_MODE` に応じてsession確立 or handoff発行 10. sessionモードでは`login_history`へ`login_identifier=user.email`を設定してINSERT |
 | 副作用 | Redis削除・書き込み、PostgreSQL INSERT/UPDATE、Cookie設定（sessionモード） |
 

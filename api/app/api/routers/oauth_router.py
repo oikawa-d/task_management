@@ -19,6 +19,7 @@ from app.core.exceptions import (
 	InvalidStateError,
 	NotSupportedInModeError,
 	OAuthEmailUnverifiedError,
+	ServiceUnavailableError,
 	TooManyAttemptsError,
 )
 from app.db import get_db_session
@@ -71,6 +72,10 @@ async def oauth_google_callback(
 		state_cookie = request.cookies.get(settings.cookie_name_oauth_state)
 		try:
 			await auth_service.oauth_callback_denied(state, state_cookie, request, response, settings=settings)
+		except ServiceUnavailableError:
+			raise
+		except TooManyAttemptsError:
+			raise
 		except Exception as exc:
 			logger.warning(
 				"OAuth callback denial cleanup failed",
@@ -81,6 +86,10 @@ async def oauth_google_callback(
 	state_cookie = request.cookies.get(settings.cookie_name_oauth_state)
 	try:
 		result = await auth_service.oauth_callback(code, state, state_cookie, request, response, db)
+	except ServiceUnavailableError:
+		raise
+	except TooManyAttemptsError:
+		raise
 	except Exception as exc:
 		logger.warning(
 			"OAuth callback failed",
