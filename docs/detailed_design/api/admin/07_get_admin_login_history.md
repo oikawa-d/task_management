@@ -118,7 +118,7 @@ sequenceDiagram
     ARP->>PG: SELECT * FROM fn_admin_list_login_history(...)
     PG-->>ARP: login_history行
     ARP-->>S: LoginHistory ORMモデル一覧
-    S->>S: LoginHistory一覧をレスポンスDTOへ写像
+    S->>S: 現行契約ではLoginHistory一覧を返す
     S-->>R: LoginHistory一覧（現行Repository契約）
     R-->>FE: 200（レスポンス契約確定後）
     alt DB接続不能
@@ -211,7 +211,7 @@ flowchart LR
 
 ### 9.1 正式なDBアクセス契約
 
-本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+本APIのrepositoryは、次のSP/FN呼び出しとORMモデルへの写像だけを行う。レスポンスDTOへの写像は目標契約として別Issueで確定する。
 
 | 種別 | 契約 | 説明 |
 |------|------|------|
