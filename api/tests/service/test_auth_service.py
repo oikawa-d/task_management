@@ -231,6 +231,7 @@ class _FakeStrategy:
 		self.mode = mode
 		self.login_calls: list[object] = []
 		self.logout_calls = 0
+		self.rollback_calls: list[tuple[object, object]] = []
 
 	async def login(self, user: object, _request: object, _response: object) -> str:
 		self.login_calls.append(user)
@@ -238,6 +239,9 @@ class _FakeStrategy:
 
 	async def logout(self, _request: object, _response: object) -> None:
 		self.logout_calls += 1
+
+	async def rollback_login(self, user: object, result: object, _response: object) -> None:
+		self.rollback_calls.append((user, result))
 
 
 class _RegisterDb:
@@ -292,7 +296,7 @@ async def test_register_creates_user_and_schedules_verification(monkeypatch: pyt
 	monkeypatch.setattr(auth_service, "issue_email_verify_token", issue_mock)
 	db = _RegisterDb()
 
-	user = await auth_service.register(_register_payload(), _FakeBackgroundTasks(), db)  # type: ignore[arg-type]
+	user = await auth_service.register(_register_payload(), _FakeBackgroundTasks(), _FakeRequest(), db)  # type: ignore[arg-type]
 
 	assert user is created
 	assert db.calls == ["db.commit"]
@@ -309,7 +313,7 @@ async def test_register_duplicate_username_raises(monkeypatch: pytest.MonkeyPatc
 	monkeypatch.setattr(auth_service.user_repository, "create", create_mock)
 
 	with pytest.raises(DuplicateUsernameError):
-		await auth_service.register(_register_payload(), _FakeBackgroundTasks(), _RegisterDb())  # type: ignore[arg-type]
+		await auth_service.register(_register_payload(), _FakeBackgroundTasks(), _FakeRequest(), _RegisterDb())  # type: ignore[arg-type]
 
 	create_mock.assert_not_awaited()
 
@@ -319,7 +323,7 @@ async def test_register_duplicate_email_raises(monkeypatch: pytest.MonkeyPatch) 
 	monkeypatch.setattr(auth_service.user_repository, "get_by_email", AsyncMock(return_value=object()))
 
 	with pytest.raises(DuplicateEmailError):
-		await auth_service.register(_register_payload(), _FakeBackgroundTasks(), _RegisterDb())  # type: ignore[arg-type]
+		await auth_service.register(_register_payload(), _FakeBackgroundTasks(), _FakeRequest(), _RegisterDb())  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(
@@ -336,7 +340,7 @@ async def test_register_converts_sqlstate_to_conflict(
 	db = _RegisterDb()
 
 	with pytest.raises(expected):
-		await auth_service.register(_register_payload(), _FakeBackgroundTasks(), db)  # type: ignore[arg-type]
+		await auth_service.register(_register_payload(), _FakeBackgroundTasks(), _FakeRequest(), db)  # type: ignore[arg-type]
 
 	assert db.calls == ["db.rollback"]
 
@@ -348,7 +352,7 @@ async def test_register_reraises_unknown_sqlstate(monkeypatch: pytest.MonkeyPatc
 	monkeypatch.setattr(auth_service.user_repository, "create", AsyncMock(side_effect=error))
 
 	with pytest.raises(DBAPIError):
-		await auth_service.register(_register_payload(), _FakeBackgroundTasks(), _RegisterDb())  # type: ignore[arg-type]
+		await auth_service.register(_register_payload(), _FakeBackgroundTasks(), _FakeRequest(), _RegisterDb())  # type: ignore[arg-type]
 
 
 async def test_login_success_records_history_and_resets_failures(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -370,6 +374,48 @@ async def test_login_success_records_history_and_resets_failures(monkeypatch: py
 	reset_mock.assert_awaited_once()
 	assert history_mock.await_args.kwargs["success"] is True
 	assert history_mock.await_args.kwargs["login_method"] == "session"
+
+
+async def test_login_rolls_back_auth_state_when_history_write_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+	user = _login_user()
+	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
+	monkeypatch.setattr(auth_service.redis_store, "reset_login_failure", AsyncMock())
+	monkeypatch.setattr(auth_service.user_repository, "get_by_login_identifier", AsyncMock(return_value=user))
+	monkeypatch.setattr(auth_service, "verify_password", lambda *_args: True)
+	monkeypatch.setattr(
+		auth_service.login_history_repository,
+		"create",
+		AsyncMock(side_effect=DBAPIError("INSERT login_history", {}, Exception())),
+	)
+	strategy = _FakeStrategy("session")
+
+	with pytest.raises(ServiceUnavailableError):
+		await auth_service.login("taro", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), strategy)  # type: ignore[arg-type]
+
+	assert len(strategy.login_calls) == 1
+	assert len(strategy.rollback_calls) == 1
+
+
+async def test_login_returns_service_unavailable_when_auth_state_rollback_fails(
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	user = _login_user()
+	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
+	monkeypatch.setattr(auth_service.redis_store, "reset_login_failure", AsyncMock())
+	monkeypatch.setattr(auth_service.user_repository, "get_by_login_identifier", AsyncMock(return_value=user))
+	monkeypatch.setattr(auth_service, "verify_password", lambda *_args: True)
+	monkeypatch.setattr(
+		auth_service.login_history_repository,
+		"create",
+		AsyncMock(side_effect=DBAPIError("INSERT login_history", {}, Exception())),
+	)
+	strategy = _FakeStrategy("session")
+	strategy.rollback_login = AsyncMock(side_effect=RuntimeError("rollback failed"))  # type: ignore[method-assign]
+
+	with pytest.raises(ServiceUnavailableError):
+		await auth_service.login("taro", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), strategy)  # type: ignore[arg-type]
+
+	strategy.rollback_login.assert_awaited_once()
 
 
 async def test_login_unknown_user_records_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -491,7 +537,7 @@ async def test_register_missing_user_after_insert_is_service_unavailable(monkeyp
 	monkeypatch.setattr(auth_service, "issue_email_verify_token", issue_mock)
 
 	with pytest.raises(ServiceUnavailableError):
-		await auth_service.register(_register_payload(), _FakeBackgroundTasks(), _RegisterDb())  # type: ignore[arg-type]
+		await auth_service.register(_register_payload(), _FakeBackgroundTasks(), _FakeRequest(), _RegisterDb())  # type: ignore[arg-type]
 
 	issue_mock.assert_not_awaited()
 

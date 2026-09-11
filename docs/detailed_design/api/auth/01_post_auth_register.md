@@ -105,7 +105,7 @@ sequenceDiagram
         R-->>FE: 403 CSRF_INVALID
     else Origin一致
         R->>R: RegisterRequestで入力検証(422はFastAPIが自動応答)
-        R->>S: register(payload, background)
+        R->>S: register(payload, background, request)
         S->>RP: exists_by_username_or_email(username, email)
         RP->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
         PG-->>RP: 行 or なし
@@ -168,7 +168,7 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def register(payload: RegisterRequest, background: BackgroundTasks, db: AsyncSession) -> User` |
+| シグネチャ | `async def register(payload: RegisterRequest, background: BackgroundTasks, request: Request, db: AsyncSession) -> User` |
 | 引数 | `payload: RegisterRequest`、`background: BackgroundTasks`、`db: AsyncSession` |
 | 戻り値 | 作成された `User`（ORMモデル） |
 | 送出例外 | `DuplicateUsernameError` / `DuplicateEmailError`（409） |

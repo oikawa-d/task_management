@@ -167,7 +167,7 @@ def _duplicate_error_for(exc: DBAPIError) -> DuplicateUsernameError | DuplicateE
 	return None
 
 
-async def register(payload: RegisterRequest, background: BackgroundTasks, db: AsyncSession) -> User:
+async def register(payload: RegisterRequest, background: BackgroundTasks, request: Request, db: AsyncSession) -> User:
 	"""ユーザーを登録し、確認メール送信を予約する。認証状態は確立しない（01_post_auth_register.md）。"""
 	if await user_repository.get_by_login_identifier(db, payload.username) is not None:
 		raise DuplicateUsernameError()
@@ -283,9 +283,17 @@ async def login(
 		raise EmailNotVerifiedError()
 
 	login_result = await strategy.login(user, request, response)
-	await _record_login_attempt(
-		db, user, identifier, request, strategy.mode, client_ip, success=True, failure_reason=None
-	)
+	try:
+		await _record_login_attempt(
+			db, user, identifier, request, strategy.mode, client_ip, success=True, failure_reason=None
+		)
+	except Exception as exc:
+		try:
+			await strategy.rollback_login(user, login_result, response)
+		except Exception as rollback_exc:
+			logger.exception("login state rollback failed", extra={"user_id": str(user.id)})
+			raise ServiceUnavailableError() from rollback_exc
+		raise ServiceUnavailableError() from exc
 	return login_result
 
 
