@@ -40,10 +40,15 @@ class BackendSettings(BaseSettings):
 	login_max_attempts: int = 5
 	login_lock_window_seconds: int = 900
 	rate_limit_register_max_requests: int = 5
+	rate_limit_register_window_seconds: int = 900
 	rate_limit_email_verify_max_requests: int = 10
+	rate_limit_email_verify_window_seconds: int = 900
 	rate_limit_email_verify_resend_max_requests: int = 5
+	rate_limit_email_verify_resend_window_seconds: int = 900
 	rate_limit_password_forgot_max_requests: int = 5
+	rate_limit_password_forgot_window_seconds: int = 900
 	rate_limit_password_reset_max_requests: int = 10
+	rate_limit_password_reset_window_seconds: int = 900
 	rate_limit_oauth_max_requests: int = 10
 	rate_limit_oauth_window_seconds: int = 900
 	rate_limit_notification_read_max_requests: int = 120

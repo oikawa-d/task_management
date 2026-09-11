@@ -103,7 +103,7 @@ Set-Cookie 一覧
 sequenceDiagram
     autonumber
     participant FE as React SPA
-    participant R as auth_router
+    participant R as oauth_router
     participant D as deps.verify_origin
     participant S as auth_service.oauth_exchange
     participant RS as redis_store
@@ -189,7 +189,7 @@ flowchart TB
 
 ## 6. 関数詳細
 
-### 6.1 `api/routers/auth_router.py :: oauth_exchange`
+### 6.1 `api/routers/oauth_router.py :: oauth_exchange`
 
 | 項目 | 内容 |
 |------|------|
@@ -248,7 +248,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    R["auth_router.oauth_exchange"] --> D["deps.verify_origin"]
+    R["oauth_router.oauth_exchange"] --> D["deps.verify_origin"]
     R --> S["auth_service.oauth_exchange"]
     S --> RS1["redis_store.consume_oauth_handoff"]
     S --> URP["user_repository.fn_get_user"]

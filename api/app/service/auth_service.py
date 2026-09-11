@@ -1,6 +1,8 @@
-"""ログイン失敗レート制限（ブルートフォース対策）と、メール認証・パスワードリセットのトークン発行・消費オーケストレーション。
+"""会員登録・ログイン・ログアウトと、メール認証・パスワードリセットのトークン発行・消費オーケストレーション。
 
-参照設計書: docs/detailed_design/auth/06_token_mail.md
+参照設計書:
+- docs/detailed_design/api/auth/01_post_auth_register.md〜05_get_auth_config.md
+- docs/detailed_design/auth/06_token_mail.md
 """
 
 from __future__ import annotations
@@ -13,8 +15,10 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from fastapi import BackgroundTasks, Request, Response
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.base import AuthStrategy, LoginResult
 from app.auth.factory import get_auth_strategy
 from app.auth.jwt_auth import JwtAuthStrategy
 from app.auth.oauth import GoogleOAuthProvider, GoogleUserInfo
@@ -22,6 +26,10 @@ from app.auth.session_auth import SessionAuthStrategy
 from app.core.client_ip import ClientIpInfo, resolve_client_ip
 from app.core.config import BackendSettings, get_backend_settings
 from app.core.exceptions import (
+	DuplicateEmailError,
+	DuplicateUsernameError,
+	EmailNotVerifiedError,
+	InvalidCredentialsError,
 	InvalidResetTokenError,
 	InvalidStateError,
 	InvalidVerifyTokenError,
@@ -33,9 +41,10 @@ from app.core.exceptions import (
 	TooManyAttemptsError,
 	UserInactiveError,
 )
-from app.core.security import hash_password
+from app.core.security import get_dummy_password_hash, hash_password, verify_password
 from app.models.user import User
 from app.repository import login_history_repository, oauth_account_repository, redis_store, user_repository
+from app.schemas.auth import RegisterRequest
 from app.schemas.oauth import OAuthCallbackResult, OAuthExchangeResponse, OAuthStartResult
 from app.service import mail_service
 
@@ -93,6 +102,7 @@ async def verify_email(token: str, db: AsyncSession) -> None:
 	if user_id is None:
 		raise InvalidVerifyTokenError()
 	await user_repository.mark_email_verified(db, user_id)
+	await db.commit()
 
 
 async def resend_verification(email: str, background: BackgroundTasks, db: AsyncSession) -> None:
@@ -138,6 +148,158 @@ async def reset_password(token: str, new_password: str, db: AsyncSession) -> Non
 	password_hash = hash_password(new_password)
 	await user_repository.update_password(db, user_id, password_hash)
 	await db.commit()
+
+
+_SQLSTATE_DUPLICATE_USERNAME = "P0001"
+_SQLSTATE_DUPLICATE_EMAIL = "P0002"
+_LOGIN_FAILURE_INVALID_CREDENTIALS = "INVALID_CREDENTIALS"
+_LOGIN_FAILURE_USER_INACTIVE = "USER_INACTIVE"
+_LOGIN_FAILURE_EMAIL_NOT_VERIFIED = "EMAIL_NOT_VERIFIED"
+
+
+def _duplicate_error_for(exc: DBAPIError) -> DuplicateUsernameError | DuplicateEmailError | None:
+	"""sp_register_userの一意性違反（P0001/P0002）を409の業務エラーへ変換する。"""
+	sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
+	if sqlstate == _SQLSTATE_DUPLICATE_USERNAME:
+		return DuplicateUsernameError()
+	if sqlstate == _SQLSTATE_DUPLICATE_EMAIL:
+		return DuplicateEmailError()
+	return None
+
+
+async def register(payload: RegisterRequest, background: BackgroundTasks, db: AsyncSession) -> User:
+	"""ユーザーを登録し、確認メール送信を予約する。認証状態は確立しない（01_post_auth_register.md）。"""
+	if await user_repository.get_by_login_identifier(db, payload.username) is not None:
+		raise DuplicateUsernameError()
+	if await user_repository.get_by_email(db, payload.email) is not None:
+		raise DuplicateEmailError()
+
+	password_hash = hash_password(payload.password)
+	try:
+		user_id = await user_repository.create(db, payload.username, payload.email, password_hash)
+		await user_repository.update_profile(
+			db,
+			user_id,
+			payload.last_name,
+			payload.first_name,
+			payload.last_name_kana,
+			payload.first_name_kana,
+			payload.birth_date,
+		)
+		await db.commit()
+	except DBAPIError as exc:
+		await db.rollback()
+		duplicate = _duplicate_error_for(exc)
+		if duplicate is None:
+			raise
+		raise duplicate from exc
+
+	user = await user_repository.get_by_id(db, user_id)
+	if user is None:
+		raise ServiceUnavailableError()
+	await issue_email_verify_token(user, background)
+	return user
+
+
+async def _record_login_attempt(
+	db: AsyncSession,
+	user: User | None,
+	identifier: str,
+	request: Request,
+	login_method: str,
+	client_ip: str,
+	*,
+	success: bool,
+	failure_reason: str | None,
+) -> None:
+	await login_history_repository.create(
+		db,
+		user_id=user.id if user is not None else None,
+		login_identifier=identifier,
+		login_method=login_method,
+		ip_address=client_ip,
+		user_agent=request.headers.get("user-agent"),
+		success=success,
+		failure_reason=failure_reason,
+	)
+	await db.commit()
+
+
+async def login(
+	identifier: str,
+	password: str,
+	request: Request,
+	response: Response,
+	db: AsyncSession,
+	strategy: AuthStrategy,
+) -> LoginResult:
+	"""認証を成立させ、AUTH_MODEに応じた認証状態を確立する（02_post_auth_login.md §6.2の判定順序）。"""
+	settings = get_backend_settings()
+	client_ip = resolve_client_ip(request, settings.trusted_proxy_cidrs).client_ip
+	await ensure_login_not_rate_limited(identifier, client_ip, settings)
+
+	user = await user_repository.get_by_login_identifier(db, identifier)
+	# ユーザー不存在・OAuth専用アカウントでもダミーハッシュを検証し、応答時間差によるユーザー列挙を防ぐ。
+	stored_hash = user.password_hash if user is not None and user.password_hash is not None else None
+	password_matched = verify_password(password, stored_hash or get_dummy_password_hash())
+	if user is None or stored_hash is None or not password_matched:
+		await record_login_failure(identifier, client_ip, settings)
+		await _record_login_attempt(
+			db,
+			user,
+			identifier,
+			request,
+			strategy.mode,
+			client_ip,
+			success=False,
+			failure_reason=_LOGIN_FAILURE_INVALID_CREDENTIALS,
+		)
+		raise InvalidCredentialsError()
+
+	await record_login_success(identifier, client_ip)
+	if not user.is_active:
+		await _record_login_attempt(
+			db,
+			user,
+			identifier,
+			request,
+			strategy.mode,
+			client_ip,
+			success=False,
+			failure_reason=_LOGIN_FAILURE_USER_INACTIVE,
+		)
+		raise UserInactiveError()
+	if user.email_verified_at is None:
+		await _record_login_attempt(
+			db,
+			user,
+			identifier,
+			request,
+			strategy.mode,
+			client_ip,
+			success=False,
+			failure_reason=_LOGIN_FAILURE_EMAIL_NOT_VERIFIED,
+		)
+		raise EmailNotVerifiedError()
+
+	login_result = await strategy.login(user, request, response)
+	await _record_login_attempt(
+		db, user, identifier, request, strategy.mode, client_ip, success=True, failure_reason=None
+	)
+	return login_result
+
+
+async def logout(request: Request, response: Response, strategy: AuthStrategy) -> None:
+	"""現在の認証状態を失効させる。未ログインでも例外を出さない冪等処理（03_post_auth_logout.md）。"""
+	await strategy.logout(request, response)
+
+
+async def refresh(request: Request, response: Response, strategy: AuthStrategy) -> LoginResult:
+	"""access tokenを再発行する。モード差異はStrategyへ委譲する（06_post_auth_refresh.md §6.2）。
+
+	sessionモードのStrategyは`NotSupportedInModeError`を送出し405となる。
+	"""
+	return await strategy.refresh(request, response)
 
 
 def normalize_redirect_to(raw: str | None, settings: BackendSettings | None = None) -> str:

@@ -110,7 +110,7 @@ sequenceDiagram
     autonumber
     actor U as ユーザー
     participant FE as React SPA
-    participant R as auth_router
+    participant R as oauth_router
     participant S as auth_service.oauth_callback
     participant OA as GoogleOAuthProvider
     participant RS as redis_store
@@ -222,7 +222,7 @@ flowchart TB
 
 ## 6. 関数詳細
 
-### 6.1 `api/routers/auth_router.py :: oauth_google_callback`
+### 6.1 `api/routers/oauth_router.py :: oauth_google_callback`
 
 | 項目 | 内容 |
 |------|------|
@@ -281,7 +281,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    R["auth_router.oauth_google_callback"] --> S["auth_service.oauth_callback"]
+    R["oauth_router.oauth_google_callback"] --> S["auth_service.oauth_callback"]
     S --> RS1["redis_store.consume_oauth_state"]
     S --> OA1["GoogleOAuthProvider.exchange_code"]
     S --> OA2["GoogleOAuthProvider._verify_id_token"]

@@ -101,7 +101,7 @@ sequenceDiagram
     autonumber
     actor U as ユーザー
     participant FE as React SPA
-    participant R as auth_router
+    participant R as oauth_router
     participant S as auth_service.oauth_start
     participant OA as GoogleOAuthProvider
     participant RS as redis_store
@@ -154,7 +154,7 @@ flowchart TB
 
 ## 6. 関数詳細
 
-### 6.1 `api/routers/auth_router.py :: oauth_google_start`
+### 6.1 `api/routers/oauth_router.py :: oauth_google_start`
 
 | 項目 | 内容 |
 |------|------|
@@ -202,7 +202,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    R["auth_router.oauth_google_start"] --> S["auth_service.oauth_start"]
+    R["oauth_router.oauth_google_start"] --> S["auth_service.oauth_start"]
     S --> N["auth_service.normalize_redirect_to"]
     S --> OA["GoogleOAuthProvider.build_authorize_url"]
     S --> RS["redis_store.save_oauth_state"]
