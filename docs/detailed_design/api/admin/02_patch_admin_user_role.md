@@ -105,10 +105,10 @@ sequenceDiagram
     R->>CSRF: Origin/CSRF検証（sessionモードのみCSRF必須）
     CSRF-->>R: OK
     R->>S: change_role(actor=CurrentUser, target_id, new_role)
-    S->>RP: sp_admin_update_user_role(actor.id, target_id, new_role)
+    S->>RP: update_user_role(actor.id, target_id, new_role)
     RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     alt 対象が存在しない
-        PG-->>RP: 対象なし相当
+        PG-->>RP: P0010 対象不存在
         RP-->>S: NotFoundError
         S-->>R: NotFoundError
         R-->>FE: 404 NOT_FOUND
@@ -123,12 +123,13 @@ sequenceDiagram
         S-->>R: LastAdminRequiredError
         R-->>FE: 409 LAST_ADMIN_REQUIRED
     else 正常
-        PG-->>RP: role更新成功（advisory lock取得を含めSP内で一体実行、コミットで解放）
-        RP-->>S: 成功
-        S->>RP: fn_get_user(target_id)
+        PG-->>RP: role更新成功（advisory lock取得を含めSP内で一体実行、コミットで解放）。OUTパラメータで更新前role（old_role）を返す
+        RP-->>S: old_role
+        S->>RP: get_by_id(target_id)
         RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>RP: 更新後の行
         RP-->>S: User
+        S->>S: 監査ログ出力（actor.id, target_id, old_role, new_role, result=success）
         S-->>R: UserDetail
         R-->>FE: 200 {user}
     end
@@ -145,15 +146,15 @@ flowchart TB
     C -->|"role != admin"| C2["403 FORBIDDEN"]
     C -->|"OK"| D["Origin/CSRF検証（sessionモード）"]
     D -->|"不一致"| D1["403 CSRF_INVALID"]
-    D -->|"OK"| I["CALL sp_admin_update_user_role<br/>（存在確認・自己変更禁止・最後のadmin判定・advisory lock・role更新をSP内で一体実行）"]
-    I -->|"対象不存在"| E1["404 NOT_FOUND"]
+    D -->|"OK"| I["CALL sp_admin_update_user_role<br/>（自己変更禁止・advisory lock・対象存在確認・最後のadmin判定・role更新をSP内で一体実行）"]
+    I -->|"P0010（対象不存在）"| E1["404 NOT_FOUND"]
     I -->|"P0007"| F1["409 SELF_MODIFICATION_NOT_ALLOWED"]
     I -->|"P0008"| H1["409 LAST_ADMIN_REQUIRED"]
-    I -->|"成功"| J["fn_get_user(target_id)で応答取得 → 200 {user}"]
+    I -->|"成功（OUTでold_role取得）"| J["get_by_id(target_id)で応答取得 → 200 {user}"]
     I -.->|"DB接続不能"| K["503 SERVICE_UNAVAILABLE"]
 ```
 
-**判定順序の理由**：自己変更禁止判定・最後のadmin判定・advisory lockによる直列化は、いずれも `sp_admin_update_user_role` 内部で一体的に処理される。SP内部では自己変更を先に判定して早期に例外化し、降格（admin→member）の場合のみ `pg_advisory_xact_lock` を取得したうえで残る有効admin数を判定する。API・service層は追加のSELECTやロック取得を行わず、SPが返すSQLSTATE（`P0007`/`P0008`）をそのままHTTPエラーへ変換するだけである。
+**判定順序の理由**：自己変更禁止判定・対象存在確認・最後のadmin判定・advisory lockによる直列化は、いずれも `sp_admin_update_user_role` 内部で一体的に処理される。SP内部では自己変更を先に判定して早期に例外化し、`pg_advisory_xact_lock` を取得したうえで対象行を`FOR UPDATE`取得し、`NOT FOUND`ならP0010（対象不存在）へ、降格（admin→member）の場合のみ残る有効admin数を判定する。API・service層は追加のSELECTやロック取得を行わず、SPが返すSQLSTATE（`P0007`/`P0008`/`P0010`）をそのままHTTPエラーへ変換するだけである（#347レビューで事前存在確認SELECTを廃止し、SP呼び出し1回のみに整理）。
 
 ## 6. 関数詳細
 
@@ -172,44 +173,31 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def change_role(actor: CurrentUser, target_id: UUID, new_role: str, db: AsyncSession) -> User` |
+| シグネチャ | `async def change_role(actor: CurrentUser, target_id: UUID, new_role: str, db: AsyncSession) -> AdminUserDetailResponse` |
 | 引数 | `actor`: 実行者（admin） / `target_id`: 対象ユーザーID / `new_role`: 変更後ロール / `db`: DBセッション |
-| 戻り値 | 更新後の `User` |
+| 戻り値 | 更新後の `AdminUserDetailResponse` |
 | 送出例外 | `NotFoundError`（404）/ `SelfModificationError`（409）/ `LastAdminRequiredError`（409） |
-| 処理内容 | `CALL sp_admin_update_user_role(actor.id, target_id, new_role)` を1回呼ぶ。対象不存在はFN結果から404、自己変更禁止・最後のadmin保護・advisory lock・role更新はSP内部で一体実行する。成功後は `fn_get_user(target_id)` で応答を取得 |
+| 処理内容 | `admin_repository.update_user_role(actor.id, target_id, new_role)` を1回呼ぶ。対象不存在（P0010）・自己変更禁止（P0007）・最後のadmin保護（P0008）・advisory lock・role更新はSP内部で一体実行され、更新前role（`old_role`）がOUTパラメータで返る。成功後は `user_repository.get_by_id(target_id)` で応答を取得し、`actor.id`/`target_id`/`old_role`/`new_role`/`result`を監査ログへINFO出力する（#347レビューで事前存在確認SELECTを廃止） |
 | 副作用 | SP内で `users.role` を更新。Redisは変更せず、次回リクエストのDB再取得で認可へ反映 |
 
-### 6.3 `repository/user_repository.py :: sp_admin_update_user_role`
+### 6.3 `repository/admin_repository.py :: update_user_role`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def sp_admin_update_user_role(db: AsyncSession, actor_id: UUID, target_id: UUID, new_role: str) -> None` |
-| 引数 / 戻り値 | actor・target・新role / なし |
-| SP/FN呼び出し（内部SQLはSP側） | `CALL sp_admin_update_user_role(:actor_id, :target_id, :new_role)` |
-| 送出例外 | `P0007 SELF_MODIFICATION_NOT_ALLOWED` / `P0008 LAST_ADMIN_REQUIRED` |
-| 処理内容 | SP内部で対象の存在・自己変更・最後のadminを判定し、必要なadvisory lockとrole更新を一体で行う |
+| シグネチャ | `async def update_user_role(db: AsyncSession, actor_id: UUID, target_id: UUID, new_role: str) -> str` |
+| 引数 / 戻り値 | actor・target・新role / 更新前のrole（`OUT p_old_role`） |
+| SP/FN呼び出し（内部SQLはSP側） | `CALL sp_admin_update_user_role(:actor_id, :target_id, :new_role, NULL)` |
+| 送出例外 | `P0007 SELF_MODIFICATION_NOT_ALLOWED` / `P0008 LAST_ADMIN_REQUIRED` / `P0010`（対象不存在） |
+| 処理内容 | SP内部で自己変更・対象の存在・最後のadminを判定し、必要なadvisory lockとrole更新を一体で行う。更新前roleをOUTパラメータで返すことで、service層が監査ログ用に別途SELECTする必要をなくす |
 | 副作用 | SP内のusers更新 |
-
-### 6.4 `repository/user_repository.py :: fn_get_user`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `async def fn_get_user(db: AsyncSession, target_id: UUID) -> User \| None` |
-| 引数 / 戻り値 | 対象ID / `SELECT fn_get_user(:target_id)` の結果 |
-| SP/FN呼び出し（内部SQLはSP側） | `SELECT fn_get_user(:target_id)` |
-| 送出例外 | なし。空集合は404へ変換 |
-| 処理内容 | `sp_admin_update_user_role` の成功後、更新後の応答DTOを取得する |
-| 副作用 | なし |
-
-advisory lockの取得はservice層では行わない。`sp_admin_update_user_role` が内部でadvisory lockを含め、対象存在・自己変更禁止・最後のadmin保護・role更新を一体実行するため、6.5相当の独立したservice層関数は存在しない。
 
 ## 7. 関数相関図
 
 ```mermaid
 flowchart LR
     R["admin_router.patch_admin_user_role"] --> S["admin_user_service.change_role"]
-    S --> RP1["user_repository.sp_admin_update_user_role"]
-    S --> RP2["user_repository.fn_get_user"]
+    S --> RP1["admin_repository.update_user_role"]
+    S --> RP2["user_repository.get_by_id"]
     RP1 --> M["models.User"]
     RP2 --> M
 ```
@@ -237,7 +225,7 @@ Redisのキー状態は変化しない（本APIはPostgreSQLの `users.role` の
 
 | 種別 | 契約 | 説明 |
 |------|------|------|
-| admin_update_user_role | `sp_admin_update_user_role(p_actor_id, p_target_id, p_new_role)` | sp_admin_update_user_roleを呼び出し、結果をレスポンスへ写像する |
+| admin_update_user_role | `sp_admin_update_user_role(p_actor_id, p_target_id, p_new_role, OUT p_old_role)` | sp_admin_update_user_roleを呼び出し、更新前role（OUT）と更新後の応答（`get_by_id`で別途取得）をレスポンスへ写像する |
 
 repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
@@ -245,7 +233,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 
 | テーブル／関数 | 操作 | 条件・TTL | 備考 |
 |----------------|------|-----------|------|
-| users | SELECT ... FOR UPDATE | `id=:target_id` | 対象行ロック |
+| users | SELECT ... FOR UPDATE | `id=:target_id` | 対象行ロック。`NOT FOUND`ならP0010（対象不存在）をRAISEする（#347レビューで追加） |
 | users | SELECT COUNT | `role='admin' AND is_active=true AND id<>:target_id` | 降格判定時のみ実行 |
 | `pg_advisory_xact_lock` | 関数呼び出し | キー `hashtext('admin_role_change')` | 降格判定時のみ実行。トランザクション終了で自動解放 |
 | users | UPDATE | `id=:target_id` | `role` のみ更新。`updated_at` はトリガ |

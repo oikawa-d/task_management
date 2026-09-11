@@ -108,13 +108,16 @@ sequenceDiagram
     R->>D: 認証 + admin確認
     D-->>R: CurrentUser(role=admin)
     R->>S: list_users(query, page, per_page)
-    S->>RP: fn_admin_list_users(q, role, is_active)
+    S->>RP: list_users(q, role, is_active, page, per_page)
     RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-    PG-->>RP: total
-    S->>RP: fn_admin_list_users(q, role, is_active, page, per_page)
-    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-    PG-->>RP: user行の一覧（単一クエリ、追加のJOINなし）
-    RP-->>S: User一覧
+    PG-->>RP: user行の一覧＋total_count（ウィンドウ関数、単一クエリ、追加のJOINなし）
+    RP-->>S: AdminUserListItem一覧（total_count込み）
+    alt 該当ページが0件（総件数を超えるページ指定等）
+        S->>RP: count_users(q, role, is_active)
+        RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
+        PG-->>RP: total
+        RP-->>S: total
+    end
     S->>S: display_name を算出しUserSummaryへ変換
     S-->>R: Page[UserSummary]
     R-->>FE: 200 {items, meta}
@@ -136,9 +139,10 @@ flowchart TB
     C -->|"is_active=false"| C2["403 USER_INACTIVE"]
     C -->|"OK"| E["deps.require_admin"]
     E -->|"role != admin"| E1["403 FORBIDDEN"]
-    E -->|"OK"| F["user_repository.fn_admin_list_users"]
-    F --> G["user_repository.fn_admin_list_users"]
-    G --> H["display_name算出・UserSummaryへ変換"]
+    E -->|"OK"| F["admin_repository.list_users（total_count込み）"]
+    F -->|"該当ページ0件"| F2["admin_repository.count_usersでtotalを取得"]
+    F -->|"1件以上"| H["display_name算出・UserSummaryへ変換"]
+    F2 --> H
     H --> I["200 {items, meta}"]
     F -.->|"DB接続不能"| J["503 SERVICE_UNAVAILABLE"]
 ```
@@ -160,33 +164,33 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def list_users(query: AdminUserListQuery, db: AsyncSession) -> Page[UserSummary]` |
+| シグネチャ | `async def list_users(query: AdminUserListQuery, db: AsyncSession) -> AdminUserListResponse` |
 | 引数 | `query`: 検索・ページング条件 / `db`: DBセッション |
-| 戻り値 | `Page[UserSummary]`（`items: list[UserSummary]`, `total: int`） |
+| 戻り値 | `AdminUserListResponse`（`items`, `meta`） |
 | 送出例外 | `ServiceUnavailableError`（PostgreSQL接続不能時）→503 |
-| 処理内容 | 1. `user_repository.fn_admin_list_users` で総件数取得 2. `user_repository.fn_admin_list_users` で該当ページの行を取得 3. 各行の `display_name` を `last_name`/`first_name` から算出し（両方NULLなら `username`）、`UserSummary` へ詰め替える |
+| 処理内容 | 1. `admin_repository.list_users` を1回呼び、該当ページの行と`total_count`（ウィンドウ関数`count(*) OVER()`）を同時に取得する 2. 該当ページが0件（総件数を超えるページ指定など）の場合のみ`admin_repository.count_users`で総件数を別途取得する 3. 各行の `display_name` を `last_name`/`first_name` から算出し（両方NULLなら `username`）、`UserSummary` へ詰め替える（#347レビューで総件数取得方式を確定。issue #143/PR #294の`fn_list_notifications`対応と同一手法） |
 | 副作用 | なし（読み取りのみ） |
 
-### 6.3 `repository/user_repository.py :: fn_admin_list_users`
+### 6.3 `repository/admin_repository.py :: list_users`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def fn_admin_list_users(db: AsyncSession, q: str \| None, role: str \| None, is_active: bool \| None, page: int, per_page: int) -> list[User]` |
-| 引数 | `q`: username/email部分一致 / `role`, `is_active`: 絞り込み条件 / `page`, `per_page`: ページング |
-| 戻り値 | `User` エンティティのリスト |
+| シグネチャ | `async def list_users(db: AsyncSession, q: str \| None, role: str \| None, is_active: bool \| None, limit: int, offset: int) -> list[AdminUserListItem]` |
+| 引数 | `q`: username/email部分一致 / `role`, `is_active`: 絞り込み条件 / `limit`, `offset`: ページング |
+| 戻り値 | `AdminUserListItem`（`user: User`, `total_count: int`）のリスト |
 | 送出例外 | `OperationalError`（DB不通） |
-| 処理内容 | 1. `q` が指定されていれば `lower(username) LIKE '%' \|\| lower(:q) \|\| '%'` または `lower(email) LIKE '%' \|\| lower(:q) \|\| '%'`（部分一致。issue #40で基本設計 [`04_api.md`](../../../basic_design/04_api.md#25-管理者apiadmin) の定義どおりに確定。全表走査になり得るが管理者一覧のためデータ量は限定的と判断） 2. `role`/`is_active` はそれぞれ等価条件として `AND` 追加 3. `ORDER BY created_at DESC` 4. `OFFSET (page-1)*per_page LIMIT per_page` 5. `oauth_accounts`/`login_history` へのJOINは行わずN+1を発生させない（一覧に表示しないため） |
+| 処理内容 | `SELECT ("user").*, total_count FROM fn_admin_list_users(:query, :role, :is_active, :limit, :offset)` を実行する。`q`/`role`/`is_active`によるフィルタ・`ORDER BY created_at DESC`・`LIMIT/OFFSET`・`count(*) OVER()`によるtotal_countの算出はいずれもFN内部で行う。`oauth_accounts`/`login_history` へのJOINは行わずN+1を発生させない（一覧に表示しないため） |
 | 副作用 | なし |
 
-### 6.4 `repository/user_repository.py :: fn_admin_list_users`
+### 6.4 `repository/admin_repository.py :: count_users`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def fn_admin_list_users(db: AsyncSession, q: str \| None, role: str \| None, is_active: bool \| None) -> int` |
-| 引数 | `fn_admin_list_users` と同じ絞り込み条件（ページング除く） |
+| シグネチャ | `async def count_users(db: AsyncSession, q: str \| None, role: str \| None, is_active: bool \| None) -> int` |
+| 引数 | `list_users` と同じ絞り込み条件（ページング除く） |
 | 戻り値 | 該当件数 |
 | 送出例外 | `OperationalError` |
-| 処理内容 | `SELECT fn_admin_list_users(:query, :role, :is_active, :limit, :offset)` を実行し、FN結果の件数をmetaへ写像する。絞り込みとページングはFN内部 |
+| 処理内容 | `SELECT fn_count_admin_users(:query, :role, :is_active)` を実行する。`list_users`が返す`total_count`は該当ページが0件のとき取得できないため、そのフォールバックとしてのみ使用する |
 | 副作用 | なし |
 
 ## 7. 関数相関図
@@ -194,8 +198,8 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["admin_router.list_admin_users"] --> S["admin_user_service.list_users"]
-    S --> RP1["user_repository.fn_admin_list_users"]
-    S --> RP2["user_repository.fn_admin_list_users"]
+    S --> RP1["admin_repository.list_users"]
+    S -.->|"該当ページ0件のときのみ"| RP2["admin_repository.count_users"]
     RP1 --> M["models.User"]
     RP2 --> M
 ```
@@ -220,7 +224,8 @@ flowchart LR
 
 | 種別 | 契約 | 説明 |
 |------|------|------|
-| fn_admin_list_users | `fn_admin_list_users(p_query, p_role, p_is_active, p_limit, p_offset)` | fn_admin_list_usersを呼び出し、結果をレスポンスへ写像する |
+| fn_admin_list_users | `fn_admin_list_users(p_query, p_role, p_is_active, p_limit, p_offset)` | fn_admin_list_usersを呼び出し、結果（user行＋total_count）をレスポンスへ写像する |
+| fn_count_admin_users | `fn_count_admin_users(p_query, p_role, p_is_active)` | fn_admin_list_usersのtotal_countが取得できない場合（該当0件）のフォールバック |
 
 repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 

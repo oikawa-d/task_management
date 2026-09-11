@@ -53,6 +53,16 @@ class OwnerCannotBeRemovedError(ConflictError):
 	message = "オーナーはメンバーから削除できません"
 
 
+class SelfModificationError(ConflictError):
+	code = "SELF_MODIFICATION_NOT_ALLOWED"
+	message = "自分自身に対してこの操作は実行できません"
+
+
+class LastAdminRequiredError(ConflictError):
+	code = "LAST_ADMIN_REQUIRED"
+	message = "最後の管理者に対してこの操作は実行できません"
+
+
 class UnauthenticatedError(AppError):
 	code = "UNAUTHENTICATED"
 	status_code = 401
