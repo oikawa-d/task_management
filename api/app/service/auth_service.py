@@ -1,6 +1,8 @@
-"""ログイン失敗レート制限（ブルートフォース対策）と、メール認証・パスワードリセットのトークン発行・消費オーケストレーション。
+"""会員登録・ログイン・ログアウトと、メール認証・パスワードリセットのトークン発行・消費オーケストレーション。
 
-参照設計書: docs/detailed_design/auth/06_token_mail.md
+参照設計書:
+- docs/detailed_design/api/auth/01_post_auth_register.md〜05_get_auth_config.md
+- docs/detailed_design/auth/06_token_mail.md
 """
 
 from __future__ import annotations
@@ -62,8 +64,8 @@ async def ensure_login_not_rate_limited(identifier: str, client_ip: str, setting
 	"""現在の失敗回数が上限に達している場合は`TooManyAttemptsError`を送出する。"""
 	failure_count = await redis_store.get_login_failure_count(identifier, client_ip)
 	if failure_count >= settings.login_max_attempts:
-		retry_after = max(await redis_store.get_login_failure_ttl(identifier, client_ip), 0)
-		raise TooManyAttemptsError(retry_after=retry_after)
+		ttl = await redis_store.get_login_failure_ttl(identifier, client_ip)
+		raise TooManyAttemptsError(retry_after=ttl if ttl > 0 else settings.login_lock_window_seconds)
 
 
 async def record_login_failure(identifier: str, client_ip: str, settings: BackendSettings) -> int:
@@ -102,22 +104,23 @@ async def register(payload: RegisterRequest, background: BackgroundTasks, reques
 		raise TooManyAttemptsError(retry_after=ttl if ttl > 0 else config.rate_limit_register_window_seconds)
 	try:
 		user_id = await user_repository.create(db, payload.username, payload.email, hash_password(payload.password))
+		await user_repository.update_profile(
+			db,
+			user_id,
+			payload.last_name,
+			payload.first_name,
+			payload.last_name_kana,
+			payload.first_name_kana,
+			payload.birth_date,
+		)
+		await db.commit()
 	except DBAPIError as exc:
+		await db.rollback()
 		if _db_sqlstate(exc) == "P0001":
 			raise DuplicateUsernameError() from exc
 		if _db_sqlstate(exc) == "P0002":
 			raise DuplicateEmailError() from exc
 		raise
-	await user_repository.update_profile(
-		db,
-		user_id,
-		payload.last_name,
-		payload.first_name,
-		payload.last_name_kana,
-		payload.first_name_kana,
-		payload.birth_date,
-	)
-	await db.commit()
 	user = await user_repository.get_by_id(db, user_id)
 	if user is None:
 		raise ServiceUnavailableError()
@@ -257,6 +260,11 @@ async def logout(request: Request, response: Response, strategy: AuthStrategy) -
 	await strategy.logout(request, response)
 
 
+async def refresh(request: Request, response: Response, strategy: AuthStrategy) -> LoginResult:
+	"""access tokenを再発行する。モード差異はStrategyへ委譲する。"""
+	return await strategy.refresh(request, response)
+
+
 async def get_me(current_user: CurrentUser, db: AsyncSession, settings: BackendSettings | None = None) -> MeResponse:
 	"""現在ユーザーの最新DB情報とOAuth providerをレスポンスへ変換する。"""
 	config = settings or get_backend_settings()
@@ -323,6 +331,7 @@ async def verify_email(token: str, db: AsyncSession) -> None:
 	if user_id is None:
 		raise InvalidVerifyTokenError()
 	await user_repository.mark_email_verified(db, user_id)
+	await db.commit()
 
 
 async def resend_verification(email: str, background: BackgroundTasks, db: AsyncSession) -> None:
@@ -679,7 +688,33 @@ async def _rollback_oauth_login(
 			_delete_oauth_state_cookie(response, settings)
 
 
-async def oauth_callback(
+async def oauth_callback_denied(
+	state: str | None,
+	state_cookie: str | None,
+	request: Request,
+	response: Response,
+	*,
+	settings: BackendSettings | None = None,
+) -> None:
+	"""Googleの同意拒否時にもcallback stateを消費し、認証開始状態を破棄する。"""
+	config = settings or get_backend_settings()
+	try:
+		await _check_oauth_rate_limit(
+			request, _OAUTH_RATE_LIMIT_SCOPE["callback"], "/api/auth/oauth/google/callback", config
+		)
+		if not state or not state_cookie or not secrets.compare_digest(state, state_cookie):
+			raise InvalidStateError()
+		try:
+			state_data = await redis_store.consume_oauth_state(state)
+		except Exception as exc:
+			raise ServiceUnavailableError() from exc
+		if state_data is None:
+			raise InvalidStateError()
+	finally:
+		_delete_oauth_state_cookie(response, config)
+
+
+async def _oauth_callback_impl(
 	code: str | None,
 	state: str | None,
 	state_cookie: str | None,
@@ -748,6 +783,36 @@ async def oauth_callback(
 		raise ServiceUnavailableError() from exc
 	_delete_oauth_state_cookie(response, config)
 	return OAuthCallbackResult(auth_mode="jwt", redirect_to=state_data.redirect_to, handoff_code=handoff_code)
+
+
+async def oauth_callback(
+	code: str | None,
+	state: str | None,
+	state_cookie: str | None,
+	request: Request,
+	response: Response,
+	db: AsyncSession | None = None,
+	*,
+	settings: BackendSettings | None = None,
+	provider: GoogleOAuthProvider | None = None,
+	strategy: Any | None = None,
+) -> OAuthCallbackResult:
+	"""OAuth callbackの実行後にstate cookieを必ず破棄する。"""
+	config = settings or get_backend_settings()
+	try:
+		return await _oauth_callback_impl(
+			code,
+			state,
+			state_cookie,
+			request,
+			response,
+			db,
+			settings=config,
+			provider=provider,
+			strategy=strategy,
+		)
+	finally:
+		_delete_oauth_state_cookie(response, config)
 
 
 async def oauth_exchange(

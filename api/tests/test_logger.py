@@ -97,3 +97,26 @@ def test_configure_logging_sets_level_and_json_handler() -> None:
 	assert root_logger.level == logging.WARNING
 	assert len(root_logger.handlers) == 1
 	assert isinstance(root_logger.handlers[0].formatter, JsonFormatter)
+
+
+def test_json_formatter_emits_failure_reason_and_drops_unlisted_keys() -> None:
+	formatter = JsonFormatter()
+	record = logging.LogRecord(
+		name="app.oauth",
+		level=logging.WARNING,
+		pathname=__file__,
+		lineno=1,
+		msg="OAuth callback failed",
+		args=(),
+		exc_info=None,
+	)
+	record.operation = "oauth_callback"
+	record.event = "oauth_callback_failed"
+	record.failure_reason = "InvalidStateError"
+	# _SAFE_AUDIT_FIELDSに無いキーはフォーマッタ通過時に落ちる。
+	record.error = "InvalidStateError"
+
+	output = json.loads(formatter.format(record))
+
+	assert output["failure_reason"] == "InvalidStateError"
+	assert "error" not in output

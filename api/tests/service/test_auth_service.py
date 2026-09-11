@@ -36,6 +36,9 @@ class _FakeDb:
 	async def commit(self) -> None:
 		self.calls.append("db.commit")
 
+	async def rollback(self) -> None:
+		self.calls.append("db.rollback")
+
 
 def _request() -> Request:
 	return Request(

@@ -101,7 +101,7 @@ sequenceDiagram
     autonumber
     actor U as ユーザー
     participant FE as React SPA
-    participant R as auth_router
+    participant R as oauth_router
     participant S as auth_service.oauth_start
     participant OA as GoogleOAuthProvider
     participant RS as redis_store
@@ -154,26 +154,26 @@ flowchart TB
 
 ## 6. 関数詳細
 
-### 6.1 `api/routers/auth_router.py :: oauth_google_start`
+### 6.1 `api/routers/oauth_router.py :: oauth_google_start`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def oauth_google_start(redirect_to: str | None = Query(default=None), service: AuthService = Depends(get_auth_service)) -> RedirectResponse` |
+| シグネチャ | `async def oauth_google_start(response: Response, request: Request, redirect_to: str | None = Query(default=None)) -> RedirectResponse` |
 | 引数 | `redirect_to`: クエリパラメータ、任意のフロントパス文字列（未検証のまま渡ってくる） |
 | 戻り値 | `RedirectResponse`（302、`Set-Cookie` 付き） |
-| 送出例外 | `ServiceUnavailableError` → 503（例外ハンドラで変換） |
-| 処理内容 | 1. `redirect_to` を `service.oauth_start` に渡す 2. 戻り値の `authorize_url` を `Location` に設定 3. `state` を `cerberus_oauth_state` Cookieにセット 4. `RedirectResponse(status_code=302)` を返す |
+| 送出例外 | `TooManyAttemptsError` → 429、`ServiceUnavailableError` → 503（例外ハンドラで変換） |
+| 処理内容 | 1. `redirect_to`、`request`、`response`を`auth_service.oauth_start`に渡す 2. 戻り値の`authorize_url`を`Location`に設定 3. serviceが設定した`cerberus_oauth_state` Cookieをレスポンスへ引き継ぐ 4. `RedirectResponse(status_code=302)`を返す |
 | 副作用 | Cookie発行のみ（Redis更新はservice層で発生） |
 
 ### 6.2 `service/auth_service.py :: oauth_start`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def oauth_start(redirect_to: str | None) -> OAuthStartResult` |
-| 引数 | `redirect_to`: 表 6.1 と同じ（未正規化） |
+| シグネチャ | `async def oauth_start(redirect_to: str | None, request: Request, response: Response) -> OAuthStartResult` |
+| 引数 | `redirect_to`: 表 6.1 と同じ（未正規化）、`request`/`response`: レート制限・Cookie操作用 |
 | 戻り値 | `OAuthStartResult`（`authorize_url: str`, `state: str`） |
-| 送出例外 | `ServiceUnavailableError`（Redis接続不能時） |
-| 処理内容 | 1. `normalize_redirect_to(redirect_to)` で正規化 2. `secrets.token_urlsafe(32)` で `state` 生成 3. `secrets.token_urlsafe(64)` で `code_verifier` 生成 4. PKCE S256で `code_challenge` を導出 5. `secrets.token_urlsafe(32)` で `nonce` 生成 6. `redis_store.save_oauth_state(state, redirect_to, code_verifier, nonce, settings.oauth_state_ttl_seconds)` を呼ぶ 7. `GoogleOAuthProvider.build_authorize_url(state, code_challenge, nonce)` を呼び `authorize_url` を得る |
+| 送出例外 | `TooManyAttemptsError`（レート制限超過）、`ServiceUnavailableError`（Redis接続不能時） |
+| 処理内容 | 1. requestのIP単位レート制限を確認 2. `normalize_redirect_to(redirect_to)` で正規化 3. `secrets.token_urlsafe(32)` で `state` 生成 4. `secrets.token_urlsafe(64)` で `code_verifier` 生成 5. PKCE S256で `code_challenge` を導出 6. `secrets.token_urlsafe(32)` で `nonce` 生成 7. `redis_store.save_oauth_state(state, redirect_to, code_verifier, nonce, settings.oauth_state_ttl_seconds)` を呼ぶ 8. `response`へstate Cookieを設定し、`GoogleOAuthProvider.build_authorize_url(state, code_challenge, nonce)`を呼び `OAuthStartResult`を返す |
 | 副作用 | Redis書き込み（`oauth_state:{state}`） |
 
 ### 6.3 `service/auth_service.py :: normalize_redirect_to`
@@ -187,7 +187,7 @@ flowchart TB
 | 処理内容 | 1. `raw` が `None` または空文字なら既定値を返す 2. `raw` が `/` で始まらない、または `//` で始まる場合は既定値を返す（プロトコル相対URL対策） 3. `urlparse` でスキーム・ホストが含まれないことを確認し、含まれる場合は既定値を返す 4. 上記をすべて満たす場合のみ `raw` をそのまま返す |
 | 副作用 | なし |
 
-### 6.4 `auth/oauth.py :: GoogleOAuthProvider.build_authorize_url`
+### 6.4 `api/app/auth/oauth.py :: GoogleOAuthProvider.build_authorize_url`
 
 | 項目 | 内容 |
 |------|------|
@@ -202,7 +202,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    R["auth_router.oauth_google_start"] --> S["auth_service.oauth_start"]
+    R["oauth_router.oauth_google_start"] --> S["auth_service.oauth_start"]
     S --> N["auth_service.normalize_redirect_to"]
     S --> OA["GoogleOAuthProvider.build_authorize_url"]
     S --> RS["redis_store.save_oauth_state"]
