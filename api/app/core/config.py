@@ -87,6 +87,7 @@ class BackendSettings(BaseSettings):
 	oauth_state_ttl_seconds: int = 600
 	oauth_handoff_ttl_seconds: int = 60
 	oauth_default_redirect_to: str = "/dashboard"
+	oauth_redirect_to_max_length: int = 2048
 
 	# メール（SMTP/Mailpit）
 	smtp_host: str = "mailpit"
