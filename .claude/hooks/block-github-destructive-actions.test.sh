@@ -13,6 +13,28 @@ trap 'rm -rf "$stub_dir"' EXIT
 cat > "$stub_dir/gh" <<'STUB'
 #!/usr/bin/env bash
 cmd="$1 $2"
+case "$cmd" in
+	# issue closeの判定で使うリポジトリ解決。GH_STUB_REPO_EXITで失敗を再現する。
+	"repo view")
+		if [[ "${GH_STUB_REPO_EXIT:-0}" != "0" ]]; then
+			exit "${GH_STUB_REPO_EXIT}"
+		fi
+		printf '%s' "${GH_STUB_REPO:-oikawa-d/task_management}"
+		exit 0
+		;;
+	# issueにリンクされたPRとそのラベルを返すGraphQL応答。
+	"api graphql")
+		if [[ "${GH_STUB_GRAPHQL_EXIT:-0}" != "0" ]]; then
+			exit "${GH_STUB_GRAPHQL_EXIT}"
+		fi
+		# JSONに `}` を含むため `${VAR:-default}` のデフォルト値では書けない。
+		if [[ -z "${GH_STUB_GRAPHQL_JSON:-}" ]]; then
+			GH_STUB_GRAPHQL_JSON='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"nodes":[]}}}}}'
+		fi
+		printf '%s' "$GH_STUB_GRAPHQL_JSON"
+		exit 0
+		;;
+esac
 if [[ "$cmd" == "${GH_STUB_MATCH:-}" ]]; then
 	if [[ -n "${GH_STUB_EXIT:-}" && "${GH_STUB_EXIT}" != "0" ]]; then
 		exit "${GH_STUB_EXIT}"
@@ -112,14 +134,47 @@ export GH_STUB_EXIT="1"
 assert_blocked "gh pr merge 123"
 export GH_STUB_EXIT="0"
 
-# 5. issue close のラベル有無2ケース
-export GH_STUB_MATCH="issue view" GH_STUB_JSON="$unreviewed_json"
-assert_blocked "gh issue close 123"
-assert_blocked "gh --repo oikawa-d/task_management issue close 123"
-export GH_STUB_JSON="$reviewed_json"
-assert_allowed "gh issue close 123"
+# 5. issue close は「issueを閉じるPR」のreviewedラベルで判定する(#401)
+# issue自身のラベルでは判定しないため、issueにreviewedが付いていても許可してはならない。
+linked_reviewed_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"nodes":[{"number":362,"labels":{"nodes":[{"name":"reviewed"}]}}]}}}}}'
+linked_unreviewed_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"nodes":[{"number":374,"labels":{"nodes":[{"name":"review-requested"}]}}]}}}}}'
+linked_none_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"nodes":[]}}}}}'
 
-unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON
+# 5-1. リンクPRにreviewedあり -> exit 0
+export GH_STUB_GRAPHQL_JSON="$linked_reviewed_json"
+assert_allowed "gh issue close 123"
+assert_allowed "gh --repo oikawa-d/task_management issue close 123"
+assert_allowed "gh issue close 123 --comment '対応完了'"
+
+# 5-2. リンクPRはあるがreviewedなし -> exit 2
+export GH_STUB_GRAPHQL_JSON="$linked_unreviewed_json"
+assert_blocked "gh issue close 123"
+
+# 5-3. リンクPRが無い(PR本文にClosesが無い) -> exit 2
+export GH_STUB_GRAPHQL_JSON="$linked_none_json"
+assert_blocked "gh issue close 123"
+
+# 5-4. issue自身にreviewedラベルがあってもリンクPRが未reviewedならブロックされること
+export GH_STUB_GRAPHQL_JSON="$linked_unreviewed_json" GH_STUB_MATCH="issue view" GH_STUB_JSON="$reviewed_json"
+assert_blocked "gh issue close 123"
+unset GH_STUB_MATCH GH_STUB_JSON
+
+# 5-5. GraphQL呼び出し失敗 -> exit 2 (fail-close)
+export GH_STUB_GRAPHQL_JSON="$linked_reviewed_json" GH_STUB_GRAPHQL_EXIT="1"
+assert_blocked "gh issue close 123"
+unset GH_STUB_GRAPHQL_EXIT
+
+# 5-6. リポジトリ解決失敗 -> exit 2 (fail-close)。--repo指定があれば解決不要で許可される。
+export GH_STUB_REPO_EXIT="1"
+assert_blocked "gh issue close 123"
+assert_allowed "gh issue close 123 --repo oikawa-d/task_management"
+assert_allowed "gh issue close 123 -R oikawa-d/task_management"
+unset GH_STUB_REPO_EXIT
+
+# 5-7. issue番号を特定できない -> exit 2 (fail-close)
+assert_blocked "gh issue close"
+
+unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON GH_STUB_GRAPHQL_JSON
 
 # 6. heredoc本文にコマンド名を含むだけのコマンド -> exit 0 (#388の回帰テスト)
 heredoc_cmd=$(printf '%s\n' \

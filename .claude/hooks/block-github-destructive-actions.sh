@@ -7,6 +7,10 @@ REVIEWED_LABEL="reviewed"
 # 実行時に `gh repo view` 等でリポジトリ名を解決しない理由は下記コメント参照。
 REPO_PLACEHOLDER="<owner>/<repo>"
 
+# issueを閉じるPR(本文のClosing keywordsでリンクされたPR)とそのラベルを取得するGraphQLクエリ。
+# includeClosedPrs:true でクローズ済み・マージ済みのPRもリンク先として扱う。
+LINKED_PR_QUERY='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){closedByPullRequestsReferences(first:20,includeClosedPrs:true){nodes{number labels(first:50){nodes{name}}}}}}}'
+
 # 想定外のエラー(パイプラインの異常終了等)は必ずブロック側に倒す(fail-close)。
 # Claude CodeのPreToolUse hookはexit 2のみをブロックとして扱い、それ以外の非ゼロ終了は
 # 非ブロッキングエラーとしてツール実行を継続してしまうため、想定外の失敗でも確実にexit 2にする。
@@ -73,27 +77,74 @@ command_for_match=$(strip_heredocs <<<"$command")
 # 迂回を意図した操作までは防げない。検出範囲の拡張は別途 #390 で検討する。
 CMD_BOUNDARY='(^|[;&|(`])[[:space:]]*'
 
-# 対象(PR番号 or Issue番号)にreviewedラベルが付与されているか確認する。
+# 対象PRにreviewedラベルが付与されているか確認する。
 # gh呼び出しに失敗した場合は必ずブロックする(fail-close)。
-has_reviewed_label() {
-	local kind="$1" # pr | issue
-	local number="$2" # 空文字ならカレントブランチ(prのみ)/省略不可(issue)
+# 0=ラベルあり / 1=ラベルなし / 2=判定不能
+has_reviewed_pr_label() {
+	local number="$1" # 空文字ならカレントブランチのPRで判定する
 	local labels_json
 
-	if [[ "$kind" == "pr" ]]; then
-		if [[ -n "$number" ]]; then
-			labels_json=$(gh pr view "$number" --json labels 2>/dev/null) || return 2
-		else
-			labels_json=$(gh pr view --json labels 2>/dev/null) || return 2
-		fi
+	if [[ -n "$number" ]]; then
+		labels_json=$(gh pr view "$number" --json labels 2>/dev/null) || return 2
 	else
-		if [[ -z "$number" ]]; then
-			return 2
-		fi
-		labels_json=$(gh issue view "$number" --json labels 2>/dev/null) || return 2
+		labels_json=$(gh pr view --json labels 2>/dev/null) || return 2
 	fi
 
 	if jq -e --arg label "$REVIEWED_LABEL" '.labels // [] | any(.name == $label)' <<<"$labels_json" >/dev/null 2>&1; then
+		return 0
+	fi
+	return 1
+}
+
+# コマンド断片の `--repo <owner>/<repo>` / `-R <owner>/<repo>` を優先し、
+# 指定が無ければカレントリポジトリを解決する。解決できない場合は失敗を返す(fail-close)。
+resolve_repo() {
+	local segment="$1"
+	local repo
+
+	repo=$(grep -Eo -- '(--repo|-R)[=[:space:]]+[A-Za-z0-9._-]+/[A-Za-z0-9._-]+' <<<"$segment" \
+		| head -1 \
+		| grep -Eo '[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' || true)
+	if [[ -n "$repo" ]]; then
+		printf '%s' "$repo"
+		return 0
+	fi
+
+	gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || return 1
+}
+
+# issueを閉じるPR(本文のClosing keywordsでリンクされたPR)にreviewedラベルがあるか確認する。
+# `reviewed` はレビュー主体がPRへ付与するラベルであり、issue側には付与されない運用のため、
+# issue closeの可否はissue自身ではなくリンクPRのラベルで判定する(#401)。
+# 0=リンクPRにreviewedあり / 1=リンクPRはあるがreviewedなし / 3=リンクPRなし / 2=判定不能
+linked_pr_has_reviewed_label() {
+	local issue_number="$1"
+	local segment="$2"
+	local repo owner name response
+
+	if [[ -z "$issue_number" ]]; then
+		return 2
+	fi
+
+	repo=$(resolve_repo "$segment") || return 2
+	if [[ "$repo" != */* ]]; then
+		return 2
+	fi
+	owner="${repo%%/*}"
+	name="${repo#*/}"
+
+	response=$(gh api graphql -f query="$LINKED_PR_QUERY" \
+		-F owner="$owner" -F repo="$name" -F number="$issue_number" 2>/dev/null) || return 2
+
+	if ! jq -e '(.data.repository.issue.closedByPullRequestsReferences.nodes // []) | length > 0' \
+		<<<"$response" >/dev/null 2>&1; then
+		return 3
+	fi
+
+	if jq -e --arg label "$REVIEWED_LABEL" '
+		(.data.repository.issue.closedByPullRequestsReferences.nodes // [])
+		| any((.labels.nodes // []) | any(.name == $label))
+	' <<<"$response" >/dev/null 2>&1; then
 		return 0
 	fi
 	return 1
@@ -105,7 +156,7 @@ if grep -Eq "${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+pr[[:space:]]+merge([[
 	pr_number=$(grep -Eo '[0-9]+' <<<"$merge_segment" | head -1 || true)
 
 	status=0
-	has_reviewed_label "pr" "$pr_number" || status=$?
+	has_reviewed_pr_label "$pr_number" || status=$?
 
 	if [[ "$status" -eq 0 ]]; then
 		exit 0
@@ -121,23 +172,27 @@ if grep -Eq "${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+pr[[:space:]]+merge([[
 	fi
 fi
 
-# `gh issue close` を検出したら、対象issueにreviewedラベルがある場合のみ許可する。
+# `gh issue close` を検出したら、そのissueを閉じるPRにreviewedラベルがある場合のみ許可する。
 if grep -Eq "${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+issue[[:space:]]+close([[:space:]]|\$)" <<<"$command_for_match"; then
 	close_segment=$(grep -Eo "${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+issue[[:space:]]+close[^;&|[:cntrl:]]*" <<<"$command_for_match" | head -1)
-	issue_number=$(grep -Eo '[0-9]+' <<<"$close_segment" | head -1 || true)
+	# 引数として渡された番号のみを対象にする(リポジトリ名に含まれる数字を拾わないよう空白区切りを必須にする)。
+	issue_number=$(grep -Eo '(^|[[:space:]])[0-9]+' <<<"$close_segment" | head -1 | tr -d '[:space:]' || true)
 
 	status=0
-	has_reviewed_label "issue" "$issue_number" || status=$?
+	linked_pr_has_reviewed_label "$issue_number" "$close_segment" || status=$?
 
 	if [[ "$status" -eq 0 ]]; then
 		exit 0
 	elif [[ "$status" -eq 2 ]]; then
-		echo "ブロック: 対象issueの情報取得(gh issue view)に失敗、またはissue番号を特定できなかったため、安全側でcloseをブロックします。" >&2
+		echo "ブロック: 対象issueのリンクPR取得(gh api graphql)に失敗、またはissue番号・リポジトリを特定できなかったため、安全側でcloseをブロックします。" >&2
+		exit 2
+	elif [[ "$status" -eq 3 ]]; then
+		echo "ブロック: issueを閉じるPRが見つかりません。PR本文に 'Closes #<Issue番号>' を記載してissueとリンクしてください（リンクしたPRがマージされればissueは自動closeされます）。" >&2
 		exit 2
 	else
 		# issues/<番号>/labels のREST APIエンドポイントはissueにもPRにも使えるため、
 		# PR用メッセージ(#386)と同じ `gh api` 形式に統一する。
-		echo "ブロック: 対象issueに '${REVIEWED_LABEL}' ラベルがありません。.agents/review-policy.md に沿ったレビューで「受入可」のコメントを投稿したうえで、PR作成者以外がラベルを付与してください（例: gh api -X POST repos/${REPO_PLACEHOLDER}/issues/<Issue番号>/labels -f \"labels[]=${REVIEWED_LABEL}\"）。" >&2
+		echo "ブロック: 対象issueを閉じるPRに '${REVIEWED_LABEL}' ラベルがありません。.agents/review-policy.md に沿ったレビューで「受入可」のコメントを投稿したうえで、PR作成者以外がPRへラベルを付与してください（例: gh api -X POST repos/${REPO_PLACEHOLDER}/issues/<PR番号>/labels -f \"labels[]=${REVIEWED_LABEL}\"）。" >&2
 		exit 2
 	fi
 fi
