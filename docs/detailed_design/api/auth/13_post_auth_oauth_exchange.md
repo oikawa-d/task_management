@@ -154,7 +154,7 @@ sequenceDiagram
                         R-->>FE: 400 OAUTH_FAILED
                     else 検証成功
                         S->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
-                        S-->>R: OAuthExchangeResult(access_token, expires_in, redirect_to)
+                        S-->>R: OAuthExchangeResponse(access_token, expires_in, redirect_to)
                         R-->>FE: 200 {access_token, redirect_to}<br/>Set-Cookie(cerberus_rt, cerberus_csrf)
                     end
                 end
@@ -193,20 +193,20 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def oauth_exchange(payload: OAuthExchangeRequest, request: Request, response: Response, _: None = Depends(verify_origin), service: AuthService = Depends(get_auth_service)) -> OAuthExchangeResponse` |
+| シグネチャ | `async def oauth_exchange(payload: OAuthExchangeRequest, request: Request, response: Response, db: AsyncSession = Depends(get_db_session), settings: BackendSettings = Depends(get_backend_settings), _: None = Depends(verify_origin)) -> OAuthExchangeResponse` |
 | 引数 | `payload`：`code`を含むリクエストボディ。`request`/`response`：Cookie操作用 |
 | 戻り値 | `OAuthExchangeResponse`（200） |
 | 送出例外 | `NotSupportedInModeError`（405）、`OAuthHandoffInvalidError`（400）、`UserInactiveError`（403）、`CsrfInvalidError`（403、`verify_origin`内） |
-| 処理内容 | 1. `settings.auth_mode != 'jwt'`なら`NotSupportedInModeError` 2. `service.oauth_exchange(payload.code, request, response)`を呼ぶ 3. 戻り値をレスポンスモデルへマッピング |
+| 処理内容 | 1. `settings.auth_mode != 'jwt'`なら`NotSupportedInModeError` 2. `auth_service.oauth_exchange(payload.code, request, response, db)`を呼ぶ 3. `Cache-Control: no-store`を付与して戻り値を返す |
 | 副作用 | Cookie発行（`cerberus_rt`/`cerberus_csrf`。`service`内の`JwtAuthStrategy.login`が実施） |
 
 ### 6.2 `service/auth_service.py :: oauth_exchange`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def oauth_exchange(code: str, request: Request, response: Response) -> OAuthExchangeResult` |
-| 引数 | `code`：一時ハンドオフコード。`request`/`response`：Strategy.loginへ引き渡す |
-| 戻り値 | `OAuthExchangeResult`（`access_token`, `expires_in`, `redirect_to`） |
+| シグネチャ | `async def oauth_exchange(code: str, request: Request, response: Response, db: AsyncSession | None = None, *, settings: BackendSettings | None = None, strategy: Any | None = None) -> OAuthExchangeResponse` |
+| 引数 | `code`：一時ハンドオフコード。`request`/`response`：Strategy.loginへ引き渡す。`db`：ユーザー・履歴参照用。`settings`/`strategy`：実行設定・テスト差し替え用 |
+| 戻り値 | `OAuthExchangeResponse`（`access_token`, `token_type`, `expires_in`, `redirect_to`） |
 | 送出例外 | `OAuthHandoffInvalidError`、`UserInactiveError`、`ServiceUnavailableError` |
 | 処理内容 | 1. `redis_store.consume_oauth_handoff(code)`を呼び`None`なら`OAuthHandoffInvalidError` 2. `user_repository.fn_get_user(data.user_id)`で現在の有効ユーザーを取得（Redisに保存されたuser_idのみを信頼し、role等は再取得しない） 3. 取得できなければ`UserInactiveError` 4. `jwt_strategy.login(user, request, response)`を呼び`LoginResult(auth_mode, access_token, refresh_token, csrf_token, expires_in)`を得る 5. `auth_mode='jwt'`、access/refresh/CSRFが非空文字列、`expires_in`がboolではない1以上のintであることを検証する 6. 検証失敗時は`login_history`記録前に`rollback_login`でRedis認証状態とCookieを補償削除し、`OAuthFailedError`を送出する 7. 検証成功後に`login_history_repository.sp_record_login_history(user.id, login_identifier=user.email, method='oauth_google', success=True)`を呼ぶ 8. `data.redirect_to`（正規化済み）とともに結果を返す。ここでの`login_identifier`は解決済みユーザーの検証済みGoogle emailであり、OAuthアカウントの`sub`ではない |
 | 副作用 | PostgreSQL：`login_history`INSERT。Redis：`refresh:{hash}`/`user_refresh:{uid}`新規作成（`JwtAuthStrategy.login`内）。Cookie：`cerberus_rt`/`cerberus_csrf`発行 |

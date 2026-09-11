@@ -399,6 +399,32 @@ async def _rollback_oauth_login(
 			_delete_oauth_state_cookie(response, settings)
 
 
+async def oauth_callback_denied(
+	state: str | None,
+	state_cookie: str | None,
+	request: Request,
+	response: Response,
+	*,
+	settings: BackendSettings | None = None,
+) -> None:
+	"""Googleの同意拒否時にもcallback stateを消費し、認証開始状態を破棄する。"""
+	config = settings or get_backend_settings()
+	try:
+		await _check_oauth_rate_limit(
+			request, _OAUTH_RATE_LIMIT_SCOPE["callback"], "/api/auth/oauth/google/callback", config
+		)
+		if not state or not state_cookie or not secrets.compare_digest(state, state_cookie):
+			raise InvalidStateError()
+		try:
+			state_data = await redis_store.consume_oauth_state(state)
+		except Exception as exc:
+			raise ServiceUnavailableError() from exc
+		if state_data is None:
+			raise InvalidStateError()
+	finally:
+		_delete_oauth_state_cookie(response, config)
+
+
 async def oauth_callback(
 	code: str | None,
 	state: str | None,

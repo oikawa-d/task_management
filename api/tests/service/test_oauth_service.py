@@ -409,6 +409,49 @@ async def test_oauth_rate_limit_log_contains_audit_fields(
 
 
 @pytest.mark.asyncio
+async def test_oauth_callback_denied_consumes_state_and_deletes_cookie(monkeypatch: pytest.MonkeyPatch) -> None:
+	settings = _settings()
+	check_rate_limit = AsyncMock(return_value=1)
+	consume_state = AsyncMock(return_value=OAuthStateData("/dashboard", "verifier", "nonce", None))
+	monkeypatch.setattr(auth_service.redis_store, "check_rate_limit", check_rate_limit)
+	monkeypatch.setattr(auth_service.redis_store, "consume_oauth_state", consume_state)
+	request = _request()
+	response = Response()
+
+	await auth_service.oauth_callback_denied("state", "state", request, response, settings=settings)
+
+	check_rate_limit.assert_awaited_once_with(
+		"oauth_callback", "127.0.0.1", settings.rate_limit_oauth_max_requests, settings.rate_limit_oauth_window_seconds
+	)
+	consume_state.assert_awaited_once_with("state")
+	assert any(
+		settings.cookie_name_oauth_state.encode() in value and b"Max-Age=0" in value
+		for key, value in response.raw_headers
+		if key == b"set-cookie"
+	)
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_denied_deletes_cookie_when_rate_limited(monkeypatch: pytest.MonkeyPatch) -> None:
+	settings = _settings()
+	monkeypatch.setattr(
+		auth_service.redis_store,
+		"check_rate_limit",
+		AsyncMock(return_value=settings.rate_limit_oauth_max_requests + 1),
+	)
+	response = Response()
+
+	with pytest.raises(TooManyAttemptsError):
+		await auth_service.oauth_callback_denied("state", "state", _request(), response, settings=settings)
+
+	assert any(
+		settings.cookie_name_oauth_state.encode() in value and b"Max-Age=0" in value
+		for key, value in response.raw_headers
+		if key == b"set-cookie"
+	)
+
+
+@pytest.mark.asyncio
 async def test_oauth_callback_rejects_state_cookie_mismatch() -> None:
 	with pytest.raises(InvalidStateError):
 		await auth_service.oauth_callback("code", "state", "different", _request(), Response())

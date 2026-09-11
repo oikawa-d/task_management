@@ -68,6 +68,15 @@ async def oauth_google_callback(
 	settings: BackendSettings = Depends(get_backend_settings),
 ) -> RedirectResponse:
 	if error:
+		state_cookie = request.cookies.get(settings.cookie_name_oauth_state)
+		try:
+			await auth_service.oauth_callback_denied(state, state_cookie, request, response, settings=settings)
+		except Exception as exc:
+			logger.warning(
+				"OAuth callback denial cleanup failed",
+				extra={"operation": "oauth_callback", "event": "oauth_callback_failed", "error": type(exc).__name__},
+			)
+			return _login_error_redirect(_callback_error_value(exc), settings, response)
 		return _login_error_redirect(OAUTH_ERROR_DENIED, settings, response)
 	state_cookie = request.cookies.get(settings.cookie_name_oauth_state)
 	try:
@@ -78,6 +87,13 @@ async def oauth_google_callback(
 			extra={"operation": "oauth_callback", "event": "oauth_callback_failed", "error": type(exc).__name__},
 		)
 		return _login_error_redirect(_callback_error_value(exc), settings, response)
+
+	if (result.auth_mode == "jwt") != (result.handoff_code is not None):
+		logger.error(
+			"OAuth callback returned inconsistent auth state",
+			extra={"operation": "oauth_callback", "event": "oauth_callback_invalid_result"},
+		)
+		return _login_error_redirect(OAUTH_ERROR_FAILED, settings, response)
 
 	fragment = {"redirect_to": result.redirect_to}
 	if result.handoff_code is not None:
