@@ -102,6 +102,7 @@ async def verify_email(token: str, db: AsyncSession) -> None:
 	if user_id is None:
 		raise InvalidVerifyTokenError()
 	await user_repository.mark_email_verified(db, user_id)
+	await db.commit()
 
 
 async def resend_verification(email: str, background: BackgroundTasks, db: AsyncSession) -> None:
@@ -166,25 +167,8 @@ def _duplicate_error_for(exc: DBAPIError) -> DuplicateUsernameError | DuplicateE
 	return None
 
 
-async def _ensure_register_not_rate_limited(request: Request, settings: BackendSettings) -> None:
-	client_ip = resolve_client_ip(request, settings.trusted_proxy_cidrs).client_ip
-	try:
-		count = await redis_store.check_rate_limit(
-			"register",
-			client_ip,
-			settings.rate_limit_register_max_requests,
-			settings.rate_limit_register_window_seconds,
-		)
-	except Exception as exc:
-		raise ServiceUnavailableError() from exc
-	if count > settings.rate_limit_register_max_requests:
-		raise TooManyAttemptsError()
-
-
-async def register(payload: RegisterRequest, background: BackgroundTasks, request: Request, db: AsyncSession) -> User:
+async def register(payload: RegisterRequest, background: BackgroundTasks, db: AsyncSession) -> User:
 	"""ユーザーを登録し、確認メール送信を予約する。認証状態は確立しない（01_post_auth_register.md）。"""
-	settings = get_backend_settings()
-	await _ensure_register_not_rate_limited(request, settings)
 	if await user_repository.get_by_login_identifier(db, payload.username) is not None:
 		raise DuplicateUsernameError()
 	if await user_repository.get_by_email(db, payload.email) is not None:
@@ -308,6 +292,14 @@ async def login(
 async def logout(request: Request, response: Response, strategy: AuthStrategy) -> None:
 	"""現在の認証状態を失効させる。未ログインでも例外を出さない冪等処理（03_post_auth_logout.md）。"""
 	await strategy.logout(request, response)
+
+
+async def refresh(request: Request, response: Response, strategy: AuthStrategy) -> LoginResult:
+	"""access tokenを再発行する。モード差異はStrategyへ委譲する（06_post_auth_refresh.md §6.2）。
+
+	sessionモードのStrategyは`NotSupportedInModeError`を送出し405となる。
+	"""
+	return await strategy.refresh(request, response)
 
 
 def normalize_redirect_to(raw: str | None, settings: BackendSettings | None = None) -> str:

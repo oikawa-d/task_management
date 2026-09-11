@@ -7,12 +7,19 @@ import pytest
 from app.auth.base import AuthContext
 from app.core.config import get_backend_settings
 from app.core.deps import (
+	enforce_rate_limit,
 	get_current_user,
 	get_current_user_optional,
 	require_admin,
 	verify_csrf_for_logout,
 )
-from app.core.exceptions import ForbiddenError, UnauthenticatedError, UserInactiveError
+from app.core.exceptions import (
+	ForbiddenError,
+	ServiceUnavailableError,
+	TooManyAttemptsError,
+	UnauthenticatedError,
+	UserInactiveError,
+)
 from app.schemas.auth import CurrentUser
 
 
@@ -87,6 +94,7 @@ class _CsrfRequest:
 	def __init__(self, cookies: dict[str, str]) -> None:
 		self.cookies = cookies
 		self.headers: dict[str, str] = {}
+		self.client = SimpleNamespace(host="127.0.0.1")
 
 
 @pytest.mark.asyncio
@@ -117,3 +125,48 @@ async def test_verify_csrf_for_logout_validates_with_auth_cookie(
 	await verify_csrf_for_logout(request, SimpleNamespace(mode=mode), settings)
 
 	verify_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_enforce_rate_limit_allows_request_within_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+	check_mock = AsyncMock(return_value=1)
+	monkeypatch.setattr("app.core.deps.redis_store.check_rate_limit", check_mock)
+	settings = get_backend_settings()
+	dependency = enforce_rate_limit(
+		"register", "rate_limit_register_max_requests", "rate_limit_register_window_seconds"
+	)
+
+	await dependency(_CsrfRequest({}), settings)
+
+	assert check_mock.await_args.args == (
+		"register",
+		"127.0.0.1",
+		settings.rate_limit_register_max_requests,
+		settings.rate_limit_register_window_seconds,
+	)
+
+
+@pytest.mark.asyncio
+async def test_enforce_rate_limit_rejects_over_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+	settings = get_backend_settings()
+	monkeypatch.setattr(
+		"app.core.deps.redis_store.check_rate_limit",
+		AsyncMock(return_value=settings.rate_limit_register_max_requests + 1),
+	)
+	dependency = enforce_rate_limit(
+		"register", "rate_limit_register_max_requests", "rate_limit_register_window_seconds"
+	)
+
+	with pytest.raises(TooManyAttemptsError):
+		await dependency(_CsrfRequest({}), settings)
+
+
+@pytest.mark.asyncio
+async def test_enforce_rate_limit_fails_closed_on_redis_error(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setattr("app.core.deps.redis_store.check_rate_limit", AsyncMock(side_effect=RuntimeError("redis down")))
+	dependency = enforce_rate_limit(
+		"register", "rate_limit_register_max_requests", "rate_limit_register_window_seconds"
+	)
+
+	with pytest.raises(ServiceUnavailableError):
+		await dependency(_CsrfRequest({}), get_backend_settings())

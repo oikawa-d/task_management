@@ -17,11 +17,14 @@ from app.api.routers.auth_router import router
 from app.auth.base import LoginResult
 from app.auth.factory import get_auth_strategy
 from app.core.config import get_backend_settings
-from app.core.deps import get_current_user
+from app.core.deps import get_current_user, verify_csrf
 from app.core.exceptions import (
 	DuplicateUsernameError,
 	EmailNotVerifiedError,
 	InvalidCredentialsError,
+	InvalidResetTokenError,
+	InvalidVerifyTokenError,
+	NotSupportedInModeError,
 	TooManyAttemptsError,
 	register_error_handling,
 )
@@ -85,6 +88,11 @@ def test_auth_router_registers_all_endpoints() -> None:
 	assert ("/api/auth/logout", "POST") in routes
 	assert ("/api/auth/me", "GET") in routes
 	assert ("/api/auth/config", "GET") in routes
+	assert ("/api/auth/refresh", "POST") in routes
+	assert ("/api/auth/verify-email", "POST") in routes
+	assert ("/api/auth/verify-email/resend", "POST") in routes
+	assert ("/api/auth/password/forgot", "POST") in routes
+	assert ("/api/auth/password/reset", "POST") in routes
 
 
 def test_register_returns_201_without_auth_cookie(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -315,3 +323,190 @@ def test_auth_endpoints_are_published_in_openapi() -> None:
 	assert set(paths["/api/auth/logout"]) == {"post"}
 	assert set(paths["/api/auth/me"]) == {"get"}
 	assert set(paths["/api/auth/config"]) == {"get"}
+	assert set(paths["/api/auth/refresh"]) == {"post"}
+	assert set(paths["/api/auth/verify-email"]) == {"post"}
+	assert set(paths["/api/auth/verify-email/resend"]) == {"post"}
+	assert set(paths["/api/auth/password/forgot"]) == {"post"}
+	assert set(paths["/api/auth/password/reset"]) == {"post"}
+
+
+@pytest.fixture(autouse=True)
+def _allow_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""レート制限はcore/deps側でテストするため、router契約テストでは常に許可する。"""
+	from app.core import deps
+
+	async def _check_rate_limit(*_args: Any, **_kwargs: Any) -> int:
+		return 1
+
+	monkeypatch.setattr(deps.redis_store, "check_rate_limit", _check_rate_limit)
+
+
+def test_refresh_returns_new_access_token(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setenv("CORS_ALLOW_ORIGINS", ALLOWED_ORIGIN)
+	get_backend_settings.cache_clear()
+
+	async def _refresh(*_args: Any, **_kwargs: Any) -> LoginResult:
+		return LoginResult("jwt", "new-access-token", "new-refresh-token", "csrf-token", 900)
+
+	monkeypatch.setattr(auth_router_module.auth_service, "refresh", _refresh)
+	app = _build_app("jwt")
+	app.dependency_overrides[verify_csrf] = lambda: None
+	with TestClient(app) as client:
+		response = client.post("/api/auth/refresh", headers={"Origin": ALLOWED_ORIGIN})
+
+	assert response.status_code == 200
+	assert response.json() == {"access_token": "new-access-token", "token_type": "bearer", "expires_in": 900}
+	assert "new-refresh-token" not in response.text
+
+
+def test_refresh_in_session_mode_returns_405(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setenv("CORS_ALLOW_ORIGINS", ALLOWED_ORIGIN)
+	get_backend_settings.cache_clear()
+
+	async def _refresh(*_args: Any, **_kwargs: Any) -> LoginResult:
+		raise NotSupportedInModeError()
+
+	monkeypatch.setattr(auth_router_module.auth_service, "refresh", _refresh)
+	app = _build_app("session")
+	app.dependency_overrides[verify_csrf] = lambda: None
+	with TestClient(app) as client:
+		response = client.post("/api/auth/refresh", headers={"Origin": ALLOWED_ORIGIN})
+
+	assert response.status_code == 405
+	assert response.json()["error"]["code"] == "NOT_SUPPORTED_IN_MODE"
+
+
+def test_refresh_requires_csrf_token(client: TestClient) -> None:
+	response = client.post("/api/auth/refresh", headers={"Origin": ALLOWED_ORIGIN})
+
+	assert response.status_code == 403
+	assert response.json()["error"]["code"] == "CSRF_INVALID"
+
+
+def test_verify_email_returns_204(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	tokens: list[str] = []
+
+	async def _verify_email(token: str, _db: Any) -> None:
+		tokens.append(token)
+
+	monkeypatch.setattr(auth_router_module.auth_service, "verify_email", _verify_email)
+
+	response = client.post("/api/auth/verify-email", json={"token": "verify-token"})
+
+	assert response.status_code == 204
+	assert response.content == b""
+	assert tokens == ["verify-token"]
+
+
+def test_verify_email_invalid_token_returns_400(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	async def _verify_email(*_args: Any, **_kwargs: Any) -> None:
+		raise InvalidVerifyTokenError()
+
+	monkeypatch.setattr(auth_router_module.auth_service, "verify_email", _verify_email)
+
+	response = client.post("/api/auth/verify-email", json={"token": "used-token"})
+
+	assert response.status_code == 400
+	assert response.json()["error"]["code"] == "INVALID_VERIFY_TOKEN"
+
+
+def test_verify_email_rejects_empty_token(client: TestClient) -> None:
+	response = client.post("/api/auth/verify-email", json={"token": ""})
+
+	assert response.status_code == 422
+	assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_resend_verify_email_returns_202_with_fixed_message(
+	client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+	async def _resend(*_args: Any, **_kwargs: Any) -> None:
+		return None
+
+	monkeypatch.setattr(auth_router_module.auth_service, "resend_verification", _resend)
+
+	response = client.post("/api/auth/verify-email/resend", json={"email": "taro@example.com"})
+
+	assert response.status_code == 202
+	assert response.json() == {"message": auth_router_module.RESEND_ACCEPTED_MESSAGE}
+
+
+def test_password_forgot_returns_202_for_unknown_email(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	async def _request_password_reset(*_args: Any, **_kwargs: Any) -> None:
+		return None
+
+	monkeypatch.setattr(auth_router_module.auth_service, "request_password_reset", _request_password_reset)
+
+	response = client.post("/api/auth/password/forgot", json={"email": "unknown@example.com"})
+
+	assert response.status_code == 202
+	assert response.json() == {"message": auth_router_module.PASSWORD_FORGOT_ACCEPTED_MESSAGE}
+
+
+def test_password_reset_returns_204(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	calls: list[tuple[str, str]] = []
+
+	async def _reset_password(token: str, new_password: str, _db: Any) -> None:
+		calls.append((token, new_password))
+
+	monkeypatch.setattr(auth_router_module.auth_service, "reset_password", _reset_password)
+
+	response = client.post(
+		"/api/auth/password/reset",
+		json={"token": "reset-token", "new_password": "NewPassw0rd!", "password_confirm": "NewPassw0rd!"},
+	)
+
+	assert response.status_code == 204
+	assert calls == [("reset-token", "NewPassw0rd!")]
+
+
+def test_password_reset_invalid_token_returns_400(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	async def _reset_password(*_args: Any, **_kwargs: Any) -> None:
+		raise InvalidResetTokenError()
+
+	monkeypatch.setattr(auth_router_module.auth_service, "reset_password", _reset_password)
+
+	response = client.post(
+		"/api/auth/password/reset",
+		json={"token": "used-token", "new_password": "NewPassw0rd!", "password_confirm": "NewPassw0rd!"},
+	)
+
+	assert response.status_code == 400
+	assert response.json()["error"]["code"] == "INVALID_RESET_TOKEN"
+
+
+def test_password_reset_rejects_mismatched_confirmation(client: TestClient) -> None:
+	response = client.post(
+		"/api/auth/password/reset",
+		json={"token": "reset-token", "new_password": "NewPassw0rd!", "password_confirm": "Other1234!"},
+	)
+
+	assert response.status_code == 422
+	assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+@pytest.mark.parametrize(
+	("path", "service_function", "payload"),
+	[
+		("/api/auth/login", "login", {"identifier": "taro", "password": "Passw0rd!"}),
+		("/api/auth/refresh", "refresh", None),
+	],
+)
+def test_jwt_response_without_access_token_is_internal_error(
+	monkeypatch: pytest.MonkeyPatch, path: str, service_function: str, payload: dict[str, str] | None
+) -> None:
+	"""Strategyがaccess tokenを欠いたLoginResultを返した場合に成功応答へ落とし込まない。"""
+	monkeypatch.setenv("CORS_ALLOW_ORIGINS", ALLOWED_ORIGIN)
+	get_backend_settings.cache_clear()
+
+	async def _broken(*_args: Any, **_kwargs: Any) -> LoginResult:
+		return LoginResult("jwt", None, "refresh-token", "csrf-token", 900)
+
+	monkeypatch.setattr(auth_router_module.auth_service, service_function, _broken)
+	app = _build_app("jwt")
+	app.dependency_overrides[verify_csrf] = lambda: None
+	with TestClient(app, raise_server_exceptions=False) as client:
+		response = client.post(path, json=payload, headers={"Origin": ALLOWED_ORIGIN})
+
+	assert response.status_code == 500
+	assert response.json()["error"]["code"] == "INTERNAL_ERROR"
