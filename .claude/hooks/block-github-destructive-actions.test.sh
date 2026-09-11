@@ -65,6 +65,25 @@ assert_blocked_raw_stdin() {
 	fi
 }
 
+# jqが存在しない環境ではfail-closeすること(#339)を検証するため、PATHをjq抜きに差し替えて実行する。
+assert_blocked_without_jq() {
+	local command=$1
+	local fake_path
+	fake_path=$(mktemp -d)
+	for utility in bash cat env; do
+		ln -s "$(command -v "$utility")" "$fake_path/$utility"
+	done
+	local input
+	input=$(payload "$command")
+	local status=0
+	printf '%s\n' "$input" | PATH="$fake_path" "$hook" >/dev/null 2>&1 || status=$?
+	rm -rf "$fake_path"
+	if [[ "$status" -ne 2 ]]; then
+		echo "jq不在時にhookがexit 2でブロックしませんでした (exit=$status): $command" >&2
+		return 1
+	fi
+}
+
 reviewed_json='{"labels":[{"name":"reviewed"}]}'
 unreviewed_json='{"labels":[]}'
 
@@ -139,5 +158,14 @@ unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON
 
 # 9. 想定外エラー時 -> exit 2 (trap ... ERR)
 assert_blocked_raw_stdin "これは不正なJSONです"
+
+# 10. `gh pr merge` / `gh issue close` の代替経路 -> exit 2 (#339)
+assert_blocked "gh api -X PUT repos/oikawa-d/task_management/pulls/123/merge"
+assert_blocked "gh api repos/oikawa-d/task_management/pulls/123/merge --method PUT"
+assert_blocked "gh issue edit 123 --state closed"
+assert_blocked "gh --repo oikawa-d/task_management issue edit 123 --state=closed"
+
+# 11. jq不在時 -> exit 2 (fail-close, #339)
+assert_blocked_without_jq "gh pr view 123"
 
 echo "block-github-destructive-actions: すべてのケースが期待通りです"

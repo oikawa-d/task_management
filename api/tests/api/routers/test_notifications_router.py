@@ -133,6 +133,7 @@ def test_list_notifications_unauthenticated_returns_401(app_and_mocks: FastAPI) 
 
 def test_list_notifications_rate_limited_returns_429(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
 	monkeypatch.setattr(deps.redis_store, "check_rate_limit", AsyncMock(return_value=121))
+	monkeypatch.setattr(deps.redis_store, "get_rate_limit_ttl", AsyncMock(return_value=45))
 	mock_list = AsyncMock()
 	monkeypatch.setattr(router_module.notification_service, "list_notifications", mock_list)
 
@@ -140,6 +141,7 @@ def test_list_notifications_rate_limited_returns_429(client: TestClient, monkeyp
 
 	assert res.status_code == 429
 	assert res.json()["error"]["code"] == "TOO_MANY_ATTEMPTS"
+	assert res.headers["Retry-After"] == "45"
 	mock_list.assert_not_called()
 
 
@@ -275,6 +277,7 @@ def test_mark_all_notifications_read_write_rate_limited_returns_429(
 	client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
 	monkeypatch.setattr(deps.redis_store, "check_rate_limit", AsyncMock(return_value=61))
+	monkeypatch.setattr(deps.redis_store, "get_rate_limit_ttl", AsyncMock(return_value=45))
 	mock_mark_all = AsyncMock()
 	monkeypatch.setattr(router_module.notification_service, "mark_all_notifications_read", mock_mark_all)
 
@@ -282,4 +285,5 @@ def test_mark_all_notifications_read_write_rate_limited_returns_429(
 
 	assert res.status_code == 429
 	assert res.json()["error"]["code"] == "TOO_MANY_ATTEMPTS"
+	assert res.headers["Retry-After"] == "45"
 	mock_mark_all.assert_not_called()

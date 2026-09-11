@@ -68,6 +68,14 @@ def test_alembic_revisions_are_unique_continuous_and_connected() -> None:
 	assert visited == set(graph), f"孤立したrevisionがあります: {sorted(set(graph) - visited)}"
 
 
+def test_revision_filename_prefix_matches_revision_id() -> None:
+	for path in VERSIONS_DIR.glob("*.py"):
+		if path.name == "__init__.py":
+			continue
+		revision, _ = _revision_values(path)
+		assert path.name[:4] == revision, f"ファイル名接頭辞とrevision IDが不一致です: {path.name} -> {revision}"
+
+
 @pytest.mark.parametrize("revision", ["0021", "0022", "0023", "0024"])
 def test_recent_revision_has_expected_parent(revision: str) -> None:
 	graph = _revision_graph()

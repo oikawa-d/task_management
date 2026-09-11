@@ -54,11 +54,11 @@
 | `0019_update_fn_list_notifications_return_type.py` | `fn_list_notifications`の戻り値をtask情報・total_countを含む`TABLE`型へ変更（`DROP FUNCTION`後に再作成）し、`fn_count_notifications`を新設 |
 | `0020_add_admin_list_total_count_and_not_found.py` | admin一覧FNの総件数フォールバックと更新SPの対象不存在・OUT値を追加 |
 | `0021_optimize_admin_list_functions.py` | admin一覧FNのN+1を解消し、集計値を返す |
-| `0020_update_sp_mark_notification_read_return_value.py`（revision `0022`） | 通知個別既読SPに既読日時のOUT値を追加 |
-| `0021_return_notification_read_results.py`（revision `0023`） | 通知全既読SPに更新件数のOUT値を追加 |
-| `0022_add_calendar_task_function.py`（revision `0024`） | カレンダー表示用`fn_list_calendar_tasks`を追加 |
+| `0022_update_sp_mark_notification_read_return_value.py`（revision `0022`） | 通知個別既読SPに既読日時のOUT値を追加 |
+| `0023_return_notification_read_results.py`（revision `0023`） | 通知全既読SPに更新件数のOUT値を追加 |
+| `0024_add_calendar_task_function.py`（revision `0024`） | カレンダー表示用`fn_list_calendar_tasks`を追加 |
 
-**要検討**：上記のリビジョン分割・命名例（`0001_...` 等の連番接頭辞）は本詳細設計での具体化であり、基本設計に明記された正の構成ではない。実装時にAlembicの自動生成ハッシュIDとの整合をどう取るか（`down_revision` チェーンの実ファイル名）は実装担当の裁量とする。
+各リビジョンファイル名の4桁接頭辞は、ファイル内の`revision` IDと一致させる。`down_revision`は直前の4桁revisionを指し、ファイル名の採番と履歴の実体を一致させることで、重複・誤参照を防止する。
 
 ### 2.2 リビジョンチェーン図
 

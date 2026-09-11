@@ -7,6 +7,7 @@ import pytest
 from app.auth.base import AuthContext
 from app.core.config import get_backend_settings
 from app.core.deps import (
+	_enforce_rate_limit,
 	enforce_rate_limit,
 	get_current_user,
 	get_current_user_optional,
@@ -149,16 +150,56 @@ async def test_enforce_rate_limit_allows_request_within_limit(monkeypatch: pytes
 @pytest.mark.asyncio
 async def test_enforce_rate_limit_rejects_over_limit(monkeypatch: pytest.MonkeyPatch) -> None:
 	settings = get_backend_settings()
+	ttl_mock = AsyncMock(return_value=321)
 	monkeypatch.setattr(
 		"app.core.deps.redis_store.check_rate_limit",
 		AsyncMock(return_value=settings.rate_limit_register_max_requests + 1),
 	)
+	monkeypatch.setattr("app.core.deps.redis_store.get_rate_limit_ttl", ttl_mock)
 	dependency = enforce_rate_limit(
 		"register", "rate_limit_register_max_requests", "rate_limit_register_window_seconds"
 	)
 
-	with pytest.raises(TooManyAttemptsError):
+	with pytest.raises(TooManyAttemptsError) as raised:
 		await dependency(_CsrfRequest({}), settings)
+
+	assert raised.value.retry_after == 321
+	ttl_mock.assert_awaited_once_with("register", "127.0.0.1")
+
+
+@pytest.mark.asyncio
+async def test_enforce_rate_limit_uses_window_when_ttl_is_expired(monkeypatch: pytest.MonkeyPatch) -> None:
+	settings = get_backend_settings()
+	monkeypatch.setattr(
+		"app.core.deps.redis_store.check_rate_limit",
+		AsyncMock(return_value=settings.rate_limit_register_max_requests + 1),
+	)
+	monkeypatch.setattr("app.core.deps.redis_store.get_rate_limit_ttl", AsyncMock(return_value=-2))
+	dependency = enforce_rate_limit(
+		"register", "rate_limit_register_max_requests", "rate_limit_register_window_seconds"
+	)
+
+	with pytest.raises(TooManyAttemptsError) as raised:
+		await dependency(_CsrfRequest({}), settings)
+
+	assert raised.value.retry_after == settings.rate_limit_register_window_seconds
+
+
+@pytest.mark.asyncio
+async def test_user_rate_limit_includes_retry_after(monkeypatch: pytest.MonkeyPatch) -> None:
+	check_mock = AsyncMock(return_value=3)
+	ttl_mock = AsyncMock(return_value=45)
+	monkeypatch.setattr("app.core.deps.redis_store.check_rate_limit", check_mock)
+	monkeypatch.setattr("app.core.deps.redis_store.get_rate_limit_ttl", ttl_mock)
+	user = CurrentUser(id=uuid4(), username="taro", role="member", is_active=True, email_verified_at=None)
+
+	with pytest.raises(TooManyAttemptsError) as raised:
+		await _enforce_rate_limit(_CsrfRequest({}), user, "notification_read", 2, 60)
+
+	assert raised.value.retry_after == 45
+	value = f"{user.id}:127.0.0.1"
+	check_mock.assert_awaited_once_with("notification_read", value, 2, 60)
+	ttl_mock.assert_awaited_once_with("notification_read", value)
 
 
 @pytest.mark.asyncio
