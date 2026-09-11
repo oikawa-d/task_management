@@ -23,6 +23,10 @@ async def get_login_failure_count(client: Redis, prefix: str, identifier: str, c
 	return int(value) if value is not None else 0
 
 
+async def get_login_failure_ttl(client: Redis, prefix: str, identifier: str, client_ip: str) -> int:
+	return int(await client.ttl(key("login_fail", prefix, identifier_hash(identifier, client_ip))))
+
+
 async def incr_login_failure(client: Redis, prefix: str, identifier: str, client_ip: str, window: int) -> int:
 	validate_ttl(window, "window")
 	login_key = key("login_fail", prefix, identifier_hash(identifier, client_ip))
@@ -45,3 +49,7 @@ async def check_rate_limit(client: Redis, prefix: str, scope: str, value: str, m
 	if count == 1:
 		await client.expire(rate_key, window)
 	return count
+
+
+async def get_rate_limit_ttl(client: Redis, prefix: str, scope: str, value: str) -> int:
+	return int(await client.ttl(key("rate_limit", prefix, scope, hashlib.sha256(value.encode()).hexdigest())))

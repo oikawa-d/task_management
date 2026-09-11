@@ -13,6 +13,7 @@ class AppError(Exception):
 	code = "INTERNAL_ERROR"
 	status_code = 500
 	message = "サーバーエラーが発生しました"
+	retry_after: int | None = None
 
 	def __init__(self, message: str | None = None, details: Any = None) -> None:
 		super().__init__(message or self.message)
@@ -41,6 +42,16 @@ class CsrfInvalidError(ForbiddenError):
 class ConflictError(AppError):
 	status_code = 409
 	message = "競合が発生しました"
+
+
+class DuplicateUsernameError(ConflictError):
+	code = "DUPLICATE_USERNAME"
+	message = "このユーザーIDは既に使用されています"
+
+
+class DuplicateEmailError(ConflictError):
+	code = "DUPLICATE_EMAIL"
+	message = "このメールアドレスは既に使用されています"
 
 
 class AlreadyMemberError(ConflictError):
@@ -115,6 +126,12 @@ class UserInactiveError(AppError):
 	message = "このアカウントは無効化されています"
 
 
+class EmailNotVerifiedError(AppError):
+	code = "EMAIL_NOT_VERIFIED"
+	status_code = 403
+	message = "メールアドレスの認証が完了していません"
+
+
 class InvalidCredentialsError(UnauthenticatedError):
 	code = "INVALID_CREDENTIALS"
 	message = "IDまたはパスワードが正しくありません"
@@ -124,6 +141,10 @@ class TooManyAttemptsError(AppError):
 	code = "TOO_MANY_ATTEMPTS"
 	status_code = 429
 	message = "試行回数が多いため、しばらく待ってから再度お試しください"
+
+	def __init__(self, retry_after: int | None = None) -> None:
+		super().__init__()
+		self.retry_after = retry_after
 
 
 class InvalidVerifyTokenError(AppError):
@@ -173,9 +194,11 @@ def register_error_handling(app: FastAPI) -> None:
 	@app.exception_handler(AppError)
 	async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
 		request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+		headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after is not None else None
 		return JSONResponse(
 			status_code=exc.status_code,
 			content=_build_error_body(exc.code, exc.message, exc.details, request_id),
+			headers=headers,
 		)
 
 	@app.exception_handler(RequestValidationError)
