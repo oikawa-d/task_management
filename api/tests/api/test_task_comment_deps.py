@@ -25,19 +25,17 @@ class TestGetTaskForMember:
 		monkeypatch.setattr("app.core.deps.task_repository.get_by_id", AsyncMock(return_value=None))
 
 		with pytest.raises(NotFoundError):
-			await get_task_for_member(uuid.uuid4(), user=_user(), db=_Db())
+			await get_task_for_member(uuid.uuid4(), db=_Db())
 
-	async def test_returns_404_for_non_member_of_project_task(self, monkeypatch: pytest.MonkeyPatch) -> None:
+	async def test_returns_project_task_without_membership_check(self, monkeypatch: pytest.MonkeyPatch) -> None:
 		task = _task(project_id=uuid.uuid4())
 		monkeypatch.setattr(
 			"app.core.deps.task_repository.get_by_id",
 			AsyncMock(return_value=SimpleNamespace(task=task, project_is_active=True)),
 		)
-		exists = AsyncMock(return_value=False)
-		monkeypatch.setattr("app.core.deps.project_member_repository.exists", exists)
+		result = await get_task_for_member(task.id, db=_Db())
 
-		with pytest.raises(NotFoundError):
-			await get_task_for_member(task.id, user=_user(), db=_Db())
+		assert result is task
 
 	async def test_returns_task_for_project_member(self, monkeypatch: pytest.MonkeyPatch) -> None:
 		task = _task(project_id=uuid.uuid4())
@@ -45,9 +43,7 @@ class TestGetTaskForMember:
 			"app.core.deps.task_repository.get_by_id",
 			AsyncMock(return_value=SimpleNamespace(task=task, project_is_active=True)),
 		)
-		monkeypatch.setattr("app.core.deps.project_member_repository.exists", AsyncMock(return_value=True))
-
-		result = await get_task_for_member(task.id, user=_user(), db=_Db())
+		result = await get_task_for_member(task.id, db=_Db())
 		assert result is task
 
 	async def test_allows_project_less_task_to_reach_service_for_creator(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -58,13 +54,9 @@ class TestGetTaskForMember:
 			"app.core.deps.task_repository.get_by_id",
 			AsyncMock(return_value=SimpleNamespace(task=task, project_is_active=None)),
 		)
-		exists = AsyncMock()
-		monkeypatch.setattr("app.core.deps.project_member_repository.exists", exists)
-
-		result = await get_task_for_member(task.id, user=user, db=_Db())
+		result = await get_task_for_member(task.id, db=_Db())
 
 		assert result is task
-		exists.assert_not_awaited()
 
 	async def test_allows_project_less_task_to_reach_service_for_non_creator(
 		self, monkeypatch: pytest.MonkeyPatch
@@ -76,22 +68,20 @@ class TestGetTaskForMember:
 			AsyncMock(return_value=SimpleNamespace(task=task, project_is_active=None)),
 		)
 
-		result = await get_task_for_member(task.id, user=_user(), db=_Db())
+		result = await get_task_for_member(task.id, db=_Db())
 		assert result is task
 
-	async def test_admin_bypasses_project_membership_check(self, monkeypatch: pytest.MonkeyPatch) -> None:
+	async def test_project_task_lookup_does_not_check_membership_for_admin(
+		self, monkeypatch: pytest.MonkeyPatch
+	) -> None:
 		task = _task(project_id=uuid.uuid4())
 		monkeypatch.setattr(
 			"app.core.deps.task_repository.get_by_id",
 			AsyncMock(return_value=SimpleNamespace(task=task, project_is_active=True)),
 		)
-		exists = AsyncMock()
-		monkeypatch.setattr("app.core.deps.project_member_repository.exists", exists)
-
-		result = await get_task_for_member(task.id, user=_user(role="admin"), db=_Db())
+		result = await get_task_for_member(task.id, db=_Db())
 
 		assert result is task
-		exists.assert_not_awaited()
 
 
 class TestGetCommentForMember:
@@ -102,9 +92,9 @@ class TestGetCommentForMember:
 		monkeypatch.setattr("app.core.deps.task_comment_repository.get_by_id", AsyncMock(return_value=None))
 
 		with pytest.raises(NotFoundError):
-			await get_comment_for_member(uuid.uuid4(), user=_user(), db=_Db())
+			await get_comment_for_member(uuid.uuid4(), db=_Db())
 
-	async def test_returns_404_for_non_member_of_project_task(self, monkeypatch: pytest.MonkeyPatch) -> None:
+	async def test_returns_comment_without_membership_check(self, monkeypatch: pytest.MonkeyPatch) -> None:
 		task = _task(project_id=uuid.uuid4())
 		comment = self._comment(task.id)
 		monkeypatch.setattr("app.core.deps.task_comment_repository.get_by_id", AsyncMock(return_value=comment))
@@ -112,10 +102,10 @@ class TestGetCommentForMember:
 			"app.core.deps.task_repository.get_by_id",
 			AsyncMock(return_value=SimpleNamespace(task=task, project_is_active=True)),
 		)
-		monkeypatch.setattr("app.core.deps.project_member_repository.exists", AsyncMock(return_value=False))
+		result = await get_comment_for_member(comment.id, db=_Db())
 
-		with pytest.raises(NotFoundError):
-			await get_comment_for_member(comment.id, user=_user(), db=_Db())
+		assert result is comment
+		assert result.task is task
 
 	async def test_allows_project_less_task_comment_to_reach_service(self, monkeypatch: pytest.MonkeyPatch) -> None:
 		"""project_idなしタスクへのコメントは、depsでは作成者判定をせずserviceへ到達させる。"""
@@ -126,11 +116,7 @@ class TestGetCommentForMember:
 			"app.core.deps.task_repository.get_by_id",
 			AsyncMock(return_value=SimpleNamespace(task=task, project_is_active=None)),
 		)
-		exists = AsyncMock()
-		monkeypatch.setattr("app.core.deps.project_member_repository.exists", exists)
-
-		result = await get_comment_for_member(comment.id, user=_user(), db=_Db())
+		result = await get_comment_for_member(comment.id, db=_Db())
 
 		assert result is comment
 		assert result.task is task
-		exists.assert_not_awaited()
