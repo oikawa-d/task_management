@@ -30,12 +30,36 @@ assert_blocked() {
 	fi
 }
 
+assert_blocked_without_jq() {
+	local command=$1
+	local fake_path
+	fake_path=$(mktemp -d)
+	for utility in bash cat env; do
+		ln -s "$(command -v "$utility")" "$fake_path/$utility"
+	done
+	local input
+	input=$(payload "$command")
+	local status=0
+	printf '%s\n' "$input" | PATH="$fake_path" "$hook" >/dev/null 2>&1 || status=$?
+	rm -f "$fake_path"/*
+	rmdir "$fake_path"
+	if [[ "$status" -ne 2 ]]; then
+		echo "jq不在時にhookがexit 2でブロックしませんでした (exit=$status): $command" >&2
+		return 1
+	fi
+}
+
 assert_allowed "gh pr view 123"
 assert_allowed "git commit -m 'test'"
 assert_blocked "gh pr merge 123 --squash"
 assert_blocked "gh --repo oikawa-d/task_management pr merge 123"
 assert_blocked "gh issue close 123"
 assert_blocked "gh --repo oikawa-d/task_management issue close 123"
+assert_blocked "gh api -X PUT repos/oikawa-d/task_management/pulls/123/merge"
+assert_blocked "gh api repos/oikawa-d/task_management/pulls/123/merge --method PUT"
+assert_blocked "gh issue edit 123 --state closed"
+assert_blocked "gh --repo oikawa-d/task_management issue edit 123 --state=closed"
 assert_blocked "git status; gh pr merge 123"
+assert_blocked_without_jq "gh pr view 123"
 
 echo "block-github-destructive-actions: すべてのケースが期待通りです"
