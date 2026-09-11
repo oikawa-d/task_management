@@ -52,6 +52,8 @@
 | `0017_add_login_history_column_comments.py` | `login_history`のテーブル・全カラムコメントを付与 |
 | `0018_align_login_history_column_comments.py` | #276で付与した`id`コメントを設計書の定義に合わせて削除 |
 | `0019_update_fn_list_notifications_return_type.py` | `fn_list_notifications`の戻り値をtask情報・total_countを含む`TABLE`型へ変更（`DROP FUNCTION`後に再作成）し、`fn_count_notifications`を新設 |
+| `0020_add_admin_list_total_count_and_not_found.py` | admin一覧FNのtotal_countと更新SPのOUT/不存在エラーを追加 |
+| `0021_optimize_admin_list_functions.py` | `fn_admin_list_projects`へmember/task集計を追加し、`fn_admin_list_login_history`へusersのLEFT JOINを追加（戻り値型変更のためDROP→CREATE。downgradeでは0020定義へ復元） |
 
 **要検討**：上記のリビジョン分割・命名例（`0001_...` 等の連番接頭辞）は本詳細設計での具体化であり、基本設計に明記された正の構成ではない。実装時にAlembicの自動生成ハッシュIDとの整合をどう取るか（`down_revision` チェーンの実ファイル名）は実装担当の裁量とする。
 

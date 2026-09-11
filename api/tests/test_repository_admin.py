@@ -34,6 +34,10 @@ async def test_list_users_filters_by_query_role_and_is_active(db_session: AsyncS
 	# total_countはウィンドウ関数count(*) OVER()で算出される（該当行数と一致するはず）
 	assert all(row.total_count == len(by_query) for row in by_query)
 	assert all(row.total_count == len(by_active) for row in by_active)
+	assert by_query[0].member_count == 0
+	assert by_query[0].task_count_todo == 0
+	assert by_query[0].task_count_in_progress == 0
+	assert by_query[0].task_count_done == 0
 
 
 async def test_list_projects_filters_by_query_and_is_active(db_session: AsyncSession) -> None:
@@ -78,6 +82,9 @@ async def test_list_login_history_filters_by_user_method_and_success(db_session:
 	assert all(row.total_count == len(by_method) for row in by_method)
 	assert all(row.total_count == len(by_success) for row in by_success)
 	assert all(row.total_count == len(by_query) for row in by_query)
+	assert by_user[0].user is not None
+	assert by_user[0].user.id == user_id
+	assert by_user[0].user.username == "hist-user1"
 
 
 async def test_list_login_history_filters_by_created_at_range(db_session: AsyncSession) -> None:
