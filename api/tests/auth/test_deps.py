@@ -149,15 +149,39 @@ async def test_enforce_rate_limit_allows_request_within_limit(monkeypatch: pytes
 @pytest.mark.asyncio
 async def test_enforce_rate_limit_rejects_over_limit(monkeypatch: pytest.MonkeyPatch) -> None:
 	settings = get_backend_settings()
+	get_ttl = AsyncMock(return_value=742)
 	monkeypatch.setattr(
 		"app.core.deps.redis_store.check_rate_limit",
 		AsyncMock(return_value=settings.rate_limit_register_max_requests + 1),
+	)
+	monkeypatch.setattr("app.core.deps.redis_store.get_rate_limit_ttl", get_ttl)
+	dependency = enforce_rate_limit(
+		"register", "rate_limit_register_max_requests", "rate_limit_register_window_seconds"
+	)
+
+	with pytest.raises(TooManyAttemptsError) as exc_info:
+		await dependency(_CsrfRequest({}), settings)
+
+	assert exc_info.value.retry_after == 742
+	get_ttl.assert_awaited_once_with("register", "127.0.0.1")
+
+
+@pytest.mark.asyncio
+async def test_enforce_rate_limit_fails_closed_when_ttl_lookup_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+	settings = get_backend_settings()
+	monkeypatch.setattr(
+		"app.core.deps.redis_store.check_rate_limit",
+		AsyncMock(return_value=settings.rate_limit_register_max_requests + 1),
+	)
+	monkeypatch.setattr(
+		"app.core.deps.redis_store.get_rate_limit_ttl",
+		AsyncMock(side_effect=RuntimeError("redis down")),
 	)
 	dependency = enforce_rate_limit(
 		"register", "rate_limit_register_max_requests", "rate_limit_register_window_seconds"
 	)
 
-	with pytest.raises(TooManyAttemptsError):
+	with pytest.raises(ServiceUnavailableError):
 		await dependency(_CsrfRequest({}), settings)
 
 

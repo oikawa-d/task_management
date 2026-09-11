@@ -183,9 +183,15 @@ async def _enforce_rate_limit(
 	window: int,
 ) -> None:
 	value = f"{user.id}:{_resolved_client_ip(request)}"
-	count = await redis_store.check_rate_limit(scope, value, max_requests, window)
+	try:
+		count = await redis_store.check_rate_limit(scope, value, max_requests, window)
+		if count <= max_requests:
+			return
+		retry_after = await redis_store.get_rate_limit_ttl(scope, value)
+	except Exception as exc:
+		raise ServiceUnavailableError() from exc
 	if count > max_requests:
-		raise TooManyAttemptsError()
+		raise TooManyAttemptsError(retry_after=retry_after)
 
 
 async def enforce_notification_read_rate_limit(
@@ -252,9 +258,12 @@ def enforce_rate_limit(scope: str, max_requests_field: str, window_field: str) -
 		client_ip = resolve_client_ip(request, settings.trusted_proxy_cidrs).client_ip
 		try:
 			count = await redis_store.check_rate_limit(scope, client_ip, max_requests, window)
+			if count <= max_requests:
+				return
+			retry_after = await redis_store.get_rate_limit_ttl(scope, client_ip)
 		except Exception as exc:
 			raise ServiceUnavailableError() from exc
 		if count > max_requests:
-			raise TooManyAttemptsError()
+			raise TooManyAttemptsError(retry_after=retry_after)
 
 	return _enforce
