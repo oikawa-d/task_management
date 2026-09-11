@@ -185,6 +185,8 @@ stateDiagram-v2
 
 | 関数 | シグネチャ | 処理概要 |
 |------|-----------|----------|
+| `get_login_failure_count` | `async def get_login_failure_count(identifier: str, client_ip: str) -> int` | `key_hash = build_login_fail_key(identifier, client_ip)` → `GET login_fail:{key_hash}`。キーが存在しない場合は`0` |
+| `get_login_failure_ttl` | `async def get_login_failure_ttl(identifier: str, client_ip: str) -> int` | `key_hash = build_login_fail_key(identifier, client_ip)` → `TTL login_fail:{key_hash}`。Redisが返す残り秒数（未存在時の負値を含む）を返す |
 | `incr_login_failure` | `async def incr_login_failure(identifier: str, client_ip: str, window: int) -> int` | `key_hash = build_login_fail_key(identifier, client_ip)`（[./07_password_security.md](./07_password_security.md) §8.4） → `INCR login_fail:{key_hash}` → 戻り値が`1`（初回）なら`EXPIRE login_fail:{key_hash} window`を追加実行 → 現在の失敗回数を返す |
 | `reset_login_failure` | `async def reset_login_failure(identifier: str, client_ip: str) -> None` | 同一`key_hash`で`DEL login_fail:{key_hash}` |
 | `check_rate_limit` | `async def check_rate_limit(scope: str, key: str, max_requests: int, window: int) -> int` | `rate_limit:{scope}:{key_hash}`を原子的に加算し、超過時は残りTTLとともに拒否する |
@@ -230,7 +232,7 @@ flowchart LR
         F3["save/consume_oauth_state<br/>save/consume_oauth_handoff"]
         F4["save/consume_password_reset_token"]
         F5["replace/consume_email_verify_token<br/>mark_email_verify_sent"]
-        F6["incr/reset_login_failure"]
+        F6["get_login_failure_count / get_login_failure_ttl<br/>incr/reset_login_failure"]
         F7["delete_all_sessions<br/>revoke_all_refresh_tokens"]
         F8["ping"]
     end
