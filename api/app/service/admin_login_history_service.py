@@ -7,7 +7,7 @@
 user_idを重複排除したうえで`user_repository.get_by_id`をユーザーIDごとに呼び出す。
 repositoryにIN句によるバッチ取得FNが存在しないため、設計書§11「N+1対策」が想定する
 単一バッチクエリではなく、重複排除済みユーザー数に比例したクエリになる
-（要検討: バッチ取得用FNの追加はDB層の変更を伴うため本issueの範囲外とした）。
+（issue #348で対応予定。本PRでは対象外）。
 """
 
 from uuid import UUID
@@ -15,7 +15,6 @@ from uuid import UUID
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_backend_settings
 from app.core.exceptions import ServiceUnavailableError
 from app.models.login_history import LoginHistory
 from app.models.user import User
@@ -51,10 +50,13 @@ def _to_item(history: LoginHistory, users_by_id: dict[UUID, User]) -> AdminLogin
 
 
 async def search(query: AdminLoginHistoryQuery, db: AsyncSession) -> AdminLoginHistoryListResponse:
-	settings = get_backend_settings()
+	"""fn_admin_list_login_historyのtotal_countはウィンドウ関数のため該当ページが0件の
+
+	場合のみfn_count_admin_login_historyへフォールバックする（#347レビュー対応）。
+	"""
 	offset = (query.page - 1) * query.per_page
 	try:
-		matched = await admin_repository.list_login_history(
+		rows = await admin_repository.list_login_history(
 			db,
 			query.user_id,
 			query.q,
@@ -62,15 +64,21 @@ async def search(query: AdminLoginHistoryQuery, db: AsyncSession) -> AdminLoginH
 			query.success,
 			query.created_from,
 			query.created_to,
-			settings.admin_list_count_query_limit,
-			0,
+			query.per_page,
+			offset,
+		)
+		total = (
+			rows[0].total_count
+			if rows
+			else await admin_repository.count_login_history(
+				db, query.user_id, query.q, query.login_method, query.success, query.created_from, query.created_to
+			)
 		)
 	except DBAPIError as exc:
 		raise ServiceUnavailableError() from exc
-	total = len(matched)
-	page_rows = matched[offset : offset + query.per_page]
 
-	user_ids = sorted({row.user_id for row in page_rows if row.user_id is not None}, key=str)
+	histories = [row.history for row in rows]
+	user_ids = sorted({history.user_id for history in histories if history.user_id is not None}, key=str)
 	users_by_id: dict[UUID, User] = {}
 	try:
 		for user_id in user_ids:
@@ -80,7 +88,7 @@ async def search(query: AdminLoginHistoryQuery, db: AsyncSession) -> AdminLoginH
 	except DBAPIError as exc:
 		raise ServiceUnavailableError() from exc
 
-	items = [_to_item(row, users_by_id) for row in page_rows]
+	items = [_to_item(history, users_by_id) for history in histories]
 	total_pages = (total + query.per_page - 1) // query.per_page if total else 0
 	return AdminLoginHistoryListResponse(
 		items=items,

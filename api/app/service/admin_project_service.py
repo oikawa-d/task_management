@@ -10,8 +10,7 @@
 `task_repository.list_board`）をプロジェクトごとに呼び出して集計する。
 DBへ直接SQLを発行する新規repository関数は追加していない（repositoryはSP/FN契約のみを
 呼び出す方針のため）。結果としてプロジェクト件数に比例したクエリが発生する
-（要検討: 設計書§11のN+1対策を満たすには`fn_admin_list_projects`へ集計列を追加する
-DB変更が必要だが、本issueはservice層に限定されるため対応していない）。
+（N+1はissue #348で対応予定。本PRでは対象外）。
 """
 
 import logging
@@ -20,7 +19,6 @@ from uuid import UUID
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_backend_settings
 from app.core.exceptions import NotFoundError, ServiceUnavailableError
 from app.models.project import Project
 from app.models.user import User
@@ -78,16 +76,16 @@ async def list_projects(query: AdminProjectListQuery, db: AsyncSession) -> Admin
 	"""検索・ページング条件で全プロジェクトを一覧取得する（05_get_admin_projects.md §6.2）。
 
 	admin一覧は`is_active`の値によらず常に全件を返す（無効化済みも含む）。
+	fn_admin_list_projectsのtotal_countはウィンドウ関数のため該当ページが0件の場合のみ
+	fn_count_admin_projectsへフォールバックする（#347レビュー対応）。
 	"""
-	settings = get_backend_settings()
 	offset = (query.page - 1) * query.per_page
 	try:
-		matched = await admin_repository.list_projects(db, query.q, None, settings.admin_list_count_query_limit, 0)
+		rows = await admin_repository.list_projects(db, query.q, None, query.per_page, offset)
+		total = rows[0].total_count if rows else await admin_repository.count_projects(db, query.q, None)
 	except DBAPIError as exc:
 		raise ServiceUnavailableError() from exc
-	total = len(matched)
-	page_projects = matched[offset : offset + query.per_page]
-	items = [await _to_summary(db, project) for project in page_projects]
+	items = [await _to_summary(db, row.project) for row in rows]
 	total_pages = (total + query.per_page - 1) // query.per_page if total else 0
 	return AdminProjectListResponse(
 		items=items,

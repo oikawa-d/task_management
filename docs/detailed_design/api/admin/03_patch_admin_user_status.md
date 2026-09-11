@@ -103,10 +103,10 @@ sequenceDiagram
     R->>CSRF: Origin/CSRF検証（sessionモードのみCSRF必須）
     CSRF-->>R: OK
     R->>S: change_status(actor=CurrentUser, target_id, new_is_active)
-    S->>RP: sp_admin_update_user_status(actor.id, target_id, new_is_active)
+    S->>RP: update_user_status(actor.id, target_id, new_is_active)
     RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     alt 対象が存在しない
-        PG-->>RP: 対象なし相当
+        PG-->>RP: P0010 対象不存在
         S-->>R: NotFoundError
         R-->>FE: 404 NOT_FOUND
     else 自分自身
@@ -118,14 +118,31 @@ sequenceDiagram
         S-->>R: LastAdminRequiredError
         R-->>FE: 409 LAST_ADMIN_REQUIRED
     else 正常
-        PG-->>RP: is_active更新成功（advisory lock取得を含めSP内で一体実行、コミットで解放）
-        RP-->>S: User
+        PG-->>RP: is_active更新成功（advisory lock取得を含めSP内で一体実行、コミットで解放）。OUTパラメータで更新前is_active（old_is_active）を返す
+        RP-->>S: old_is_active
         alt 無効化（new_is_active=false）
             S->>RD: delete_all_sessions(target_id)
-            RD-->>S: SMEMBERS→各session/csrf DEL→SREM
+            alt Redis失敗
+                RD-->>S: RedisError
+                S->>S: ERROR監査ログ出力（actor.id, target_id, operation=delete_all_sessions）
+                S-->>R: ServiceUnavailableError
+                R-->>FE: 503 SERVICE_UNAVAILABLE
+            end
+            RD-->>S: SMEMBERS→各session/csrf DEL→SREM（削除件数）
             S->>RD: revoke_all_refresh_tokens(target_id)
-            RD-->>S: SMEMBERS→各refresh DEL→SREM
+            alt Redis失敗
+                RD-->>S: RedisError
+                S->>S: ERROR監査ログ出力（actor.id, target_id, operation=revoke_all_refresh_tokens）
+                S-->>R: ServiceUnavailableError
+                R-->>FE: 503 SERVICE_UNAVAILABLE
+            end
+            RD-->>S: SMEMBERS→各refresh DEL→SREM（削除件数）
         end
+        S->>RP: get_by_id(target_id)
+        RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
+        PG-->>RP: 更新後の行
+        RP-->>S: User
+        S->>S: 監査ログ出力（actor.id, target_id, old_is_active, new_is_active, session/refresh失効件数）をINFO出力
         S-->>R: UserDetail
         R-->>FE: 200 {user}
     end
@@ -142,18 +159,19 @@ flowchart TB
     C -->|"role != admin"| C2["403 FORBIDDEN"]
     C -->|"OK"| D["Origin/CSRF検証（sessionモード）"]
     D -->|"不一致"| D1["403 CSRF_INVALID"]
-    D -->|"OK"| I["CALL sp_admin_update_user_status<br/>（存在確認・自己変更禁止・最後のadmin判定・advisory lock・is_active更新をSP内で一体実行）"]
-    I -->|"対象不存在"| E1["404 NOT_FOUND"]
+    D -->|"OK"| I["CALL sp_admin_update_user_status<br/>（自己変更禁止・advisory lock・対象存在確認・最後のadmin判定・is_active更新をSP内で一体実行）"]
+    I -->|"P0010（対象不存在）"| E1["404 NOT_FOUND"]
     I -->|"P0007"| F1["409 SELF_MODIFICATION_NOT_ALLOWED"]
     I -->|"P0008"| H1["409 LAST_ADMIN_REQUIRED"]
-    I -->|"成功"| J{"new_is_active == false?"}
+    I -->|"成功（OUTでold_is_active取得）"| J{"new_is_active == false?"}
     J -->|"Yes"| K["Redis: delete_all_sessions<br/>+ revoke_all_refresh_tokens"]
-    J -->|"No（再有効化）"| L["200 {user}"]
-    K --> L
-    I -.->|"DB/Redis接続不能"| M["503 SERVICE_UNAVAILABLE"]
+    J -->|"No（再有効化）"| L["get_by_id(target_id)で応答取得 → 200 {user}"]
+    K -->|"成功"| L
+    K -.->|"Redis失敗"| M2["ERROR監査ログ出力 → 503 SERVICE_UNAVAILABLE"]
+    I -.->|"DB接続不能"| M["503 SERVICE_UNAVAILABLE"]
 ```
 
-**判定順序の理由**：[02_patch_admin_user_role.md](./02_patch_admin_user_role.md) と同一の考え方で、自己変更禁止判定・最後のadmin判定・advisory lockによる直列化はいずれも `sp_admin_update_user_status` 内部で一体的に処理される。API/service層は追加のSELECTやロック取得を行わず、SPが返すSQLSTATE（`P0007`/`P0008`）をそのままHTTPエラーへ変換する。DB更新後にRedis失効を行う順序とすることで、「DB上は無効化されたがRedisのセッションだけが生き残る」中間状態が発生してもフェイルセーフ側（無効化済み）に倒れる。逆に「Redisは失効したがDB更新前に失敗した」場合はトランザクションがロールバックされDB上は有効なままとなり、この場合はユーザーが再ログインすればセッションが再発行されるため実害はない。
+**判定順序の理由**：[02_patch_admin_user_role.md](./02_patch_admin_user_role.md) と同一の考え方で、自己変更禁止判定・対象存在確認・最後のadmin判定・advisory lockによる直列化はいずれも `sp_admin_update_user_status` 内部で一体的に処理される。API/service層は追加のSELECTやロック取得を行わず、SPが返すSQLSTATE（`P0007`/`P0008`/`P0010`）をそのままHTTPエラーへ変換する（#347レビューで事前存在確認SELECTを廃止し、SP呼び出し1回のみに整理。更新前is_activeはOUTパラメータで受け取る）。DB更新後にRedis失効を行う順序とすることで、「DB上は無効化されたがRedisのセッションだけが生き残る」中間状態が発生してもフェイルセーフ側（無効化済み）に倒れる。Redis失効が失敗した場合はDBの無効化をロールバックせず、`actor.id`/`target_id`/失敗した操作（sessions/refresh_tokens）をERROR監査ログへ出力してから503を返す。運用者はこのログを検知して同じuser_idに対する失効を再試行、または手動失効で補償する。逆に「Redisは失効したがDB更新前に失敗した」場合はトランザクションがロールバックされDB上は有効なままとなり、この場合はユーザーが再ログインすればセッションが再発行されるため実害はない。
 
 ## 6. 関数詳細
 
@@ -172,21 +190,22 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def change_status(actor: CurrentUser, target_id: UUID, new_is_active: bool, db: AsyncSession) -> User` |
+| シグネチャ | `async def change_status(actor: CurrentUser, target_id: UUID, new_is_active: bool, db: AsyncSession) -> AdminUserDetailResponse` |
 | 引数 | `actor`: 実行者（admin） / `target_id`: 対象ユーザーID / `new_is_active`: 変更後の値 / `db`: DBセッション |
-| 戻り値 | 更新後の `User` |
-| 送出例外 | `NotFoundError`（404）/ `SelfModificationError`（409）/ `LastAdminRequiredError`（409） |
-| 処理内容 | `CALL sp_admin_update_user_status(actor.id, target_id, new_is_active)` を1回呼ぶ。対象不存在はFN結果から404、自己変更禁止・最後のadmin保護・advisory lock・status更新はSP内部で一体実行する。無効化が成功した場合だけAPI層がRedis失効を続けて実行する |
+| 戻り値 | 更新後の `AdminUserDetailResponse` |
+| 送出例外 | `NotFoundError`（404）/ `SelfModificationError`（409）/ `LastAdminRequiredError`（409）/ `ServiceUnavailableError`（503） |
+| 処理内容 | `admin_repository.update_user_status(actor.id, target_id, new_is_active)` を1回呼ぶ。対象不存在（P0010）・自己変更禁止（P0007）・最後のadmin保護（P0008）・advisory lock・status更新はSP内部で一体実行され、更新前is_active（`old_is_active`）がOUTパラメータで返る。無効化が成功した場合だけAPI層がRedis失効（`delete_all_sessions`→`revoke_all_refresh_tokens`）を続けて実行し、失敗時は`actor.id`/`target_id`/失敗した操作をERROR監査ログへ出力してから`ServiceUnavailableError`にする。成功後は`user_repository.get_by_id`で応答を取得し、`actor.id`/`target_id`/`old_is_active`/`new_is_active`/失効件数を監査ログへINFO出力する（#347レビューで事前存在確認SELECTを廃止） |
 | 副作用 | SP内で `users.is_active` を更新。無効化時はDB更新成功後にRedisの `session:{sid}` / `csrf:{sid}` / `user_sessions:{uid}` / `refresh:{hash}` / `user_refresh:{uid}` をAPI層が全削除 |
 
-### 6.3 `repository/user_repository.py :: sp_admin_update_user_status`
+### 6.3 `repository/admin_repository.py :: update_user_status`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def sp_admin_update_user_status(db: AsyncSession, actor_id: UUID, target_id: UUID, is_active: bool) -> None` |
-| DB呼び出し | `CALL sp_admin_update_user_status(:actor_id, :target_id, :is_active)` |
-| 送出例外 | `P0007 SELF_MODIFICATION_NOT_ALLOWED` / `P0008 LAST_ADMIN_REQUIRED` |
-| 責務 | 対象存在、自己変更、最後のadmin、advisory lock、users更新をSP内で一体実行する |
+| シグネチャ | `async def update_user_status(db: AsyncSession, actor_id: UUID, target_id: UUID, is_active: bool) -> bool` |
+| DB呼び出し | `CALL sp_admin_update_user_status(:actor_id, :target_id, :is_active, NULL)` |
+| 戻り値 | 更新前のis_active（`OUT p_old_is_active`） |
+| 送出例外 | `P0007 SELF_MODIFICATION_NOT_ALLOWED` / `P0008 LAST_ADMIN_REQUIRED` / `P0010`（対象不存在） |
+| 責務 | 自己変更、対象存在、最後のadmin、advisory lock、users更新をSP内で一体実行する。更新前is_activeをOUTパラメータで返すことで、service層が監査ログ用に別途SELECTする必要をなくす |
 
 ### 6.4 `repository/redis_store.py :: delete_all_sessions`（既存関数の再掲）
 
@@ -213,10 +232,12 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["admin_router.patch_admin_user_status"] --> S["admin_user_service.change_status"]
-    S --> RP1["user_repository.sp_admin_update_user_status"]
+    S --> RP1["admin_repository.update_user_status"]
+    S --> RP2["user_repository.get_by_id"]
     S --> RS1["redis_store.delete_all_sessions"]
     S --> RS2["redis_store.revoke_all_refresh_tokens"]
     RP1 --> M["models.User"]
+    RP2 --> M
     RS1 --> RD[("Redis")]
     RS2 --> RD
 ```
@@ -247,7 +268,7 @@ stateDiagram-v2
 
 | 種別 | 契約 | 説明 |
 |------|------|------|
-| admin_update_user_status | `sp_admin_update_user_status(p_actor_id, p_target_id, p_is_active)` | sp_admin_update_user_statusを呼び出し、結果をレスポンスへ写像する |
+| admin_update_user_status | `sp_admin_update_user_status(p_actor_id, p_target_id, p_is_active, OUT p_old_is_active)` | sp_admin_update_user_statusを呼び出し、更新前is_active（OUT）と更新後の応答（`get_by_id`で別途取得）をレスポンスへ写像する |
 
 repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
@@ -255,7 +276,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 
 | テーブル／関数 | 操作 | 条件・TTL | 備考 |
 |----------------|------|-----------|------|
-| users | SELECT ... FOR UPDATE | `id=:target_id` | 対象行ロック |
+| users | SELECT ... FOR UPDATE | `id=:target_id` | 対象行ロック。`NOT FOUND`ならP0010（対象不存在）をRAISEする（#347レビューで追加） |
 | users | SELECT COUNT | `role='admin' AND is_active=true AND id<>:target_id` | 無効化かつ現在adminの場合のみ実行 |
 | `pg_advisory_xact_lock` | 関数呼び出し | キー `hashtext('admin_role_change')` | 同上の場合のみ実行。[02_patch_admin_user_role.md](./02_patch_admin_user_role.md)と共通のロックキー |
 | users | UPDATE | `id=:target_id` | `is_active` のみ更新 |
@@ -285,7 +306,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | ユーザー列挙対策 | admin専用APIのため対象外 |
 | タイミング攻撃対策 | 該当なし |
 | レート制限 | なし |
-| fail-close方針 | PostgreSQL/Redis接続不能時は `503 SERVICE_UNAVAILABLE`。DB更新を先に行うため、Redis失効が失敗してもDBの無効化はロールバックしない。部分失効はERROR監査後に同じuser_idで再実行できる |
+| fail-close方針 | PostgreSQL/Redis接続不能時は `503 SERVICE_UNAVAILABLE`。DB更新を先に行うため、Redis失効が失敗してもDBの無効化はロールバックしない。Redis失効の失敗時は`actor.id`/`target_id`/失敗した操作（`delete_all_sessions`/`revoke_all_refresh_tokens`のどちらか）をERROR出力し、運用者が検知して同じuser_idで再試行または手動失効できるようにする（#347レビューで追加） |
 | sessionモードへの効果 | `session:{sid}` の即時DELにより、無効化直後のリクエストから `401 SESSION_EXPIRED` となる |
 | jwtモードへの効果 | アクセストークンはRedisを参照しない署名検証のみのため、`user_refresh` 配下のリフレッシュトークンを失効させても既発行のアクセストークンは失効しない。ただし `deps.get_current_user` は認証成立後に必ず `users` テーブルの `is_active` を再確認するため（[03_auth.md §9.2](../../../basic_design/03_auth.md#92-依存性関数coredepspy)）、無効化直後のリクエストからは `403 USER_INACTIVE` で拒否される。すなわち「アクセストークンの署名は有効だがDB確認により403で弾かれる」という形で実質的に即時遮断される |
 | 最後のadmin保護 | ロール変更API（[02](./02_patch_admin_user_role.md)）と同一の `pg_advisory_xact_lock` キーを用いた直列化で、無効化とロール変更が同時に発生しても有効adminが0人になることを防ぐ |

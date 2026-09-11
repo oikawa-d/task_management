@@ -9,6 +9,7 @@ from app.models.project_member import ProjectMember
 from app.models.task import Task
 from app.models.user import User
 from app.repository import admin_repository, project_member_repository, project_repository, task_repository
+from app.repository.admin_repository import AdminProjectListItem
 from app.repository.task_repository import TaskWithProjectStatus
 from app.schemas.admin import AdminProjectListQuery
 from app.schemas.auth import CurrentUser
@@ -57,8 +58,8 @@ def _task(project_id: object, status: str) -> TaskWithProjectStatus:
 @pytest.mark.asyncio
 async def test_list_admin_projects_returns_all_owners_projects(monkeypatch: pytest.MonkeyPatch) -> None:
 	owner = _owner()
-	projects = [_project(owner) for _ in range(3)]
-	monkeypatch.setattr(admin_repository, "list_projects", AsyncMock(return_value=projects))
+	rows = [AdminProjectListItem(_project(owner), 3) for _ in range(3)]
+	monkeypatch.setattr(admin_repository, "list_projects", AsyncMock(return_value=rows))
 	monkeypatch.setattr(project_member_repository, "list_by_project", AsyncMock(return_value=[]))
 	monkeypatch.setattr(task_repository, "list_board", AsyncMock(return_value=[]))
 
@@ -69,18 +70,34 @@ async def test_list_admin_projects_returns_all_owners_projects(monkeypatch: pyte
 
 
 @pytest.mark.asyncio
-async def test_list_admin_projects_pagination(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_list_admin_projects_pagination_uses_total_count_from_window_function(
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
 	owner = _owner()
-	projects = [_project(owner) for _ in range(25)]
-	monkeypatch.setattr(admin_repository, "list_projects", AsyncMock(return_value=projects))
+	rows = [AdminProjectListItem(_project(owner), 25) for _ in range(20)]
+	monkeypatch.setattr(admin_repository, "list_projects", AsyncMock(return_value=rows))
 	monkeypatch.setattr(project_member_repository, "list_by_project", AsyncMock(return_value=[]))
 	monkeypatch.setattr(task_repository, "list_board", AsyncMock(return_value=[]))
+	count_projects = AsyncMock()
+	monkeypatch.setattr(admin_repository, "count_projects", count_projects)
 
 	response = await admin_project_service.list_projects(AdminProjectListQuery(page=1, per_page=20), AsyncMock())
 
 	assert len(response.items) == 20
 	assert response.meta.total == 25
 	assert response.meta.total_pages == 2
+	count_projects.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_list_admin_projects_falls_back_to_count_when_page_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setattr(admin_repository, "list_projects", AsyncMock(return_value=[]))
+	monkeypatch.setattr(admin_repository, "count_projects", AsyncMock(return_value=25))
+
+	response = await admin_project_service.list_projects(AdminProjectListQuery(page=5, per_page=20), AsyncMock())
+
+	assert response.items == []
+	assert response.meta.total == 25
 
 
 @pytest.mark.asyncio
@@ -93,7 +110,7 @@ async def test_list_admin_projects_aggregates_member_and_task_counts(monkeypatch
 	owner = _owner()
 	project = _project(owner)
 	member = ProjectMember(project_id=project.id, user_id=owner.id)
-	monkeypatch.setattr(admin_repository, "list_projects", AsyncMock(return_value=[project]))
+	monkeypatch.setattr(admin_repository, "list_projects", AsyncMock(return_value=[AdminProjectListItem(project, 1)]))
 	monkeypatch.setattr(project_member_repository, "list_by_project", AsyncMock(return_value=[member]))
 	monkeypatch.setattr(
 		task_repository,
