@@ -19,7 +19,7 @@
 | 認証 | 必要（session Cookie または `Authorization: Bearer`） |
 | 認可 | `notification.user_id = current_user.id` の本人一致のみ。adminも他人の通知は操作不可 |
 | CSRF検証 | 必要（session方式）。jwt方式はBearer認証のため不要 |
-| Origin検証 | 不要（Cookie発行を伴わない一般更新API） |
+| Origin検証 | 必要（Cookieを利用する更新系。jwtモードはAuthorizationヘッダのみのためOriginは必須検証としない） |
 | 冪等性 | あり。既読済みでも `read_at` を上書きせず200を返す |
 | レート制限 | user_id + 解決済みIP単位で60回/60秒。超過時は429 `TOO_MANY_ATTEMPTS`（`Retry-After`付き）、Redis障害時は503 |
 | トランザクション境界 | 対象行の更新と未読件数取得を1トランザクションで行う |

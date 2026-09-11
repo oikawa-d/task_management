@@ -92,6 +92,7 @@
 | `RATE_LIMIT_OAUTH_WINDOW_SECONDS` | int | `900` | OAuth Rate Limit時間窓 | 平文可 |
 | `RATE_LIMIT_NOTIFICATION_READ_MAX_REQUESTS` | int | `120` | 通知GETのuser_id + IP単位上限（時間窓60秒） | 平文可 |
 | `RATE_LIMIT_NOTIFICATION_WRITE_MAX_REQUESTS` | int | `60` | 通知PATCH/POSTのuser_id + IP単位上限（時間窓60秒） | 平文可 |
+| `RATE_LIMIT_NOTIFICATION_WINDOW_SECONDS` | int | `60` | 通知API（GET/PATCH/POST共通）のRate Limit時間窓 | 平文可 |
 | `TRUSTED_PROXY_CIDRS` | list[str] | 空 | `X-Forwarded-For`を信頼する直近ProxyのCIDR一覧。空なら接続元IPを使用 | 平文可 |
 | `ARGON2_TIME_COST` | int | `3` | argon2idコストパラメータ | 平文可 |
 | `ARGON2_MEMORY_COST` | int | `65536` | argon2idコストパラメータ（KiB） | 平文可 |
