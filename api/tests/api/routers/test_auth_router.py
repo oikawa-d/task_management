@@ -6,6 +6,7 @@ import pytest
 from app.api.routers import auth_router
 from app.auth.base import LoginResult
 from app.core.config import BackendSettings
+from app.core.exceptions import InvalidStateError
 from app.schemas.auth import (
 	AuthConfigResponse,
 	LoginRequest,
@@ -188,10 +189,48 @@ async def test_oauth_callback_maps_success_to_frontend_fragment(monkeypatch: pyt
 	)
 
 
+@pytest.mark.asyncio
+async def test_oauth_callback_logs_warning_on_unexpected_exception(
+	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+	callback = AsyncMock(side_effect=InvalidStateError())
+	monkeypatch.setattr(auth_router.auth_service, "oauth_callback", callback)
+	settings = _settings(frontend_base_url="https://frontend.example")
+	request = auth_router.Request(
+		{"type": "http", "method": "GET", "path": "/api/auth/oauth/google/callback", "headers": []}
+	)
+	response = Response()
+
+	with caplog.at_level("WARNING", logger="app.oauth"):
+		result = await auth_router.oauth_google_callback(
+			request=request,
+			response=response,
+			db=AsyncMock(),
+			settings=settings,
+			code="code",
+			state="state",
+			error=None,
+		)
+
+	assert result is response
+	assert response.status_code == 302
+	assert response.headers["location"] == "https://frontend.example/login?error=invalid_state"
+	warning_records = [record for record in caplog.records if record.levelname == "WARNING"]
+	assert len(warning_records) == 1
+	assert warning_records[0].failure_reason == "InvalidStateError"
+	assert warning_records[0].event == "oauth_callback_failed"
+
+
 def test_route_response_models_cover_contracts() -> None:
 	routes = _routes()
 	assert routes[("/api/auth/config", "GET")].response_model is AuthConfigResponse
 	assert routes[("/api/auth/me", "GET")].response_model is MeResponse
 	assert routes[("/api/auth/oauth/exchange", "POST")].response_model is OAuthExchangeResponse
 	assert routes[("/api/auth/register", "POST")].response_model is RegisterResponse
-	assert signature(auth_router.oauth_google_callback).parameters["state"].default is not None
+
+
+def test_oauth_google_callback_query_params_default_to_none() -> None:
+	params = signature(auth_router.oauth_google_callback).parameters
+	assert params["code"].default.default is None
+	assert params["state"].default.default is None
+	assert params["error"].default.default is None

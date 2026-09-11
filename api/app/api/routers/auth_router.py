@@ -1,3 +1,4 @@
+import logging
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, Response, status
@@ -33,6 +34,8 @@ from app.schemas.auth import (
 )
 from app.schemas.oauth import OAuthExchangeRequest, OAuthExchangeResponse, OAuthStartResult
 from app.service import auth_service
+
+logger = logging.getLogger("app.oauth")
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -93,6 +96,24 @@ def _oauth_error_code(exc: Exception) -> str:
 	if isinstance(exc, (OAuthFailedError, TooManyAttemptsError)):
 		return "oauth_failed"
 	return "oauth_failed"
+
+
+def _request_id(request: Request) -> str | None:
+	request_state = getattr(request, "state", None)
+	value = getattr(request_state, "request_id", None)
+	return value if isinstance(value, str) else None
+
+
+def _log_oauth_callback_failed(request: Request, exc: Exception) -> None:
+	logger.warning(
+		"OAuth callback failed",
+		extra={
+			"operation": "oauth_callback",
+			"event": "oauth_callback_failed",
+			"failure_reason": type(exc).__name__,
+			"request_id": _request_id(request),
+		},
+	)
 
 
 @router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
@@ -248,6 +269,7 @@ async def oauth_google_callback(
 		)
 		return _complete_redirect(response, _oauth_callback_location(settings, result))
 	except Exception as exc:
+		_log_oauth_callback_failed(request, exc)
 		response.delete_cookie(
 			settings.cookie_name_oauth_state,
 			secure=settings.cookie_secure,
