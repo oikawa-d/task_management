@@ -9,7 +9,8 @@
 - `./01_table_users.md`（親テーブル）
 - `../api/users/04_get_users_me_login_history.md`
 - `../api/admin/07_get_admin_login_history.md`
-- `../database/08_db_functions.md`（`sp_purge_login_history` の実行方式。担当外だが参照のみ行う）
+- `../database/08_db_functions.md`（`fn_list_user_login_history` / `fn_admin_list_login_history` / `sp_record_login_history` / `sp_purge_login_history`の契約）
+- `../api/admin/07_get_admin_login_history.md`（管理者向け絞り込み一覧。`admin_repository`が担当）
 
 ## 1. 概要
 
@@ -169,12 +170,12 @@ flowchart LR
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def create(db: AsyncSession, data: LoginHistoryCreateInput) -> LoginHistory` |
-| 引数 / 戻り値 | `data`：`user_id`（NULL可）・`login_identifier`・`login_method`・`ip_address`・`user_agent`・`success`・`failure_reason` / 作成後の `LoginHistory` |
-| 発行SQL | `INSERT INTO login_history (user_id, login_identifier, login_method, ip_address, user_agent, success, failure_reason) VALUES (:user_id, :login_identifier, :login_method, :ip_address, :user_agent, :success, :failure_reason) RETURNING *` |
-| 使用インデックス | なし（INSERTのみ） |
-| 送出例外 | `IntegrityError`（`ck_login_history_login_method` / `ck_login_history_failure_reason_consistency` 違反時。通常はservice層で許容値のみ渡すため到達しない想定） |
-| 処理内容 | 1. ログイン試行（成功・失敗）確定直後に必ず1件INSERTする 2. INSERT失敗時はログイン処理を失敗として扱い、成功時に作成したRedis状態を補償削除して `503 SERVICE_UNAVAILABLE` を返す |
+| シグネチャ | `async def create(db: AsyncSession, user_id: UUID \| None, login_identifier: str, login_method: str, ip_address: str \| None, user_agent: str \| None, success: bool, failure_reason: str \| None) -> None` |
+| 引数 / 戻り値 | 表の各引数 / なし |
+| 発行SQL | `CALL sp_record_login_history(:user_id, :login_identifier, :login_method, :ip_address, :user_agent, :success, :failure_reason)` |
+| 使用インデックス | なし（SP内部のINSERT） |
+| 送出例外 | DB例外を呼び出し元へ伝播（通常はservice層で認証状態のrollbackと`503 SERVICE_UNAVAILABLE`へ変換） |
+| 処理内容 | 1. ログイン試行（成功・失敗）確定直後にSPを呼ぶ 2. repositoryはINSERT結果や`LoginHistory` ORMモデルを返さない 3. INSERT失敗時の認証成立可否とRedis状態の補償はservice層が担う |
 
 ### 8.2 `repository/login_history_repository.py :: list_by_user_id`
 
@@ -182,21 +183,23 @@ flowchart LR
 |------|------|
 | シグネチャ | `async def list_by_user_id(db: AsyncSession, user_id: UUID, limit: int = 50, offset: int = 0) -> list[LoginHistory]` |
 | 引数 / 戻り値 | 対象ユーザーID・取得件数・オフセット / 新しい順の一覧 |
-| 発行SQL | `SELECT * FROM login_history WHERE user_id = :user_id ORDER BY created_at DESC LIMIT :limit OFFSET :offset` |
-| 使用インデックス | `ix_login_history_user_created` |
+| 発行SQL | `SELECT * FROM fn_list_user_login_history(:user_id, :limit, :offset)` |
+| 使用インデックス | `ix_login_history_user_created`（関数内部） |
 | 送出例外 | なし |
-| 処理内容 | 1. `GET /api/users/me/login-history` から呼び出され、自分自身の履歴のみ返す（Q-6。基本設計の既定値 `LIMIT 50` に合わせる） |
+| 処理内容 | 1. 関数結果を`LoginHistory` ORMモデル一覧へ写像 2. `GET /api/users/me/login-history` から呼び出される 3. 対象ユーザーの限定はSQL関数が行い、本人確認はservice/deps層が担う |
 
-### 8.3 `repository/login_history_repository.py :: list_all`
+### 8.3 `admin_repository.py :: list_login_history`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def list_all(db: AsyncSession, limit: int = 50, offset: int = 0) -> list[LoginHistory]` |
-| 引数 / 戻り値 | 取得件数・オフセット / 新しい順の一覧（全ユーザー対象） |
-| 発行SQL | `SELECT * FROM login_history ORDER BY created_at DESC LIMIT :limit OFFSET :offset` |
-| 使用インデックス | `ix_login_history_created` |
+| シグネチャ | `async def list_login_history(db: AsyncSession, user_id: UUID \| None, query: str \| None, login_method: str \| None, success: bool \| None, created_from: datetime \| None, created_to: datetime \| None, limit: int, offset: int) -> list[LoginHistory]` |
+| 引数 / 戻り値 | `fn_admin_list_login_history`の絞り込み条件・件数・オフセット / `LoginHistory` ORMモデル一覧 |
+| 発行SQL | `SELECT * FROM fn_admin_list_login_history(:user_id, :query, :login_method, :success, :created_from, :created_to, :limit, :offset)` |
+| 使用インデックス | `ix_login_history_user_created`, `ix_login_history_created`（関数内部） |
 | 送出例外 | なし |
-| 処理内容 | 1. `GET /api/admin/login-history`（管理者専用）から呼び出す 2. RBACによる管理者判定はservice層/認可レイヤで行い、本関数はフィルタなしで返す |
+| 処理内容 | 1. 関数結果を`LoginHistory` ORMモデル一覧へ写像 2. `GET /api/admin/login-history`から呼び出す 3. user_id・identifier・login_method・success・期間の絞り込みはSQL関数へ委譲 4. 管理者認可はservice/deps層が担う |
+
+`login_history_repository.list_all`は新設しない。本人向けの`list_by_user_id`と、管理者向けの絞り込み可能な`admin_repository.list_login_history`で責務を分担する。将来、両者を共通一覧へ統合する必要が生じた場合のAPI・認可・SQL関数統合方針は別途要検討とする。
 
 ### 8.4 `repository/login_history_repository.py :: purge_expired`
 
@@ -215,9 +218,10 @@ flowchart LR
 flowchart LR
     AS["auth_service"] --> LRP["login_history_repository"]
     US["user_service"] --> LRP
-    ADS["admin_service<br/>（担当外）"] --> LRP
+    ADS["admin_service<br/>（担当外）"] --> ARP["admin_repository"]
     OPS["運用者による手動実行<br/>（アプリ外）"] --> LRP
     LRP --> T["login_history テーブル"]
+    ARP --> T
 ```
 
 ## 10. 想定クエリと性能
@@ -225,7 +229,7 @@ flowchart LR
 | No | ユースケース | クエリ概要 | 使用インデックス | 想定計画 |
 |----|--------------|-----------|-------------------|----------|
 | Q-6 | 自分のログイン履歴 | `WHERE user_id=:uid ORDER BY created_at DESC LIMIT 50` | `ix_login_history_user_created` | Index Scan（複合インデックスの先頭一致 + ソート済み） |
-| - | 管理者の全体ログイン履歴 | `ORDER BY created_at DESC LIMIT/OFFSET` | `ix_login_history_created` | Index Scan Backward |
+| - | 管理者のログイン履歴絞り込み | `fn_admin_list_login_history`（各条件、`ORDER BY created_at DESC LIMIT/OFFSET`） | `ix_login_history_user_created` / `ix_login_history_created`（関数内部） | Index Scan |
 | - | 保持期間超過分の一括削除 | `DELETE WHERE created_at < now() - interval` | `ix_login_history_created` | Index Scan（削除範囲の特定） |
 
 ## 11. 整合性・並行制御
@@ -249,7 +253,8 @@ flowchart LR
 | 5 | CASCADE | 親 `users` を削除 | `login_history.user_id` が `NULL` に更新され、行自体は残る | `test_delete_user_sets_login_history_user_id_null` |
 | 6 | 件数増加 | 大量件数（例：10,000件）投入時の `list_by_user_id` の応答 | `ix_login_history_user_created` を使用しLIMIT付きで高速応答する（実行計画にIndex Scanが現れる） | `test_list_by_user_id_uses_index_with_large_dataset` |
 | 7 | 保持期間 | `retention_days` より古い行と新しい行を混在させて `purge_expired` を実行 | 古い行のみ削除され、新しい行は残る | `test_purge_expired_deletes_only_old_rows` |
-| 8 | リポジトリ | `list_all` がRBACの制御なしに全件返すこと（呼び出し元制御の確認） | service層で管理者以外からの呼び出しが拒否される（403） | `test_list_all_login_history_requires_admin_at_service_layer` |
+| 8 | リポジトリ | `list_by_user_id`が`fn_list_user_login_history`を呼ぶ | `LoginHistory` ORMモデル一覧を返し、対象ユーザーの履歴だけ取得する | `test_list_by_user_id_returns_orm_models` |
+| 9 | リポジトリ | `admin_repository.list_login_history`が絞り込み条件を受け取る | `fn_admin_list_login_history`による`LoginHistory` ORMモデル一覧を返す | `test_admin_list_login_history_applies_filters` |
 
 ## 13. Issue #8で確定した事項
 
@@ -258,3 +263,4 @@ flowchart LR
 - `X-Forwarded-For` は `TRUSTED_PROXY_CIDRS` による信頼境界を通過した場合のみ監査IPへ反映する。
 - `purge_expired` の実行中に新規ログイン試行のINSERTと競合した場合の挙動（ロック待ち等）は、PostgreSQLの標準的なMVCCに委ねる前提とし、advisory lockは使用しない方針としたが、運用上問題ないか要検討。
 - `failure_reason` の許容値一覧（`invalid_credentials` / `user_inactive` / `oauth_denied` 等）はCHECK制約化せず基本設計の「等」表記のまま自由記述としたが、値のガバナンスをDB側でも制約すべきか要検討。
+- `login_history_repository.list_all`は設けず、本人向け取得と管理者向け絞り込み取得を分離する。将来の共通一覧化はAPI・認可・DB関数の責務を含めて要検討。
