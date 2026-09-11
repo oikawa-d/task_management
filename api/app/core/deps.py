@@ -221,3 +221,50 @@ def enforce_rate_limit(scope: str, max_requests_field: str, window_field: str) -
 			raise TooManyAttemptsError()
 
 	return _enforce
+
+
+def _resolved_client_ip(request: Request) -> str:
+	return request.client.host if request.client else "unknown"
+
+
+async def _enforce_rate_limit(
+	request: Request,
+	user: CurrentUser,
+	scope: str,
+	max_requests: int,
+	window: int,
+) -> None:
+	value = f"{user.id}:{_resolved_client_ip(request)}"
+	count = await redis_store.check_rate_limit(scope, value, max_requests, window)
+	if count > max_requests:
+		raise TooManyAttemptsError()
+
+
+async def enforce_notification_read_rate_limit(
+	request: Request,
+	user: CurrentUser = Depends(get_current_user),
+	settings: BackendSettings = Depends(get_backend_settings),
+) -> None:
+	"""通知参照系（一覧・未読件数）APIのレート制限。user_id+解決済みIP単位で判定する。"""
+	await _enforce_rate_limit(
+		request,
+		user,
+		"notification_read",
+		settings.rate_limit_notification_read_max_requests,
+		settings.rate_limit_notification_window_seconds,
+	)
+
+
+async def enforce_notification_write_rate_limit(
+	request: Request,
+	user: CurrentUser = Depends(get_current_user),
+	settings: BackendSettings = Depends(get_backend_settings),
+) -> None:
+	"""通知更新系（個別既読・全既読）APIのレート制限。user_id+解決済みIP単位で判定する。"""
+	await _enforce_rate_limit(
+		request,
+		user,
+		"notification_write",
+		settings.rate_limit_notification_write_max_requests,
+		settings.rate_limit_notification_window_seconds,
+	)

@@ -53,6 +53,7 @@ class BackendSettings(BaseSettings):
 	rate_limit_oauth_window_seconds: int = 900
 	rate_limit_notification_read_max_requests: int = 120
 	rate_limit_notification_write_max_requests: int = 60
+	rate_limit_notification_window_seconds: int = 60
 	trusted_proxy_cidrs: Annotated[list[str], NoDecode] = []
 	argon2_time_cost: int = 3
 	argon2_memory_cost: int = 65536

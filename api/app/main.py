@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routers.auth_router import router as auth_router
 from app.api.routers.comment_router import router as comment_router
+from app.api.routers.notifications_router import router as notifications_router
 from app.api.routers.oauth_router import router as oauth_router
 from app.api.routers.projects_router import router as projects_router
 from app.api.routers.system_router import router as system_router
@@ -58,3 +59,4 @@ app.include_router(oauth_router)
 app.include_router(projects_router)
 app.include_router(tasks_router)
 app.include_router(comment_router)
+app.include_router(notifications_router)
