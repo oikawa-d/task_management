@@ -193,9 +193,9 @@ flowchart TB
 |------|------|
 | シグネチャ | `async def list_projects(db: AsyncSession, q: str \| None, is_active: bool \| None, limit: int, offset: int) -> list[AdminProjectListItem]` |
 | 引数 | `q`: プロジェクト名の部分一致条件（`None` なら全件対象） / `is_active`: admin一覧では常に`None`（全件対象） / `limit`, `offset`: ページング |
-| 戻り値 | `AdminProjectListItem`（`project: Project`, `member_count: int`, status別task_count、`total_count: int`）のリスト |
+| 戻り値 | `AdminProjectListItem`（`project: Project`, `owner: User`, `member_count: int`, status別task_count、`total_count: int`）のリスト |
 | 送出例外 | `OperationalError`（DB不通） |
-| 処理内容 | `SELECT (project).*, member_count, task_count_todo, task_count_in_progress, task_count_done, total_count FROM fn_admin_list_projects(:query, :is_active, :limit, :offset)` を実行する。`q`によるフィルタ・集計・`ORDER BY created_at DESC`・`LIMIT/OFFSET`・`count(*) OVER()`によるtotal_countの算出はいずれもFN内部で行う |
+| 処理内容 | `SELECT (project).*, (owner).*` と集計値を `fn_admin_list_projects(:query, :is_active, :limit, :offset)` から取得する。FNが返すowner情報を`User`へ復元し、`Project.owner`へ設定する。`q`によるフィルタ・集計・`ORDER BY created_at DESC`・`LIMIT/OFFSET`・`count(*) OVER()`によるtotal_countの算出はいずれもFN内部で行う |
 | 副作用 | なし |
 
 ### 6.4 `repository/admin_repository.py :: count_projects`

@@ -114,11 +114,12 @@ def _user_row(**overrides: object) -> dict[str, object]:
 
 
 def _project_row(**overrides: object) -> dict[str, object]:
+	owner_id = uuid4()
 	defaults: dict[str, object] = {
 		"id": uuid4(),
 		"name": "Cerberus開発",
 		"description": None,
-		"owner_id": uuid4(),
+		"owner_id": owner_id,
 		"is_active": True,
 		"start_at": None,
 		"end_at": None,
@@ -129,6 +130,20 @@ def _project_row(**overrides: object) -> dict[str, object]:
 		"task_count_in_progress": 4,
 		"task_count_done": 5,
 		"total_count": 1,
+		"owner_user_id": owner_id,
+		"owner_username": "owner",
+		"owner_email": "owner@example.com",
+		"owner_password_hash": None,
+		"owner_last_name": "山田",
+		"owner_first_name": "太郎",
+		"owner_last_name_kana": None,
+		"owner_first_name_kana": None,
+		"owner_birth_date": None,
+		"owner_role": "member",
+		"owner_is_active": True,
+		"owner_email_verified_at": None,
+		"owner_created_at": datetime.now(timezone.utc),
+		"owner_updated_at": datetime.now(timezone.utc),
 	}
 	defaults.update(overrides)
 	return defaults
@@ -206,6 +221,9 @@ async def test_admin_repository_list_projects_maps_total_count() -> None:
 	assert items[0].task_count_todo == 3
 	assert items[0].task_count_in_progress == 4
 	assert items[0].task_count_done == 5
+	assert items[0].project.owner is not None
+	assert items[0].project.owner.id == items[0].project.owner_id
+	assert items[0].project.owner.username == "owner"
 	assert db.execute.await_count == 1
 
 

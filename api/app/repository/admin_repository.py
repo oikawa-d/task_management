@@ -73,6 +73,31 @@ def _build_project(row: RowMapping) -> Project:
 	)
 
 
+def _build_project_owner(row: RowMapping) -> User:
+	return User(
+		id=row["owner_user_id"],
+		username=row["owner_username"],
+		email=row["owner_email"],
+		password_hash=row["owner_password_hash"],
+		last_name=row["owner_last_name"],
+		first_name=row["owner_first_name"],
+		last_name_kana=row["owner_last_name_kana"],
+		first_name_kana=row["owner_first_name_kana"],
+		birth_date=row["owner_birth_date"],
+		role=row["owner_role"],
+		is_active=row["owner_is_active"],
+		email_verified_at=row["owner_email_verified_at"],
+		created_at=row["owner_created_at"],
+		updated_at=row["owner_updated_at"],
+	)
+
+
+def _build_admin_project(row: RowMapping) -> Project:
+	project = _build_project(row)
+	project.owner = _build_project_owner(row)
+	return project
+
+
 def _build_login_history(row: RowMapping) -> LoginHistory:
 	return LoginHistory(
 		id=row["id"],
@@ -116,7 +141,14 @@ async def list_projects(
 ) -> list[AdminProjectListItem]:
 	result = await db.execute(
 		text(
-			"SELECT (project).*, member_count, task_count_todo, task_count_in_progress, "
+			"SELECT (project).*, (owner).id AS owner_user_id, (owner).username AS owner_username, "
+			"(owner).email AS owner_email, (owner).password_hash AS owner_password_hash, "
+			"(owner).last_name AS owner_last_name, (owner).first_name AS owner_first_name, "
+			"(owner).last_name_kana AS owner_last_name_kana, (owner).first_name_kana AS owner_first_name_kana, "
+			"(owner).birth_date AS owner_birth_date, (owner).role AS owner_role, "
+			"(owner).is_active AS owner_is_active, (owner).email_verified_at AS owner_email_verified_at, "
+			"(owner).created_at AS owner_created_at, (owner).updated_at AS owner_updated_at, "
+			"member_count, task_count_todo, task_count_in_progress, "
 			"task_count_done, total_count "
 			"FROM fn_admin_list_projects(:query, :is_active, :limit, :offset)"
 		),
@@ -124,7 +156,7 @@ async def list_projects(
 	)
 	return [
 		AdminProjectListItem(
-			project=_build_project(row),
+			project=_build_admin_project(row),
 			total_count=row["total_count"],
 			member_count=row["member_count"],
 			task_count_todo=row["task_count_todo"],
