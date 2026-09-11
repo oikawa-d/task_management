@@ -116,6 +116,28 @@ async def test_add_comment_rejects_inactive_task(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_add_comment_fetches_created_comment_by_id(monkeypatch) -> None:
+	user = _user()
+	task = _task(user.id)
+	db = AsyncMock()
+	comment = _comment(user.id, task.id)
+	comment_id = comment.id
+	create = AsyncMock(return_value=comment_id)
+	get_by_id = AsyncMock(return_value=comment)
+	list_by_task = AsyncMock()
+	monkeypatch.setattr(task_comment_service.task_comment_repository, "create", create)
+	monkeypatch.setattr(task_comment_service.task_comment_repository, "get_by_id", get_by_id)
+	monkeypatch.setattr(task_comment_service.task_comment_repository, "list_by_task", list_by_task)
+
+	response = await task_comment_service.add_comment(task, CommentCreateRequest(body="本文"), user, db)
+
+	assert response.id == comment_id
+	create.assert_awaited_once_with(db, task.id, user.id, "本文")
+	get_by_id.assert_awaited_once_with(db, comment_id)
+	list_by_task.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_update_comment_rejects_inactive_task(monkeypatch) -> None:
 	user = _user()
 	task = _task(user.id, is_active=False)
