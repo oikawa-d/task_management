@@ -23,9 +23,14 @@
 | ガード | 認証必須（`RequireAuth`）。未認証は `/login` へリダイレクト |
 | 対応要件 | 要件書§2-3 |
 | 主なユースケース | 自分が所属するプロジェクトを一覧し、カードから `/projects/:projectId` へ遷移する。新規プロジェクトを作成する |
-| 実装ファイル | `frontend/src/features/dashboard/pages/DashboardPage.tsx`、`frontend/src/features/dashboard/components/ProjectList.tsx`、`frontend/src/features/dashboard/components/ProjectCreateModal.tsx`、`frontend/src/features/dashboard/components/Calendar.tsx`、`frontend/src/features/dashboard/hooks/useDashboard.ts`、`frontend/src/lib/api/projects.ts`、`frontend/src/stores/projectStore.ts` |
+| 現行実装ファイル | `frontend/src/features/dashboard/pages/DashboardPage.tsx`、`frontend/src/features/dashboard/components/ProjectList.tsx`、`frontend/src/features/dashboard/components/ProjectCreateForm.tsx`、`frontend/src/features/dashboard/hooks/useProjects.ts`、`frontend/src/features/dashboard/hooks/useCreateProject.ts`、`frontend/src/features/dashboard/api/projectsApi.ts` |
+| 未実装・実装予定ファイル | `frontend/src/features/dashboard/components/ProjectCreateModal.tsx`、`frontend/src/features/dashboard/components/Calendar.tsx`、`frontend/src/features/dashboard/hooks/useDashboard.ts`、`frontend/src/lib/api/projects.ts`、`frontend/src/stores/projectStore.ts` |
 
-> 推奨方針: 実装済みのルート・コンポーネント・状態管理が`features/dashboard`配下に統一されているため、ファイルを`features/projects`へ移動せず、詳細設計書の実装パスを`features/dashboard`へ合わせる。この方針を#159の設計・実装パス差異に対する確定方針とする。
+> 現行developでは、プロジェクト一覧・作成・ボードへの遷移を`features/dashboard`配下の実装で提供している。カレンダー、選択中プロジェクトを保持する統合state、`useDashboard`による統合フックは未実装であり、上表の「未実装・実装予定ファイル」は現行実装として参照しない。
+>
+> §2以降のUI・処理仕様は目標仕様を示す。現行実装では作成UIはモーダルではなく`ProjectCreateForm`として表示され、カレンダー領域はプレースホルダである。
+>
+> #159の受入条件は、未マージブランチのコミットではなく現行developの動作で判定する。現行実装は初回取得と作成成功後の一覧再取得を満たすが、作成したプロジェクトの選択state更新および403/409の個別反映は未実装である。
 
 ## 2. 画面レイアウト
 
@@ -130,7 +135,7 @@ sequenceDiagram
     actor U as ユーザー
     participant DP as DashboardPage
     participant Q as TanStack Query
-    participant EP as lib/api/projects.ts
+    participant EP as features/dashboard/api/projectsApi.ts
     participant AA as AuthAdapter
     participant API as FastAPI
 
@@ -163,10 +168,10 @@ sequenceDiagram
 sequenceDiagram
     autonumber
     actor U as ユーザー
-    participant PCM as ProjectCreateModal
+    participant PCM as ProjectCreateForm
     participant RHF as react-hook-form + zod
     participant Q as TanStack Query
-    participant EP as lib/api/projects.ts
+    participant EP as features/dashboard/api/projectsApi.ts
     participant API as FastAPI
 
     U->>PCM: 「新規プロジェクトの作成」クリック
@@ -178,7 +183,7 @@ sequenceDiagram
         RHF-->>U: フィールドエラー表示（送信しない）
     else バリデーションOK
         PCM->>Q: createProjectMutation.mutate({name, description})
-        Q->>EP: postProject(payload)
+        Q->>EP: createProject(payload)
         EP->>API: POST /api/projects
         alt 201
             API-->>EP: {project}
@@ -211,48 +216,52 @@ flowchart TB
     OUT --> DP["DashboardPage"]
 
     DP -->|"useQuery(['projects'])"| Q["TanStack Query Cache"]
-    DP --> PCL["ProjectCardList<br/>props: items"]
-    PCL --> PC["ProjectCard × N<br/>props: project, onClick"]
-    DP --> EMP["EmptyState<br/>props: onCreateClick"]
-    DP --> PCM["ProjectCreateModal<br/>props: open, onClose"]
-    PCM --> RHF["useForm(ProjectCreateSchema)"]
+    DP --> PCL["ProjectList<br/>props: projects, onSelect, onRetry, onCreateClick"]
+    PCL --> PC["project button × N<br/>props: project, onSelect"]
+    DP --> EMP["ProjectListのEmptyState<br/>props: onCreateClick"]
+    DP --> PCM["ProjectCreateForm<br/>props: onSubmit, onCancel"]
+    PCM --> RHF["useForm(projectCreateSchema)"]
     PCM --> BTN["Button（送信/キャンセル）"]
 
     PC -->|"onClick"| NAV["router.navigate(/projects/:id)"]
-    PCM -->|"mutate"| EP["lib/api/projects.ts :: createProject"]
+    PCM -->|"mutate"| EP["features/dashboard/api/projectsApi.ts :: createProject"]
 ```
 
 ## 9. 関数・カスタムフック詳細
 
-### 9.1 `features/dashboard/hooks/useDashboard.ts :: useDashboard`
+### 9.1 `features/dashboard/hooks/useProjects.ts :: useProjects`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `function useDashboard(options?: { calendarParams?: CalendarParams; perPage?: number }): DashboardState` |
-| 引数 | `calendarParams`（カレンダー取得条件、任意）、`perPage`（既定20） |
-| 戻り値 | プロジェクト一覧、選択中プロジェクト、カレンダータスク、ページング、取得・作成状態、再取得関数 |
-| 処理内容 | 1. `queryKey: ['projects', { page, perPage }]` で一覧取得 2. `calendarParams` 指定時はカレンダータスクを取得 3. 取得結果を`projectStore`へ反映 4. 作成成功時に一覧を無効化し、作成プロジェクトを選択 |
-| 副作用 | `GET /api/projects`、`GET /api/tasks/calendar` 呼び出し。作成成功時は一覧キャッシュを無効化 |
+| シグネチャ | `function useProjects(params?: ProjectListParams): UseQueryResult<ProjectListResponse>` |
+| 引数 | `page`（既定1）、`per_page`（既定20）、`include_inactive`（既定false） |
+| 戻り値 | TanStack Queryのプロジェクト一覧取得結果 |
+| 処理内容 | `queryKey: ['projects', { page, perPage }]` を組み立て、`projectsApi.getProjects`をqueryFnとして実行する |
+| 副作用 | `GET /api/projects` 呼び出し |
 
-### 9.2 `lib/api/projects.ts :: getProjects / createProject / getCalendarTasks`
-
-| 項目 | 内容 |
-|------|------|
-| シグネチャ | `getProjects(options?, client?): Promise<ProjectListResponse>`、`createProject(input, client?): Promise<ProjectSummaryResponse>`、`getCalendarTasks(params, client?): Promise<CalendarTask[]>` |
-| 引数 | 一覧取得条件、作成入力、カレンダー取得条件。HTTP clientは共通`getApiClient()`を既定値とする |
-| 戻り値 | APIレスポンスの型付きPromise |
-| 処理内容 | 共通API clientを使用してプロジェクト一覧取得、作成、カレンダータスク取得を行う |
-| 副作用 | `GET /api/projects`、`POST /api/projects`、`GET /api/tasks/calendar` 呼び出し |
-
-### 9.3 `features/dashboard/components/ProjectCreateModal.tsx :: ProjectCreateModal`
+### 9.2 `features/dashboard/hooks/useCreateProject.ts :: useCreateProject`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `function ProjectCreateModal(props: { open: boolean; onClose: () => void }): JSX.Element` |
-| 引数 | `open`：表示制御、`onClose`：閉じる際のコールバック |
+| シグネチャ | `function useCreateProject(): UseMutationResult<ProjectSummary, unknown, ProjectCreateRequest>` |
+| 引数 | `mutate(payload)` または `mutateAsync(payload)` にプロジェクト作成入力を渡す |
+| 戻り値 | TanStack Queryのプロジェクト作成mutation結果 |
+| 処理内容 | `projectsApi.createProject`をmutationFnとして実行し、成功時に`['projects']`をinvalidateする |
+| 副作用 | `POST /api/projects` 呼び出し、成功時にプロジェクト一覧を再取得 |
+
+### 9.3 `features/dashboard/components/ProjectCreateForm.tsx :: ProjectCreateForm`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `function ProjectCreateForm(props: { onSubmit: (payload: ProjectCreateRequest) => Promise<void>; onCancel: () => void }): JSX.Element` |
+| 引数 | `onSubmit`：作成処理、`onCancel`：フォームを閉じる処理 |
 | 戻り値 | JSX |
-| 処理内容 | 1. `useForm(zodResolver(ProjectCreateSchema))` でフォーム初期化 2. 送信ハンドラで `useCreateProject().mutate` を呼ぶ 3. 成功時に `reset()` と `onClose()` を呼ぶ 4. 422時は `setError` でフィールドへ反映 |
-| 副作用 | `POST /api/projects`、トースト表示 |
+| 処理内容 | 1. `useForm(zodResolver(projectCreateSchema))` でフォーム初期化 2. `onSubmit`へ入力値を渡す 3. 422時は`setError`でフィールドへ反映 4. その他の失敗はフォーム内へ表示 |
+| 副作用 | `POST /api/projects` 呼び出し、入力エラー表示 |
+
+### 9.4 未実装・実装予定の統合機能
+
+`useDashboard`、`getCalendarTasks`、`projectStore`、`ProjectCreateModal`、`Calendar`は設計上の予定であり、現行developには実装されていない。これらを実装ファイルとして参照する変更は、別Issueで受入条件を定義してから行う。
 
 ## 10. バリデーション
 
@@ -278,7 +287,7 @@ flowchart LR
     C --> D["APIレスポンス 201 {project}"]
     D --> E["TanStack Query<br/>invalidateQueries(['projects'])"]
     E --> F["GET /api/projects 再取得"]
-    F --> G["ProjectCardList 再描画"]
+    F --> G["ProjectList 再描画"]
 
     H["マウント"] --> I["GET /api/projects"]
     I --> J["queryCache['projects']"]
@@ -307,12 +316,12 @@ flowchart LR
 
 | No | 区分 | ケース | 前提（MSWのモック応答等） | 期待結果 | テスト名案 |
 |----|------|--------|---------------------------|----------|------------|
-| 1 | 単体（zod） | `name` が101文字 | - | バリデーションエラー | `ProjectCreateSchema rejects name over 100 chars` |
-| 2 | 単体（zod） | `name` が空文字 | - | 必須エラー | `ProjectCreateSchema requires name` |
+| 1 | 単体（zod） | `name` が101文字 | - | バリデーションエラー | `projectCreateSchema rejects name over 100 chars` |
+| 2 | 単体（zod） | `name` が空文字 | - | 必須エラー | `projectCreateSchema requires name` |
 | 3 | コンポーネント | 0件時の描画 | `GET /projects` → `{items:[], meta:{total:0}}` | 空状態メッセージと作成導線を表示 | `DashboardPage shows empty state when no projects` |
 | 4 | コンポーネント | 複数件時の描画 | `GET /projects` → 2件 | メンバー数・タスク件数バッジを含むカードが2枚描画 | `DashboardPage renders project cards with badges` |
-| 5 | コンポーネント | 作成成功 | `POST /projects` → 201 | モーダルが閉じ、一覧が再取得される | `ProjectCreateModal closes and refetches list on success` |
-| 6 | コンポーネント | 作成422 | `POST /projects` → 422 `{field:'name'}` | フィールドにエラー表示、モーダルは開いたまま | `ProjectCreateModal shows field error on 422` |
+| 5 | コンポーネント | 作成成功 | `POST /projects` → 201 | フォームが閉じ、一覧が再取得される | `ProjectCreateForm closes and refetches list on success` |
+| 6 | コンポーネント | 作成422 | `POST /projects` → 422 `{field:'name'}` | フィールドにエラー表示、フォームは開いたまま | `ProjectCreateForm shows field error on 422` |
 | 7 | 結合 | 未認証アクセス | authStore=`unauthenticated` | `/login` にリダイレクト | `RequireAuth redirects unauthenticated user from dashboard` |
 | 8 | 網羅できない範囲 | 実際のカードグリッドのレスポンシブ折返し | - | - | ピクセル単位のレイアウト崩れはCSSの視覚回帰テスト対象外のため手動確認とする |
 

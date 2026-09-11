@@ -279,7 +279,10 @@ flowchart LR
 
 ```mermaid
 stateDiagram-v2
-    [*] --> RowLocked: "sp_update_task内部で対象行をロック"
+    [*] --> LockDecision: "status/position変更の有無を判定"
+    LockDecision --> AdvisoryLocked: "変更あり: 対象列のadvisory lockをキー昇順で取得"
+    LockDecision --> RowLocked: "変更なし"
+    AdvisoryLocked --> RowLocked: "対象行をFOR UPDATE"
     RowLocked --> VersionChecked: "version一致確認"
     VersionChecked --> Conflict: "不一致"
     Conflict --> [*]: "ROLLBACK / 409"
@@ -287,8 +290,7 @@ stateDiagram-v2
     AssigneeChecked --> Rejected: "assignee非メンバー/無効"
     Rejected --> [*]: "ROLLBACK / 422 or 409"
     AssigneeChecked --> SimpleUpdate: "status/position変更なし"
-    AssigneeChecked --> AdvisoryLocked: "status/position変更あり"
-    AdvisoryLocked --> Displaced: "対象行を退避値へ"
+    AssigneeChecked --> Displaced: "status/position変更ありなら対象行を退避値へ"
     Displaced --> Shifted: "旧列/新列の該当行をシフト"
     Shifted --> Finalized: "対象行のstatus/positionを確定"
     Finalized --> SimpleUpdate: "その他フィールド反映"
@@ -341,7 +343,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | タイミング攻撃対策 | 対象外 |
 | レート制限 | なし |
 | fail-close方針 | advisory lock取得やシフトUPDATEの途中で失敗した場合はROLLBACKし、部分適用のposition状態を残さない |
-| 同時更新制御 | 行ロック（`FOR UPDATE`）で同一タスクへの同時PATCHを直列化しつつ、`version` 比較で「先勝ち」の楽観ロック意味論を維持する。行ロックは排他制御の手段であり、`TASK_CONFLICT` の判定基準はあくまで `version` 一致とする |
+| 同時更新制御 | 対象列のadvisory lockを行ロック（`FOR UPDATE`）より先に取得して列内の複数タスク更新を直列化し、その後の行ロックで同一タスクへの同時PATCHを直列化する。`version` 比較で「先勝ち」の楽観ロック意味論を維持し、`TASK_CONFLICT` の判定基準はあくまで `version` 一致とする |
 | デッドロック回避 | 影響する `(project_id, status)` のadvisory lockは常にstatus文字列の昇順で取得する。異なる2タスクが逆順で列を跨ぐ移動を同時に行っても、ロック取得順序が一致するため待機のみでデッドロックしない |
 | is_active変更の権限 | 一般のプロジェクトメンバーは`is_active`を変更できない（403 `FORBIDDEN`）。作成者本人／プロジェクトオーナー／adminのみ許可し、無効化の取り消し（再有効化）操作の誤用・悪用を防ぐ |
 

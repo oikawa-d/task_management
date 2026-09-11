@@ -219,14 +219,15 @@ flowchart LR
     C --> D["INSERT tasks<br/>version=1"]
     D --> E["ROW 生成完了"]
 
-    E --> F["PATCH /tasks/:id<br/>version一致確認"]
-    F -->|"status/position変更あり"| G["advisory lock 取得<br/>(project_id, 旧status)<br/>(project_id, 新status)"]
-    G --> H["移動対象を退避値へ一時UPDATE<br/>(max+件数+1)"]
-    H --> I["旧列: 後続positionを-1で詰める<br/>新列: 挿入位置以降を+1でずらす"]
+    E --> F["PATCH /tasks/:id"]
+    F -->|"status/position変更あり"| G["旧列・新列のadvisory lockをキー昇順で取得"]
+    G --> H["対象行をFOR UPDATE<br/>→ version一致確認"]
+    F -->|"status/position変更なし"| H
+    H -->|"status/position変更あり"| I["旧列: 後続positionを-1で詰める<br/>新列: 挿入位置以降を+1でずらす"]
+    H -->|"status/position変更なし"| L["UPDATE title/description/assignee/due_at<br/>version=version+1"]
     I --> J["移動対象へ最終position設定<br/>UPDATE version=version+1"]
     J --> K["COMMIT（DEFERRED制約検証）"]
-
-    F -->|"status/position変更なし"| L["UPDATE title/description/assignee/due_at<br/>version=version+1"]
+    L --> K
 
     E --> M["DELETE /tasks/:id"]
     M --> N["UPDATE tasks SET is_active=false<br/>version=version+1"]
@@ -266,7 +267,7 @@ repositoryは上表のSP/FN呼び出しと戻り値のDTO写像のみを実装�
 
 | 項目 | 内容 |
 |------|------|
-| 行ロック | `PATCH /tasks/{id}` に対応するUPDATEの直前に `SELECT ... FROM tasks WHERE id = :task_id FOR UPDATE` 相当の行ロックをSP内で取得し、`version` チェックとUPDATEの間の競合を防ぐ（advisory lockは「列全体」、本ロックは「この1行」が対象という違いに注意） |
+| 行ロック | status/position変更時は対象タスクの `(project_id, status)` advisory lockをキー文字列の昇順で先に取得し、その後 `SELECT ... FROM tasks WHERE id = :task_id FOR UPDATE` 相当の行ロックをSP内で取得する。status/position変更なしでも行ロックを取得し、`version` チェックとUPDATEの間の競合を防ぐ（advisory lockは「列全体」、本ロックは「この1行」が対象という違いに注意）。行ロックを先に取得すると、同じ列への並行更新で相互に行ロックを待つdeadlockが発生し得る。 |
 | 楽観ロック | `UPDATE tasks SET ..., version = version + 1 WHERE id = :id AND version = :expected_version` で行を絞り込み、影響行数0件なら `version` 不一致として `P0005 TASK_CONFLICT` を送出する |
 | 実行順序 | status/positionが変わる場合は §8.3〜8.4 の再採番処理を同一トランザクションで実施してから本UPDATEを発行する |
 
@@ -361,7 +362,7 @@ flowchart LR
 | 論理削除（`is_active`） | `DELETE /api/tasks/{id}` は `UPDATE tasks SET is_active=false` のみを発行し、`position` の詰め（compaction）は行わない。再有効化は `PATCH /api/tasks/{id}` に `is_active=true` を指定して行う（作成者/プロジェクトオーナー/adminのみ） |
 | 楽観ロック（`version`） | `PATCH /tasks/{id}` は `version` を必須パラメータとし、`UPDATE ... WHERE id=:id AND version=:expected_version` で一致した場合のみ更新、成功時に `version+1`。不一致時は影響行数0件を検知して `409 TASK_CONFLICT` |
 | advisory lock | `pg_advisory_xact_lock(hashtextextended(project_id \|\| ':' \|\| status, 0))` で `(project_id, status)` 単位に position 採番・再採番を直列化。`_xact_` 系のためトランザクション終了で自動解放。列間移動時は旧列・新列のロックをキー文字列の昇順で取得しデッドロックを回避 |
-| トランザクション境界 | 作成：lock取得→採番→INSERTを1トランザクション。更新（status/position変更あり）：`FOR UPDATE`→lock取得→再採番UPDATE群→楽観ロックUPDATEを1トランザクション。論理削除・再有効化：`UPDATE tasks SET is_active=...` 単文（position詰めを行わないためadvisory lock・複数UPDATEは不要） |
+| トランザクション境界 | 作成：lock取得→採番→INSERTを1トランザクション。更新（status/position変更あり）：対象列のadvisory lock取得→`FOR UPDATE`→version確認→再採番UPDATE群→楽観ロックUPDATEを1トランザクション。論理削除・再有効化：`UPDATE tasks SET is_active=...` 単文（position詰めを行わないためadvisory lock・複数UPDATEは不要） |
 | ロックの二重性 | 行ロック（`FOR UPDATE`/`version`列）は「この1タスク」、advisory lockは「同じ列の複数タスク」の同時更新を防ぐ。目的が異なるため併用する |
 
 ## 12. テスト設計
