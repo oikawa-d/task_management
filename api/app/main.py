@@ -8,6 +8,7 @@ from app.api.routers.comment_router import router as comment_router
 from app.api.routers.projects_router import router as projects_router
 from app.api.routers.system_router import router as system_router
 from app.api.routers.tasks_router import router as tasks_router
+from app.api.routers.users_router import router as users_router
 from app.core.config import get_backend_settings
 from app.core.exceptions import register_error_handling
 from app.core.logger import configure_logging
@@ -54,3 +55,4 @@ app.include_router(system_router)
 app.include_router(projects_router)
 app.include_router(tasks_router)
 app.include_router(comment_router)
+app.include_router(users_router)
