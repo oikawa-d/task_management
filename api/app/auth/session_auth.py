@@ -4,6 +4,7 @@ from typing import Literal, TypedDict
 from fastapi import Request, Response
 
 from app.auth.base import AuthContext, AuthStrategy, LoginResult
+from app.core.client_ip import resolve_client_ip
 from app.core.exceptions import NotSupportedInModeError
 from app.models.user import User
 from app.repository import redis_store
@@ -51,10 +52,22 @@ class SessionAuthStrategy(AuthStrategy):
 			)
 
 	async def login(self, user: User, request: Request, response: Response) -> LoginResult:
-		ip = request.client.host if request.client is not None else None
+		ip = resolve_client_ip(request, self.settings.trusted_proxy_cidrs).client_ip
 		session_id, csrf_token = await redis_store.create_session(user.id, ip, self.settings.session_ttl_seconds)
 		self._set_cookies(response, session_id, csrf_token)
-		return LoginResult("session", csrf_token=csrf_token, expires_in=self.settings.session_ttl_seconds)
+		return LoginResult(
+			"session",
+			csrf_token=csrf_token,
+			expires_in=self.settings.session_ttl_seconds,
+			session_id=session_id,
+		)
+
+	async def rollback_login(self, user: User, result: LoginResult, response: Response) -> None:
+		try:
+			if result.session_id is not None:
+				await redis_store.delete_session(result.session_id, user.id)
+		finally:
+			self._delete_cookies(response)
 
 	async def authenticate(self, request: Request) -> AuthContext | None:
 		session_id = request.cookies.get(self.settings.cookie_name_session)

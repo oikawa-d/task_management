@@ -142,6 +142,7 @@
 | `OAUTH_STATE_TTL_SECONDS` | int | `600` | `oauth_state:{state}` のTTL | 平文可 |
 | `OAUTH_HANDOFF_TTL_SECONDS` | int | `60` | `oauth_handoff:{code}` のTTL（jwtモード限定） | 平文可 |
 | `OAUTH_DEFAULT_REDIRECT_TO` | str | `/dashboard` | OAuth完了後の既定遷移先。`redirect_to` 未指定時および正規化で不正と判定した場合のフォールバック値。同一オリジンの相対パスのみ（`/` は `/login` へのリダイレクト専用パスのため指定しない） | 平文可 |
+| `OAUTH_REDIRECT_TO_MAX_LENGTH` | int | `2048` | OAuth `redirect_to` の最大文字数。超過時は既定遷移先へフォールバック | 平文可 |
 
 ### 3.8 メール（SMTP/Mailpit）
 

@@ -23,6 +23,7 @@ class LoginResult:
 	refresh_token: str | None = None
 	csrf_token: str | None = None
 	expires_in: int | None = None
+	session_id: str | None = None
 
 
 class AuthStrategy(ABC):
@@ -42,3 +43,7 @@ class AuthStrategy(ABC):
 
 	@abstractmethod
 	async def refresh(self, request: Request, response: Response) -> LoginResult: ...
+
+	async def rollback_login(self, user: User, result: LoginResult, response: Response) -> None:
+		"""login後の後続処理に失敗した場合、発行済み認証状態を破棄する。"""
+		raise NotImplementedError("rollback_login must be implemented by the auth strategy")
