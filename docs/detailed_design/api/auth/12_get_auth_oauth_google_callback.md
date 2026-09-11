@@ -423,6 +423,8 @@ stateDiagram-v2
 | 15 | 結合 | 通常callbackのサービス失敗時 | Google/Redis境界を差し替え | 302 `/login?error=oauth_failed`、state Cookie削除 | `test_callback_route_deletes_state_cookie_on_service_failure` |
 | 16 | 結合 | callbackレート制限超過 | `TooManyAttemptsError(retry_after=42)`を差し替え | 429 `TOO_MANY_ATTEMPTS`、`Retry-After: 42` | `test_callback_preserves_rate_limit_and_redis_errors` |
 | 17 | 結合 | callbackのRedis障害 | `ServiceUnavailableError`を差し替え | 503 `SERVICE_UNAVAILABLE` | `test_callback_preserves_rate_limit_and_redis_errors` |
+| 18 | 結合 | callbackレート制限超過（ルートからservice経由） | Redisレート制限判定を超過値、TTLを42秒へ差し替え | 429 `TOO_MANY_ATTEMPTS`、`Retry-After: 42` | `test_callback_service_rate_limit_returns_429` |
+| 19 | 結合 | callbackのRedis障害（ルートからservice経由） | レート制限Redis操作を例外へ差し替え | 503 `SERVICE_UNAVAILABLE` | `test_callback_service_redis_failure_returns_503` |
 
 網羅できない範囲：Google実サーバーとの実通信（JWKS取得含む）は`respx`でモックし、実際のGoogleアカウントでの手動確認を別途行う。
 

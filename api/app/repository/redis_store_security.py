@@ -48,6 +48,6 @@ async def check_rate_limit(client: Redis, prefix: str, scope: str, value: str, m
 
 async def get_rate_limit_ttl(client: Redis, prefix: str, scope: str, value: str) -> int:
 	milliseconds = int(await client.pttl(rate_limit_key(scope, value, prefix)))
-	if milliseconds < 0:
-		return milliseconds
+	if milliseconds <= 0:
+		return 1
 	return max(1, (milliseconds + 999) // 1000)

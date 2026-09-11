@@ -250,6 +250,14 @@ async def test_rate_limit_ttl_rounds_up_remaining_milliseconds(
 	assert await redis_store.get_rate_limit_ttl("register", "127.0.0.1") == 2
 
 
+async def test_rate_limit_ttl_uses_minimum_retry_after_when_key_is_missing(
+	redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+	monkeypatch.setattr(redis, "pttl", AsyncMock(return_value=-2))
+
+	assert await redis_store.get_rate_limit_ttl("register", "127.0.0.1") == 1
+
+
 async def test_rotate_refresh_token_returns_reuse_marker(redis: _FakeRedis) -> None:
 	user_id = uuid.uuid4()
 	redis.eval = AsyncMock(return_value=[2, str(user_id), "family"])

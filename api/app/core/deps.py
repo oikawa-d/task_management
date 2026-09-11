@@ -199,7 +199,7 @@ async def _enforce_rate_limit(
 	except Exception as exc:
 		raise ServiceUnavailableError() from exc
 	if count > max_requests:
-		raise TooManyAttemptsError(retry_after=retry_after if retry_after > 0 else window)
+		raise TooManyAttemptsError(retry_after=retry_after)
 
 
 async def enforce_notification_read_rate_limit(

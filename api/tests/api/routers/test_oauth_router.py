@@ -389,6 +389,34 @@ def test_denied_callback_preserves_rate_limit_error(client: TestClient, monkeypa
 	assert response.headers["Retry-After"] == "42"
 
 
+def test_callback_service_rate_limit_returns_429(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setattr(
+		oauth_router_module.auth_service.redis_store,
+		"check_rate_limit",
+		AsyncMock(return_value=11),
+	)
+	monkeypatch.setattr(oauth_router_module.auth_service.redis_store, "get_rate_limit_ttl", AsyncMock(return_value=42))
+
+	response = client.get("/api/auth/oauth/google/callback", params={"code": "auth-code", "state": "state-value"})
+
+	assert response.status_code == 429
+	assert response.json()["error"]["code"] == "TOO_MANY_ATTEMPTS"
+	assert response.headers["Retry-After"] == "42"
+
+
+def test_callback_service_redis_failure_returns_503(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setattr(
+		oauth_router_module.auth_service.redis_store,
+		"check_rate_limit",
+		AsyncMock(side_effect=RuntimeError("redis unavailable")),
+	)
+
+	response = client.get("/api/auth/oauth/google/callback", params={"code": "auth-code", "state": "state-value"})
+
+	assert response.status_code == 503
+	assert response.json()["error"]["code"] == "SERVICE_UNAVAILABLE"
+
+
 def test_exchange_returns_tokens_in_jwt_mode(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
 	async def _oauth_exchange(*_args: Any, **_kwargs: Any) -> OAuthExchangeResponse:
 		_args[2].set_cookie("cerberus_rt", "refresh-token", httponly=True, path="/api/auth")

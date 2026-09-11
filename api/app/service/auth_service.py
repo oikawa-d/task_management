@@ -234,9 +234,7 @@ async def _check_oauth_rate_limit(request: Request, scope: str, route: str, sett
 				"request_id": _request_id(request),
 			},
 		)
-		raise TooManyAttemptsError(
-			retry_after=retry_after if retry_after > 0 else settings.rate_limit_oauth_window_seconds
-		)
+		raise TooManyAttemptsError(retry_after=retry_after)
 	return client_info
 
 

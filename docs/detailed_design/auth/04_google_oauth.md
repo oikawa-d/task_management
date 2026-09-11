@@ -118,7 +118,7 @@ sequenceDiagram
     else userinfo.sub と id_token.sub 不一致
         API-->>FE: 302 → /login?error=oauth_failed
     else email_verified=false かつ 未紐付け
-        API-->>FE: 400 OAUTH_EMAIL_UNVERIFIED
+        API-->>FE: 302 → /login?error=oauth_email_unverified<br/>（内部例外は400 OAUTH_EMAIL_UNVERIFIED）
     end
 ```
 
