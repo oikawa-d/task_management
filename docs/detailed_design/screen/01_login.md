@@ -74,7 +74,7 @@
 
 | No | 呼び出しタイミング | メソッド／パス | 送信内容 | 成功時処理 | 失敗時処理 | queryKey / mutationKey |
 |----|--------------------|-----------------|----------|------------|------------|--------------------------|
-| 1 | マウント時（`AuthProvider` 経由。本画面独自では呼ばない） | GET `/auth/config` | - | `authConfig` を store に保持、⑦の表示可否決定 | トースト表示のみ（ログイン自体はブロックしない） | `['auth', 'config']` |
+| 1 | マウント時（`AuthProvider`（`authBootstrap`）経由。本画面独自では呼ばない） | GET `/auth/config` | - | `authStore.googleLoginEnabled` へ保持、⑦の表示可否決定 | トースト表示のみ（ログイン自体はブロックしない） | - |
 | 2 | ⑥クリック／Enter | POST `/auth/login` | `{ identifier, password }` | session: `authStore` を `authenticated` に更新し `/dashboard` へ `navigate`。jwt: `access_token` を保存後に同様 | §11参照 | `mutationKey: ['auth', 'login']` |
 | 3 | ①''の再送ボタンクリック | POST `/auth/verify-email/resend` | `{ email: lastAttemptedIdentifierIfEmail }` | 結果に関わらず「送信しました」表示（§7） | 同上（202固定のためエラー分岐なし） | `mutationKey: ['auth', 'resendVerification']` |
 
@@ -87,7 +87,7 @@
 | ローカルstate | `lastError` | `{ code: string; message: string; retryAfterSec?: number } \| null` | `null` | ログイン失敗時に設定、再送信時にクリア | なし |
 | ローカルstate | `resendState` | `'idle' \| 'sending' \| 'sent'` | `'idle'` | 再送ボタン操作 | なし |
 | Zustand `authStore` | `user`, `status` | - | §5.1参照（[05_frontend.md#5](../../basic_design/05_frontend.md)）。JWTのaccessTokenはAuthAdapterへ注入したTokenStoreが保持する | ログイン成功時にuser/statusを更新 | しない |
-| TanStack Query | `['auth', 'config']` | `AuthConfig` | - | `AuthProvider` 起動時に取得しキャッシュ | しない |
+| Zustand `authStore` | `googleLoginEnabled` | boolean | `false` | `authBootstrap`（`AuthProvider` 起動時）が `GET /auth/config` のレスポンスを保持 | しない |
 | React Router `location.state` | `registeredEmail?: string` | - | `/register` からの `navigate` 時のみ | - | なし（画面遷移1回のみ有効） |
 
 ## 6. 画面状態遷移図
@@ -197,8 +197,7 @@ flowchart TB
     LF --> BTN["SubmitButton"]
     LP -.uses.-> HOOK1["useLogin()"]
     LP -.uses.-> HOOK2["useResendVerification()"]
-    LP -.reads.-> STORE["authStore"]
-    LP -.reads.-> QCFG["useAuthConfig() (['auth','config'])"]
+    LP -.reads.-> STORE["authStore（user/status/googleLoginEnabled）"]
 ```
 
 ## 9. 関数・カスタムフック詳細

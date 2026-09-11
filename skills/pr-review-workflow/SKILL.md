@@ -75,7 +75,11 @@ gh pr comment <番号> --body-file <file>
 
 ## マージとclose
 
-マージ前に必ず確認する。
+**PRを作成したエージェントはmerge・issue closeを実施しない。** `AGENTS.md` の通り、CIが全passしていてもユーザーの明示承認を得るまでmergeせず、承認後に別の操作主体が実施する。`.claude/hooks/block-github-destructive-actions.sh` が `gh pr merge` と `gh issue close` をPreToolUseで拒否するため、作成者エージェントが実行しても必ず失敗する。
+
+作成者エージェントはここまでで作業を止め、「CI全pass・mergeable」であることと未解決の指摘の有無をユーザーに報告する。
+
+以降はユーザー承認後の操作主体向けの手順。マージ前に必ず確認する。
 
 ```bash
 gh pr view <番号> --json mergeable,mergeStateStatus --jq '"\(.mergeable) \(.mergeStateStatus)"'
@@ -83,7 +87,7 @@ gh pr checks <番号>
 ```
 
 - `MERGEABLE` / `CLEAN` かつ全チェックpassであること。`UNKNOWN` はGitHub側の判定待ちなので、数秒おいて再取得する。
-- `AGENTS.md` の通り squash merge する。
+- squash mergeし、マージ後にリモート・ローカルの作業ブランチを削除する。
 
 ```bash
 gh pr merge <番号> --squash

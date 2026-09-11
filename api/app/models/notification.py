@@ -30,11 +30,8 @@ class Notification(UUIDPkMixin, CreatedAtMixin, Base):
 	read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 	user: Mapped["User"] = relationship("User", lazy="noload")
-	# 設計書10_table_notifications.md §6ではlazy="joined"だが、本リポジトリのrepositoryは
-	# select(Model).from_statement(text(...))でSP/FN結果をORM行にマッピングする方式であり、
-	# from_statementは生SQLをそのまま使うためlazy="joined"のSQL結合が効かず、
-	# 後から.taskへアクセスするとMissingGreenletになる。そのためnoloadとし、
-	# タスク情報が必要な場面は将来のservice層がtask_repository.get_by_id()を別途呼ぶ前提とする。
+	# task情報はfn_list_notifications内のLEFT JOINで取得しrepositoryが直接マッピングするため、
+	# ORMのrelationshipによる遅延/eagerロードは使用しない。
 	task: Mapped["Task | None"] = relationship("Task", lazy="noload")
 
 	__table_args__ = (

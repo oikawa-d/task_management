@@ -53,6 +53,16 @@ class OwnerCannotBeRemovedError(ConflictError):
 	message = "オーナーはメンバーから削除できません"
 
 
+class SelfModificationError(ConflictError):
+	code = "SELF_MODIFICATION_NOT_ALLOWED"
+	message = "自分自身に対してこの操作は実行できません"
+
+
+class LastAdminRequiredError(ConflictError):
+	code = "LAST_ADMIN_REQUIRED"
+	message = "最後の管理者に対してこの操作は実行できません"
+
+
 class UnauthenticatedError(AppError):
 	code = "UNAUTHENTICATED"
 	status_code = 401
@@ -83,6 +93,30 @@ class TokenExpiredError(UnauthenticatedError):
 class TokenRevokedError(UnauthenticatedError):
 	code = "TOKEN_REVOKED"
 	message = "セッションが無効になりました。再度ログインしてください"
+
+
+class InvalidStateError(AppError):
+	code = "INVALID_STATE"
+	status_code = 400
+	message = "OAuth stateが無効です"
+
+
+class OAuthFailedError(AppError):
+	code = "OAUTH_FAILED"
+	status_code = 400
+	message = "OAuth認証に失敗しました"
+
+
+class OAuthEmailUnverifiedError(AppError):
+	code = "OAUTH_EMAIL_UNVERIFIED"
+	status_code = 400
+	message = "Googleアカウントのメールアドレスが検証されていません"
+
+
+class OAuthHandoffInvalidError(AppError):
+	code = "OAUTH_HANDOFF_INVALID"
+	status_code = 400
+	message = "OAuthログインの有効期限が切れています"
 
 
 class UserInactiveError(AppError):

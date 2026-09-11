@@ -54,6 +54,25 @@ def test_settings_cors_origins_parsed(monkeypatch: pytest.MonkeyPatch) -> None:
 	assert settings.cors_allow_origins == ["http://a", "http://b"]
 
 
+def test_settings_cors_origins_wildcard_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+	_base_env(monkeypatch)
+	monkeypatch.setenv("CORS_ALLOW_ORIGINS", "*")
+
+	with pytest.raises(ValidationError):
+		BackendSettings(_env_file=None)
+
+
+def test_settings_cors_methods_and_headers_parsed(monkeypatch: pytest.MonkeyPatch) -> None:
+	_base_env(monkeypatch)
+	monkeypatch.setenv("CORS_ALLOW_METHODS", "GET,POST")
+	monkeypatch.setenv("CORS_ALLOW_HEADERS", "Content-Type,X-CSRF-Token")
+
+	settings = BackendSettings(_env_file=None)
+
+	assert settings.cors_allow_methods == ["GET", "POST"]
+	assert settings.cors_allow_headers == ["Content-Type", "X-CSRF-Token"]
+
+
 def test_settings_bool_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
 	_base_env(monkeypatch)
 	monkeypatch.setenv("COOKIE_SECURE", "false")
