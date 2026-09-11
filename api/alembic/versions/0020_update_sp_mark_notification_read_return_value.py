@@ -1,7 +1,7 @@
 """return the persisted read_at from sp_mark_notification_read
 
-Revision ID: 0020
-Revises: 0019
+Revision ID: 0021
+Revises: 0020
 Create Date: 2026-09-11
 
 """
@@ -11,8 +11,8 @@ from typing import Sequence, Union
 
 from alembic import op
 
-revision: str = "0020"
-down_revision: Union[str, None] = "0019"
+revision: str = "0021"
+down_revision: Union[str, None] = "0020"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
