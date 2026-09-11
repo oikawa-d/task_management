@@ -69,9 +69,12 @@ sequenceDiagram
 
     FE->>API: "POST /api/auth/login {identifier, password}"
     API->>API: "key_hash = sha256(normalize(identifier) + ':' + client_ip)"
-    API->>RD: "GET login_fail:{key_hash}"
+    API->>RD: "get_login_failure_count(identifier, client_ip)"
+    RD-->>API: "失敗回数"
     alt "失敗回数 >= LOGIN_MAX_ATTEMPTS"
-        API-->>FE: "429 TOO_MANY_ATTEMPTS"
+        API->>RD: "get_login_failure_ttl(identifier, client_ip)"
+        RD-->>API: "残りTTL（秒）"
+        API-->>FE: "429 TOO_MANY_ATTEMPTS + Retry-After: max(TTL, 0)"
     else 継続
         API->>PG: "SELECT users WHERE email=? OR username=?"
         alt ユーザーが存在しない
@@ -121,7 +124,7 @@ flowchart TB
     A["POST /auth/login"] --> B["key_hash = sha256(identifier_normalized + client_ip)"]
     B --> C["GET login_fail:{key_hash}"]
     C --> D{"失敗回数 >= LOGIN_MAX_ATTEMPTS?"}
-    D -->|Yes| E["429 TOO_MANY_ATTEMPTS"]
+    D -->|Yes| E["get_login_failure_ttl<br/>Retry-After = max(TTL, 0)<br/>429 TOO_MANY_ATTEMPTS"]
     D -->|No| F["SELECT users WHERE identifier一致"]
     F --> G{"該当ユーザーあり?"}
     G -->|No| H["ダミーハッシュでverify_password実行<br/>（処理時間を均一化）"]
@@ -213,7 +216,7 @@ stateDiagram-v2
 | 引数 / 入力 | `payload.identifier` / `payload.password`、`request`（クライアントIP取得元） |
 | 戻り値 / 出力 | `LoginResult` |
 | 送出例外 / 失敗条件 | `TooManyAttemptsError`（429）、`InvalidCredentialsError`（401）、`UserInactiveError`（403）、`EmailNotVerifiedError`（403） |
-| 処理内容 | 全体シーケンスは[../api/auth/02_post_auth_login.md](../api/auth/02_post_auth_login.md) §4・§6.2を正とし、本書はハッシュ検証・レート制限に関わる部分（1〜6手順）のみを担当範囲とする：1. `key_hash = build_login_fail_key(...)` 2. `redis_store.incr_login_failure`前に`GET`相当で現在値確認し上限超過なら例外 3. `user_repository.find_by_identifier` 4. 該当なしなら`verify_password(password, _dummy_hash)`後に`incr_login_failure`して例外 5. 該当ありなら`verify_password(password, user.password_hash)`、不一致なら`incr_login_failure`して例外 6. 一致なら`reset_login_failure`し`needs_rehash`を確認して必要なら再ハッシュ |
+| 処理内容 | 全体シーケンスは[../api/auth/02_post_auth_login.md](../api/auth/02_post_auth_login.md) §4・§6.2を正とし、本書はハッシュ検証・レート制限に関わる部分（1〜6手順）のみを担当範囲とする：1. `key_hash = build_login_fail_key(...)` 2. `redis_store.get_login_failure_count`で現在値を確認し、上限超過時は`redis_store.get_login_failure_ttl`の残り秒数を`Retry-After`へ渡して例外 3. `user_repository.find_by_identifier` 4. 該当なしなら`verify_password(password, _dummy_hash)`後に`incr_login_failure`して例外 5. 該当ありなら`verify_password(password, user.password_hash)`、不一致なら`incr_login_failure`して例外 6. 一致なら`reset_login_failure`し`needs_rehash`を確認して必要なら再ハッシュ |
 | 副作用 | Redis: `login_fail`のGET/INCR/DEL。DB: 再ハッシュ時のみ`users.password_hash`をUPDATE |
 
 ## 9. 関数・要素相関図
@@ -223,7 +226,7 @@ flowchart LR
     LOGINSVC["service/auth_service.py::login"] --> BUILDKEY["build_login_fail_key"]
     LOGINSVC --> SEC1["core/security.py::verify_password"]
     LOGINSVC --> SEC2["core/security.py::needs_rehash"]
-    LOGINSVC --> RS1["redis_store.incr_login_failure<br/>redis_store.reset_login_failure"]
+    LOGINSVC --> RS1["redis_store.get_login_failure_count / get_login_failure_ttl<br/>incr/reset_login_failure"]
 
     REGSVC["service/auth_service.py::register"] --> SEC3["core/security.py::hash_password"]
     PWCHANGESVC["service/user_service.py::change_password"] --> SEC1
