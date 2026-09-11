@@ -1,7 +1,7 @@
 """admin一覧関数の集計・ユーザー情報を一括返却
 
-Revision ID: 0021
-Revises: 0020
+Revision ID: 0022
+Revises: 0021
 Create Date: 2026-09-11
 
 """
@@ -11,8 +11,8 @@ from typing import Sequence, Union
 
 from alembic import op
 
-revision: str = "0021"
-down_revision: Union[str, None] = "0020"
+revision: str = "0022"
+down_revision: Union[str, None] = "0021"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

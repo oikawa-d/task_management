@@ -514,6 +514,7 @@ flowchart TB
 | `require_project_member` | `project_id`, `user`, `db` | `Project` | admin は無条件通過。それ以外は `project_members` の存在を確認 | 403 / 404 |
 | `require_project_owner` | `project_id`, `user`, `db` | `Project` | admin は無条件通過。それ以外は `project_members` の存在を確認し、非所属なら404。所属していて `owner_id != user.id` なら403 | 403 / 404 |
 | `verify_origin` / `verify_csrf` | `request`, `strategy` | `None` | ログインを含むCookie発行・利用リクエストで許可Originを検証し、session モードの更新系、または jwt モードの `/auth/refresh`・`/auth/logout` ではCookie/headerのCSRFも検証 | 403 `CSRF_INVALID` |
+| `verify_origin_if_session` / `verify_csrf_if_session` | `request`, `strategy` | `None` | projects/tasks/comments/users/notifications等の通常更新APIで、sessionモードの場合だけOriginとCSRFを検証。jwtモードはAuthorizationヘッダ認証のため検証しない | 403 `CSRF_INVALID` |
 
 存在しないリソースと権限のないリソースの区別による情報漏洩を避けるため、**所属していないプロジェクトIDに対しては 404 を返す**方針とする（管理者のみ 403/404 を厳密に区別）。
 

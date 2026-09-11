@@ -22,7 +22,7 @@
 | 認証 | session モード：`cerberus_sid` Cookie ／ jwt モード：`Authorization: Bearer {access_token}` |
 | 認可 | `project_id`を指定した場合：プロジェクトメンバー（`require_project_member`相当。admin は無条件許可）。`project_id`省略/`null`の場合：ログイン済みユーザー全員に作成を許可（未所属タスクは誰でも自分用に作成できる。作成後の可視範囲は作成者本人のみ、[03_get_task.md](./03_get_task.md)参照） |
 | CSRF検証 | 必要（session モードの更新系。`X-CSRF-Token` ヘッダ必須） |
-| Origin検証 | 不要 |
+| Origin検証 | 必要（sessionモードのみ。jwtモードはAuthorizationヘッダのみのため不要） |
 | AUTH_MODE差異 | session時はCSRF検証あり、jwt時は不要。それ以外の業務ロジックに差異なし |
 | 冪等性 | なし（POSTのため同一リクエストの再送で複数タスクが作成され得る） |
 | レート制限 | 対象外 |
