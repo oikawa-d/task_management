@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
 from typing import cast
 from uuid import UUID
 
 from redis.asyncio import Redis
 
-from app.repository.redis_store_common import identifier_hash, key, rate_limit_key, validate_ttl
+from app.repository.redis_store_common import identifier_hash, key, validate_ttl
 
 
 async def mark_email_verify_sent(client: Redis, prefix: str, user_id: UUID, interval: int) -> bool:
@@ -44,7 +45,7 @@ async def check_rate_limit(client: Redis, prefix: str, scope: str, value: str, m
 	if max_requests <= 0:
 		raise ValueError("max_requests must be positive")
 	validate_ttl(window, "window")
-	rate_key = rate_limit_key(scope, value, prefix)
+	rate_key = key("rate_limit", prefix, scope, hashlib.sha256(value.encode()).hexdigest())
 	count = int(await client.incr(rate_key))
 	if count == 1:
 		await client.expire(rate_key, window)
@@ -52,7 +53,4 @@ async def check_rate_limit(client: Redis, prefix: str, scope: str, value: str, m
 
 
 async def get_rate_limit_ttl(client: Redis, prefix: str, scope: str, value: str) -> int:
-	milliseconds = int(await client.pttl(rate_limit_key(scope, value, prefix)))
-	if milliseconds <= 0:
-		return 1
-	return max(1, (milliseconds + 999) // 1000)
+	return int(await client.ttl(key("rate_limit", prefix, scope, hashlib.sha256(value.encode()).hexdigest())))

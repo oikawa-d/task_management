@@ -64,7 +64,11 @@ def test_json_formatter_includes_safe_oauth_fields_only() -> None:
 	record.ip_source = "trusted_xff"
 	record.request_id = "request-123"
 	record.user_id = "user-123"
+	record.identifier = "alice@example.com"
 	record.login_method = "oauth_google"
+	record.auth_mode = "jwt"
+	record.success = True
+	record.failure_reason = None
 	record.deleted_session_count = 1
 	record.deleted_refresh_count = 0
 	record.code = "secret-code"
@@ -77,6 +81,10 @@ def test_json_formatter_includes_safe_oauth_fields_only() -> None:
 	assert output["route"] == "/api/auth/oauth/google/callback"
 	assert output["client_ip"] == "198.51.100.4"
 	assert output["deleted_session_count"] == 1
+	assert output["identifier"] == "alice@example.com"
+	assert output["auth_mode"] == "jwt"
+	assert output["success"] is True
+	assert "failure_reason" not in output
 	assert "code" not in output
 	assert "email" not in output
 

@@ -13,6 +13,7 @@ class AppError(Exception):
 	code = "INTERNAL_ERROR"
 	status_code = 500
 	message = "サーバーエラーが発生しました"
+	retry_after: int | None = None
 
 	def __init__(self, message: str | None = None, details: Any = None) -> None:
 		super().__init__(message or self.message)
@@ -41,6 +42,16 @@ class CsrfInvalidError(ForbiddenError):
 class ConflictError(AppError):
 	status_code = 409
 	message = "競合が発生しました"
+
+
+class DuplicateUsernameError(ConflictError):
+	code = "DUPLICATE_USERNAME"
+	message = "このユーザーIDは既に使用されています"
+
+
+class DuplicateEmailError(ConflictError):
+	code = "DUPLICATE_EMAIL"
+	message = "このメールアドレスは既に使用されています"
 
 
 class AlreadyMemberError(ConflictError):
@@ -123,6 +134,12 @@ class UserInactiveError(AppError):
 	code = "USER_INACTIVE"
 	status_code = 403
 	message = "このアカウントは無効化されています"
+
+
+class EmailNotVerifiedError(AppError):
+	code = "EMAIL_NOT_VERIFIED"
+	status_code = 403
+	message = "メールアドレスの認証が完了していません"
 
 
 class InvalidCredentialsError(UnauthenticatedError):

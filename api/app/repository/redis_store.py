@@ -32,6 +32,7 @@ __all__ = [
 	"get_login_failure_ttl",
 	"get_refresh_token",
 	"get_session",
+	"get_rate_limit_ttl",
 	"incr_login_failure",
 	"mark_email_verify_sent",
 	"ping",
