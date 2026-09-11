@@ -18,3 +18,9 @@
 5. 指摘事項と検証結果をPRテンプレートのレビュー欄に記録する。
 
 レビュー結果は、問題がない場合も「レビュー済み」と明記してください。
+
+## `reviewed`ラベルの付与
+
+- `reviewed`ラベルは、PRを作成した本人以外がこの方針に沿ったレビューを行い、PR上に「受入可」のコメントを投稿したうえで付与します。
+- PRを作成したエージェントは、自身が作成したPRに`reviewed`ラベルを付与してはいけません。
+- `gh pr merge`・`gh issue close`は`.claude/hooks/block-github-destructive-actions.sh`により、対象に`reviewed`ラベルが無い場合はブロックされます（fail-close）。
