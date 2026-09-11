@@ -9,7 +9,7 @@ from app.repository import admin_repository
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 ADMIN_MIGRATION = REPOSITORY_ROOT / "api/alembic/versions/0015_create_admin_functions.py"
 ADMIN_TOTAL_COUNT_MIGRATION = REPOSITORY_ROOT / "api/alembic/versions/0020_add_admin_list_total_count_and_not_found.py"
-ADMIN_AGGREGATE_MIGRATION = REPOSITORY_ROOT / "api/alembic/versions/0021_optimize_admin_list_functions.py"
+ADMIN_AGGREGATE_MIGRATION = REPOSITORY_ROOT / "api/alembic/versions/0022_optimize_admin_list_functions.py"
 
 FUNCTION_FILES = (
 	"fn_admin_list_users.sql",
