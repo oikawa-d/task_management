@@ -255,7 +255,7 @@ flowchart TB
 
 | ストア | 保持内容 | 永続化 | 備考 |
 |--------|----------|--------|------|
-| `authStore`（Zustand） | `user`, `status`（`loading` / `authenticated` / `unauthenticated`） | **しない**（メモリのみ） | JWTのアクセストークンは`AuthAdapter`へ注入したメモリ上の`TokenStore`が保持し、authStoreには保持しない。adapterは`GET /auth/config`の実行時設定から選択 |
+| `authStore`（Zustand） | `user`, `status`（`loading` / `authenticated` / `unauthenticated`）, `googleLoginEnabled` | **しない**（メモリのみ） | JWTのアクセストークンは`AuthAdapter`へ注入したメモリ上の`TokenStore`が保持し、authStoreには保持しない。adapterと`googleLoginEnabled`は`GET /auth/config`の実行時設定から選択・保持する（`authBootstrap`が起動時に設定） |
 | `uiStore`（Zustand + persist） | `fontScale`, `sidebarOpen`, `dashboardView`（`"cards"` / `"calendar"`） | localStorage | 文字サイズ・サイドバー開閉・ダッシュボードの表示モードはクライアント側のみで保持。次回起動時も選択中の表示モードを復元する |
 | 通知（React Query） | `['notifications','unread-count']` / `['notifications', page, unreadOnly]` | しない | 未読件数はポーリング、一覧はパネルを開いたときに取得。パネルの開閉状態のみコンポーネントのローカルstateで持つ |
 | TanStack Query | プロジェクト一覧・ボード・ユーザー一覧 | しない | `queryKey` は `['projects']` / `['board', projectId]`。タスク詳細コメントは`taskDetailStore`で管理する（下段参照） |
@@ -331,7 +331,7 @@ sequenceDiagram
 
 **方針**：認証方式の差異は `AuthAdapter` に閉じ込め、画面・feature 層は `api/endpoints/*` の関数を呼ぶだけで方式に依存しない。
 
-API clientは`fetchWithAuth`（共通APIクライアント）を必ず経由する。endpointが直接`fetch`を呼び出したり、`credentials`、`Authorization`、`X-CSRF-Token`を個別に設定したりしてはならない。例外は認証モードを取得する`GET /auth/config`だけとする。`fetchWithAuth`は初回リクエスト時に`/auth/config`を取得し、`auth_mode`に応じたadapterを生成する。AuthProviderは未実装のため、起動時に認証状態を復元しadapterを明示的に初期化する処理は後続Issueで実装する。
+API clientは`fetchWithAuth`（共通APIクライアント）を必ず経由する。endpointが直接`fetch`を呼び出したり、`credentials`、`Authorization`、`X-CSRF-Token`を個別に設定したりしてはならない。例外は認証モードを取得する`GET /auth/config`だけとする。adapterのインスタンスはアプリ全体で1つに統一する。起動時に`bootstrapAuth()`が`GET /auth/config`の結果からadapterを生成し、`authStore`と`fetchWithAuth`の双方へ同一インスタンスを登録する（`setAuthAdapter()`）。これにより、ログインやリフレッシュで得たアクセストークンが`fetchWithAuth`経由の呼び出しにも反映される。`fetchWithAuth`は登録済みadapterが無い場合に限り、初回リクエスト時に`/auth/config`を取得してadapterを生成するフォールバック経路を持つ。
 
 ```mermaid
 classDiagram
@@ -398,6 +398,7 @@ flowchart TB
 | ルール | 内容 |
 |--------|------|
 | 起動時の復元 | `GET /auth/config` → jwtなら `POST /auth/refresh` → `GET /auth/me`。refresh Cookieが無い場合の401は未認証として扱う |
+| adapterの共有 | 起動時に生成したadapterを `authStore` と `fetchWithAuth` の双方へ登録し、アプリ全体で単一インスタンスとする。インスタンスが分かれると`TokenStore`も分かれ、jwtモードでBearerが付与されない |
 | OAuth callbackの優先 | `/oauth/callback` では、jwtのrefresh Cookieが無い場合でもAuthProviderが `/login` へ先行リダイレクトせず、`OAuthCallbackPage` がfragmentのcodeを交換してから認証状態を確定する |
 | リフレッシュの多重実行防止 | `JwtAdapter` 内で進行中の `refreshPromise` を共有し、同時に発生した401をまとめて1回のリフレッシュで処理する |
 | リトライ回数 | 1回のみ（`config._retried` フラグで管理） |
@@ -538,7 +539,8 @@ flowchart LR
 | 区分 | 対象 | 内容 |
 |------|------|------|
 | 単体 | `authAdapter` | session / jwt それぞれで `attach` / `onUnauthorized` の挙動、リフレッシュの多重実行防止 |
-| 単体 | `fetchWithAuth` | `/auth/config`の実行時モード選択、jwtのBearer、session更新系のCSRF、GETにCSRFを付けないこと |
+| 単体 | `fetchWithAuth` | `setAuthAdapter`で登録したadapterの共有、adapter未登録時の`/auth/config`によるモード選択、jwtのBearer、session更新系のCSRF、GETにCSRFを付けないこと |
+| 単体 | `bootstrapAuth` | 生成したadapterを`authStore`と`fetchWithAuth`へ登録し、以降`/auth/config`を再取得しないこと |
 | 単体 | `AuthProvider` | 起動時の認証状態を `loading` に保ち、初期化成功で `authenticated`、未認証・失敗で `unauthenticated` に遷移 |
 | コンポーネント | `RequireAuth` / `RequireAdmin` / `RequireGuest` | `loading` 中はローディングUIを表示し、リダイレクトしない |
 | 単体 | zod スキーマ | パスワードポリシー・フリガナ・各環境変数上限などの境界値 |

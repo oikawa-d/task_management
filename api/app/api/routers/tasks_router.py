@@ -3,7 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_current_user, require_project_member, verify_csrf, verify_origin
+from app.core.deps import get_current_user, require_project_member, verify_csrf_if_session, verify_origin
 from app.db import get_db_session
 from app.models.project import Project
 from app.schemas.auth import CurrentUser
@@ -38,7 +38,7 @@ async def create_project_task(
 	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
 	_: None = Depends(verify_origin),
-	__csrf: None = Depends(verify_csrf),
+	__csrf: None = Depends(verify_csrf_if_session),
 ) -> TaskResponse:
 	return await task_service.create_task(project.id, payload, user, db)
 
@@ -66,7 +66,7 @@ async def create_flat_task(
 	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
 	_: None = Depends(verify_origin),
-	__csrf: None = Depends(verify_csrf),
+	__csrf: None = Depends(verify_csrf_if_session),
 ) -> TaskResponse:
 	return await task_service.create_task_flat(payload, user, db)
 
@@ -87,7 +87,7 @@ async def update_task(
 	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
 	_: None = Depends(verify_origin),
-	__csrf: None = Depends(verify_csrf),
+	__csrf: None = Depends(verify_csrf_if_session),
 ) -> TaskResponse:
 	return await task_service.update_task(task_id, payload, user, db)
 
@@ -98,7 +98,7 @@ async def delete_task(
 	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
 	_: None = Depends(verify_origin),
-	__csrf: None = Depends(verify_csrf),
+	__csrf: None = Depends(verify_csrf_if_session),
 ) -> Response:
 	await task_service.delete_task(task_id, user, db)
 	return Response(status_code=status.HTTP_204_NO_CONTENT)

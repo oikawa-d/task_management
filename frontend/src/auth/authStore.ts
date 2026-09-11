@@ -16,6 +16,8 @@ export type AuthState = {
 	status: AuthStatus;
 	accessToken: string | null;
 	authAdapter: AuthAdapter | null;
+	/** GET /auth/config の google_login_enabled。AuthProvider起動時（authBootstrap）に設定される */
+	googleLoginEnabled: boolean;
 };
 
 const initialAuthState: AuthState = {
@@ -23,6 +25,7 @@ const initialAuthState: AuthState = {
 	status: "loading",
 	accessToken: null,
 	authAdapter: null,
+	googleLoginEnabled: false,
 };
 
 export type AuthStore = AuthState & {
@@ -32,6 +35,7 @@ export type AuthStore = AuthState & {
 	setAccessToken: (accessToken: string | null) => void;
 	clear: () => void;
 	setAuthAdapter: (authAdapter: AuthAdapter) => void;
+	setGoogleLoginEnabled: (enabled: boolean) => void;
 	reset: () => void;
 };
 
@@ -46,6 +50,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 		set({ user: null, status: "unauthenticated", accessToken: null });
 	},
 	setAuthAdapter: (authAdapter) => set({ authAdapter }),
+	setGoogleLoginEnabled: (googleLoginEnabled) => set({ googleLoginEnabled }),
 	reset: () => set(initialAuthState),
 }));
 

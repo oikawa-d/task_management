@@ -63,6 +63,9 @@ class BackendSettings(BaseSettings):
 
 	# CORS・API公開設定
 	cors_allow_origins: Annotated[list[str], NoDecode] = ["http://localhost:5173"]
+	cors_allow_methods: Annotated[list[str], NoDecode] = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+	cors_allow_headers: Annotated[list[str], NoDecode] = ["Content-Type", "X-CSRF-Token", "Authorization"]
+	cors_max_age_seconds: int = 600
 	enable_api_docs: bool = True
 
 	# ページング
@@ -112,11 +115,22 @@ class BackendSettings(BaseSettings):
 	login_history_list_limit: int = 50
 	admin_search_query_max_length: int = 100
 
-	@field_validator("cors_allow_origins", "trusted_proxy_cidrs", mode="before")
+	@field_validator(
+		"cors_allow_origins", "cors_allow_methods", "cors_allow_headers", "trusted_proxy_cidrs", mode="before"
+	)
 	@classmethod
 	def _split_comma_separated(cls, value: object) -> object:
 		if isinstance(value, str):
 			return [item.strip() for item in value.split(",") if item.strip()]
+		return value
+
+	@field_validator("cors_allow_origins")
+	@classmethod
+	def _reject_wildcard_origin(cls, value: list[str]) -> list[str]:
+		# app.main.appのCORSMiddlewareはallow_credentials=Trueで固定登録しているため、
+		# ここでのワイルドカード禁止は常にその前提で成立する（docs/detailed_design/auth/03_csrf.md §10）。
+		if "*" in value:
+			raise ValueError("cors_allow_origins must not contain '*' when allow_credentials is True")
 		return value
 
 	@field_validator("initial_admin_email", "initial_admin_username", "initial_admin_password")
