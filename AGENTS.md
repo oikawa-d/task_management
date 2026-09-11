@@ -68,8 +68,10 @@ CIでは、`api/`・`batch/`それぞれに対して`ruff check`、`ruff format 
 
 変更をコミットまたはPRにする前に、[共通レビュー方針](./.agents/review-policy.md)に従ったレビューを必ず実施し、結果を作業報告またはPR本文に記載してください。
 
-PR作成後は作成した時点で作業完了とせず、PR作成者以外が[共通レビュー方針](./.agents/review-policy.md)に沿ったレビューを行い「受入可」のコメントを投稿したうえで`reviewed`ラベルを付与してください。`reviewed`ラベルが付与済みかつCIの全チェックが成功したPRは、PR作成者以外が都度のユーザー承認を得ることなくsquash mergeを実施してよく、Issue closeも同様です。PRを作成したエージェントは、自身が作成したPRに`reviewed`ラベルを付与すること、および自身が作成したPRをmergeすることのいずれも行ってはいけません。`gh pr merge`・`gh issue close`は`.claude/hooks/block-github-destructive-actions.sh`により対象に`reviewed`ラベルが無い場合はブロックされます。マージ後はリモート・ローカルの作業ブランチを削除します。CIが失敗した場合はmergeせず、原因を修正してから再度確認してください。
+PR作成後は作成した時点で作業完了とせず、PR作成者以外が[共通レビュー方針](./.agents/review-policy.md)に沿ったレビューを行い「受入可」のコメントを投稿したうえで`reviewed`ラベルを付与してください。`reviewed`ラベルが付与済みかつCIの全チェックが成功したPRは、PR作成者以外が都度のユーザー承認を得ることなくsquash mergeを実施してよく、Issue closeも同様です。PRを作成したエージェントは、自身が作成したPRに`reviewed`ラベルを付与すること、および自身が作成したPRをmergeすることのいずれも行ってはいけません。`gh pr merge`・`gh issue close`は`.claude/hooks/block-github-destructive-actions.sh`によりブロックされます（判定条件は[共通レビュー方針](./.agents/review-policy.md)を参照）。マージ後はリモート・ローカルの作業ブランチを削除します。CIが失敗した場合はmergeせず、原因を修正してから再度確認してください。
 
 ## セキュリティ・設定
+
+GitHub CLIの認証確認は、インストール済みバージョンとの互換性を保つため、必ず`gh auth status --hostname github.com`をそのまま実行してください。`--active`オプションは使用しないでください。認証確認に失敗した場合でも、PR参照の取得や差分確認などGitのみの読み取り操作は継続できますが、`gh`によるPR・Issue操作、API操作、pushは実行しないでください。
 
 `.env`、認証情報、OAuthシークレット、JWT鍵、SMTPパスワードはコミットしないでください。`.env.example`とGitHub Secretsを使用します。認証、CSRF、OAuthリダイレクト、Cookie、エラーコードの変更は、要件・基本設計・詳細設計をまたぐ変更として扱い、関連文書をすべて更新してください。

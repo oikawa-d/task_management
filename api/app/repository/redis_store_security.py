@@ -50,3 +50,7 @@ async def check_rate_limit(client: Redis, prefix: str, scope: str, value: str, m
 	if count == 1:
 		await client.expire(rate_key, window)
 	return count
+
+
+async def get_rate_limit_ttl(client: Redis, prefix: str, scope: str, value: str) -> int:
+	return int(await client.ttl(key("rate_limit", prefix, scope, hashlib.sha256(value.encode()).hexdigest())))

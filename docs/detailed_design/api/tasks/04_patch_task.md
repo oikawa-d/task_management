@@ -29,7 +29,7 @@
 | 認証 | session モード：`cerberus_sid` Cookie ／ jwt モード：`Authorization: Bearer {access_token}` |
 | 認可 | 基本：プロジェクトメンバー（`task_id` からプロジェクトを特定し所属確認。admin は無条件許可）。ただし `is_active` フィールドの変更（再有効化）のみ、追加で「作成者本人 / プロジェクトオーナー / admin」に限定する（§5.3参照） |
 | CSRF検証 | 必要（session モードの更新系。`X-CSRF-Token` ヘッダ必須） |
-| Origin検証 | 不要（本APIはCookie発行を伴わないため対象外） |
+| Origin検証 | 必要（sessionモードのみ。jwtモードはAuthorizationヘッダのみのため不要） |
 | AUTH_MODE差異 | CSRF検証の要否のみ異なる。楽観ロック・列並べ替えのロジックに差異なし |
 | 冪等性 | **なし**。同一リクエストの再送は2回目以降が `version` 不一致となり `409 TASK_CONFLICT` を返す（意図せぬ多重適用を防ぐという意味では実質的に安全側） |
 | レート制限 | 対象外 |
