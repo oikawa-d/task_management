@@ -1,6 +1,8 @@
-"""ログイン失敗レート制限（ブルートフォース対策）と、メール認証・パスワードリセットのトークン発行・消費オーケストレーション。
+"""会員登録・ログイン・ログアウトと、メール認証・パスワードリセットのトークン発行・消費オーケストレーション。
 
-参照設計書: docs/detailed_design/auth/06_token_mail.md
+参照設計書:
+- docs/detailed_design/api/auth/01_post_auth_register.md〜05_get_auth_config.md
+- docs/detailed_design/auth/06_token_mail.md
 """
 
 from __future__ import annotations
@@ -9,7 +11,6 @@ import base64
 import hashlib
 import logging
 import secrets
-import uuid
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -38,13 +39,12 @@ from app.core.exceptions import (
 	OAuthHandoffInvalidError,
 	ServiceUnavailableError,
 	TooManyAttemptsError,
-	UnauthenticatedError,
 	UserInactiveError,
 )
 from app.core.security import get_dummy_password_hash, hash_password, verify_password
 from app.models.user import User
 from app.repository import login_history_repository, oauth_account_repository, redis_store, user_repository
-from app.schemas.auth import AuthConfigResponse, CurrentUser, MeResponse, RegisterRequest
+from app.schemas.auth import RegisterRequest
 from app.schemas.oauth import OAuthCallbackResult, OAuthExchangeResponse, OAuthStartResult
 from app.service import mail_service
 
@@ -76,226 +76,6 @@ async def record_login_success(identifier: str, client_ip: str) -> None:
 	await redis_store.reset_login_failure(identifier, client_ip)
 
 
-def _db_sqlstate(error: DBAPIError) -> str | None:
-	original = getattr(error, "orig", None)
-	return getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)
-
-
-async def register(payload: RegisterRequest, background: BackgroundTasks, request: Request, db: AsyncSession) -> User:
-	"""ユーザーを登録し、確認メールを予約する。登録直後の自動ログインは行わない。"""
-	config = get_backend_settings()
-	client_info = resolve_client_ip(request, config.trusted_proxy_cidrs)
-	try:
-		count = await redis_store.check_rate_limit(
-			"register",
-			client_info.client_ip,
-			config.rate_limit_register_max_requests,
-			config.rate_limit_register_window_seconds,
-		)
-	except Exception as exc:
-		raise ServiceUnavailableError() from exc
-	if count > config.rate_limit_register_max_requests:
-		try:
-			ttl = await redis_store.get_rate_limit_ttl("register", client_info.client_ip)
-		except Exception as exc:
-			raise ServiceUnavailableError() from exc
-		raise TooManyAttemptsError(retry_after=ttl if ttl > 0 else config.rate_limit_register_window_seconds)
-	try:
-		user_id = await user_repository.create(db, payload.username, payload.email, hash_password(payload.password))
-	except DBAPIError as exc:
-		if _db_sqlstate(exc) == "P0001":
-			raise DuplicateUsernameError() from exc
-		if _db_sqlstate(exc) == "P0002":
-			raise DuplicateEmailError() from exc
-		raise
-	await user_repository.update_profile(
-		db,
-		user_id,
-		payload.last_name,
-		payload.first_name,
-		payload.last_name_kana,
-		payload.first_name_kana,
-		payload.birth_date,
-	)
-	await db.commit()
-	user = await user_repository.get_by_id(db, user_id)
-	if user is None:
-		raise ServiceUnavailableError()
-	await issue_email_verify_token(user, background)
-	_log_user_registered(request, user)
-	return user
-
-
-async def _record_login_attempt(
-	db: AsyncSession,
-	user_id: uuid.UUID | None,
-	identifier: str,
-	login_method: str,
-	request: Request,
-	client_info: ClientIpInfo,
-	success: bool,
-	failure_reason: str | None,
-) -> None:
-	await login_history_repository.create(
-		db,
-		user_id=user_id,
-		login_identifier=identifier,
-		login_method=login_method,
-		ip_address=client_info.client_ip,
-		user_agent=request.headers.get("user-agent"),
-		success=success,
-		failure_reason=failure_reason,
-	)
-	await db.commit()
-
-
-async def login(
-	identifier: str,
-	password: str,
-	request: Request,
-	response: Response,
-	db: AsyncSession,
-	strategy: AuthStrategy | None = None,
-	*,
-	settings: BackendSettings | None = None,
-) -> LoginResult:
-	"""資格情報を検証し、設定済み認証方式でログイン状態を確立する。"""
-	config = settings or get_backend_settings()
-	client_info = resolve_client_ip(request, config.trusted_proxy_cidrs)
-	try:
-		await ensure_login_not_rate_limited(identifier, client_info.client_ip, config)
-	except TooManyAttemptsError:
-		_log_login_attempt(request, None, client_info, identifier, config.auth_mode, False, "too_many_attempts")
-		raise
-	except Exception as exc:
-		raise ServiceUnavailableError() from exc
-	user = await user_repository.get_by_login_identifier(db, identifier)
-	stored_password_hash = user.password_hash if user is not None else None
-	has_password = stored_password_hash is not None
-	password_hash = stored_password_hash or get_dummy_password_hash()
-	password_valid = verify_password(password, password_hash)
-	if user is None:
-		try:
-			await record_login_failure(identifier, client_info.client_ip, config)
-		except Exception as exc:
-			raise ServiceUnavailableError() from exc
-		await _record_login_attempt(
-			db,
-			user.id if user else None,
-			identifier,
-			config.auth_mode,
-			request,
-			client_info,
-			False,
-			"invalid_credentials",
-		)
-		_log_login_attempt(request, user, client_info, identifier, config.auth_mode, False, "invalid_credentials")
-		raise InvalidCredentialsError()
-	if not has_password or not password_valid:
-		try:
-			await record_login_failure(identifier, client_info.client_ip, config)
-		except Exception as exc:
-			raise ServiceUnavailableError() from exc
-		await _record_login_attempt(
-			db,
-			user.id,
-			identifier,
-			config.auth_mode,
-			request,
-			client_info,
-			False,
-			"invalid_credentials",
-		)
-		_log_login_attempt(request, user, client_info, identifier, config.auth_mode, False, "invalid_credentials")
-		raise InvalidCredentialsError()
-	try:
-		await record_login_success(identifier, client_info.client_ip)
-	except Exception as exc:
-		raise ServiceUnavailableError() from exc
-	if not user.is_active:
-		await _record_login_attempt(
-			db, user.id, identifier, config.auth_mode, request, client_info, False, "user_inactive"
-		)
-		_log_login_attempt(request, user, client_info, identifier, config.auth_mode, False, "user_inactive")
-		raise UserInactiveError()
-	if user.email_verified_at is None:
-		await _record_login_attempt(
-			db, user.id, identifier, config.auth_mode, request, client_info, False, "email_not_verified"
-		)
-		_log_login_attempt(request, user, client_info, identifier, config.auth_mode, False, "email_not_verified")
-		raise EmailNotVerifiedError()
-	auth_strategy = _auth_strategy(config, strategy)
-	if auth_strategy.mode != config.auth_mode:
-		raise ServiceUnavailableError()
-	login_result: LoginResult | None = None
-	try:
-		login_result = await auth_strategy.login(user, request, response)
-	except Exception as exc:
-		_log_login_attempt(request, user, client_info, identifier, config.auth_mode, False, "service_unavailable")
-		raise ServiceUnavailableError() from exc
-	try:
-		await _record_login_attempt(db, user.id, identifier, config.auth_mode, request, client_info, True, None)
-		_log_login_attempt(request, user, client_info, identifier, config.auth_mode, True, None)
-	except Exception as exc:
-		_log_login_attempt(
-			request, user, client_info, identifier, config.auth_mode, False, "login_history_write_failed"
-		)
-		_log_login_history_write_failed(request, user, client_info, operation="login", login_method=config.auth_mode)
-		try:
-			assert login_result is not None
-			await auth_strategy.rollback_login(user, login_result, response)
-		except Exception as rollback_exc:
-			_log_auth_state_revoke_failed(request, user, "login", login_result, client_info)
-			raise ServiceUnavailableError() from rollback_exc
-		raise ServiceUnavailableError() from exc
-	assert login_result is not None
-	return login_result
-
-
-async def logout(request: Request, response: Response, strategy: AuthStrategy) -> None:
-	"""認証方式固有のログアウト処理へ委譲する。"""
-	await strategy.logout(request, response)
-
-
-async def get_me(current_user: CurrentUser, db: AsyncSession, settings: BackendSettings | None = None) -> MeResponse:
-	"""現在ユーザーの最新DB情報とOAuth providerをレスポンスへ変換する。"""
-	config = settings or get_backend_settings()
-	user = await user_repository.get_by_id(db, current_user.id)
-	if user is None:
-		raise UnauthenticatedError()
-	accounts = await oauth_account_repository.list_by_user_id(db, user.id)
-	return MeResponse(
-		id=user.id,
-		username=user.username,
-		email=user.email,
-		last_name=user.last_name,
-		first_name=user.first_name,
-		last_name_kana=user.last_name_kana,
-		first_name_kana=user.first_name_kana,
-		birth_date=user.birth_date,
-		profile_completed=all(
-			value is not None
-			for value in (user.last_name, user.first_name, user.last_name_kana, user.first_name_kana, user.birth_date)
-		),
-		role=user.role,
-		has_password=user.password_hash is not None,
-		oauth_providers=[account.provider for account in accounts],
-		auth_mode=config.auth_mode,
-	)
-
-
-def get_auth_config(settings: BackendSettings | None = None) -> AuthConfigResponse:
-	"""フロントエンド向けに秘密情報を含まない認証設定を返す。"""
-	config = settings or get_backend_settings()
-	return AuthConfigResponse(
-		auth_mode=config.auth_mode,
-		google_login_enabled=bool(
-			config.google_login_enabled and config.google_client_id and config.google_client_secret
-		),
-		csrf_cookie_name=config.cookie_name_csrf,
-	)
-
-
 def _generate_token() -> str:
 	return secrets.token_urlsafe(_TOKEN_URLSAFE_BYTES)
 
@@ -323,6 +103,7 @@ async def verify_email(token: str, db: AsyncSession) -> None:
 	if user_id is None:
 		raise InvalidVerifyTokenError()
 	await user_repository.mark_email_verified(db, user_id)
+	await db.commit()
 
 
 async def resend_verification(email: str, background: BackgroundTasks, db: AsyncSession) -> None:
@@ -368,6 +149,166 @@ async def reset_password(token: str, new_password: str, db: AsyncSession) -> Non
 	password_hash = hash_password(new_password)
 	await user_repository.update_password(db, user_id, password_hash)
 	await db.commit()
+
+
+_SQLSTATE_DUPLICATE_USERNAME = "P0001"
+_SQLSTATE_DUPLICATE_EMAIL = "P0002"
+_LOGIN_FAILURE_INVALID_CREDENTIALS = "INVALID_CREDENTIALS"
+_LOGIN_FAILURE_USER_INACTIVE = "USER_INACTIVE"
+_LOGIN_FAILURE_EMAIL_NOT_VERIFIED = "EMAIL_NOT_VERIFIED"
+
+
+def _duplicate_error_for(exc: DBAPIError) -> DuplicateUsernameError | DuplicateEmailError | None:
+	"""sp_register_userの一意性違反（P0001/P0002）を409の業務エラーへ変換する。"""
+	sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
+	if sqlstate == _SQLSTATE_DUPLICATE_USERNAME:
+		return DuplicateUsernameError()
+	if sqlstate == _SQLSTATE_DUPLICATE_EMAIL:
+		return DuplicateEmailError()
+	return None
+
+
+async def register(payload: RegisterRequest, background: BackgroundTasks, request: Request, db: AsyncSession) -> User:
+	"""ユーザーを登録し、確認メール送信を予約する。認証状態は確立しない（01_post_auth_register.md）。"""
+	if await user_repository.get_by_login_identifier(db, payload.username) is not None:
+		raise DuplicateUsernameError()
+	if await user_repository.get_by_email(db, payload.email) is not None:
+		raise DuplicateEmailError()
+
+	password_hash = hash_password(payload.password)
+	try:
+		user_id = await user_repository.create(db, payload.username, payload.email, password_hash)
+		await user_repository.update_profile(
+			db,
+			user_id,
+			payload.last_name,
+			payload.first_name,
+			payload.last_name_kana,
+			payload.first_name_kana,
+			payload.birth_date,
+		)
+		await db.commit()
+	except DBAPIError as exc:
+		await db.rollback()
+		duplicate = _duplicate_error_for(exc)
+		if duplicate is None:
+			raise
+		raise duplicate from exc
+
+	user = await user_repository.get_by_id(db, user_id)
+	if user is None:
+		raise ServiceUnavailableError()
+	await issue_email_verify_token(user, background)
+	return user
+
+
+async def _record_login_attempt(
+	db: AsyncSession,
+	user: User | None,
+	identifier: str,
+	request: Request,
+	login_method: str,
+	client_ip: str,
+	*,
+	success: bool,
+	failure_reason: str | None,
+) -> None:
+	await login_history_repository.create(
+		db,
+		user_id=user.id if user is not None else None,
+		login_identifier=identifier,
+		login_method=login_method,
+		ip_address=client_ip,
+		user_agent=request.headers.get("user-agent"),
+		success=success,
+		failure_reason=failure_reason,
+	)
+	await db.commit()
+
+
+async def login(
+	identifier: str,
+	password: str,
+	request: Request,
+	response: Response,
+	db: AsyncSession,
+	strategy: AuthStrategy,
+) -> LoginResult:
+	"""認証を成立させ、AUTH_MODEに応じた認証状態を確立する（02_post_auth_login.md §6.2の判定順序）。"""
+	settings = get_backend_settings()
+	client_ip = resolve_client_ip(request, settings.trusted_proxy_cidrs).client_ip
+	await ensure_login_not_rate_limited(identifier, client_ip, settings)
+
+	user = await user_repository.get_by_login_identifier(db, identifier)
+	# ユーザー不存在・OAuth専用アカウントでもダミーハッシュを検証し、応答時間差によるユーザー列挙を防ぐ。
+	stored_hash = user.password_hash if user is not None and user.password_hash is not None else None
+	password_matched = verify_password(password, stored_hash or get_dummy_password_hash())
+	if user is None or stored_hash is None or not password_matched:
+		await record_login_failure(identifier, client_ip, settings)
+		await _record_login_attempt(
+			db,
+			user,
+			identifier,
+			request,
+			strategy.mode,
+			client_ip,
+			success=False,
+			failure_reason=_LOGIN_FAILURE_INVALID_CREDENTIALS,
+		)
+		raise InvalidCredentialsError()
+
+	await record_login_success(identifier, client_ip)
+	if not user.is_active:
+		await _record_login_attempt(
+			db,
+			user,
+			identifier,
+			request,
+			strategy.mode,
+			client_ip,
+			success=False,
+			failure_reason=_LOGIN_FAILURE_USER_INACTIVE,
+		)
+		raise UserInactiveError()
+	if user.email_verified_at is None:
+		await _record_login_attempt(
+			db,
+			user,
+			identifier,
+			request,
+			strategy.mode,
+			client_ip,
+			success=False,
+			failure_reason=_LOGIN_FAILURE_EMAIL_NOT_VERIFIED,
+		)
+		raise EmailNotVerifiedError()
+
+	login_result = await strategy.login(user, request, response)
+	try:
+		await _record_login_attempt(
+			db, user, identifier, request, strategy.mode, client_ip, success=True, failure_reason=None
+		)
+	except Exception as exc:
+		try:
+			await strategy.rollback_login(user, login_result, response)
+		except Exception as rollback_exc:
+			logger.exception("login state rollback failed", extra={"user_id": str(user.id)})
+			raise ServiceUnavailableError() from rollback_exc
+		raise ServiceUnavailableError() from exc
+	return login_result
+
+
+async def logout(request: Request, response: Response, strategy: AuthStrategy) -> None:
+	"""現在の認証状態を失効させる。未ログインでも例外を出さない冪等処理（03_post_auth_logout.md）。"""
+	await strategy.logout(request, response)
+
+
+async def refresh(request: Request, response: Response, strategy: AuthStrategy) -> LoginResult:
+	"""access tokenを再発行する。モード差異はStrategyへ委譲する（06_post_auth_refresh.md §6.2）。
+
+	sessionモードのStrategyは`NotSupportedInModeError`を送出し405となる。
+	"""
+	return await strategy.refresh(request, response)
 
 
 def normalize_redirect_to(raw: str | None, settings: BackendSettings | None = None) -> str:
@@ -552,63 +493,17 @@ def _request_id(request: Request) -> str | None:
 	return value if isinstance(value, str) else None
 
 
-def _log_login_history_write_failed(
-	request: Request,
-	user: User,
-	client_info: ClientIpInfo,
-	*,
-	operation: str = "oauth_login",
-	login_method: str = "oauth_google",
-) -> None:
+def _log_login_history_write_failed(request: Request, user: User, client_info: ClientIpInfo) -> None:
 	logger.warning(
-		"Login history write failed",
+		"OAuth login history write failed",
 		extra={
-			"operation": operation,
+			"operation": "oauth_login",
 			"event": "login_history_write_failed",
 			"user_id": str(user.id),
-			"login_method": login_method,
+			"login_method": "oauth_google",
 			"client_ip": client_info.client_ip,
 			"proxy_peer_ip": client_info.proxy_peer_ip,
 			"ip_source": client_info.ip_source,
-			"request_id": _request_id(request),
-		},
-	)
-
-
-def _log_login_attempt(
-	request: Request,
-	user: User | None,
-	client_info: ClientIpInfo,
-	identifier: str,
-	auth_mode: str,
-	success: bool,
-	failure_reason: str | None,
-) -> None:
-	logger.info(
-		"Login attempt",
-		extra={
-			"operation": "login",
-			"event": "login_attempt",
-			"identifier": identifier,
-			"user_id": str(user.id) if user is not None else None,
-			"success": success,
-			"auth_mode": auth_mode,
-			"failure_reason": failure_reason,
-			"client_ip": client_info.client_ip,
-			"proxy_peer_ip": client_info.proxy_peer_ip,
-			"ip_source": client_info.ip_source,
-			"request_id": _request_id(request),
-		},
-	)
-
-
-def _log_user_registered(request: Request, user: User) -> None:
-	logger.info(
-		"User registered",
-		extra={
-			"operation": "register",
-			"event": "user_registered",
-			"user_id": str(user.id),
 			"request_id": _request_id(request),
 		},
 	)

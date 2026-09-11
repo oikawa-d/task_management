@@ -29,6 +29,7 @@ __all__ = [
 	"get_csrf_token",
 	"get_login_failure_count",
 	"get_login_failure_ttl",
+	"get_rate_limit_ttl",
 	"get_refresh_token",
 	"get_session",
 	"get_rate_limit_ttl",

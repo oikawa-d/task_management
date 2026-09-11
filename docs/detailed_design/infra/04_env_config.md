@@ -83,12 +83,16 @@
 | `COOKIE_DOMAIN` | str | 空文字 | Cookieの`Domain`属性（必要時のみ設定） | 平文可 |
 | `LOGIN_MAX_ATTEMPTS` | int | `5` | ログイン失敗の許容回数上限 | 平文可 |
 | `LOGIN_LOCK_WINDOW_SECONDS` | int | `900` | ログイン失敗カウントのロック窓TTL | 平文可 |
-| `RATE_LIMIT_REGISTER_MAX_REQUESTS` | int | `5` | 会員登録のIP単位上限（時間窓900秒） | 平文可 |
-| `RATE_LIMIT_REGISTER_WINDOW_SECONDS` | int | `900` | 会員登録のIP単位Rate Limit時間窓 | 平文可 |
-| `RATE_LIMIT_EMAIL_VERIFY_MAX_REQUESTS` | int | `10` | メール認証実行のIP単位上限（時間窓900秒） | 平文可 |
-| `RATE_LIMIT_EMAIL_VERIFY_RESEND_MAX_REQUESTS` | int | `5` | 認証メール再送のIP単位上限（時間窓900秒） | 平文可 |
-| `RATE_LIMIT_PASSWORD_FORGOT_MAX_REQUESTS` | int | `5` | パスワード再設定要求のIP単位上限（時間窓900秒） | 平文可 |
-| `RATE_LIMIT_PASSWORD_RESET_MAX_REQUESTS` | int | `10` | パスワード再設定実行のIP単位上限（時間窓900秒） | 平文可 |
+| `RATE_LIMIT_REGISTER_MAX_REQUESTS` | int | `5` | 会員登録のIP単位上限 | 平文可 |
+| `RATE_LIMIT_REGISTER_WINDOW_SECONDS` | int | `900` | 会員登録Rate Limitの時間窓 | 平文可 |
+| `RATE_LIMIT_EMAIL_VERIFY_MAX_REQUESTS` | int | `10` | メール認証実行のIP単位上限 | 平文可 |
+| `RATE_LIMIT_EMAIL_VERIFY_WINDOW_SECONDS` | int | `900` | メール認証Rate Limitの時間窓 | 平文可 |
+| `RATE_LIMIT_EMAIL_VERIFY_RESEND_MAX_REQUESTS` | int | `5` | 認証メール再送のIP単位上限 | 平文可 |
+| `RATE_LIMIT_EMAIL_VERIFY_RESEND_WINDOW_SECONDS` | int | `900` | 認証メール再送Rate Limitの時間窓 | 平文可 |
+| `RATE_LIMIT_PASSWORD_FORGOT_MAX_REQUESTS` | int | `5` | パスワード再設定要求のIP単位上限 | 平文可 |
+| `RATE_LIMIT_PASSWORD_FORGOT_WINDOW_SECONDS` | int | `900` | パスワード再設定申請Rate Limitの時間窓 | 平文可 |
+| `RATE_LIMIT_PASSWORD_RESET_MAX_REQUESTS` | int | `10` | パスワード再設定実行のIP単位上限 | 平文可 |
+| `RATE_LIMIT_PASSWORD_RESET_WINDOW_SECONDS` | int | `900` | パスワード再設定Rate Limitの時間窓 | 平文可 |
 | `RATE_LIMIT_OAUTH_MAX_REQUESTS` | int | `10` | OAuth開始・callback・exchange各APIのIP単位上限 | 平文可 |
 | `RATE_LIMIT_OAUTH_WINDOW_SECONDS` | int | `900` | OAuth Rate Limit時間窓 | 平文可 |
 | `RATE_LIMIT_NOTIFICATION_READ_MAX_REQUESTS` | int | `120` | 通知GETのuser_id + IP単位上限（時間窓60秒） | 平文可 |
