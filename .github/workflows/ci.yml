@@ -63,7 +63,7 @@ jobs:
 
       - name: GitHub破壊操作hookのテスト
         run: |
-          for test_file in .claude/hooks/*.test.sh; do
+          for test_file in .agents/hooks/*.test.sh; do
             bash "$test_file"
           done
 
