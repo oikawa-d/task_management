@@ -92,6 +92,7 @@
 | 4 | ⑭を開く | `GET /api/notifications?page=1&per_page=20` | クエリのみ | 通知一覧と未読件数を描画 | 401はAuthAdapter、その他はパネル内エラー | `queryKey: ['notifications', 1]` |
 | 5 | 通知行クリック | `PATCH /api/notifications/{notification_id}/read` | なし | 成功後に`read_at`と未読件数をキャッシュへ反映し、パネルを閉じる。taskがあればボードへ遷移 | パネルを維持し、エラーと再試行ボタンを表示。成功するまで遷移しない | `mutationKey: ['notification-read']` |
 | 6 | 「すべて既読」クリック | `POST /api/notifications/read-all` | なし | 成功後に`updated_count` / `unread_count`を反映し、パネルを閉じる | パネルを維持し、エラーと再試行ボタンを表示 | `mutationKey: ['notifications-read-all']` |
+| 7 | カレンダー表示・月送り | `GET /api/tasks/calendar?from={from}&to={to}&scope=me` | 6週分の日付範囲 | `CalendarTaskItem[]`を`due_date`で42セルへ割り当て | 401はAuthAdapter、その他はカレンダー内にエラーと再試行ボタン | `queryKey: ['tasks-calendar', scope, projectId, from, to]` |
 
 ## 5. 状態管理
 
@@ -251,6 +252,8 @@ flowchart TB
 | 処理内容 | `projectsApi.createProject`をmutationFnとして実行し、成功時に`['projects']`をinvalidateする |
 | 副作用 | `POST /api/projects` 呼び出し、成功時にプロジェクト一覧を再取得 |
 
+`getCalendarTasks(params)`は`GET /api/tasks/calendar`を呼び出し、`CalendarTaskItem[]`を返す。`CalendarTaskItem.due_date`はサーバーが`APP_TIMEZONE`で算出した日付キーであり、`Calendar`は`due_at`のブラウザ側変換を行わず、この値でタスクをセルへ割り当てる。
+
 ### 9.3 `features/dashboard/components/ProjectCreateForm.tsx :: ProjectCreateForm`
 
 | 項目 | 内容 |
@@ -303,6 +306,10 @@ flowchart LR
     N2 --> O2["行クリック / すべて既読"]
     O2 --> P2["PATCH read / POST read-all"]
     P2 --> J2
+
+    H3["カレンダー月表示"] --> I3["GET /api/tasks/calendar"]
+    I3 --> J3["CalendarTaskItem[]<br/>due_date = APP_TIMEZONEの日付"]
+    J3 --> K3["due_dateでCalendarの42セルへ割当"]
 ```
 
 ## 13. アクセシビリティ・表示設定
@@ -324,15 +331,25 @@ flowchart LR
 | 4 | コンポーネント | 複数件時の描画 | `GET /projects` → 2件 | メンバー数・タスク件数バッジを含むカードが2枚描画 | `DashboardPage renders project cards with badges` |
 | 5 | コンポーネント | 作成成功 | `POST /projects` → 201 | フォームが閉じ、一覧が再取得される | `ProjectCreateForm closes and refetches list on success` |
 | 6 | コンポーネント | 作成422 | `POST /projects` → 422 `{field:'name'}` | フィールドにエラー表示、フォームは開いたまま | `ProjectCreateForm shows field error on 422` |
-| 7 | コンポーネント | カレンダーの期限タスク表示 | `GET /tasks/calendar` → 期限付きタスク配列 | 期限日セルにタスク名を表示 | `Calendar renders tasks on due dates` |
+| 7 | コンポーネント | カレンダーの期限タスク表示 | `GET /tasks/calendar` → `CalendarTaskItem[]`（`due_date`付き） | `due_date`の期限日セルにタスク名を表示 | `Calendar renders tasks on due dates` |
 | 8 | コンポーネント | カレンダーの月送り | 前月/次月ボタンを操作 | 6週グリッドと取得範囲が切り替わる | `DashboardPage changes calendar month and query range` |
-| 9 | 結合 | 未認証アクセス | authStore=`unauthenticated` | `/login` にリダイレクト | `RequireAuth redirects unauthenticated user from dashboard` |
-| 10 | 網羅できない範囲 | 実際のカードグリッドのレスポンシブ折返し | - | - | ピクセル単位のレイアウト崩れはCSSの視覚回帰テスト対象外のため手動確認とする |
+| 9 | 境界 | UTC 16:00の期限タスク | `due_at=2026-09-09T16:00:00Z`、`due_date=2026-09-10` | ブラウザTZに依存せずJSTの10日セルへ表示 | `Calendar assigns task by server APP_TIMEZONE date` |
+| 10 | 結合 | 未認証アクセス | authStore=`unauthenticated` | `/login` にリダイレクト | `RequireAuth redirects unauthenticated user from dashboard` |
+| 11 | 網羅できない範囲 | 実際のカードグリッドのレスポンシブ折返し | - | - | ピクセル単位のレイアウト崩れはCSSの視覚回帰テスト対象外のため手動確認とする |
 
-## 15. 不明点・要検討事項
+## 15. 日付境界方針（Issue #396）
+
+案A（サーバーが`APP_TIMEZONE`の日付キーを返す）を採用する。`GET /tasks/calendar`の既存の期間抽出はすでに`APP_TIMEZONE`で日境界をUTCへ変換しており、その同じ境界計算から`due_date`を生成する。フロントは日時を再解釈せず、日付のみの`due_date`でセルへ割り当てる。
+
+案B（`GET /auth/config`へ`app_timezone`を追加してフロントで再計算）を採用しない理由は、認証起動設定のレスポンス契約と起動時stateへ不要な責務を追加し、バックエンドとフロントで日付計算を二重管理するためである。案AはカレンダーAPIの専用レスポンス型だけを拡張し、既存の認証設定APIおよび他のタスクAPIの契約を変更しない。
+
+`due_date`はサーバーが返すため、ブラウザのローカルタイムゾーンに関係なく`APP_TIMEZONE`の日境界と一致する。将来ユーザー単位のタイムゾーン設定を導入する場合は、対象APIの契約とこの方針を再検討する。
+
+## 16. 不明点・要検討事項
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
 | なし | ページングは`meta.page` / `meta.total_pages`を⑬として定義済み | - |
 | 確定 | `description` の文字数上限はissue #40で0〜2000文字に確定（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） | - |
 | 要検討 | サイドバー開閉の画面幅によるデフォルト値切り替え（狭幅時の自動折りたたみ等）の要否が [05_frontend.md](../../basic_design/05_frontend.md) に明記されていない | レスポンシブ挙動の実装方針 |
+| 要検討 | ユーザー単位のタイムゾーン設定を将来導入する場合のカレンダー日付キー | `due_date`の算出元とAPI契約の再設計 |

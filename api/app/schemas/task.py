@@ -114,6 +114,10 @@ class TaskListItem(TaskDetailResponse):
 	pass
 
 
+class CalendarTaskItem(TaskListItem):
+	due_date: date
+
+
 class BoardColumns(BaseModel):
 	todo: list[TaskSummary] = Field(default_factory=list)
 	in_progress: list[TaskSummary] = Field(default_factory=list)

@@ -61,6 +61,7 @@ export interface CalendarTask {
 	project_id: string | null;
 	title: string;
 	due_at: string;
+	due_date: string;
 	status: "todo" | "in_progress" | "done";
 }
 
