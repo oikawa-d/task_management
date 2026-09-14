@@ -101,6 +101,20 @@ def test_start_redirects_to_google_with_state_cookie(client: TestClient, monkeyp
 	assert captured == ["/projects"]
 
 
+def test_start_rate_limited_returns_positive_retry_after(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	async def _oauth_start(*_args: Any, **_kwargs: Any) -> OAuthStartResult:
+		raise TooManyAttemptsError(retry_after=42)
+
+	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_start", _oauth_start)
+
+	response = client.get("/api/auth/oauth/google")
+
+	assert response.status_code == 429
+	assert response.json()["error"]["code"] == "TOO_MANY_ATTEMPTS"
+	assert response.headers["Retry-After"] == "42"
+	assert int(response.headers["Retry-After"]) > 0
+
+
 def test_callback_session_mode_redirects_with_redirect_to_fragment(
 	session_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -444,6 +458,24 @@ def test_exchange_returns_tokens_in_jwt_mode(client: TestClient, monkeypatch: py
 	assert response.headers["cache-control"] == "no-store"
 	assert any(value.startswith("cerberus_rt=refresh-token") for value in response.headers.get_list("set-cookie"))
 	assert any(value.startswith("cerberus_csrf=csrf-token") for value in response.headers.get_list("set-cookie"))
+
+
+def test_exchange_rate_limited_returns_positive_retry_after(
+	client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+	async def _oauth_exchange(*_args: Any, **_kwargs: Any) -> OAuthExchangeResponse:
+		raise TooManyAttemptsError(retry_after=42)
+
+	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_exchange", _oauth_exchange)
+
+	response = client.post(
+		"/api/auth/oauth/exchange", json={"code": "handoff-code"}, headers={"Origin": ALLOWED_ORIGIN}
+	)
+
+	assert response.status_code == 429
+	assert response.json()["error"]["code"] == "TOO_MANY_ATTEMPTS"
+	assert response.headers["Retry-After"] == "42"
+	assert int(response.headers["Retry-After"]) > 0
 
 
 def test_exchange_in_session_mode_returns_405(monkeypatch: pytest.MonkeyPatch) -> None:
