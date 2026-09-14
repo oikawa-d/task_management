@@ -83,6 +83,30 @@ gh_selector_to_repo() {
 	return 1
 }
 
+# トークンが `--repo` / `-R` のいずれかの形式なら、そのリポジトリ値を GH_TARGET_REPO へ格納する。
+# 戻り値: 0=値を同一トークンから取得した / 1=次トークンが値(呼び出し側で読み飛ばす) / 2=該当なし
+gh_take_repo_flag() {
+	local token="$1"
+	local next="${2:-}"
+
+	case "$token" in
+		--repo|-R)
+			GH_TARGET_REPO="$next"
+			return 1
+			;;
+		--repo=*)
+			GH_TARGET_REPO="${token#*=}"
+			return 0
+			;;
+		# pflagは短縮形に値を続けて書く `-Rowner/repo` 形式も受け付ける。
+		-R?*)
+			GH_TARGET_REPO="${token#-R}"
+			return 0
+			;;
+	esac
+	return 2
+}
+
 # コマンド断片から操作対象のセレクタ(番号・URL・ブランチ名)と対象リポジトリを抽出する。
 # 第1引数: pr-merge | issue-close
 # 第2引数: コマンド断片
@@ -135,6 +159,17 @@ gh_parse_target() {
 		return 2
 	fi
 
+	# `gh --repo owner/repo pr merge 123` のように、サブコマンドより前に置かれた
+	# `--repo` / `-R` も有効なため、`gh` からサブコマンドまでの区間も解析する。
+	local pre_index take_status
+	for (( pre_index = 0; pre_index + 2 < index; pre_index++ )); do
+		take_status=0
+		gh_take_repo_flag "${tokens[pre_index]}" "${tokens[pre_index + 1]:-}" || take_status=$?
+		if [[ "$take_status" -eq 1 ]]; then
+			(( pre_index++ ))
+		fi
+	done
+
 	local token end_of_options=0
 	for (( ; index < total; index++ )); do
 		token="${tokens[index]}"
@@ -145,12 +180,19 @@ gh_parse_target() {
 				continue
 			fi
 
+			# `--repo` / `-R` は形式が多いため、共通処理でまとめて解析する。
+			take_status=0
+			gh_take_repo_flag "$token" "${tokens[index + 1]:-}" || take_status=$?
+			if [[ "$take_status" -eq 0 ]]; then
+				continue
+			elif [[ "$take_status" -eq 1 ]]; then
+				(( index++ ))
+				continue
+			fi
+
 			# `--flag=value` 形式は値が同一トークンに含まれるため、次トークンは消費しない。
 			if [[ "$token" == --?*=* ]]; then
 				if gh_contains "${token%%=*}" "${value_flags[@]}" || gh_contains "${token%%=*}" "${bool_flags[@]}"; then
-					if [[ "${token%%=*}" == "--repo" ]]; then
-						GH_TARGET_REPO="${token#*=}"
-					fi
 					continue
 				fi
 				return 2
@@ -158,9 +200,6 @@ gh_parse_target() {
 
 			if [[ "$token" == -* && "$token" != "-" ]]; then
 				if gh_contains "$token" "${value_flags[@]}"; then
-					if [[ "$token" == "--repo" || "$token" == "-R" ]]; then
-						GH_TARGET_REPO="${tokens[index + 1]:-}"
-					fi
 					(( index++ ))
 					continue
 				fi

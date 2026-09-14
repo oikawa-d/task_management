@@ -185,6 +185,14 @@ assert_gh_not_called_with "gh pr merge 123" '--repo'
 # 引用文字列に含まれる `--repo` は実オプションではないため照会先に使わないこと
 assert_gh_not_called_with 'gh pr merge --subject "see --repo evil/other" 123' 'evil/other'
 
+# 3-5. サブコマンドより前に置かれたグローバルな `--repo` / `-R` も照会先へ反映すること
+assert_gh_called_with "gh --repo evil/other pr merge 123" 'pr view 123 --json labels --repo evil/other'
+assert_gh_called_with "gh --repo=evil/other pr merge 123" 'pr view 123 --json labels --repo evil/other'
+assert_gh_called_with "gh -R evil/other pr merge 123" 'pr view 123 --json labels --repo evil/other'
+assert_gh_called_with "gh -Revil/other pr merge 123" 'pr view 123 --json labels --repo evil/other'
+# サブコマンド後の短縮形の値連結(`-Rowner/repo`)も同様に解析すること
+assert_gh_called_with "gh pr merge 123 -Revil/other" 'pr view 123 --json labels --repo evil/other'
+
 # 3-3. 未知のフラグはブロックすること(fail-close)
 assert_blocked "gh pr merge --unknown-option 999 123"
 
@@ -253,6 +261,15 @@ assert_gh_called_with "gh issue close --repo evil/other 123" 'owner=evil -F repo
 assert_gh_called_with 'gh issue close --comment "text --repo evil/other" 123' \
 	'owner=oikawa-d -F repo=task_management -F number=123'
 assert_gh_not_called_with 'gh issue close --comment "text --repo evil/other" 123' 'owner=evil'
+
+# 5-12. サブコマンドより前に置かれたグローバルな `--repo` / `-R` も照会先へ反映すること
+assert_gh_called_with "gh --repo evil/other issue close 123" 'owner=evil -F repo=other -F number=123'
+assert_gh_called_with "gh --repo=evil/other issue close 123" 'owner=evil -F repo=other -F number=123'
+assert_gh_called_with "gh -R evil/other issue close 123" 'owner=evil -F repo=other -F number=123'
+assert_gh_called_with "gh -Revil/other issue close 123" 'owner=evil -F repo=other -F number=123'
+assert_gh_called_with "gh issue close 123 -Revil/other" 'owner=evil -F repo=other -F number=123'
+# サブコマンド前後いずれの位置でも、引用文字列の内容は実オプションとして扱わないこと
+assert_gh_not_called_with 'gh issue close --comment "see gh --repo evil/other issue close 999" 123' 'owner=evil'
 
 # 5-9. 未知のフラグは値を取るか判断できないため解析不能としてブロックすること(fail-close)
 assert_blocked "gh issue close --unknown-option 999 123"
