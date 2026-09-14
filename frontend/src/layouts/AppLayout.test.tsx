@@ -10,6 +10,7 @@ import type { AuthAdapter } from "../api/authAdapter";
 import { useAuthStore } from "../auth/authStore";
 import { buildNotification } from "../features/notifications/testFixtures";
 import { ROUTES } from "../routes";
+import { useProjectStore } from "../stores/projectStore";
 import { AppLayout } from "./AppLayout";
 
 function createAuthAdapter(overrides: Partial<AuthAdapter> = {}): AuthAdapter {
@@ -37,11 +38,12 @@ function renderAppLayout(props: Parameters<typeof AppLayout>[0] = {}) {
 		{ initialEntries: [ROUTES.DASHBOARD] },
 	);
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	return render(
+	render(
 		<QueryClientProvider client={queryClient}>
 			<RouterProvider router={router} />
 		</QueryClientProvider>,
 	);
+	return queryClient;
 }
 
 function mockUnreadCount(unreadCount: number) {
@@ -57,6 +59,7 @@ describe("AppLayout", () => {
 		vi.unstubAllGlobals();
 		clearAuthAdapter();
 		act(() => useAuthStore.getState().reset());
+		act(() => useProjectStore.getState().clearSelectedProject());
 	});
 
 	it("設定リンク・通知ベル・adminリンクを実アプリ用レイアウトで表示する", async () => {
@@ -103,8 +106,12 @@ describe("AppLayout", () => {
 		let resolveLogout: (() => void) | undefined;
 		const logout = vi.fn(() => new Promise<void>((resolve) => (resolveLogout = resolve)));
 		const adapter = createAuthAdapter({ logout });
-		act(() => useAuthStore.setState({ status: "authenticated", user: { id: "u1", role: "member" }, authAdapter: adapter }));
-		renderAppLayout();
+		act(() => {
+			useAuthStore.setState({ status: "authenticated", user: { id: "u1", role: "member" }, authAdapter: adapter });
+			useProjectStore.getState().selectProject("project-1");
+		});
+		const queryClient = renderAppLayout();
+		queryClient.setQueryData(["projects", { page: 1 }], { items: [{ id: "project-1" }] });
 
 		const button = screen.getByRole("button", { name: "ログアウト" });
 		fireEvent.click(button);
@@ -115,5 +122,7 @@ describe("AppLayout", () => {
 		act(() => resolveLogout?.());
 		expect(await screen.findByRole("heading", { name: "ログイン" })).toBeInTheDocument();
 		expect(useAuthStore.getState().status).toBe("unauthenticated");
+		expect(useProjectStore.getState().selectedProjectId).toBeNull();
+		expect(queryClient.getQueryData(["projects", { page: 1 }])).toBeUndefined();
 	});
 });

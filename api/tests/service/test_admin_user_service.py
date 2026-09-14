@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -22,6 +23,10 @@ class _Orig(Exception):
 
 def _dbapi_error(sqlstate: str | None) -> DBAPIError:
 	return DBAPIError("CALL sp_admin_update_user_role()", {}, _Orig(sqlstate))
+
+
+def _connection_error(statement: str = "x") -> OperationalError:
+	return OperationalError(statement, {}, SimpleNamespace(sqlstate="08006"))
 
 
 def _user(**overrides: object) -> User:
@@ -93,7 +98,7 @@ async def test_list_admin_users_falls_back_to_count_when_page_is_empty(monkeypat
 
 @pytest.mark.asyncio
 async def test_list_admin_users_service_unavailable_on_db_error(monkeypatch: pytest.MonkeyPatch) -> None:
-	monkeypatch.setattr(admin_repository, "list_users", AsyncMock(side_effect=OperationalError("x", {}, Exception())))
+	monkeypatch.setattr(admin_repository, "list_users", AsyncMock(side_effect=_connection_error()))
 
 	with pytest.raises(ServiceUnavailableError):
 		await admin_user_service.list_users(AdminUserListQuery(), AsyncMock())
@@ -158,11 +163,11 @@ async def test_change_role_calls_repository_exactly_once_then_fetches_updated_us
 
 
 @pytest.mark.asyncio
-async def test_change_role_unknown_sqlstate_is_service_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
-	"""fail-close方針: P0007/P0008/P0010以外のDB例外は503へ変換する。"""
+async def test_change_role_unknown_sqlstate_is_reraised(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""P0007/P0008/P0010以外のDB例外は共通ハンドラで500へ処理する。"""
 	monkeypatch.setattr(admin_repository, "update_user_role", AsyncMock(side_effect=_dbapi_error(None)))
 
-	with pytest.raises(ServiceUnavailableError):
+	with pytest.raises(DBAPIError):
 		await admin_user_service.change_role(_actor(), uuid4(), "admin", AsyncMock())
 
 
@@ -428,7 +433,7 @@ async def test_force_logout_does_not_catch_non_redis_exceptions(monkeypatch: pyt
 
 @pytest.mark.asyncio
 async def test_get_existing_user_service_unavailable_on_db_error(monkeypatch: pytest.MonkeyPatch) -> None:
-	monkeypatch.setattr(user_repository, "get_by_id", AsyncMock(side_effect=OperationalError("x", {}, Exception())))
+	monkeypatch.setattr(user_repository, "get_by_id", AsyncMock(side_effect=_connection_error()))
 
 	with pytest.raises(ServiceUnavailableError):
 		await admin_user_service.force_logout(_actor(), uuid4(), AsyncMock())

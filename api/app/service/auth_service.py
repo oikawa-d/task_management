@@ -17,6 +17,7 @@ from app.core.exceptions import (
 	ServiceUnavailableError,
 	TooManyAttemptsError,
 	UserInactiveError,
+	raise_database_error,
 )
 from app.core.security import get_dummy_password_hash, hash_password, verify_password
 from app.models.user import User
@@ -96,7 +97,7 @@ async def register(payload: RegisterRequest, background: BackgroundTasks, reques
 		await db.rollback()
 		duplicate = _duplicate_error_for(exc)
 		if duplicate is None:
-			raise
+			raise_database_error(exc)
 		raise duplicate from exc
 	user = await user_repository.get_by_id(db, user_id)
 	if user is None:
