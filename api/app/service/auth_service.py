@@ -60,20 +60,31 @@ _OAUTH_RATE_LIMIT_SCOPE = {
 
 async def ensure_login_not_rate_limited(identifier: str, client_ip: str, settings: BackendSettings) -> None:
 	"""現在の失敗回数が上限に達している場合は`TooManyAttemptsError`を送出する。"""
-	failure_count = await redis_store.get_login_failure_count(identifier, client_ip)
-	if failure_count >= settings.login_max_attempts:
-		ttl = await redis_store.get_login_failure_ttl(identifier, client_ip)
-		raise TooManyAttemptsError(retry_after=ttl if ttl > 0 else settings.login_lock_window_seconds)
+	try:
+		failure_count = await redis_store.get_login_failure_count(identifier, client_ip)
+		if failure_count >= settings.login_max_attempts:
+			ttl = await redis_store.get_login_failure_ttl(identifier, client_ip)
+			raise TooManyAttemptsError(retry_after=ttl if ttl > 0 else settings.login_lock_window_seconds)
+	except TooManyAttemptsError:
+		raise
+	except Exception as exc:
+		raise ServiceUnavailableError() from exc
 
 
 async def record_login_failure(identifier: str, client_ip: str, settings: BackendSettings) -> int:
 	"""ログイン失敗を記録し、記録後の失敗回数を返す。"""
-	return await redis_store.incr_login_failure(identifier, client_ip, settings.login_lock_window_seconds)
+	try:
+		return await redis_store.incr_login_failure(identifier, client_ip, settings.login_lock_window_seconds)
+	except Exception as exc:
+		raise ServiceUnavailableError() from exc
 
 
 async def record_login_success(identifier: str, client_ip: str) -> None:
 	"""ログイン成功時に失敗回数カウンタをリセットする。"""
-	await redis_store.reset_login_failure(identifier, client_ip)
+	try:
+		await redis_store.reset_login_failure(identifier, client_ip)
+	except Exception as exc:
+		raise ServiceUnavailableError() from exc
 
 
 def _generate_token() -> str:
@@ -226,6 +237,24 @@ async def _record_login_attempt(
 	await db.commit()
 
 
+def _log_basic_login_history_write_failed(
+	request: Request, user: User, login_method: str, client_info: ClientIpInfo
+) -> None:
+	logger.warning(
+		"Login history write failed",
+		extra={
+			"operation": "login",
+			"event": "login_history_write_failed",
+			"user_id": str(user.id),
+			"login_method": login_method,
+			"client_ip": client_info.client_ip,
+			"proxy_peer_ip": client_info.proxy_peer_ip,
+			"ip_source": client_info.ip_source,
+			"request_id": _request_id(request),
+		},
+	)
+
+
 async def login(
 	identifier: str,
 	password: str,
@@ -283,12 +312,23 @@ async def login(
 		)
 		raise EmailNotVerifiedError()
 
-	login_result = await strategy.login(user, request, response)
+	try:
+		login_result = await strategy.login(user, request, response)
+	except ServiceUnavailableError:
+		raise
+	except Exception as exc:
+		raise ServiceUnavailableError() from exc
 	try:
 		await _record_login_attempt(
 			db, user, identifier, request, strategy.mode, client_ip, success=True, failure_reason=None
 		)
 	except Exception as exc:
+		_log_basic_login_history_write_failed(
+			request,
+			user,
+			strategy.mode,
+			resolve_client_ip(request, settings.trusted_proxy_cidrs),
+		)
 		try:
 			await strategy.rollback_login(user, login_result, response)
 		except Exception as rollback_exc:

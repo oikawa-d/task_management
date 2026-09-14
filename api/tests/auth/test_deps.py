@@ -7,6 +7,7 @@ import pytest
 from app.auth.base import AuthContext
 from app.core.config import get_backend_settings
 from app.core.deps import (
+	enforce_notification_read_rate_limit,
 	enforce_rate_limit,
 	get_current_user,
 	get_current_user_optional,
@@ -194,3 +195,23 @@ async def test_enforce_rate_limit_fails_closed_on_redis_error(monkeypatch: pytes
 
 	with pytest.raises(ServiceUnavailableError):
 		await dependency(_CsrfRequest({}), get_backend_settings())
+
+
+@pytest.mark.asyncio
+async def test_notification_rate_limit_uses_resolved_forwarded_client_ip(monkeypatch: pytest.MonkeyPatch) -> None:
+	check_mock = AsyncMock(return_value=1)
+	monkeypatch.setattr("app.core.deps.redis_store.check_rate_limit", check_mock)
+	request = _CsrfRequest({})
+	request.client = SimpleNamespace(host="10.0.0.1")
+	request.headers = {"x-forwarded-for": "198.51.100.4, 10.0.0.2"}
+	settings = get_backend_settings().model_copy(update={"trusted_proxy_cidrs": ["10.0.0.0/8"]})
+	user = CurrentUser(id=uuid4(), username="taro", role="member", is_active=True, email_verified_at=None)
+
+	await enforce_notification_read_rate_limit(request, user, settings)
+
+	assert check_mock.await_args.args == (
+		"notification_read",
+		f"{user.id}:198.51.100.4",
+		settings.rate_limit_notification_read_max_requests,
+		settings.rate_limit_notification_window_seconds,
+	)

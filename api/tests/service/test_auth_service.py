@@ -379,7 +379,58 @@ async def test_login_success_records_history_and_resets_failures(monkeypatch: py
 	assert history_mock.await_args.kwargs["login_method"] == "session"
 
 
-async def test_login_rolls_back_auth_state_when_history_write_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_login_returns_503_when_login_failure_count_lookup_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setattr(
+		auth_service.redis_store, "get_login_failure_count", AsyncMock(side_effect=RuntimeError("redis down"))
+	)
+
+	with pytest.raises(ServiceUnavailableError):
+		await auth_service.login("taro", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), _FakeStrategy())  # type: ignore[arg-type]
+
+
+async def test_login_returns_503_when_failure_counter_update_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
+	monkeypatch.setattr(
+		auth_service.redis_store, "incr_login_failure", AsyncMock(side_effect=RuntimeError("redis down"))
+	)
+	monkeypatch.setattr(auth_service.user_repository, "get_by_login_identifier", AsyncMock(return_value=None))
+	monkeypatch.setattr(auth_service, "verify_password", lambda *_args: False)
+
+	with pytest.raises(ServiceUnavailableError):
+		await auth_service.login(
+			"ghost", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), _FakeStrategy()
+		)  # type: ignore[arg-type]
+
+
+async def test_login_returns_503_when_failure_counter_reset_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+	user = _login_user()
+	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
+	monkeypatch.setattr(
+		auth_service.redis_store, "reset_login_failure", AsyncMock(side_effect=RuntimeError("redis down"))
+	)
+	monkeypatch.setattr(auth_service.user_repository, "get_by_login_identifier", AsyncMock(return_value=user))
+	monkeypatch.setattr(auth_service, "verify_password", lambda *_args: True)
+
+	with pytest.raises(ServiceUnavailableError):
+		await auth_service.login("taro", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), _FakeStrategy())  # type: ignore[arg-type]
+
+
+async def test_login_returns_503_when_strategy_login_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+	user = _login_user()
+	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
+	monkeypatch.setattr(auth_service.redis_store, "reset_login_failure", AsyncMock())
+	monkeypatch.setattr(auth_service.user_repository, "get_by_login_identifier", AsyncMock(return_value=user))
+	monkeypatch.setattr(auth_service, "verify_password", lambda *_args: True)
+	strategy = _FakeStrategy()
+	strategy.login = AsyncMock(side_effect=RuntimeError("redis down"))  # type: ignore[method-assign]
+
+	with pytest.raises(ServiceUnavailableError):
+		await auth_service.login("taro", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), strategy)  # type: ignore[arg-type]
+
+
+async def test_login_rolls_back_auth_state_when_history_write_fails(
+	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
 	user = _login_user()
 	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
 	monkeypatch.setattr(auth_service.redis_store, "reset_login_failure", AsyncMock())
@@ -392,11 +443,12 @@ async def test_login_rolls_back_auth_state_when_history_write_fails(monkeypatch:
 	)
 	strategy = _FakeStrategy("session")
 
-	with pytest.raises(ServiceUnavailableError):
+	with caplog.at_level("WARNING", logger="app.oauth"), pytest.raises(ServiceUnavailableError):
 		await auth_service.login("taro", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), strategy)  # type: ignore[arg-type]
 
 	assert len(strategy.login_calls) == 1
 	assert len(strategy.rollback_calls) == 1
+	assert any(record.event == "login_history_write_failed" for record in caplog.records)
 
 
 async def test_login_returns_service_unavailable_when_auth_state_rollback_fails(

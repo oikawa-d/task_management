@@ -182,18 +182,15 @@ async def get_comment_for_member(
 	return comment
 
 
-def _resolved_client_ip(request: Request) -> str:
-	return request.client.host if request.client else "unknown"
-
-
 async def _enforce_rate_limit(
 	request: Request,
 	user: CurrentUser,
 	scope: str,
 	max_requests: int,
 	window: int,
+	trusted_proxy_cidrs: list[str],
 ) -> None:
-	value = f"{user.id}:{_resolved_client_ip(request)}"
+	value = f"{user.id}:{resolve_client_ip(request, trusted_proxy_cidrs).client_ip}"
 	try:
 		count = await redis_store.check_rate_limit(scope, value, max_requests, window)
 		if count <= max_requests:
@@ -202,7 +199,7 @@ async def _enforce_rate_limit(
 	except Exception as exc:
 		raise ServiceUnavailableError() from exc
 	if count > max_requests:
-		raise TooManyAttemptsError(retry_after=retry_after)
+		raise TooManyAttemptsError(retry_after=retry_after if retry_after > 0 else window)
 
 
 async def enforce_notification_read_rate_limit(
@@ -217,6 +214,7 @@ async def enforce_notification_read_rate_limit(
 		"notification_read",
 		settings.rate_limit_notification_read_max_requests,
 		settings.rate_limit_notification_window_seconds,
+		settings.trusted_proxy_cidrs,
 	)
 
 
@@ -232,6 +230,7 @@ async def enforce_notification_write_rate_limit(
 		"notification_write",
 		settings.rate_limit_notification_write_max_requests,
 		settings.rate_limit_notification_window_seconds,
+		settings.trusted_proxy_cidrs,
 	)
 
 

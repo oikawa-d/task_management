@@ -45,7 +45,7 @@
 | フィールド | 型 | NULL可否 | 説明 |
 |-----------|----|----------|------|
 | auth_mode | string | 不可 | `session` / `jwt`。`settings.auth_mode`（環境変数`AUTH_MODE`） |
-| google_login_enabled | boolean | 不可 | `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`が設定されているかで判定 |
+| google_login_enabled | boolean | 不可 | `GOOGLE_LOGIN_ENABLED=true` かつ `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`が設定されている場合のみtrue |
 | csrf_cookie_name | string | 不可 | `COOKIE_NAME_CSRF`の値。フロントが`document.cookie`から読み取るCookie名を固定値でハードコードしないための提供 |
 
 秘密情報（クライアントシークレット、JWT署名鍵等）は一切含めない。`Cache-Control: no-store`を付与する。
@@ -154,8 +154,8 @@ repository/service層は経由しない（設定値の参照のみで完結す�
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 単体 | Google設定ありの場合 | `settings.google_client_id`等をモック設定 | `google_login_enabled=true` | `test_auth_config_google_enabled_when_configured` |
-| 2 | 単体 | Google設定なしの場合 | `settings.google_client_id=None` | `google_login_enabled=false` | `test_auth_config_google_disabled_when_missing` |
+| 1 | 単体 | Google設定あり・明示有効の場合 | `settings.google_login_enabled=true`、ID/Secretを設定 | `google_login_enabled=true` | `test_auth_config_google_enabled_when_configured` |
+| 2 | 単体 | 明示無効またはGoogle設定なしの場合 | `settings.google_login_enabled=false` またはID/Secret未設定 | `google_login_enabled=false` | `test_auth_config_google_disabled_when_missing` |
 | 3 | 結合 | `AUTH_MODE=session`起動時 | 環境変数設定 | `200 {"auth_mode": "session", ...}` | `test_auth_config_endpoint_session_mode` |
 | 4 | 結合 | `AUTH_MODE=jwt`起動時 | 環境変数設定 | `200 {"auth_mode": "jwt", ...}` | `test_auth_config_endpoint_jwt_mode` |
 | 5 | 結合 | レスポンスヘッダ確認 | 任意モード | `Cache-Control: no-store`が付与される | `test_auth_config_endpoint_no_store_header` |
