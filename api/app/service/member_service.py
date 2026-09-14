@@ -55,7 +55,7 @@ async def add_member(project: Project, user_id: UUID, invited_by: UUID, db: Asyn
 	created = next((member for member in members if member.user_id == user_id), None)
 	if created is None:
 		raise NotFoundError("追加したメンバーを取得できません")
-	return MemberResponse.model_validate(_member_summary(created, project.owner_id))
+	return MemberResponse(**_member_summary(created, project.owner_id).model_dump())
 
 
 async def search_candidates(project: Project, query: str, db: AsyncSession) -> CandidateListResponse:
