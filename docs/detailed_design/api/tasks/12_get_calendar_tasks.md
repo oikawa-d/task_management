@@ -63,7 +63,7 @@ sequenceDiagram
     P->>DB: SELECT fn_list_calendar_tasks(...)
     DB-->>P: task + project_is_active
     P-->>S: TaskWithProjectStatus
-    S-->>R: list[TaskListItem]
+    S-->>R: list[CalendarTaskItem]
     R-->>U: 200 JSON配列
 ```
 
@@ -71,8 +71,8 @@ sequenceDiagram
 
 | 層 | 関数 | 入力 | 出力 |
 |----|------|------|------|
-| router | `list_calendar_tasks` | Query、CurrentUser、DB | `list[TaskListItem]` |
-| service | `list_calendar_tasks` | CurrentUser、CalendarTaskQuery、DB | `list[TaskListItem]` |
+| router | `list_calendar_tasks` | Query、CurrentUser、DB | `list[CalendarTaskItem]` |
+| service | `list_calendar_tasks` | CurrentUser、CalendarTaskQuery、DB | `list[CalendarTaskItem]` |
 | repository | `list_calendar` | user、UTC境界、scope、project_id | `list[TaskWithProjectStatus]` |
 | DB | `fn_list_calendar_tasks` | user、UTC境界、scope、project_id | task行とproject状態 |
 
