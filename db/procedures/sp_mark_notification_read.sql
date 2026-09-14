@@ -21,7 +21,12 @@ BEGIN
     UPDATE notifications
        SET read_at = COALESCE(read_at, now())
      WHERE id = p_notification_id
-       AND user_id = p_user_id
-     RETURNING read_at INTO p_read_at;
+       AND user_id = p_user_id;
+
+    SELECT read_at
+      INTO p_read_at
+      FROM notifications
+     WHERE id = p_notification_id
+       AND user_id = p_user_id;
 END;
 $$;
