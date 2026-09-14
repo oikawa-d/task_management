@@ -3,6 +3,7 @@ import json
 import logging
 from pathlib import Path
 
+import pytest
 from app.core.logger import _SAFE_AUDIT_FIELDS, JsonFormatter, configure_logging
 
 
@@ -119,34 +120,57 @@ def test_json_formatter_includes_force_logout_fields() -> None:
 	assert "email" not in output
 
 
-def test_all_structured_log_extra_keys_are_allowlisted() -> None:
-	app_root = Path(__file__).resolve().parent.parent / "app"
-	allowed = set(_SAFE_AUDIT_FIELDS)
+def _find_unknown_extra_keys(source: str, filename: str, allowed: set[str]) -> list[str]:
+	tree = ast.parse(source, filename=filename)
 	log_methods = {"debug", "info", "warning", "error", "exception", "critical", "log"}
 	unknown: list[str] = []
 
-	for path in app_root.rglob("*.py"):
-		tree = ast.parse(path.read_text(), filename=str(path))
-		for node in ast.walk(tree):
-			if not isinstance(node, ast.Call):
+	for node in ast.walk(tree):
+		if not isinstance(node, ast.Call):
+			continue
+		for keyword in node.keywords:
+			if keyword.arg != "extra" or not isinstance(node.func, ast.Attribute) or node.func.attr not in log_methods:
 				continue
-			for keyword in node.keywords:
-				if (
-					keyword.arg != "extra"
-					or not isinstance(node.func, ast.Attribute)
-					or node.func.attr not in log_methods
-				):
-					continue
-				if not isinstance(keyword.value, ast.Dict):
-					unknown.append(f"{path}:{keyword.value.lineno}:dynamic extra mapping")
-					continue
-				for key in keyword.value.keys:
-					if key is None:
-						unknown.append(f"{path}:{keyword.value.lineno}:dynamic extra mapping")
-					elif isinstance(key, ast.Constant) and isinstance(key.value, str) and key.value not in allowed:
-						unknown.append(f"{path}:{key.lineno}:{key.value}")
+			if not isinstance(keyword.value, ast.Dict):
+				unknown.append(f"{filename}:{keyword.value.lineno}:dynamic extra mapping")
+				continue
+			for key in keyword.value.keys:
+				if key is None:
+					unknown.append(f"{filename}:{keyword.value.lineno}:dynamic extra mapping")
+				elif not isinstance(key, ast.Constant) or not isinstance(key.value, str) or key.value not in allowed:
+					key_name = "dynamic extra key" if not isinstance(key, ast.Constant) else repr(key.value)
+					unknown.append(f"{filename}:{key.lineno}:{key_name}")
+	return unknown
+
+
+def test_all_structured_log_extra_keys_are_allowlisted() -> None:
+	app_root = Path(__file__).resolve().parent.parent / "app"
+	allowed = set(_SAFE_AUDIT_FIELDS)
+	unknown: list[str] = []
+
+	for path in app_root.rglob("*.py"):
+		unknown.extend(_find_unknown_extra_keys(path.read_text(), str(path), allowed))
 
 	assert unknown == []
+
+
+@pytest.mark.parametrize(
+	("extra", "expected_fragment"),
+	[
+		("{dynamic_key: value}", "dynamic extra key"),
+		("{1: value}", ":1"),
+		("{**mapping}", "dynamic extra mapping"),
+	],
+)
+def test_extra_key_scanner_rejects_non_allowlisted_keys(extra: str, expected_fragment: str) -> None:
+	unknown = _find_unknown_extra_keys(
+		f'logger.info("message", extra={extra})',
+		"<test>",
+		{"operation"},
+	)
+
+	assert len(unknown) == 1
+	assert expected_fragment in unknown[0]
 
 
 def test_configure_logging_sets_level_and_json_handler() -> None:
