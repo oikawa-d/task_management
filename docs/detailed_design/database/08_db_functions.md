@@ -400,7 +400,19 @@ DBが業務エラーを返す場合は `RAISE EXCEPTION ... USING ERRCODE = 'P0x
 | `P0008` | `LAST_ADMIN_REQUIRED` | 409 | 最後の有効adminの降格・無効化 |
 | `P0009` | `DB_INVALID_STATE` | 400 | 期間・status・保持日数などDB業務状態の不正 |
 
-`P0001`〜`P0009`は重複・欠番なしで予約する。ドライバのSQLSTATEをマッピングテーブルへ渡し、未定義のSQLSTATEは `INTERNAL_ERROR`、接続・タイムアウトは `SERVICE_UNAVAILABLE` とする。API側の一覧は [basic_design/04_api.md](../../basic_design/04_api.md) §4.2に反映する。
+`P0001`〜`P0009`は重複・欠番なしで予約する。ドライバのSQLSTATEをマッピングテーブルへ渡し、未定義のSQLSTATEは `INTERNAL_ERROR` とする。API側の一覧は [basic_design/04_api.md](../../basic_design/04_api.md) §4.2に反映する。
+
+DB・Redis障害を `SERVICE_UNAVAILABLE`（503）へ変換する例外型は、次の一覧を共通契約とする。`OperationalError` は型だけで判定せず、接続例外を示すSQLSTATEに限定する。PostgreSQLのSQLSTATEクラス `08`（connection exception）または `57P03`（cannot connect now）の `OperationalError` は503、それ以外の `OperationalError`（デッドロック `40P01`、serialization failure `40001`、未定義SQLSTATEを含む）は `INTERNAL_ERROR`（500）とする。
+
+| 例外型 | 503へ変換する条件 | その他の扱い |
+|--------|--------------------|--------------|
+| `redis.exceptions.RedisError` | 常に503 | - |
+| `sqlalchemy.exc.InterfaceError` | 常に503 | - |
+| `sqlalchemy.exc.DisconnectionError` | 常に503 | - |
+| `sqlalchemy.exc.TimeoutError` | 常に503 | - |
+| `sqlalchemy.exc.OperationalError` | SQLSTATEが `08` で始まる、または `57P03` | それ以外は500 |
+
+上記以外の `DBAPIError` は共通の503対象としない。`P0001`〜`P0009`はサービス層で本表の業務エラーへ変換し、それ以外の `DBAPIError` は `INTERNAL_ERROR`（500）として処理する。
 
 ## 5. 関数相関図（repositoryはSP/FN呼び出しのみ）
 
