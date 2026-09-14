@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import require_admin, verify_csrf, verify_origin
@@ -35,35 +35,40 @@ async def list_admin_users(
 async def patch_admin_user_role(
 	user_id: UUID,
 	payload: AdminUserRoleUpdateRequest,
+	request: Request,
 	actor: CurrentUser = Depends(require_admin),
 	_: None = Depends(verify_origin),
 	__csrf: None = Depends(verify_csrf),
 	db: AsyncSession = Depends(get_db_session),
 ) -> AdminUserDetailResponse:
-	return await admin_user_service.change_role(actor, user_id, payload.role, db)
+	return await admin_user_service.change_role(actor, user_id, payload.role, db, request_id=request.state.request_id)
 
 
 @router.patch("/users/{user_id}/status", response_model=AdminUserDetailResponse)
 async def patch_admin_user_status(
 	user_id: UUID,
 	payload: AdminUserStatusUpdateRequest,
+	request: Request,
 	actor: CurrentUser = Depends(require_admin),
 	_: None = Depends(verify_origin),
 	__csrf: None = Depends(verify_csrf),
 	db: AsyncSession = Depends(get_db_session),
 ) -> AdminUserDetailResponse:
-	return await admin_user_service.change_status(actor, user_id, payload.is_active, db)
+	return await admin_user_service.change_status(
+		actor, user_id, payload.is_active, db, request_id=request.state.request_id
+	)
 
 
 @router.post("/users/{user_id}/force-logout", status_code=status.HTTP_204_NO_CONTENT)
 async def post_admin_user_force_logout(
 	user_id: UUID,
+	request: Request,
 	actor: CurrentUser = Depends(require_admin),
 	_: None = Depends(verify_origin),
 	__csrf: None = Depends(verify_csrf),
 	db: AsyncSession = Depends(get_db_session),
 ) -> Response:
-	await admin_user_service.force_logout(actor, user_id, db)
+	await admin_user_service.force_logout(actor, user_id, db, request_id=request.state.request_id)
 	return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -79,12 +84,13 @@ async def list_admin_projects(
 @router.delete("/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_admin_project(
 	project_id: UUID,
+	request: Request,
 	actor: CurrentUser = Depends(require_admin),
 	_: None = Depends(verify_origin),
 	__csrf: None = Depends(verify_csrf),
 	db: AsyncSession = Depends(get_db_session),
 ) -> Response:
-	await admin_project_service.deactivate_project(actor, project_id, db)
+	await admin_project_service.deactivate_project(actor, project_id, db, request_id=request.state.request_id)
 	return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
