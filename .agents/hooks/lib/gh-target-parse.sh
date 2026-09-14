@@ -72,15 +72,46 @@ gh_contains() {
 	return 1
 }
 
-# セレクタがPR/IssueのURLの場合、URLに含まれるリポジトリ(owner/repo)を取り出す。
+# セレクタがPR/IssueのURLの場合、URLに含まれるリポジトリ([HOST/]owner/repo)を取り出す。
 gh_selector_to_repo() {
 	local selector="$1"
 
-	if [[ "$selector" =~ ^https?://[^/]+/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)/(issues|pull)/[0-9]+ ]]; then
-		printf '%s/%s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+	if [[ "$selector" =~ ^https?://([A-Za-z0-9.-]+(:[0-9]+)?)/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)/(issues|pull)/[0-9]+ ]]; then
+		printf '%s/%s/%s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}"
 		return 0
 	fi
 	return 1
+}
+
+# `[HOST/]OWNER/REPO` の形式を検証する。
+gh_validate_repo_reference() {
+	local repo="$1"
+
+	[[ "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ||
+		"$repo" =~ ^[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]
+}
+
+# `[HOST/]OWNER/REPO` をホスト・owner・repoへ分解する。
+# ホストが無い場合は空文字とし、ghの既定ホストを使用する。
+gh_split_repo_reference() {
+	local repo="$1"
+
+	GH_REPO_HOST=""
+	GH_REPO_OWNER=""
+	GH_REPO_NAME=""
+
+	if [[ "$repo" =~ ^([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)$ ]]; then
+		GH_REPO_OWNER="${BASH_REMATCH[1]}"
+		GH_REPO_NAME="${BASH_REMATCH[2]}"
+		return 0
+	fi
+	if [[ "$repo" =~ ^([A-Za-z0-9.-]+(:[0-9]+)?)/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)$ ]]; then
+		GH_REPO_HOST="${BASH_REMATCH[1]}"
+		GH_REPO_OWNER="${BASH_REMATCH[3]}"
+		GH_REPO_NAME="${BASH_REMATCH[4]}"
+		return 0
+	fi
+	return 2
 }
 
 # トークンが `--repo` / `-R` のいずれかの形式なら、そのリポジトリ値を GH_TARGET_REPO へ格納する。
@@ -223,7 +254,7 @@ gh_parse_target() {
 		GH_TARGET_REPO="$repo_from_url"
 	fi
 
-	if [[ -n "$GH_TARGET_REPO" && ! "$GH_TARGET_REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+	if [[ -n "$GH_TARGET_REPO" ]] && ! gh_validate_repo_reference "$GH_TARGET_REPO"; then
 		return 2
 	fi
 

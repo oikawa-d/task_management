@@ -179,7 +179,10 @@ assert_gh_called_with "gh pr merge --squash feature/issue-999" 'pr view feature/
 assert_gh_called_with "gh pr merge --repo evil/other 123" 'pr view 123 --json labels --repo evil/other'
 assert_gh_called_with "gh pr merge 123 -R evil/other" 'pr view 123 --json labels --repo evil/other'
 assert_gh_called_with "gh pr merge --repo=evil/other 123" 'pr view 123 --json labels --repo evil/other'
-assert_gh_called_with "gh pr merge https://github.com/evil/other/pull/123" '--repo evil/other'
+assert_gh_called_with "gh pr merge https://github.com/evil/other/pull/123" '--repo github.com/evil/other'
+assert_gh_called_with "gh pr merge --repo ghe.example/evil/other 123" 'pr view 123 --json labels --repo ghe.example/evil/other'
+assert_gh_called_with "gh pr merge https://ghe.example/evil/other/pull/123" '--repo ghe.example/evil/other'
+assert_blocked "gh pr merge --repo invalid 123"
 # `--repo` 未指定ならカレントリポジトリ(=`--repo` を付けない)で照会すること
 assert_gh_not_called_with "gh pr merge 123" '--repo'
 # 引用文字列に含まれる `--repo` は実オプションではないため照会先に使わないこと
@@ -256,6 +259,13 @@ assert_blocked 'gh issue close --comment "tracking 999" 123'
 assert_gh_called_with "gh issue close https://github.com/evil/other/issues/123" \
 	'owner=evil -F repo=other -F number=123'
 assert_gh_called_with "gh issue close --repo evil/other 123" 'owner=evil -F repo=other -F number=123'
+assert_gh_called_with "gh issue close --repo github.com/evil/other 123" \
+	'api graphql .*--hostname github.com .*owner=evil -F repo=other -F number=123'
+assert_gh_called_with "gh issue close --repo ghe.example/evil/other 123" \
+	'api graphql .*--hostname ghe.example .*owner=evil -F repo=other -F number=123'
+assert_gh_called_with "gh issue close https://ghe.example/evil/other/issues/123" \
+	'api graphql .*--hostname ghe.example .*owner=evil -F repo=other -F number=123'
+assert_blocked "gh issue close --repo invalid 123"
 
 # 5-11. コメント等の引用文字列に含まれる `--repo` は照会先に使わず、カレントリポジトリを照会すること
 assert_gh_called_with 'gh issue close --comment "text --repo evil/other" 123' \

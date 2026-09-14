@@ -131,21 +131,27 @@ resolve_repo() {
 linked_pr_has_reviewed_label() {
 	local issue_number="$1"
 	local parsed_repo="$2" # コマンドで明示されたリポジトリ(空文字ならカレントリポジトリ)
-	local repo owner name response
+	local repo owner name host response
+	local -a graphql_args=(api graphql -f "query=$LINKED_PR_QUERY")
 
 	if [[ -z "$issue_number" ]]; then
 		return 2
 	fi
 
 	repo=$(resolve_repo "$parsed_repo") || return 2
-	if [[ "$repo" != */* ]]; then
+	gh_split_repo_reference "$repo" || return 2
+	owner="$GH_REPO_OWNER"
+	name="$GH_REPO_NAME"
+	host="$GH_REPO_HOST"
+	if [[ -z "$owner" || -z "$name" ]]; then
 		return 2
 	fi
-	owner="${repo%%/*}"
-	name="${repo#*/}"
+	if [[ -n "$host" ]]; then
+		graphql_args+=(--hostname "$host")
+	fi
+	graphql_args+=(-F "owner=$owner" -F "repo=$name" -F "number=$issue_number")
 
-	response=$(gh api graphql -f query="$LINKED_PR_QUERY" \
-		-F owner="$owner" -F repo="$name" -F number="$issue_number" 2>/dev/null) || return 2
+	response=$(gh "${graphql_args[@]}" 2>/dev/null) || return 2
 
 	if ! jq -e '(.data.repository.issue.closedByPullRequestsReferences.nodes // []) | length > 0' \
 		<<<"$response" >/dev/null 2>&1; then
