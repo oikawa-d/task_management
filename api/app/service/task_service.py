@@ -15,6 +15,7 @@ from app.schemas.auth import CurrentUser
 from app.schemas.task import (
 	BoardColumns,
 	BoardResponse,
+	CalendarTaskItem,
 	CalendarTaskQuery,
 	TaskAssignee,
 	TaskCreateFlatRequest,
@@ -119,7 +120,7 @@ async def list_tasks(
 	)
 
 
-async def list_calendar_tasks(user: CurrentUser, query: CalendarTaskQuery, db: AsyncSession) -> list[TaskListItem]:
+async def list_calendar_tasks(user: CurrentUser, query: CalendarTaskQuery, db: AsyncSession) -> list[CalendarTaskItem]:
 	if query.scope == "project" and user.role != "admin":
 		if query.project_id is None or not await project_repository.is_member(db, query.project_id, user.id):
 			raise NotFoundError()
@@ -127,7 +128,14 @@ async def list_calendar_tasks(user: CurrentUser, query: CalendarTaskQuery, db: A
 	from_utc = datetime.combine(query.from_date, time.min, tzinfo=zone).astimezone(UTC)
 	to_utc = datetime.combine(query.to_date + timedelta(days=1), time.min, tzinfo=zone).astimezone(UTC)
 	items = await task_repository.list_calendar(db, user.id, from_utc, to_utc, query.scope, query.project_id)
-	return [TaskListItem(**_response(item, user).model_dump()) for item in items]
+	return [
+		CalendarTaskItem(
+			**_response(item, user).model_dump(),
+			due_date=item.task.due_at.astimezone(zone).date(),
+		)
+		for item in items
+		if item.task.due_at is not None
+	]
 
 
 async def create_task(

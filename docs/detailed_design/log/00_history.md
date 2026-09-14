@@ -98,6 +98,19 @@ sequenceDiagram
 
 監査IPは `TRUSTED_PROXY_CIDRS` で確定した `client_ip` とし、`proxy_peer_ip`、`ip_source`（`direct` / `trusted_xff`）も記録する。パスワード、トークン、Cookie、Authorization値、未ハッシュの識別子は記録しない。
 
+### 3.2 構造化ログの許可フィールド
+
+`api/app/core/logger.py` の `JsonFormatter` は、下表の安全なフィールドだけを標準出力へ出力する。各ログ呼び出しの`extra`辞書はこの許可リストに含まれるキーだけを使用し、許可外のキーは出力しない。許可リストとの不一致は`api/tests/test_logger.py`のAST検査で検出する。
+
+| 分類 | 許可フィールド |
+|------|----------------|
+| 共通・レート制限 | `operation`、`event`、`route`、`scope`、`limit`、`window`、`request_id`、`client_ip`、`proxy_peer_ip`、`ip_source` |
+| 認証 | `user_id`、`identifier`、`login_method`、`auth_mode`、`success`、`failure_reason` |
+| 失効・管理ユーザー | `deleted_session_count`、`deleted_refresh_count`、`actor_user_id`、`target_user_id`、`new_role`、`old_role`、`result`、`old_is_active`、`new_is_active`、`session_revoked_count`、`refresh_revoked_count`、`mode`、`access_token_revocation_delay_seconds` |
+| 管理プロジェクト | `project_id`、`owner_id`、`member_count`、`task_count_todo`、`task_count_in_progress`、`task_count_done` |
+
+UUID・状態・件数・固定の例外型名は許可するが、メールアドレス等の個人情報、パスワード、認証コード、トークン、秘密情報は許可フィールドへ追加しない。
+
 ## 4. batch記録方式
 
 各ジョブを `with_batch_history` 相当の共通ラッパーで包む。scheduler起動と `--run-once` の両方で、ジョブ本体より先に `batch_history`へ `inprogress` をINSERTする。ジョブの結果を集計し、正常時は `complete`、例外時は `error`へ更新する。

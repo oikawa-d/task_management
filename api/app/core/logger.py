@@ -23,6 +23,23 @@ _SAFE_AUDIT_FIELDS = (
 	"failure_reason",
 	"deleted_session_count",
 	"deleted_refresh_count",
+	"actor_user_id",
+	"target_user_id",
+	"new_role",
+	"old_role",
+	"result",
+	"old_is_active",
+	"new_is_active",
+	"session_revoked_count",
+	"refresh_revoked_count",
+	"project_id",
+	"owner_id",
+	"member_count",
+	"task_count_todo",
+	"task_count_in_progress",
+	"task_count_done",
+	"mode",
+	"access_token_revocation_delay_seconds",
 )
 
 

@@ -95,7 +95,7 @@
 | scope | string | 必須 | `me` / `project` |
 | project_id | string(uuid) | scope=`project`時必須 | 非所属（かつ非admin）は`404 NOT_FOUND` |
 
-`scope=me`：`(project_id IS NULL AND created_by=自分) OR (assignee_id=自分)` に該当するタスク（所属プロジェクトのタスクと、自分が作成した未所属タスクの両方を含む）。`scope=project`：指定`project_id`配下の全タスク（担当者を問わない、プロジェクトメンバー全員分）。いずれも`due_at`が期間内かつ非NULL、`is_active=true`のタスクのみを対象とし、`due_at`昇順でページングなしに全件返す（月表示1画面分の範囲に上限を設けているため）。レスポンス形式は`GET /tasks`の`items[]`要素と同一（`meta`は付与しない）。範囲超過・日付不正は`422 VALIDATION_ERROR`。
+`scope=me`：`(project_id IS NULL AND created_by=自分) OR (assignee_id=自分)` に該当するタスク（所属プロジェクトのタスクと、自分が作成した未所属タスクの両方を含む）。`scope=project`：指定`project_id`配下の全タスク（担当者を問わない、プロジェクトメンバー全員分）。いずれも`due_at`が期間内かつ非NULL、`is_active=true`のタスクのみを対象とし、`due_at`昇順でページングなしに全件返す（月表示1画面分の範囲に上限を設けているため）。レスポンスは`GET /tasks`の`items[]`を拡張したカレンダー専用要素とし、`due_at`を`APP_TIMEZONE`へ変換した日付キー`due_date`（`YYYY-MM-DD`）を含む。範囲超過・日付不正は`422 VALIDATION_ERROR`。
 
 ### 2.5 管理者（`/api/admin`）
 
