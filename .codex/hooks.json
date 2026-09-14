@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "'/home/doikawa/task_management/.codex/hooks/block-github-destructive-actions.sh'"
+            "command": "\"${CODEX_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/.codex/hooks/block-github-destructive-actions.sh\""
           }
         ]
       }

@@ -12,6 +12,10 @@ trap 'rm -rf "$stub_dir"' EXIT
 
 cat > "$stub_dir/gh" <<'STUB'
 #!/usr/bin/env bash
+# どの番号でレビュー状態を確認したかを検証できるよう、呼び出し引数を記録する。
+if [[ -n "${GH_STUB_CALLS:-}" ]]; then
+	printf '%s\n' "$*" >> "$GH_STUB_CALLS"
+fi
 cmd="$1 $2"
 case "$cmd" in
 	# issue closeの判定で使うリポジトリ解決。GH_STUB_REPO_EXITで失敗を再現する。
@@ -106,6 +110,24 @@ assert_blocked_without_jq() {
 	fi
 }
 
+# hookがレビュー状態の確認に使った引数(=対象番号)を検証する。
+assert_gh_called_with() {
+	local command=$1
+	local pattern=$2
+	local calls
+	calls=$(mktemp)
+	GH_STUB_CALLS="$calls" payload "$command" | GH_STUB_CALLS="$calls" "$hook" >/dev/null 2>&1 || true
+	if grep -q -- "$pattern" "$calls"; then
+		rm -f "$calls"
+		return 0
+	fi
+	echo "対象番号の判定が想定と異なります (期待: $pattern): $command" >&2
+	echo "実際のgh呼び出し:" >&2
+	cat "$calls" >&2
+	rm -f "$calls"
+	return 1
+}
+
 reviewed_json='{"labels":[{"name":"reviewed"}]}'
 unreviewed_json='{"labels":[]}'
 
@@ -128,6 +150,15 @@ assert_allowed "gh pr merge 123 --squash"
 assert_allowed "gh pr merge --squash"
 export GH_STUB_JSON="$unreviewed_json"
 assert_blocked "gh pr merge --squash"
+
+# 3-2. オプション値・フラグの数字を対象PRと誤認しないこと
+export GH_STUB_JSON="$unreviewed_json"
+assert_gh_called_with 'gh pr merge --subject "fix 999" 123 --squash' 'pr view 123'
+assert_gh_called_with 'gh pr merge --body-file /tmp/999.md 123' 'pr view 123'
+assert_gh_called_with "gh pr merge --squash feature/issue-999" 'pr view feature/issue-999'
+
+# 3-3. 未知のフラグはブロックすること(fail-close)
+assert_blocked "gh pr merge --unknown-option 999 123"
 
 # 4. gh pr view 失敗時 -> exit 2 (fail-close)
 export GH_STUB_EXIT="1"
@@ -173,6 +204,20 @@ unset GH_STUB_REPO_EXIT
 
 # 5-7. issue番号を特定できない -> exit 2 (fail-close)
 assert_blocked "gh issue close"
+
+unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON GH_STUB_GRAPHQL_JSON
+
+# 5-8. オプション値の数字を対象番号と誤認しないこと
+# `--comment` の値に含まれる 999 ではなく、位置引数の 123 を対象にしなければならない。
+export GH_STUB_GRAPHQL_JSON="$linked_unreviewed_json"
+assert_gh_called_with 'gh issue close --comment "tracking 999" 123' 'number=123'
+assert_gh_called_with "gh issue close --reason 'not planned' 123" 'number=123'
+assert_gh_called_with 'gh issue close --comment="tracking 999" 123' 'number=123'
+assert_gh_called_with 'gh issue close -R oikawa-d/task-999 123' 'number=123'
+assert_blocked 'gh issue close --comment "tracking 999" 123'
+
+# 5-9. 未知のフラグは値を取るか判断できないため解析不能としてブロックすること(fail-close)
+assert_blocked "gh issue close --unknown-option 999 123"
 
 unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON GH_STUB_GRAPHQL_JSON
 

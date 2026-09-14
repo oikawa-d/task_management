@@ -75,7 +75,7 @@ gh pr comment <番号> --body-file <file>
 
 ## マージとclose
 
-**PRを作成したエージェントはmerge・issue closeを実施しない。** `AGENTS.md` の通り、CIが全passしていてもユーザーの明示承認を得るまでmergeせず、承認後に別の操作主体が実施する。`.claude/hooks/block-github-destructive-actions.sh` が `gh pr merge` と `gh issue close` をPreToolUseで拒否するため、作成者エージェントが実行しても必ず失敗する。
+**PRを作成したエージェントはmerge・issue closeを実施しない。** `AGENTS.md` の通り、CIが全passしていてもユーザーの明示承認を得るまでmergeせず、承認後に別の操作主体が実施する。`.agents/hooks/block-github-destructive-actions.sh`（`.claude/hooks/`のラッパー経由で呼び出される）が `gh pr merge` と `gh issue close` をPreToolUseで拒否するため、作成者エージェントが実行しても必ず失敗する。
 
 作成者エージェントはここまでで作業を止め、「CI全pass・mergeable」であることと未解決の指摘の有無をユーザーに報告する。
 
