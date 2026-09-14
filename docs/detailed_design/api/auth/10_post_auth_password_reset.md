@@ -240,7 +240,7 @@ flowchart LR
 ```mermaid
 stateDiagram-v2
     [*] --> トークン発行済み: "09_post_auth_password_forgot.mdで<br/>SETEX pwreset:{hash} TTL=1800"
-    トークン発行済み --> Redis失効済み: "POST /auth/password/reset 成功<br/>GETDEL pwreset:{hash}<br/>delete_all_sessions<br/>revoke_all_refresh_tokens"
+    トークン発行済み --> Redis失効済み: "POST処理中のRedis失効完了<br/>GETDEL pwreset:{hash}<br/>delete_all_sessions<br/>revoke_all_refresh_tokens"
     トークン発行済み --> 期限切れ: "TTL満了（Redisが自動削除）"
     Redis失効済み --> パスワード更新済み: "UPDATE users.password_hash<br/>DBトランザクションでcommit"
     パスワード更新済み --> [*]
