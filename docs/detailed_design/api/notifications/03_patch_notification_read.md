@@ -185,6 +185,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 3 | 結合 | 他人の通知IDを指定 | 404、通知は変更されない | `test_sp_mark_notification_read_other_users_notification_returns_404` |
 | 4 | 結合 | session方式でCSRF不正 | 403 `CSRF_INVALID`、DB更新なし | `test_sp_mark_notification_read_rejects_invalid_csrf` |
 | 5 | 単体 | notification_idが不正 | 422 `VALIDATION_ERROR` | `test_sp_mark_notification_read_rejects_invalid_id` |
+| 6 | 結合 | レート制限超過時にTTLを取得できない | Redis TTLが0以下を返す | 429 `TOO_MANY_ATTEMPTS`、`Retry-After`が設定窓以上の正の整数 | `test_all_notification_rate_limited_endpoints_return_positive_retry_after_when_ttl_unavailable` |
 
 ## 11. 不明点・要検討事項
 
