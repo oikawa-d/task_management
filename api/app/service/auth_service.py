@@ -334,6 +334,14 @@ async def login(
 				failure_reason=_LOGIN_FAILURE_USER_INACTIVE,
 			)
 		except Exception as exc:
+			_log_login_history_write_failed(
+				request,
+				user,
+				client_info,
+				operation="login",
+				login_method=strategy.mode,
+				failure_reason=_LOGIN_FAILURE_SERVICE_UNAVAILABLE,
+			)
 			raise ServiceUnavailableError() from exc
 		_log_login_attempt(request, user, client_info, identifier, strategy.mode, False, _LOGIN_FAILURE_USER_INACTIVE)
 		raise UserInactiveError()
@@ -350,6 +358,14 @@ async def login(
 				failure_reason=_LOGIN_FAILURE_EMAIL_NOT_VERIFIED,
 			)
 		except Exception as exc:
+			_log_login_history_write_failed(
+				request,
+				user,
+				client_info,
+				operation="login",
+				login_method=strategy.mode,
+				failure_reason=_LOGIN_FAILURE_SERVICE_UNAVAILABLE,
+			)
 			raise ServiceUnavailableError() from exc
 		_log_login_attempt(
 			request, user, client_info, identifier, strategy.mode, False, _LOGIN_FAILURE_EMAIL_NOT_VERIFIED
