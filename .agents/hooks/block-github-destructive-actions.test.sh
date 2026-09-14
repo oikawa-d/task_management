@@ -476,6 +476,15 @@ assert_blocked "gh api --method PATCH /repos/oikawa-d/task_management/issues/123
 assert_blocked 'gh api -X PATCH repos/oikawa-d/task_management/issues/123 -f "state=CLOSED"'
 assert_blocked 'STATE=closed; gh api -X PATCH repos/oikawa-d/task_management/issues/123 -f state="$STATE"'
 assert_allowed "gh api -X PATCH repos/oikawa-d/task_management/issues/123 -f title=updated"
+assert_blocked "gh api -X PATCH repos/oikawa-d/task_management/issues/123 --input payload.json"
+assert_blocked "gh api -X PATCH repos/oikawa-d/task_management/issues/123 --input=payload.json"
+assert_blocked "gh api -X PATCH repos/oikawa-d/task_management/issues/123 --input -"
+assert_blocked "gh api -X PATCH repos/oikawa-d/task_management/issues/123 -F state=@state.txt"
+assert_blocked "gh api -X PATCH repos/oikawa-d/task_management/issues/123 -F state=-"
+assert_blocked "gh api -X PATCH repos/oikawa-d/task_management/issues/123 --field state=@state.txt"
+assert_blocked "gh api repos/oikawa-d/task_management/issues/123 --input payload.json"
+assert_allowed "gh api -X PATCH repos/oikawa-d/task_management/issues/123 -F title=@title.txt"
+assert_allowed "gh api repos/oikawa-d/task_management/pulls/123 -q .title"
 assert_blocked $'gh api graphql -f query=\'mutation{mergePullRequest(input:{pullRequestId:"x"}){clientMutationId}}\''
 assert_blocked $'gh api graphql -f query=\'mutation{closeIssue(input:{issueId:"x"}){clientMutationId}}\''
 assert_allowed $'gh api graphql -f query=\'query{repository(owner:"o",name:"r"){id}}\''

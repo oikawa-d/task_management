@@ -8,6 +8,8 @@
 #   GH_API_HAS_DYNAMIC_METHOD : メソッドがシェル展開の場合1
 #   GH_API_ENDPOINTS          : オプション値以外のトークン(=endpoint候補)
 #   GH_API_FIELDS             : -f/-F等で渡されたフィールド指定
+#   GH_API_FIELD_KINDS        : 各フィールドの種別(raw_field=-f / file_field=-F)
+#   GH_API_HAS_INPUT          : --input でリクエスト本文を外部から渡す場合1
 #   GH_API_IS_GRAPHQL         : endpointが graphql の場合1
 # endpointを最初の非オプショントークン1件に限定すると、値付きオプションの追随漏れで
 # 実endpointを取りこぼす(値がendpointとして確定してしまう)ため、候補は全件保持する。
@@ -17,6 +19,8 @@ gh_parse_api_segment() {
 	GH_API_HAS_DYNAMIC_METHOD=0
 	GH_API_ENDPOINTS=()
 	GH_API_FIELDS=()
+	GH_API_FIELD_KINDS=()
+	GH_API_HAS_INPUT=0
 	GH_API_IS_GRAPHQL=0
 
 	gh_load_segment_tokens "$segment"
@@ -39,16 +43,20 @@ gh_parse_api_segment() {
 
 		case "$token" in
 			-X|--method) option_value_kind='method'; continue ;;
-			-f|-F|--raw-field|--field) option_value_kind='field'; continue ;;
-			-H|-q|-t|-p|--header|--jq|--template|--input|--hostname|--cache|--preview)
+			-f|--raw-field) option_value_kind='raw_field'; continue ;;
+			-F|--field) option_value_kind='file_field'; continue ;;
+			--input) GH_API_HAS_INPUT=1; option_value_kind='other'; continue ;;
+			--input=*) GH_API_HAS_INPUT=1; continue ;;
+			-H|-q|-t|-p|--header|--jq|--template|--hostname|--cache|--preview)
 				option_value_kind='other'
 				continue
 				;;
 			-X?*) gh_api_record_value 'method' "$(gh_api_attached_value "$token" 2)"; continue ;;
 			--method=*) gh_api_record_value 'method' "${token#--method=}"; continue ;;
-			-f?*|-F?*) gh_api_record_value 'field' "$(gh_api_attached_value "$token" 2)"; continue ;;
-			--raw-field=*) gh_api_record_value 'field' "${token#--raw-field=}"; continue ;;
-			--field=*) gh_api_record_value 'field' "${token#--field=}"; continue ;;
+			-f?*) gh_api_record_value 'raw_field' "$(gh_api_attached_value "$token" 2)"; continue ;;
+			-F?*) gh_api_record_value 'file_field' "$(gh_api_attached_value "$token" 2)"; continue ;;
+			--raw-field=*) gh_api_record_value 'raw_field' "${token#--raw-field=}"; continue ;;
+			--field=*) gh_api_record_value 'file_field' "${token#--field=}"; continue ;;
 			--) continue ;;
 			-*) continue ;;
 		esac
@@ -76,7 +84,10 @@ gh_api_record_value() {
 				GH_API_METHOD="${value^^}"
 			fi
 			;;
-		field) GH_API_FIELDS+=("$value") ;;
+		raw_field|file_field)
+			GH_API_FIELDS+=("$value")
+			GH_API_FIELD_KINDS+=("$kind")
+			;;
 	esac
 }
 
@@ -107,17 +118,30 @@ gh_segment_is_api_merge() {
 }
 
 # REST API経由のIssue close(`PATCH repos/<owner>/<repo>/issues/<番号>` + state=closed)。
+# stateの値を静的に確認できない形式(シェル展開、`-F state=@file` / `-F state=-` のような
+# ファイル・標準入力からの読み込み、`--input` によるリクエスト本文全体の外部指定)は、
+# closeか否かを判定できないため安全側でブロックする(fail-close)。
 gh_segment_is_api_issue_close() {
-	local field match_status=0 has_state_closed=0
+	local index field kind value match_status=0 has_state_closed=0
 	gh_parse_api_segment "$1" || return 1
-	for field in "${GH_API_FIELDS[@]}"; do
-		if [[ "${field,,}" == "state=closed" ]] || \
-			{ [[ "$field" == state=* ]] && gh_token_is_dynamic "$field"; }; then
+	for (( index = 0; index < ${#GH_API_FIELDS[@]}; index++ )); do
+		field="${GH_API_FIELDS[index]}"
+		kind="${GH_API_FIELD_KINDS[index]}"
+		[[ "$field" == state=* ]] || continue
+		value="${field#state=}"
+		if [[ "${value,,}" == "closed" ]] || gh_token_is_dynamic "$value"; then
+			has_state_closed=1
+		elif [[ "$kind" == "file_field" && ( "$value" == @* || "$value" == "-" ) ]]; then
 			has_state_closed=1
 		fi
 	done
+	# --input はリクエスト本文全体を外部から渡すため、stateを静的に確認できない。
+	if (( GH_API_HAS_INPUT )); then
+		has_state_closed=1
+	fi
 	(( has_state_closed )) || return 1
-	[[ "$GH_API_METHOD" == "PATCH" || "$GH_API_METHOD" == "POST" ]] || (( GH_API_HAS_DYNAMIC_METHOD )) || return 1
+	# --input 指定時はメソッド未指定でもリクエスト本文付きで送信されるため、安全側条件へ含める。
+	[[ "$GH_API_METHOD" == "PATCH" || "$GH_API_METHOD" == "POST" ]] || (( GH_API_HAS_DYNAMIC_METHOD )) || (( GH_API_HAS_INPUT )) || return 1
 	gh_api_match_endpoint '^/?repos/[^/]+/[^/]+/issues/[0-9]+(\?.*)?$' || match_status=$?
 	# 0=一致 / 2=endpointがシェル展開(判定不能)はいずれも安全側でブロックする。
 	[[ "$match_status" == "0" || "$match_status" == "2" ]]
