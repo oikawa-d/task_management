@@ -33,6 +33,8 @@ from app.schemas.user import UserProfileResponse
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from redis.exceptions import ConnectionError as RedisConnectionError
+from sqlalchemy.exc import OperationalError
 
 ALLOWED_ORIGIN = "http://localhost:5173"
 
@@ -483,6 +485,55 @@ def test_password_reset_rejects_mismatched_confirmation(client: TestClient) -> N
 
 	assert response.status_code == 422
 	assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+@pytest.mark.parametrize(
+	("service_function", "path", "payload", "headers"),
+	[
+		("register", "/api/auth/register", _REGISTER_PAYLOAD, {"Origin": ALLOWED_ORIGIN}),
+		("verify_email", "/api/auth/verify-email", {"token": "verify-token"}, {}),
+		("resend_verification", "/api/auth/verify-email/resend", {"email": "taro@example.com"}, {}),
+		("request_password_reset", "/api/auth/password/forgot", {"email": "taro@example.com"}, {}),
+		(
+			"reset_password",
+			"/api/auth/password/reset",
+			{"token": "reset-token", "new_password": "NewPassw0rd!", "password_confirm": "NewPassw0rd!"},
+			{},
+		),
+	],
+)
+@pytest.mark.parametrize(
+	"infra_error",
+	[
+		RedisConnectionError("redis down"),
+		OperationalError("SELECT 1", {}, Exception("connection refused")),
+	],
+	ids=["redis_error", "operational_error"],
+)
+def test_auth_endpoints_return_503_on_infra_failure(
+	client: TestClient,
+	monkeypatch: pytest.MonkeyPatch,
+	service_function: str,
+	path: str,
+	payload: dict[str, Any],
+	headers: dict[str, str],
+	infra_error: Exception,
+) -> None:
+	"""Redis/PostgreSQL接続不能時はfail-closeで503 SERVICE_UNAVAILABLEを返す（#392レビュー対応）。
+
+	修正前はこれらの例外がinfra_error_handlerで捕捉されず、unhandled_exception_handlerにより
+	一律500 INTERNAL_ERRORになっていた。
+	"""
+
+	async def _boom(*_args: Any, **_kwargs: Any) -> Any:
+		raise infra_error
+
+	monkeypatch.setattr(auth_router_module.auth_service, service_function, _boom)
+
+	response = client.post(path, json=payload, headers=headers)
+
+	assert response.status_code == 503
+	assert response.json()["error"]["code"] == "SERVICE_UNAVAILABLE"
 
 
 @pytest.mark.parametrize(

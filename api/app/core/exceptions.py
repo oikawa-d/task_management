@@ -5,6 +5,8 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from redis.exceptions import RedisError
+from sqlalchemy.exc import InterfaceError, OperationalError
 
 logger = logging.getLogger("app.error")
 
@@ -212,6 +214,19 @@ def register_error_handling(app: FastAPI) -> None:
 			content=_build_error_body(exc.code, exc.message, exc.details, request_id),
 			headers=headers,
 		)
+
+	@app.exception_handler(RedisError)
+	async def infra_error_handler(request: Request, exc: Exception) -> JSONResponse:
+		"""Redis/PostgreSQLの接続不能例外をfail-closeで503へ変換する（AppError由来の例外は対象外）。"""
+		request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+		logger.exception("infrastructure error", extra={"request_id": request_id})
+		return JSONResponse(
+			status_code=ServiceUnavailableError.status_code,
+			content=_build_error_body(ServiceUnavailableError.code, ServiceUnavailableError.message, None, request_id),
+		)
+
+	app.add_exception_handler(OperationalError, infra_error_handler)
+	app.add_exception_handler(InterfaceError, infra_error_handler)
 
 	@app.exception_handler(RequestValidationError)
 	async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:

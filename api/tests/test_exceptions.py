@@ -1,7 +1,15 @@
-from app.core.exceptions import ForbiddenError, NotFoundError, TooManyAttemptsError, register_error_handling
+from app.core.exceptions import (
+	ForbiddenError,
+	NotFoundError,
+	ServiceUnavailableError,
+	TooManyAttemptsError,
+	register_error_handling,
+)
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
+from redis.exceptions import ConnectionError as RedisConnectionError
+from sqlalchemy.exc import InterfaceError, OperationalError
 
 
 class _Payload(BaseModel):
@@ -27,6 +35,22 @@ def _build_app() -> FastAPI:
 	@app.get("/boom-unhandled")
 	async def boom_unhandled() -> None:
 		raise RuntimeError("unexpected")
+
+	@app.get("/boom-service-unavailable")
+	async def boom_service_unavailable() -> None:
+		raise ServiceUnavailableError()
+
+	@app.get("/boom-redis-error")
+	async def boom_redis_error() -> None:
+		raise RedisConnectionError("redis down")
+
+	@app.get("/boom-operational-error")
+	async def boom_operational_error() -> None:
+		raise OperationalError("SELECT 1", {}, Exception("connection refused"))
+
+	@app.get("/boom-interface-error")
+	async def boom_interface_error() -> None:
+		raise InterfaceError("SELECT 1", {}, Exception("connection lost"))
 
 	@app.post("/validate")
 	async def validate(payload: _Payload) -> dict[str, str]:
@@ -75,6 +99,41 @@ def test_unhandled_exception_converted_to_internal_error() -> None:
 	body = res.json()
 	assert body["error"]["code"] == "INTERNAL_ERROR"
 	assert body["error"]["message"] == "サーバーエラーが発生しました"
+
+
+def _assert_service_unavailable_body(body: dict) -> None:
+	assert body["error"]["code"] == "SERVICE_UNAVAILABLE"
+	assert body["error"]["message"] == "現在サービスをご利用いただけません"
+	assert body["error"]["details"] is None
+	assert "request_id" in body["error"]
+
+
+def test_service_unavailable_app_error_returns_503() -> None:
+	res = _client().get("/boom-service-unavailable")
+
+	assert res.status_code == 503
+	_assert_service_unavailable_body(res.json())
+
+
+def test_redis_error_is_converted_to_503_by_infra_error_handler() -> None:
+	res = _client().get("/boom-redis-error")
+
+	assert res.status_code == 503
+	_assert_service_unavailable_body(res.json())
+
+
+def test_operational_error_is_converted_to_503_by_infra_error_handler() -> None:
+	res = _client().get("/boom-operational-error")
+
+	assert res.status_code == 503
+	_assert_service_unavailable_body(res.json())
+
+
+def test_interface_error_is_converted_to_503_by_infra_error_handler() -> None:
+	res = _client().get("/boom-interface-error")
+
+	assert res.status_code == 503
+	_assert_service_unavailable_body(res.json())
 
 
 def test_validation_error_returns_field_details() -> None:

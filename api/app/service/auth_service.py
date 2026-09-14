@@ -136,19 +136,21 @@ async def request_password_reset(email: str, background: BackgroundTasks, db: As
 
 
 async def reset_password(token: str, new_password: str, db: AsyncSession) -> None:
-	"""パスワードリセットtokenを消費し、全セッション・全リフレッシュトークンを失効させた上でパスワードを更新する。
+	"""パスワードリセットtokenを消費し、パスワードを更新した上で全セッション・全リフレッシュトークンを失効させる。
 
-	Redisの失効が成功した後にのみDBを更新する（Redis失敗時はDB更新しない）。
+	設計書の処理順序（10_post_auth_password_reset.md §4/§6.2）に従い、
+	DB更新（commit）を先に確定させてからRedisの全セッション・全リフレッシュトークン失効を行う。
 	"""
 	user_id = await redis_store.consume_password_reset_token(token)
 	if user_id is None:
 		raise InvalidResetTokenError()
-	await redis_store.delete_all_sessions(user_id)
-	await redis_store.revoke_all_refresh_tokens(user_id)
 
 	password_hash = hash_password(new_password)
 	await user_repository.update_password(db, user_id, password_hash)
 	await db.commit()
+
+	await redis_store.delete_all_sessions(user_id)
+	await redis_store.revoke_all_refresh_tokens(user_id)
 
 
 _SQLSTATE_DUPLICATE_USERNAME = "P0001"

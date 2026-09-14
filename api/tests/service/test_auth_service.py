@@ -16,6 +16,7 @@ from app.core.exceptions import (
 	UserInactiveError,
 )
 from app.service import auth_service
+from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy.exc import DBAPIError
 
 
@@ -185,7 +186,7 @@ async def test_reset_password_invalid_token(monkeypatch: pytest.MonkeyPatch) -> 
 	delete_sessions_mock.assert_not_awaited()
 
 
-async def test_reset_password_revokes_all_sessions_before_db_update(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_reset_password_updates_db_before_revoking_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
 	user_id = uuid4()
 	call_order: list[str] = []
 
@@ -215,11 +216,35 @@ async def test_reset_password_revokes_all_sessions_before_db_update(monkeypatch:
 
 	assert call_order == [
 		"consume_password_reset_token",
-		"delete_all_sessions",
-		"revoke_all_refresh_tokens",
 		"update_password",
 		"db.commit",
+		"delete_all_sessions",
+		"revoke_all_refresh_tokens",
 	]
+
+
+async def test_reset_password_db_commit_survives_session_revocation_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""部分適用対策: DB更新（パスワード変更）はRedis失効より先に確定させる（10_post_auth_password_reset.md §4/§6.2）。
+
+	delete_all_sessionsがRedis障害で失敗しても、db.commitは既に完了済みであることを確認する。
+	例外自体はinfra_error_handler（HTTP層）が503へ変換するため、ここでは変換前の生例外が
+	伝播すること（サービス層で握りつぶさないこと）を確認する。
+	"""
+	user_id = uuid4()
+	monkeypatch.setattr(auth_service.redis_store, "consume_password_reset_token", AsyncMock(return_value=user_id))
+	monkeypatch.setattr(auth_service.user_repository, "update_password", AsyncMock())
+	monkeypatch.setattr(
+		auth_service.redis_store, "delete_all_sessions", AsyncMock(side_effect=RedisConnectionError("redis down"))
+	)
+	revoke_refresh_mock = AsyncMock()
+	monkeypatch.setattr(auth_service.redis_store, "revoke_all_refresh_tokens", revoke_refresh_mock)
+
+	db = _FakeDb()
+	with pytest.raises(RedisConnectionError):
+		await auth_service.reset_password("token", "NewPassw0rd!", db)  # type: ignore[arg-type]
+
+	assert "db.commit" in db.calls
+	revoke_refresh_mock.assert_not_awaited()
 
 
 class _FakeRequest:
