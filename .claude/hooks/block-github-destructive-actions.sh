@@ -189,7 +189,10 @@ fi
 
 # `gh issue close` を検出したら、そのissueを閉じるPRにreviewedラベルがある場合のみ許可する。
 if grep -Eq "${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+issue[[:space:]]+close([[:space:]]|\$)" <<<"$command_for_match"; then
-	close_segment=$(grep -Eo "${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+issue[[:space:]]+close[^;&|[:cntrl:]]*" <<<"$command_for_match" | head -1)
+	close_segment=$(extract_issue_close_segment "$command_for_match") || {
+		echo "ブロック: issue closeのコマンド断片を安全に解析できなかったため、安全側でcloseをブロックします。" >&2
+		exit 2
+	}
 	status=0
 	parse_issue_close_command "$close_segment" || status=$?
 	issue_number="${PARSED_ISSUE_NUMBER:-}"

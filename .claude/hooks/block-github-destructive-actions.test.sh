@@ -168,6 +168,7 @@ export GH_STUB_GRAPHQL_JSON="$linked_reviewed_json"
 assert_allowed "gh issue close 123"
 assert_allowed "gh --repo oikawa-d/task_management issue close 123"
 assert_allowed "gh issue close 123 --comment '対応完了'"
+assert_allowed "gh issue close 123 --comment 'fix; done | keep & quoted'"
 
 # 5-2. リンクPRはあるがreviewedなし -> exit 2
 export GH_STUB_GRAPHQL_JSON="$linked_unreviewed_json"
@@ -192,6 +193,7 @@ export GH_STUB_REPO_EXIT="1"
 assert_blocked "gh issue close 123"
 assert_allowed "gh issue close 123 --repo oikawa-d/task_management"
 assert_allowed "gh issue close 123 -R oikawa-d/task_management"
+assert_allowed "gh issue close 123 --repo github.com/oikawa-d/task_management"
 unset GH_STUB_REPO_EXIT
 
 # 5-7. issue番号を特定できない -> exit 2 (fail-close)

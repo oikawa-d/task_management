@@ -56,6 +56,54 @@ tokenize_command_segment() {
 	fi
 }
 
+# コマンド全体をクォート外のシェル区切り文字で分割し、issue closeを含む断片を返す。
+# grepで単純に切り出すと、コメント値に含まれる`;`や`|`まで区切り文字として扱うため、
+# 引用符の状態を維持したまま分割する。
+extract_issue_close_segment() {
+	local command="$1"
+	local segment="" quote="" escaped=0 char i
+
+	for ((i = 0; i < ${#command}; i++)); do
+		char="${command:i:1}"
+		segment+="$char"
+		if ((escaped)); then
+			escaped=0
+			continue
+		fi
+		if [[ "$quote" == "'" ]]; then
+			[[ "$char" == "'" ]] && quote=""
+			continue
+		fi
+		if [[ "$quote" == '"' ]]; then
+			if [[ "$char" == '"' ]]; then
+				quote=""
+			elif [[ "$char" == "\\" ]]; then
+				escaped=1
+			fi
+			continue
+		fi
+		case "$char" in
+			"'") quote="'" ;;
+			'"') quote='"' ;;
+			\\) escaped=1 ;;
+			';'|'|'|'&')
+				segment="${segment:0:${#segment}-1}"
+				if parse_issue_close_command "$segment"; then
+					printf '%s' "$segment"
+					return 0
+				fi
+				segment=""
+				;;
+		esac
+	done
+
+	if parse_issue_close_command "$segment"; then
+		printf '%s' "$segment"
+		return 0
+	fi
+	return 1
+}
+
 # `gh issue close` の実引数からIssue番号とリポジトリを抽出する。
 # クォート内の文字列やオプション値を位置引数として扱わない。
 # URL形式はGitHub.comのIssue URLに限定し、対象リポジトリもURLから取得する。
@@ -137,8 +185,12 @@ parse_issue_close_command() {
 	done
 
 	[[ -n "$issue_number" ]] || return 2
-	if [[ -n "$explicit_repo" && ! "$explicit_repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
-		return 2
+	if [[ -n "$explicit_repo" ]]; then
+		if [[ "$explicit_repo" =~ ^github\.com/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)$ ]]; then
+			explicit_repo="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+		elif [[ ! "$explicit_repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+			return 2
+		fi
 	fi
 	if [[ -n "$explicit_repo" && -n "$url_repo" && "$explicit_repo" != "$url_repo" ]]; then
 		return 2
