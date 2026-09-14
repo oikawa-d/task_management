@@ -741,7 +741,7 @@ async def test_login_fails_closed_when_user_lookup_raises(
 	monkeypatch.setattr(
 		auth_service.user_repository,
 		"get_by_login_identifier",
-		AsyncMock(side_effect=RuntimeError("database unavailable")),
+		AsyncMock(side_effect=ServiceUnavailableError()),
 	)
 
 	with caplog.at_level("INFO", logger="app.oauth"), pytest.raises(ServiceUnavailableError):
@@ -754,7 +754,24 @@ async def test_login_fails_closed_when_user_lookup_raises(
 	assert record.user_id is None
 	assert record.success is False
 	assert "ghost" not in caplog.text
-	assert "database unavailable" not in caplog.text
+
+
+async def test_login_propagates_non_connection_user_lookup_operational_error(
+	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
+	monkeypatch.setattr(
+		auth_service.user_repository,
+		"get_by_login_identifier",
+		AsyncMock(side_effect=OperationalError("SELECT user", {}, SimpleNamespace(sqlstate="40P01"))),
+	)
+
+	with caplog.at_level("INFO", logger="app.oauth"), pytest.raises(OperationalError):
+		await auth_service.login(
+			"ghost", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), _FakeStrategy()
+		)  # type: ignore[arg-type]
+
+	assert not [record for record in caplog.records if getattr(record, "event", None) == "login_attempt"]
 
 
 async def test_login_fails_closed_when_strategy_login_raises(

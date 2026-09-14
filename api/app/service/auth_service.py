@@ -274,11 +274,11 @@ async def login(
 
 	try:
 		user = await user_repository.get_by_login_identifier(db, identifier)
-	except Exception as exc:
+	except ServiceUnavailableError:
 		_log_login_attempt(
 			request, None, client_info, identifier, strategy.mode, False, _LOGIN_FAILURE_SERVICE_UNAVAILABLE
 		)
-		raise ServiceUnavailableError() from exc
+		raise
 	# ユーザー不存在・OAuth専用アカウントでもダミーハッシュを検証し、応答時間差によるユーザー列挙を防ぐ。
 	stored_hash = user.password_hash if user is not None and user.password_hash is not None else None
 	password_matched = verify_password(password, stored_hash or get_dummy_password_hash())
