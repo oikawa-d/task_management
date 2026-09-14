@@ -19,7 +19,9 @@
 | 項目 | 内容 |
 |------|------|
 | エンドポイント | `GET /api/auth/oauth/google/callback` |
+| 実装ファイル | `api/app/api/routers/oauth_router.py` |
 | 目的 | Googleからの認可コードを受け取り、state/PKCE/id_tokenを検証してユーザーを解決・作成し、`AUTH_MODE` に応じてログイン状態を確立する |
+| ルーター責務 | OAuthの3 endpointを `oauth_router.py` に分離する。通常の認証endpointは `api/app/api/routers/auth_router.py` が担当する |
 | 認証 | 不要（Googleからのリダイレクトを直接受ける） |
 | 認可 | 未認証可 |
 | CSRF検証 | 不要（GETかつstate/Cookie一致検証が同等の役割を果たす） |
@@ -28,6 +30,8 @@
 | 冪等性 | 冪等ではない（`state`はワンタイム消費。同一codeでの再実行はGoogle側で失敗する） |
 | レート制限 | `oauth callback` はIP単位で10回/900秒。超過時は429 `TOO_MANY_ATTEMPTS` と残り秒数の`Retry-After`を返し、Redis障害時は503 `SERVICE_UNAVAILABLE` として認可を成立させない。その他の検証失敗は302で`/login`へ遷移する |
 | トランザクション境界 | ユーザー解決/作成（`users` INSERT または `oauth_accounts` INSERT）は1トランザクション。session モードでは同トランザクション確定後に `login_history` を別途INSERTする |
+
+OAuth routerの配置方針と通常の認証routerとの責務境界は、11番ファイル §1.1の決定に従う。
 
 ## 2. 入出力仕様
 
@@ -111,7 +115,7 @@ sequenceDiagram
     autonumber
     actor U as ユーザー
     participant FE as React SPA
-    participant R as oauth_router
+    participant R as "api/app/api/routers/oauth_router.py"
     participant S as auth_service.oauth_callback
     participant OA as GoogleOAuthProvider
     participant RS as redis_store
@@ -249,7 +253,7 @@ flowchart TB
 
 ## 6. 関数詳細
 
-### 6.1 `api/routers/oauth_router.py :: oauth_google_callback`
+### 6.1 `api/app/api/routers/oauth_router.py :: oauth_google_callback`
 
 | 項目 | 内容 |
 |------|------|
@@ -316,7 +320,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    R["oauth_router.oauth_google_callback"] --> S["auth_service.oauth_callback"]
+    R["api/app/api/routers/oauth_router.py<br/>oauth_google_callback"] --> S["auth_service.oauth_callback"]
     S --> RS1["redis_store.consume_oauth_state"]
     S --> OA1["GoogleOAuthProvider.exchange_code"]
     S --> OA2["GoogleOAuthProvider.verify_id_token"]

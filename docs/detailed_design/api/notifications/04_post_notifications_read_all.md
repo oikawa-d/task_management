@@ -148,6 +148,7 @@ SPが返す更新件数を `updated_count` に使用するため、既読済み�
 | 3 | 結合 | 他人の未読が存在 | 本人分だけ更新、他人分は未読のまま | `test_sp_mark_all_notifications_read_never_updates_other_users` |
 | 4 | 結合 | session方式でCSRF不正 | 403 `CSRF_INVALID`、DB更新なし | `test_sp_mark_all_notifications_read_rejects_invalid_csrf` |
 | 5 | 結合 | 個別既読と同時実行 | 件数が負にならず、最終的に本人の未読が0 | `test_sp_mark_all_notifications_read_concurrent_sp_mark_notification_read_is_consistent` |
+| 6 | 結合 | レート制限超過時にTTLを取得できない | Redis TTLが0以下を返す | 429 `TOO_MANY_ATTEMPTS`、`Retry-After`が設定窓以上の正の整数 | `test_all_notification_rate_limited_endpoints_return_positive_retry_after_when_ttl_unavailable` |
 
 ## 11. 不明点・要検討事項
 

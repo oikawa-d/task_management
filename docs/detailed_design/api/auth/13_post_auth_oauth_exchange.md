@@ -19,7 +19,9 @@
 | 項目 | 内容 |
 |------|------|
 | エンドポイント | `POST /api/auth/oauth/exchange` |
+| 実装ファイル | `api/app/api/routers/oauth_router.py` |
 | 目的 | jwtモードのOAuthログインにおいて、コールバックで発行された一時ハンドオフコードをアクセストークン・refresh/CSRF Cookieに交換する |
+| ルーター責務 | OAuthの3 endpointを `oauth_router.py` に分離する。通常の認証endpointは `api/app/api/routers/auth_router.py` が担当する |
 | 認証 | 一時コード（ボディの`code`）。session/refresh Cookie・Authorizationヘッダは不要 |
 | 認可 | 未認証可（ただし有効な`code`の保有が事実上の認可条件） |
 | CSRF検証 | 不要（本APIはCookieを読み取らず、一時codeという単発トークンで保護されているため。Origin検証のみ実施） |
@@ -28,6 +30,8 @@
 | 冪等性 | 冪等ではない（`code`は`GETDEL`によりワンタイム消費。2回目の呼び出しは失敗する） |
 | レート制限 | `oauth exchange` はIP単位で10回/900秒。超過時は429 `TOO_MANY_ATTEMPTS`（`Retry-After`付き）、Redis障害時は503 `SERVICE_UNAVAILABLE` |
 | トランザクション境界 | `user_id`から現在の有効ユーザーを再取得する処理と`login_history`のINSERTは、それぞれ独立したPostgreSQL操作（同一トランザクションにまとめる必要はない。要検討：一貫性が必要な場合は1トランザクションに統合） |
+
+OAuth routerの配置方針と通常の認証routerとの責務境界は、11番ファイル §1.1の決定に従う。
 
 ## 2. 入出力仕様
 
@@ -103,7 +107,7 @@ Set-Cookie 一覧
 sequenceDiagram
     autonumber
     participant FE as React SPA
-    participant R as oauth_router
+    participant R as "api/app/api/routers/oauth_router.py"
     participant D as deps.verify_origin
     participant S as auth_service.oauth_exchange
     participant RS as redis_store
@@ -189,7 +193,7 @@ flowchart TB
 
 ## 6. 関数詳細
 
-### 6.1 `api/routers/oauth_router.py :: oauth_exchange`
+### 6.1 `api/app/api/routers/oauth_router.py :: oauth_exchange`
 
 | 項目 | 内容 |
 |------|------|
@@ -248,7 +252,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    R["oauth_router.oauth_exchange"] --> D["deps.verify_origin"]
+    R["api/app/api/routers/oauth_router.py<br/>oauth_exchange"] --> D["deps.verify_origin"]
     R --> S["auth_service.oauth_exchange"]
     S --> RS1["redis_store.consume_oauth_handoff"]
     S --> URP["user_repository.get_by_id"]
@@ -323,6 +327,7 @@ PostgreSQLの`users`/`oauth_accounts`は本APIでは更新しない（12番フ�
 | 11 | 結合 | 交換成功後の`login_history` | 正常系 | `login_history`に`method='oauth_google', login_identifier=user.email, success=true`の行が1件追加される | `test_oauth_exchange_records_login_history` |
 | 12 | 結合 | `redirect_to`の伝播 | 11番ファイルで`redirect_to=/projects/1`を保存 → 12番でhandoffへ引き継ぎ | レスポンスの`redirect_to`が`/projects/1` | `test_oauth_exchange_returns_propagated_redirect_to` |
 | 13 | 単体 | `LoginResult`完全性検証（`auth_mode`不一致/欠落、access/refresh/CSRFの空文字・非文字列、`expires_in`の0・負数・非整数） | `JwtAuthStrategy.login`が不正な値を返す | `login_history`前に`rollback_login`を呼び、`OAuthFailedError`を送出 | `test_oauth_exchange_rolls_back_for_invalid_login_result_values` |
+| 14 | 結合 | レート制限超過時にRetry-Afterを返す | serviceが`TooManyAttemptsError(retry_after=42)`を送出 | 429 `TOO_MANY_ATTEMPTS`、`Retry-After: 42` | `test_exchange_rate_limited_returns_positive_retry_after` |
 
 網羅できない範囲：ローカルのHTTP結合テストではRedis・PostgreSQLをモックしているため、実RedisのGETDEL/SETEX、実PostgreSQLの`fn_get_user`/`sp_record_login_history`との接続・トランザクションまでは検証しない。実環境の境界確認はCIまたは統合環境で別途実施する。
 
