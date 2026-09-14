@@ -179,8 +179,8 @@ async def test_change_role_logs_old_role_new_role_and_result_on_success(
 		await admin_user_service.change_role(actor, target_id, "admin", AsyncMock())
 
 	record = caplog.records[-1]
-	assert record.actor_id == str(actor.id)
-	assert record.target_id == str(target_id)
+	assert record.actor_user_id == str(actor.id)
+	assert record.target_user_id == str(target_id)
 	assert record.old_role == "member"
 	assert record.new_role == "admin"
 	assert record.result == "success"
@@ -295,8 +295,8 @@ async def test_change_status_redis_failure_logs_error_with_actor_target_and_oper
 
 	record = caplog.records[-1]
 	assert record.levelname == "ERROR"
-	assert record.actor_id == str(actor.id)
-	assert record.target_id == str(target_id)
+	assert record.actor_user_id == str(actor.id)
+	assert record.target_user_id == str(target_id)
 	assert record.operation == "delete_all_sessions"
 
 
@@ -376,6 +376,33 @@ async def test_force_logout_idempotent_when_no_active_sessions(monkeypatch: pyte
 	monkeypatch.setattr(redis_store, "revoke_all_refresh_tokens", AsyncMock(return_value=0))
 
 	await admin_user_service.force_logout(_actor(), target.id, AsyncMock())
+
+
+@pytest.mark.asyncio
+async def test_force_logout_logs_mode_and_access_token_delay(
+	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+	target = _user()
+	actor = _actor()
+	monkeypatch.setattr(user_repository, "get_by_id", AsyncMock(return_value=target))
+	monkeypatch.setattr(redis_store, "delete_all_sessions", AsyncMock(return_value=1))
+	monkeypatch.setattr(redis_store, "revoke_all_refresh_tokens", AsyncMock(return_value=2))
+	monkeypatch.setenv("AUTH_MODE", "jwt")
+	monkeypatch.setenv("ACCESS_TOKEN_TTL_SECONDS", "900")
+	from app.core.config import get_backend_settings
+
+	get_backend_settings.cache_clear()
+	with caplog.at_level("INFO", logger="app.audit"):
+		await admin_user_service.force_logout(actor, target.id, AsyncMock(), request_id="request-123")
+
+	record = caplog.records[-1]
+	assert record.actor_user_id == str(actor.id)
+	assert record.target_user_id == str(target.id)
+	assert record.request_id == "request-123"
+	assert record.mode == "jwt"
+	assert record.access_token_revocation_delay_seconds == 900
+	assert record.session_revoked_count == 1
+	assert record.refresh_revoked_count == 2
 
 
 @pytest.mark.asyncio

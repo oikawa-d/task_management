@@ -50,7 +50,7 @@ async def _send_mail(to: str, subject: str, html_body: str, text_body: str) -> N
 	except Exception:
 		# 送信失敗はログのみに留め、呼び出し元（BackgroundTasks）へは伝播させない。
 		# トークン平文・ハッシュはログに出力しない。
-		logger.error("failed to send mail", extra={"template": subject})
+		logger.error("failed to send mail")
 
 
 async def send_email_verification_mail(to: str, token: str, expires_hours: int) -> None:

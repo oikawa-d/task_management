@@ -30,7 +30,7 @@ function buildDays(month: Date): Date[] {
 export function Calendar({ month, tasks, isLoading, isError, onPreviousMonth, onNextMonth, onRetry }: CalendarProps) {
 	const tasksByDate = new Map<string, CalendarTask[]>();
 	for (const task of tasks) {
-		const key = dateKey(new Date(task.due_at));
+		const key = task.due_date;
 		const grouped = tasksByDate.get(key) ?? [];
 		grouped.push(task);
 		tasksByDate.set(key, grouped);

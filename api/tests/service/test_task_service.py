@@ -26,6 +26,7 @@ def _item(user: CurrentUser) -> TaskWithProjectStatus:
 			position=0,
 			version=1,
 			is_active=True,
+			due_at=now,
 			created_at=now,
 			updated_at=now,
 		),
@@ -85,3 +86,18 @@ async def test_list_calendar_tasks_converts_app_dates_to_utc_and_checks_membersh
 	assert args[2].isoformat() == "2026-08-31T15:00:00+00:00"
 	assert args[3].isoformat() == "2026-09-01T15:00:00+00:00"
 	assert response[0].id == item.task.id
+
+
+@pytest.mark.asyncio
+async def test_list_calendar_tasks_returns_app_timezone_due_date_at_utc_boundary(
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	user = _user()
+	item = _item(user)
+	item.task.due_at = datetime(2026, 9, 9, 16, 0, tzinfo=timezone.utc)
+	monkeypatch.setattr(task_service.task_repository, "list_calendar", AsyncMock(return_value=[item]))
+
+	query = CalendarTaskQuery(**{"from": "2026-09-10", "to": "2026-09-10", "scope": "me"})
+	response = await task_service.list_calendar_tasks(user, query, AsyncMock())
+
+	assert response[0].due_date.isoformat() == "2026-09-10"
