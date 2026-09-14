@@ -463,11 +463,38 @@ assert_allowed 'gh api -X PUT repos/oikawa-d/task_management/issues/123 -f body=
 assert_blocked "gh issue edit 123 --state closed"
 assert_blocked "gh --repo oikawa-d/task_management issue edit 123 --state=closed"
 
-# 10-2. 1回の入力に複数の破壊操作がある場合、全件を検査すること
+# 10-1. gh apiの値付きオプションをendpointと誤認しないこと
+assert_blocked 'gh api -X PUT -H "Accept: application/vnd.github+json" repos/oikawa-d/task_management/pulls/123/merge'
+assert_blocked "gh api -X PUT -q .sha repos/oikawa-d/task_management/pulls/123/merge"
+assert_blocked 'gh api -X PUT -t "{{.sha}}" repos/oikawa-d/task_management/pulls/123/merge'
+assert_blocked "gh api -X PUT --jq .sha repos/oikawa-d/task_management/pulls/123/merge"
+assert_allowed 'gh api -H "Accept: application/vnd.github+json" repos/oikawa-d/task_management/pulls/123'
+
+# 10-2. API経由のIssue close / GraphQL mutation -> exit 2
+assert_blocked "gh api -X PATCH repos/oikawa-d/task_management/issues/123 -f state=closed"
+assert_blocked "gh api --method PATCH /repos/oikawa-d/task_management/issues/123 -f state=closed"
+assert_blocked 'gh api -X PATCH repos/oikawa-d/task_management/issues/123 -f "state=CLOSED"'
+assert_blocked 'STATE=closed; gh api -X PATCH repos/oikawa-d/task_management/issues/123 -f state="$STATE"'
+assert_allowed "gh api -X PATCH repos/oikawa-d/task_management/issues/123 -f title=updated"
+assert_blocked $'gh api graphql -f query=\'mutation{mergePullRequest(input:{pullRequestId:"x"}){clientMutationId}}\''
+assert_blocked $'gh api graphql -f query=\'mutation{closeIssue(input:{issueId:"x"}){clientMutationId}}\''
+assert_allowed $'gh api graphql -f query=\'query{repository(owner:"o",name:"r"){id}}\''
+
+# 10-3. 1回の入力に複数の破壊操作がある場合、全件を検査すること
 export GH_STUB_JSON="$reviewed_json" GH_STUB_UNREVIEWED_PR="456" GH_STUB_GRAPHQL_JSON="$linked_unreviewed_json"
 assert_blocked "gh pr merge 123 && gh pr merge 456"
 assert_blocked "gh pr merge 123 && gh issue close 456"
 unset GH_STUB_JSON GH_STUB_UNREVIEWED_PR GH_STUB_GRAPHQL_JSON
+
+# 10-4. 算術シフトをheredoc開始と誤認しないこと / 終端語の無いheredocはfail-close
+export GH_STUB_MATCH="pr view" GH_STUB_EXIT="0" GH_STUB_JSON="$unreviewed_json" GH_STUB_GRAPHQL_JSON="$linked_unreviewed_json"
+assert_blocked $'shift=2\nvalue=$((1<<shift))\ngh pr merge 123'
+assert_blocked $'value=$((1<<N))\ngh issue close 123'
+assert_blocked $'value=$((1 << 2))\ngh pr merge 123'
+assert_blocked $'value=$(( (1<<shift) + 1 ))\ngh pr merge 123'
+assert_blocked $'cat <<EOF\ngh pr merge 123\n'
+assert_allowed $'value=$((1<<shift))\necho "$value"'
+unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON GH_STUB_GRAPHQL_JSON
 
 # 11. jq不在時 -> exit 2 (fail-close, #339)
 assert_blocked_without_jq "gh pr view 123"

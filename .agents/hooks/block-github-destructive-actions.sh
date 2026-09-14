@@ -16,6 +16,8 @@ source "$HOOK_DIR/lib/gh-substitution-parse.sh"
 source "$HOOK_DIR/lib/gh-command-parse.sh"
 # shellcheck source=lib/gh-target-parse.sh
 source "$HOOK_DIR/lib/gh-target-parse.sh"
+# shellcheck source=lib/gh-api-parse.sh
+source "$HOOK_DIR/lib/gh-api-parse.sh"
 
 # issueを閉じるPR(本文のClosing keywordsでリンクされたPR)とそのラベルを取得するGraphQLクエリ。
 # includeClosedPrs:true でクローズ済み・マージ済みのPRもリンク先として扱う。
@@ -51,6 +53,7 @@ strip_heredocs() {
 			strip_tabs = 0
 			word = ""
 			quote = ""
+			arith_depth = 0
 			single_quote = sprintf("%c", 39)
 			double_quote = sprintf("%c", 34)
 		}
@@ -82,6 +85,19 @@ strip_heredocs() {
 				if (char == "\\") { i++; continue }
 				if (char == single_quote) { quote = "single"; continue }
 				if (char == double_quote) { quote = "double"; continue }
+				# 算術式 `$(( ))` 内のシフト演算子はheredoc開始ではない。
+				# `$((1<<shift))` を開始語と誤認すると、終端語が現れないため
+				# 以降の全行が検査対象から消え、ブロックを回避できてしまう。
+				if (arith_depth > 0) {
+					if (char == "(") { arith_depth++ }
+					else if (char == ")") { arith_depth-- }
+					continue
+				}
+				if (char == "$" && substr(line, i + 1, 2) == "((") {
+					arith_depth = 2
+					i += 2
+					continue
+				}
 				if (char != "<" || substr(line, i + 1, 1) != "<") { continue }
 
 				j = i + 2
@@ -113,10 +129,19 @@ strip_heredocs() {
 				}
 			}
 		}
+		END {
+			# 終端語が現れないheredocは以降の行を検査できないため、解析不能として扱う。
+			if (in_heredoc) { exit 3 }
+		}
 	'
 }
 
-command_for_match=$(strip_heredocs <<<"$command")
+heredoc_status=0
+command_for_match=$(strip_heredocs <<<"$command") || heredoc_status=$?
+if (( heredoc_status != 0 )); then
+	echo "ブロック: heredocの終端語が見つからず入力を解析できないため、安全側でブロックします。" >&2
+	exit 2
+fi
 # シェルのバックスラッシュ改行はトークン間の空白として扱われるため、
 # 操作名が改行で分断されても同じコマンドとして検査する。
 command_for_match=${command_for_match//\\$'\n'/}
@@ -316,6 +341,14 @@ for command_segment in "${GH_COMMAND_SEGMENTS[@]}"; do
 	fi
 	if gh_segment_is_api_merge "$command_segment"; then
 		echo "ブロック: GitHub API経由のPR mergeは禁止されています。レビュー完了後に '${REVIEWED_LABEL}' ラベルを付与し、gh pr merge を使用してください。" >&2
+		exit 2
+	fi
+	if gh_segment_is_api_issue_close "$command_segment"; then
+		echo "ブロック: GitHub API経由のIssue closeは禁止されています。レビュー完了後に '${REVIEWED_LABEL}' ラベルを付与し、gh issue close を使用してください。" >&2
+		exit 2
+	fi
+	if gh_segment_is_api_graphql_destructive "$command_segment"; then
+		echo "ブロック: GraphQL mutation(mergePullRequest / closeIssue)によるPR merge・Issue closeは禁止されています。レビュー完了後に '${REVIEWED_LABEL}' ラベルを付与し、gh pr merge / gh issue close を使用してください。" >&2
 		exit 2
 	fi
 	if gh_segment_is_issue_state_close "$command_segment"; then
