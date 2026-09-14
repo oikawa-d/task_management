@@ -415,6 +415,7 @@ flowchart LR
 | 13 | 異常系 | `project_id IS NULL`の行が存在する状態で`0013`をdowngradeする | `NOT NULL`制約違反で失敗する（想定どおりの挙動であることの確認） | `test_migration_0013_downgrade_fails_with_unassigned_tasks` |
 | 14 | 正常系 | 未所属タスクが存在しない状態で`0013`のupgrade→downgrade→upgradeを実行する | 最終的なスキーマが初回`upgrade head`と一致する | `test_migration_0013_roundtrip_without_unassigned_tasks` |
 | 15 | 正常系 | `api/alembic/versions/`の全リビジョンファイルを検査する | ファイル名接頭辞と`revision` IDが一致し、リビジョンIDが重複しない | `test_migration_filename_prefix_matches_revision_id` |
+| 16 | 正常系 | `api/alembic/versions/`のリビジョンチェーンを検査する | `0001 -> None` から始まり、各`down_revision`が直前IDを指す単一チェーンである | `test_migration_history_is_a_contiguous_single_chain` |
 
 ## 9. 不明点・要検討事項
 

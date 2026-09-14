@@ -24,6 +24,23 @@ def _revision_id(path: Path) -> str:
 	raise AssertionError(f"revision declaration is missing: {path.name}")
 
 
+def _down_revision(path: Path) -> str | None:
+	tree = ast.parse(path.read_text(encoding="utf-8"))
+	for node in ast.walk(tree):
+		targets = []
+		if isinstance(node, ast.AnnAssign):
+			targets = [node.target]
+		elif isinstance(node, ast.Assign):
+			targets = node.targets
+		if not any(isinstance(target, ast.Name) and target.id == "down_revision" for target in targets):
+			continue
+		value = node.value
+		if isinstance(value, ast.Constant) and (value.value is None or isinstance(value.value, str)):
+			return value.value
+		raise AssertionError(f"down_revision must be a string or None: {path.name}")
+	raise AssertionError(f"down_revision declaration is missing: {path.name}")
+
+
 def test_migration_filename_prefix_matches_revision_id() -> None:
 	violations: list[str] = []
 	seen_revisions: dict[str, Path] = {}
@@ -51,6 +68,27 @@ def test_migration_history_has_single_head() -> None:
 	config.set_main_option("script_location", str(VERSIONS_DIR.parent))
 
 	assert len(ScriptDirectory.from_config(config).get_heads()) == 1
+
+
+def test_migration_history_is_a_contiguous_single_chain() -> None:
+	records = []
+	for path in sorted(VERSIONS_DIR.glob("*.py")):
+		match = REVISION_FILENAME_PATTERN.fullmatch(path.name)
+		if match is not None:
+			records.append((int(match.group("revision")), _revision_id(path), _down_revision(path), path.name))
+
+	records.sort()
+	violations: list[str] = []
+	for index, (prefix, revision, down_revision, filename) in enumerate(records, start=1):
+		expected_revision = f"{index:04d}"
+		expected_down_revision = None if index == 1 else f"{index - 1:04d}"
+		if prefix != index or revision != expected_revision or down_revision != expected_down_revision:
+			violations.append(
+				f"{filename}: expected revision={expected_revision}, down_revision={expected_down_revision}; "
+				f"actual revision={revision}, down_revision={down_revision}"
+			)
+
+	assert violations == [], "migration chain violations: " + "; ".join(violations)
 
 
 def test_migration_filename_naming_convention_is_documented() -> None:
