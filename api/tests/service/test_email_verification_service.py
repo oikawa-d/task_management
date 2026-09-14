@@ -137,15 +137,18 @@ async def test_request_password_reset_is_noop_for_unknown_user(monkeypatch: pyte
 async def test_request_password_reset_schedules_mail(monkeypatch: pytest.MonkeyPatch) -> None:
 	user = _user()
 	monkeypatch.setattr(email_verification_service.user_repository, "get_by_email", AsyncMock(return_value=user))
+	monkeypatch.setattr(email_verification_service, "_generate_token", lambda: "reset-token")
 	save = AsyncMock()
 	monkeypatch.setattr(email_verification_service.redis_store, "save_password_reset_token", save)
 	background = _FakeBackgroundTasks()
 
 	await email_verification_service.request_password_reset("taro@example.com", background, _FakeDb())  # type: ignore[arg-type]
 
-	save.assert_awaited_once()
-	assert save.await_args.args[1] == user.id
-	assert len(background.tasks) == 1
+	settings = email_verification_service.get_backend_settings()
+	save.assert_awaited_once_with("reset-token", user.id, ttl=settings.password_reset_ttl_seconds)
+	func, args = background.tasks[0]
+	assert func is email_verification_service.mail_service.send_password_reset_mail
+	assert args == (user.email, "reset-token", settings.password_reset_ttl_seconds // 60)
 
 
 @pytest.mark.asyncio

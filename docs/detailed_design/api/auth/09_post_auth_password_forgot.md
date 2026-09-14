@@ -145,14 +145,14 @@ flowchart TB
 | 処理内容 | 1. `user_repository.get_by_email(db, email)` でユーザー取得。`None` なら終了 2. `token = secrets.token_urlsafe(32)` を生成 3. `redis_store.save_password_reset_token(token, user.id, ttl)` を呼ぶ 4. `background.add_task(mail_service.send_password_reset_mail, user.email, token, expires_minutes)` を登録 |
 | 副作用 | Redis：`pwreset:{hash}` の新規作成。メール：`BackgroundTasks` 経由で非同期送信 |
 
-### 6.3 `repository/user_repository.py :: fn_find_user_by_email`
+### 6.3 `api/app/repository/user_repository.py :: get_by_email`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def get_by_email(email: str) -> User \| None` |
-| 引数 | `email: str` |
+| シグネチャ | `async def get_by_email(db: AsyncSession, email: str) -> User \| None` |
+| 引数 | `db: AsyncSession`（DBセッション）、`email: str` |
 | 戻り値 | `User` または `None` |
-| 送出例外 | なし |
+| 送出例外 | `OperationalError` は `raise_database_error` で共通DBエラーへ変換 |
 | 処理内容 | `SELECT fn_find_user_by_email(:email)` を実行する。空集合でも同一の正常応答とし、ユーザー列挙を許さない |
 | 副作用 | なし（参照のみ）。`07_post_auth_verify_email.md` / `08_post_auth_verify_email_resend.md` と共通の関数を再利用する |
 
@@ -183,7 +183,7 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["auth_router.password_forgot"] --> S["email_verification_service.request_password_reset"]
-    S --> UR["user_repository.fn_find_user_by_email"]
+    S --> UR["user_repository.get_by_email"]
     S --> RD["redis_store.save_password_reset_token"]
     S -.->|"BackgroundTasks"| MS["mail_service.send_password_reset_mail"]
     UR --> PG[("PostgreSQL<br/>users")]

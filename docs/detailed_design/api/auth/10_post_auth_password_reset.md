@@ -112,8 +112,7 @@ sequenceDiagram
         RD->>RD: "SMEMBERS user_refresh:{uid} → 各refreshをDEL → DEL user_refresh:{uid}"
         S->>UR: "update_password(db, user_id, password_hash)"
         UR->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
-        PG-->>UR: "更新後の行"
-        UR-->>S: "User"
+        PG-->>UR: "更新完了"
         S->>S: "db.commit()"
         S-->>R: "None"
         R-->>FE: "204 No Content"
@@ -162,14 +161,14 @@ flowchart TB
 | 処理内容 | 1. `redis_store.consume_password_reset_token(token)` を呼び user_id を取得 2. `None` の場合は `InvalidResetTokenError` を送出 3. `core/security.py` の `hash_password(new_password)` で argon2 ハッシュを生成 4. `redis_store.delete_all_sessions(user_id)` を呼ぶ 5. `redis_store.revoke_all_refresh_tokens(user_id)` を呼ぶ 6. `user_repository.update_password(db, user_id, password_hash)` を呼ぶ 7. `db.commit()` でDB更新を確定する。RedisまたはDB接続不能時は503とし、Redis失効に失敗した場合はDB更新へ進まない |
 | 副作用 | Redis：`pwreset:{hash}` 削除、`session:*` / `csrf:*` / `user_sessions:{uid}` 全削除、`refresh:*` / `user_refresh:{uid}` 全削除。PostgreSQL：`users.password_hash` 更新 |
 
-### 6.3 `repository/user_repository.py :: sp_update_user_password`
+### 6.3 `api/app/repository/user_repository.py :: update_password`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def update_password(user_id: UUID, password_hash: str) -> User` |
-| 引数 | `user_id: UUID`、`password_hash: str`（argon2ハッシュ済み） |
-| 戻り値 | 更新後の `User` |
-| 送出例外 | `NotFoundError`（対象ユーザーが存在しない場合。理論上はトークン発行時に存在確認済みのため発生しないが防御的に扱う） |
+| シグネチャ | `async def update_password(db: AsyncSession, user_id: UUID, password_hash: str) -> None` |
+| 引数 | `db: AsyncSession`（DBセッション）、`user_id: UUID`、`password_hash: str`（argon2ハッシュ済み） |
+| 戻り値 | `None` |
+| 送出例外 | `OperationalError` は `raise_database_error` で共通DBエラーへ変換 |
 | 処理内容 | `CALL sp_update_user_password(:user_id, :password_hash)` を実行する。対象なしはAPI層で404へ変換する |
 | 副作用 | PostgreSQL：`users` テーブル1行の更新 |
 
@@ -224,7 +223,7 @@ flowchart LR
     R["auth_router.password_reset"] --> S["email_verification_service.reset_password"]
     S --> RD1["redis_store.consume_password_reset_token"]
     S --> SEC["core/security.hash_password"]
-    S --> UR["user_repository.sp_update_user_password"]
+    S --> UR["user_repository.update_password"]
     S --> RD2["redis_store.delete_all_sessions"]
     S --> RD3["redis_store.revoke_all_refresh_tokens"]
     RD1 --> REDIS1[("Redis<br/>pwreset:*")]
