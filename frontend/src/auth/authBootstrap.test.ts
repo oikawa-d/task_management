@@ -1,10 +1,13 @@
-import axios, { type AxiosInstance } from "axios";
+import axios, { AxiosError, type AxiosInstance } from "axios";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { clearAuthAdapter, fetchWithAuth } from "../api/authAdapter/client";
 import { AUTH_CONFIG_ENDPOINT, AUTH_ME_ENDPOINT } from "../api/authAdapter/constants";
 import { resetApiClient } from "../api/client";
+import { queryClient } from "../lib/queryClient";
+import { useProjectStore } from "../stores/projectStore";
 import { bootstrapAuth } from "./authBootstrap";
+import { useAuthStore } from "./authStore";
 
 function createMockClient(authMode: "session" | "jwt"): AxiosInstance {
 	return {
@@ -28,6 +31,9 @@ describe("bootstrapAuth", () => {
 		vi.unstubAllGlobals();
 		clearAuthAdapter();
 		resetApiClient();
+		queryClient.clear();
+		useProjectStore.getState().clearSelectedProject();
+		useAuthStore.getState().reset();
 	});
 
 	it("gets config, restores the session, then gets the current user", async () => {
@@ -78,5 +84,32 @@ describe("bootstrapAuth", () => {
 
 		expect(fetchMock).toHaveBeenCalledOnce();
 		expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/projects");
+	});
+
+	it("401で自動ログアウトするとユーザー別キャッシュと選択stateを破棄する", async () => {
+		let responseErrorHandler: ((error: unknown) => Promise<unknown>) | undefined;
+		const client = createMockClient("session");
+		(client.interceptors.response.use as ReturnType<typeof vi.fn>).mockImplementation((_onFulfilled, onRejected) => {
+			responseErrorHandler = onRejected;
+		});
+		vi.spyOn(axios, "create").mockReturnValue(client);
+		useProjectStore.getState().selectProject("project-1");
+		queryClient.setQueryData(["projects", { page: 1 }], { items: [{ id: "project-1" }] });
+
+		await bootstrapAuth();
+		const config = { url: "/projects", headers: {} };
+		const error = new AxiosError("Unauthorized", "ERR_BAD_REQUEST", config as never, undefined, {
+			data: { error: { code: "UNAUTHENTICATED", message: "認証が必要です", details: null, request_id: null } },
+			status: 401,
+			statusText: "Unauthorized",
+			headers: {},
+			config: config as never,
+		});
+
+		expect(responseErrorHandler).toBeDefined();
+		await expect(responseErrorHandler!(error)).rejects.toMatchObject({ status: 401 });
+		expect(useAuthStore.getState().status).toBe("unauthenticated");
+		expect(useProjectStore.getState().selectedProjectId).toBeNull();
+		expect(queryClient.getQueryData(["projects", { page: 1 }])).toBeUndefined();
 	});
 });

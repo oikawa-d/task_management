@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from alembic import command
@@ -38,6 +39,61 @@ def _login_history_id_comment() -> str | None:
 					"WHERE attrelid = 'login_history'::regclass AND attname = 'id'"
 				)
 			).scalar()
+	finally:
+		engine.dispose()
+
+
+def _mark_all_notifications_read_after_downgrade() -> tuple[int, int]:
+	"""0022時点の署名（入力引数1個・OUTなし）で一括既読を実行し、テーブル状態を返す。"""
+	engine = create_engine(_sync_database_url())
+	try:
+		with engine.begin() as connection:
+			suffix = uuid4().hex[:12]
+			user_id = connection.execute(
+				text(
+					"INSERT INTO users (username, email, password_hash) VALUES (:username, :email, 'hash') RETURNING id"
+				),
+				{"username": f"migration-{suffix}", "email": f"migration-{suffix}@example.com"},
+			).scalar_one()
+			connection.execute(
+				text(
+					"INSERT INTO notifications (user_id, type, title, dedupe_key) "
+					"VALUES (:user_id, 'due_today_created', 'unread', :unread_key)"
+				),
+				{"user_id": user_id, "unread_key": f"unread-{uuid4().hex}"},
+			)
+			connection.execute(
+				text(
+					"INSERT INTO notifications (user_id, type, title, dedupe_key, read_at) "
+					"VALUES (:user_id, 'due_today_created', 'read', :read_key, now())"
+				),
+				{"user_id": user_id, "read_key": f"read-{uuid4().hex}"},
+			)
+			connection.execute(text("CALL sp_mark_all_notifications_read(:user_id)"), {"user_id": user_id})
+			unread_count = connection.execute(
+				text("SELECT count(*) FROM notifications WHERE user_id = :user_id AND read_at IS NULL"),
+				{"user_id": user_id},
+			).scalar_one()
+			read_count = connection.execute(
+				text("SELECT count(*) FROM notifications WHERE user_id = :user_id AND read_at IS NOT NULL"),
+				{"user_id": user_id},
+			).scalar_one()
+			return int(unread_count), int(read_count)
+	finally:
+		engine.dispose()
+
+
+def _procedure_arguments(name: str) -> str | None:
+	engine = create_engine(_sync_database_url())
+	try:
+		with engine.connect() as connection:
+			return connection.execute(
+				text(
+					"SELECT pg_get_function_arguments(oid) FROM pg_proc "
+					"WHERE proname = :name AND pronamespace = 'public'::regnamespace"
+				),
+				{"name": name},
+			).scalar_one_or_none()
 	finally:
 		engine.dispose()
 
@@ -87,3 +143,19 @@ def test_login_history_comment_migration_downgrade_restores_previous_comment() -
 	command.downgrade(cfg, "0017")
 
 	assert _login_history_id_comment() == "ログイン試行を一意に識別するUUID"
+
+
+def test_notification_procedure_contract_is_restored_by_0023_downgrade() -> None:
+	cfg = _alembic_config()
+	command.upgrade(cfg, "head")
+	command.downgrade(cfg, "0022")
+
+	assert _procedure_arguments("sp_mark_all_notifications_read") == "IN p_user_id uuid"
+	assert _procedure_arguments("sp_mark_notification_read") == (
+		"IN p_notification_id uuid, IN p_user_id uuid, OUT p_read_at timestamp with time zone"
+	)
+
+	unread_count, read_count = _mark_all_notifications_read_after_downgrade()
+
+	assert unread_count == 0
+	assert read_count == 2

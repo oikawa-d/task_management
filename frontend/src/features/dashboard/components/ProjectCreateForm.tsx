@@ -3,6 +3,7 @@ import { useForm } from "react-hook-form";
 
 import { ApiError } from "../../../api/errors";
 import type { ProjectCreateRequest } from "../api/types";
+import { resolveForbiddenMessage } from "../errors";
 import { createZodResolver, projectCreateSchema, type ProjectCreateFormValues } from "../validation";
 
 const GENERIC_ERROR_MESSAGE = "プロジェクトの作成に失敗しました。しばらくしてから再度お試しください";
@@ -26,6 +27,7 @@ function extractFieldErrors(error: unknown): Array<{ field: string; message: str
 /**
  * docs/detailed_design/screen/06_dashboard.md §3（⑨〜⑫）、§9.3、§10、§13
  * name 1〜100文字必須・description 0〜2000文字任意。開いたときnameへ自動フォーカスする。
+ * 403（USER_INACTIVE / CSRF_INVALID）はフォーム全体のエラーとして個別メッセージを表示する。
  */
 export function ProjectCreateForm({ onSubmit, onCancel }: ProjectCreateFormProps) {
 	const nameRef = useRef<HTMLInputElement | null>(null);
@@ -48,6 +50,11 @@ export function ProjectCreateForm({ onSubmit, onCancel }: ProjectCreateFormProps
 		try {
 			await onSubmit({ name: values.name, description: values.description || null });
 		} catch (error) {
+			const forbiddenMessage = resolveForbiddenMessage(error);
+			if (forbiddenMessage) {
+				setError("root", { type: "server", message: forbiddenMessage });
+				return;
+			}
 			const fieldErrors = extractFieldErrors(error);
 			if (fieldErrors.length > 0) {
 				for (const fieldError of fieldErrors) {
