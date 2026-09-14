@@ -316,6 +316,21 @@ assert_allowed 'echo "gh pr merge 123 --squash"'
 assert_allowed "echo 'gh issue close 123'"
 assert_allowed "# gh pr merge 123 (コメント例)"
 
+# heredoc風の記号が引用符内にある場合、後続行をheredoc本文として削除しないこと。
+# 実際の後続コマンドはレビュー状態を検査する必要がある。
+export GH_STUB_MATCH="pr view" GH_STUB_EXIT="0" GH_STUB_JSON="$unreviewed_json"
+quoted_heredoc_marker=$(printf '%s\n' \
+	"echo '<<EOF'" \
+	"gh pr merge 123" \
+	"EOF")
+assert_blocked "$quoted_heredoc_marker"
+quoted_double_heredoc_marker=$(printf '%s\n' \
+	'echo "<<EOF2"' \
+	"gh pr merge 123" \
+	"EOF2")
+assert_blocked "$quoted_double_heredoc_marker"
+unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON
+
 # 8. 実際のマージコマンドは引き続きブロックされること(区切り文字経由も含む)
 export GH_STUB_MATCH="pr view" GH_STUB_EXIT="0" GH_STUB_JSON="$unreviewed_json"
 assert_blocked "git status; gh pr merge 123"
@@ -324,6 +339,13 @@ assert_blocked "gh pr merge 123 || echo fallback"
 # この文字列は実行されず、hookへの入力データとして渡すだけのため展開させない意図で単一引用符を使用する。
 # shellcheck disable=SC2016
 assert_blocked '$(echo dummy); gh pr merge 123'
+unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON
+
+# バックスラッシュ改行で分断されたコマンドも、実行時のコマンドとして検査すること。
+export GH_STUB_MATCH="pr view" GH_STUB_EXIT="0" GH_STUB_JSON="$unreviewed_json"
+assert_blocked $'gh pr \\\nmerge 123'
+assert_blocked $'gh issue \\\nclose 123'
+assert_blocked $'gh api -X \\\nPUT repos/oikawa-d/task_management/pulls/123/merge'
 unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON
 
 # 9. 想定外エラー時 -> exit 2 (trap ... ERR)
