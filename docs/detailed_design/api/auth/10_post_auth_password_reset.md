@@ -149,7 +149,7 @@ flowchart TB
 | シグネチャ | `async def password_reset(payload: PasswordResetRequest, db: AsyncSession = Depends(get_db_session)) -> None` |
 | 引数 | `payload: PasswordResetRequest`、`db: AsyncSession` |
 | 戻り値 | `None`（`204 No Content`） |
-| 送出例外 | なし（`auth_service.reset_password` が送出した `InvalidResetTokenError` はグローバル例外ハンドラで400に変換） |
+| 送出例外 | `InvalidResetTokenError`（グローバル例外ハンドラで400 `INVALID_RESET_TOKEN`に変換）。Redis障害またはPostgreSQL接続障害はグローバル例外ハンドラで503 `SERVICE_UNAVAILABLE`に変換 |
 | 処理内容 | `auth_service.reset_password(payload.token, payload.new_password, db)` を呼び出す。成功時は`204 No Content`を返す |
 | 副作用 | なし（副作用は service 層に委譲） |
 
@@ -160,8 +160,8 @@ flowchart TB
 | シグネチャ | `async def reset_password(token: str, new_password: str, db: AsyncSession) -> None` |
 | 引数 | `token: str`（メールリンクのトークン）、`new_password: str`（バリデーション済み平文）、`db: AsyncSession`（DBトランザクション） |
 | 戻り値 | `None` |
-| 送出例外 | `InvalidResetTokenError`（HTTP 400） |
-| 処理内容 | 1. `redis_store.consume_password_reset_token(token)` を呼び user_id を取得 2. `None` の場合は `InvalidResetTokenError` を送出 3. `core/security.py` の `hash_password(new_password)` で argon2 ハッシュを生成 4. `redis_store.delete_all_sessions(user_id)` を呼ぶ 5. `redis_store.revoke_all_refresh_tokens(user_id)` を呼ぶ 6. Redis失効成功後に `user_repository.update_password(db, user_id, password_hash)` を呼ぶ 7. `db.commit()` を呼ぶ |
+| 送出例外 | `InvalidResetTokenError`（HTTP 400）。Redis障害またはPostgreSQL接続障害はグローバル例外ハンドラで503 `SERVICE_UNAVAILABLE`に変換 |
+| 処理内容 | 1. `redis_store.consume_password_reset_token(token)` を呼び user_id を取得 2. `None` の場合は `InvalidResetTokenError` を送出 3. `core/security.py` の `hash_password(new_password)` で argon2 ハッシュを生成 4. `redis_store.delete_all_sessions(user_id)` を呼ぶ 5. `redis_store.revoke_all_refresh_tokens(user_id)` を呼ぶ 6. Redis失効成功後に `user_repository.update_password(db, user_id, password_hash)` を呼ぶ 7. `db.commit()` を呼ぶ。Redis失効に失敗した場合はfail-closeとし、DB更新・`commit()`を行わない |
 | 副作用 | Redis：`pwreset:{hash}` 削除、`session:*` / `csrf:*` / `user_sessions:{uid}` 全削除、`refresh:*` / `user_refresh:{uid}` 全削除。PostgreSQL：`users.password_hash` 更新 |
 
 ### 6.3 `repository/user_repository.py :: update_password`
@@ -171,7 +171,7 @@ flowchart TB
 | シグネチャ | `async def update_password(db: AsyncSession, user_id: UUID, password_hash: str) -> None` |
 | 引数 | `db: AsyncSession`、`user_id: UUID`、`password_hash: str`（argon2ハッシュ済み） |
 | 戻り値 | `None` |
-| 送出例外 | `ServiceUnavailableError`（PostgreSQL接続不能時） |
+| 送出例外 | `ServiceUnavailableError`（PostgreSQL接続障害時。グローバル例外ハンドラで503 `SERVICE_UNAVAILABLE`に変換） |
 | 処理内容 | `CALL sp_update_user_password(:user_id, :password_hash)` を実行する |
 | 副作用 | PostgreSQL：`users` テーブル1行の更新 |
 
@@ -182,7 +182,7 @@ flowchart TB
 | シグネチャ | `async def consume_password_reset_token(token: str) -> UUID \| None` |
 | 引数 | `token: str`（平文） |
 | 戻り値 | `UUID` または `None` |
-| 送出例外 | なし（Redis接続不能時は `RedisError`） |
+| 送出例外 | `RedisError`（Redis障害時。グローバル例外ハンドラで503 `SERVICE_UNAVAILABLE`に変換） |
 | 処理内容 | 1. `hash = sha256(token).hexdigest()` を計算 2. `GETDEL pwreset:{hash}` を実行 3. 値が存在すれば `user_id` を返す |
 | 副作用 | Redis：`pwreset:{hash}` を削除（ワンタイム消費） |
 
@@ -193,7 +193,7 @@ flowchart TB
 | シグネチャ | `async def delete_all_sessions(user_id: UUID) -> int` |
 | 引数 | `user_id: UUID` |
 | 戻り値 | `int`（削除件数） |
-| 送出例外 | なし |
+| 送出例外 | `RedisError`（Redis障害時。グローバル例外ハンドラで503 `SERVICE_UNAVAILABLE`に変換） |
 | 処理内容 | 1. `SMEMBERS user_sessions:{uid}` で有効session_id一覧を取得 2. 各 `session:{sid}` / `csrf:{sid}` を `DEL` 3. `DEL user_sessions:{uid}` |
 | 副作用 | Redis：sessionモードの全ログイン状態を削除 |
 
@@ -204,7 +204,7 @@ flowchart TB
 | シグネチャ | `async def revoke_all_refresh_tokens(user_id: UUID) -> int` |
 | 引数 | `user_id: UUID` |
 | 戻り値 | `int`（削除件数） |
-| 送出例外 | なし |
+| 送出例外 | `RedisError`（Redis障害時。グローバル例外ハンドラで503 `SERVICE_UNAVAILABLE`に変換） |
 | 処理内容 | 1. `SMEMBERS user_refresh:{uid}` で有効token_hash一覧を取得 2. 各 `refresh:{hash}` を `DEL` 3. `DEL user_refresh:{uid}` |
 | 副作用 | Redis：jwtモードの全リフレッシュトークンを削除。既発行のアクセストークンは署名検証のみのため最大 `ACCESS_TOKEN_TTL_SECONDS`（既定900秒）は有効なまま残り得る（`basic_design/03_auth.md` §7.2 末尾） |
 
