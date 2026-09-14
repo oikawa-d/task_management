@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, Outlet, useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { useAuthStore } from "../auth/authStore";
+import { clearUserSessionState } from "../auth/sessionCleanup";
 import { NotificationCenter } from "../features/notifications";
 import { useUnreadCount } from "../features/notifications/hooks/useUnreadCount";
 import type { NotificationItemData } from "../features/notifications/types";
@@ -28,6 +30,7 @@ export function AppLayout({
 	const status = useAuthStore((state) => state.status);
 	const authAdapter = useAuthStore((state) => state.authAdapter);
 	const clearAuth = useAuthStore((state) => state.clear);
+	const queryClient = useQueryClient();
 	const navigate = useNavigate();
 	const [isLoggingOut, setIsLoggingOut] = useState(false);
 	const [unreadOverride, setUnreadOverride] = useState<number | null>(null);
@@ -55,6 +58,7 @@ export function AppLayout({
 			// API失敗時もクライアント側の認証状態を破棄する
 		} finally {
 			clearAuth();
+			clearUserSessionState(queryClient);
 			navigate(ROUTES.LOGIN, { replace: true });
 		}
 	};

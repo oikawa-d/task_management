@@ -23,12 +23,25 @@ def test_workflow_file_exists() -> None:
 	assert WORKFLOW_PATH.is_file()
 
 
-def test_triggers_are_push_and_pull_request_on_main_and_develop() -> None:
+def test_pull_request_trigger_has_no_base_branch_filter() -> None:
 	workflow = _load_workflow()
 	triggers = workflow.get("on") or workflow.get(True)
 	assert triggers is not None
-	for event in ("push", "pull_request"):
-		assert set(triggers[event]["branches"]) == {"main", "develop"}
+	assert triggers["pull_request"] == {}
+
+
+def test_push_trigger_is_limited_to_main_and_develop() -> None:
+	workflow = _load_workflow()
+	triggers = workflow.get("on") or workflow.get(True)
+	assert triggers is not None
+	assert set(triggers["push"]["branches"]) == {"main", "develop"}
+
+
+def test_concurrency_cancels_previous_run_for_same_pr() -> None:
+	workflow = _load_workflow()
+	concurrency = workflow["concurrency"]
+	assert concurrency["group"] == "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+	assert concurrency["cancel-in-progress"] is True
 
 
 def test_required_jobs_are_defined() -> None:
