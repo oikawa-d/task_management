@@ -7,7 +7,7 @@
 # レビュー状態を誤った番号で確認してしまうため、位置引数のみを対象として解析する。
 
 # オプション値を取るフラグ(この次のトークンは位置引数ではない)。
-GH_PR_MERGE_VALUE_FLAGS=(--author-email --body -b --body-file -F --match-head-commit --subject -t --repo -R)
+GH_PR_MERGE_VALUE_FLAGS=(--author-email -A --body -b --body-file -F --match-head-commit --subject -t --repo -R)
 # 値を取らないフラグ。
 GH_PR_MERGE_BOOL_FLAGS=(--admin --auto --disable-auto --delete-branch -d --merge -m --rebase -r --squash -s --dry-run --help -h)
 GH_ISSUE_CLOSE_VALUE_FLAGS=(--comment -c --reason -r --repo -R)
@@ -138,6 +138,19 @@ gh_take_repo_flag() {
 	return 2
 }
 
+# 短縮形の値付きフラグに値が連結されている形式(`-Aauthor@example.com`等)を判定する。
+# 完全一致のフラグは呼び出し側で次のトークンを値として消費するため、ここでは扱わない。
+gh_is_attached_short_value_flag() {
+	local token="$1"
+	local flag
+
+	shift
+	for flag in "$@"; do
+		[[ "$flag" == -? && "$token" == "$flag"?* ]] && return 0
+	done
+	return 1
+}
+
 # コマンド断片から操作対象のセレクタ(番号・URL・ブランチ名)と対象リポジトリを抽出する。
 # 第1引数: pr-merge | issue-close
 # 第2引数: コマンド断片
@@ -230,6 +243,9 @@ gh_parse_target() {
 			fi
 
 			if [[ "$token" == -* && "$token" != "-" ]]; then
+				if gh_is_attached_short_value_flag "$token" "${value_flags[@]}"; then
+					continue
+				fi
 				if gh_contains "$token" "${value_flags[@]}"; then
 					(( index++ ))
 					continue

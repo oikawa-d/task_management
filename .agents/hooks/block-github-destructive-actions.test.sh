@@ -44,6 +44,9 @@ if [[ "$cmd" == "${GH_STUB_MATCH:-}" ]]; then
 		exit "${GH_STUB_EXIT}"
 	fi
 	json="${GH_STUB_JSON:-}"
+	if [[ "$cmd" == "pr view" && -n "${GH_STUB_UNREVIEWED_PR:-}" && "$3" == "$GH_STUB_UNREVIEWED_PR" ]]; then
+		json='{"labels":[]}'
+	fi
 	if [[ -z "$json" ]]; then
 		json='{"labels":[]}'
 	fi
@@ -173,6 +176,8 @@ export GH_STUB_JSON="$unreviewed_json"
 assert_gh_called_with 'gh pr merge --subject "fix 999" 123 --squash' 'pr view 123'
 assert_gh_called_with 'gh pr merge --body-file /tmp/999.md 123' 'pr view 123'
 assert_gh_called_with "gh pr merge --squash feature/issue-999" 'pr view feature/issue-999'
+assert_gh_called_with "gh pr merge -A author@example.com 123" 'pr view 123'
+assert_gh_called_with "gh pr merge -Aauthor@example.com 123" 'pr view 123'
 
 # 3-4. `--repo` やURLで指定した別リポジトリのPRを照会すること
 # カレントリポジトリの同番号PRのreviewed状態で許可・拒否してはならない。
@@ -329,6 +334,12 @@ assert_blocked "gh api -X PUT repos/oikawa-d/task_management/pulls/123/merge"
 assert_blocked "gh api repos/oikawa-d/task_management/pulls/123/merge --method PUT"
 assert_blocked "gh issue edit 123 --state closed"
 assert_blocked "gh --repo oikawa-d/task_management issue edit 123 --state=closed"
+
+# 10-2. 1回の入力に複数の破壊操作がある場合、全件を検査すること
+export GH_STUB_JSON="$reviewed_json" GH_STUB_UNREVIEWED_PR="456" GH_STUB_GRAPHQL_JSON="$linked_unreviewed_json"
+assert_blocked "gh pr merge 123 && gh pr merge 456"
+assert_blocked "gh pr merge 123 && gh issue close 456"
+unset GH_STUB_JSON GH_STUB_UNREVIEWED_PR GH_STUB_GRAPHQL_JSON
 
 # 11. jq不在時 -> exit 2 (fail-close, #339)
 assert_blocked_without_jq "gh pr view 123"

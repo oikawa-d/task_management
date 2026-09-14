@@ -167,45 +167,49 @@ linked_pr_has_reviewed_label() {
 	return 1
 }
 
-# `gh pr merge` を検出したら、対象PRにreviewedラベルがある場合のみ許可する。
-if grep -Eq "${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+pr[[:space:]]+merge([[:space:]]|\$)" <<<"$command_for_match"; then
-	merge_segment=$(grep -Eo "${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+pr[[:space:]]+merge[^;&|[:cntrl:]]*" <<<"$command_for_match" | head -1)
-	parse_status=0
+# grepのマッチにはコマンド区切り文字が含まれるため、解析前に除去する。
+strip_segment_prefix() {
+	local segment="$1"
+	sed -E 's/^[;&|`([:space:]]+//' <<<"$segment"
+}
+
+# `gh pr merge` の1件を検査する。戻り値0は許可、2はブロックを表す。
+check_merge_segment() {
+	local merge_segment="$1"
+	local parse_status=0 status=0
 	gh_parse_target "pr-merge" "$merge_segment" || parse_status=$?
 	if [[ "$parse_status" -ne 0 ]]; then
 		echo "ブロック: 対象PRを特定できないコマンド形式のため、安全側でmergeをブロックします。PR番号・URL・ブランチ名を位置引数で指定してください。" >&2
-		exit 2
+		return 2
 	fi
 
 	status=0
 	has_reviewed_pr_label "$GH_TARGET_SELECTOR" "$GH_TARGET_REPO" || status=$?
 
 	if [[ "$status" -eq 0 ]]; then
-		exit 0
+		return 0
 	elif [[ "$status" -eq 2 ]]; then
 		echo "ブロック: 対象PRの情報取得(gh pr view)に失敗したため、安全側でmergeをブロックします。ネットワークやPR番号を確認してください。" >&2
-		exit 2
+		return 2
 	else
 		# `gh pr edit --add-label` はProjects(classic)廃止に伴うGraphQLエラー(projectCards参照)で
 		# 失敗するため案内しない(#386)。REST APIの `gh api` 経由であれば同エンドポイントは
 		# PR・issueの両方に使えて安定して成功するため、こちらを案内する。
 		echo "ブロック: 対象PRに '${REVIEWED_LABEL}' ラベルがありません。.agents/review-policy.md に沿ったレビューで「受入可」のコメントを投稿したうえで、PR作成者以外がラベルを付与してください（例: gh api -X POST repos/${REPO_PLACEHOLDER}/issues/<PR番号>/labels -f \"labels[]=${REVIEWED_LABEL}\"）。" >&2
-		exit 2
+		return 2
 	fi
-fi
+}
 
-# `gh issue close` を検出したら、そのissueを閉じるPRにreviewedラベルがある場合のみ許可する。
-if grep -Eq "${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+issue[[:space:]]+close([[:space:]]|\$)" <<<"$command_for_match"; then
-	close_segment=$(grep -Eo "${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+issue[[:space:]]+close[^;&|[:cntrl:]]*" <<<"$command_for_match" | head -1)
+# `gh issue close` の1件を検査する。戻り値0は許可、2はブロックを表す。
+check_close_segment() {
+	local close_segment="$1"
+	local parse_status=0 issue_number="" issue_repo="" status=0
 	# オプション値やリポジトリ名に含まれる数字を拾わないよう、位置引数のみを対象番号として扱う。
-	parse_status=0
 	gh_parse_target "issue-close" "$close_segment" || parse_status=$?
-	issue_number=""
 	if [[ "$parse_status" -eq 0 && -n "$GH_TARGET_SELECTOR" ]]; then
 		issue_number=$(gh_selector_to_number "$GH_TARGET_SELECTOR") || issue_number=""
 	fi
 	# URLで別リポジトリのissueが指定された場合、そのリポジトリのリンクPRを照会する。
-	issue_repo=""
 	if [[ "$parse_status" -eq 0 ]]; then
 		issue_repo="$GH_TARGET_REPO"
 	fi
@@ -214,20 +218,38 @@ if grep -Eq "${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+issue[[:space:]]+close
 	linked_pr_has_reviewed_label "$issue_number" "$issue_repo" || status=$?
 
 	if [[ "$status" -eq 0 ]]; then
-		exit 0
+		return 0
 	elif [[ "$status" -eq 2 ]]; then
 		echo "ブロック: 対象issueのリンクPR取得(gh api graphql)に失敗、またはissue番号・リポジトリを特定できなかったため、安全側でcloseをブロックします。" >&2
-		exit 2
+		return 2
 	elif [[ "$status" -eq 3 ]]; then
 		echo "ブロック: issueを閉じるPRが見つかりません。PR本文に 'Closes #<Issue番号>' を記載してissueとリンクしてください（リンクしたPRがマージされればissueは自動closeされます）。" >&2
-		exit 2
+		return 2
 	else
 		# issues/<番号>/labels のREST APIエンドポイントはissueにもPRにも使えるため、
 		# PR用メッセージ(#386)と同じ `gh api` 形式に統一する。
 		echo "ブロック: 対象issueを閉じるPRに '${REVIEWED_LABEL}' ラベルがありません。.agents/review-policy.md に沿ったレビューで「受入可」のコメントを投稿したうえで、PR作成者以外がPRへラベルを付与してください（例: gh api -X POST repos/${REPO_PLACEHOLDER}/issues/<PR番号>/labels -f \"labels[]=${REVIEWED_LABEL}\"）。" >&2
+		return 2
+	fi
+}
+
+# 1回のBash入力に複数の破壊操作が含まれる場合も、検出した全件を検査する。
+# いずれか1件でもブロック対象なら入力全体をブロックし、全件が許可された場合のみ通過させる。
+merge_pattern="${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+pr[[:space:]]+merge[^;&|[:cntrl:]]*"
+while IFS= read -r merge_segment; do
+	merge_segment=$(strip_segment_prefix "$merge_segment")
+	if ! check_merge_segment "$merge_segment"; then
 		exit 2
 	fi
-fi
+done < <(grep -Eo "$merge_pattern" <<<"$command_for_match" || true)
+
+close_pattern="${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+issue[[:space:]]+close[^;&|[:cntrl:]]*"
+while IFS= read -r close_segment; do
+	close_segment=$(strip_segment_prefix "$close_segment")
+	if ! check_close_segment "$close_segment"; then
+		exit 2
+	fi
+done < <(grep -Eo "$close_pattern" <<<"$command_for_match" || true)
 
 # `gh pr merge` の代替経路となるGitHub API直叩き(PUT .../pulls/<番号>/merge)を塞ぐ。
 # こちらはreviewedラベルの有無にかかわらず禁止し、mergeは `gh pr merge` に一本化する。
