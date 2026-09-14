@@ -124,7 +124,7 @@ sequenceDiagram
             S->>RD: delete_all_sessions(target_id)
             alt Redis失敗
                 RD-->>S: RedisError
-                S->>S: ERROR監査ログ出力（actor.id, target_id, operation=delete_all_sessions）
+                S->>S: ERROR監査ログ出力（actor_user_id, target_user_id, operation=delete_all_sessions）
                 S-->>R: ServiceUnavailableError
                 R-->>FE: 503 SERVICE_UNAVAILABLE
             end
@@ -132,7 +132,7 @@ sequenceDiagram
             S->>RD: revoke_all_refresh_tokens(target_id)
             alt Redis失敗
                 RD-->>S: RedisError
-                S->>S: ERROR監査ログ出力（actor.id, target_id, operation=revoke_all_refresh_tokens）
+                S->>S: ERROR監査ログ出力（actor_user_id, target_user_id, operation=revoke_all_refresh_tokens）
                 S-->>R: ServiceUnavailableError
                 R-->>FE: 503 SERVICE_UNAVAILABLE
             end
@@ -142,7 +142,7 @@ sequenceDiagram
         RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>RP: 更新後の行
         RP-->>S: User
-        S->>S: 監査ログ出力（actor.id, target_id, old_is_active, new_is_active, session/refresh失効件数）をINFO出力
+        S->>S: 監査ログ出力（actor_user_id, target_user_id, old_is_active, new_is_active, session/refresh失効件数）をINFO出力
         S-->>R: UserDetail
         R-->>FE: 200 {user}
     end
@@ -171,7 +171,7 @@ flowchart TB
     I -.->|"DB接続不能"| M["503 SERVICE_UNAVAILABLE"]
 ```
 
-**判定順序の理由**：[02_patch_admin_user_role.md](./02_patch_admin_user_role.md) と同一の考え方で、自己変更禁止判定・対象存在確認・最後のadmin判定・advisory lockによる直列化はいずれも `sp_admin_update_user_status` 内部で一体的に処理される。API/service層は追加のSELECTやロック取得を行わず、SPが返すSQLSTATE（`P0007`/`P0008`/`P0010`）をそのままHTTPエラーへ変換する（#347レビューで事前存在確認SELECTを廃止し、SP呼び出し1回のみに整理。更新前is_activeはOUTパラメータで受け取る）。DB更新後にRedis失効を行う順序とすることで、「DB上は無効化されたがRedisのセッションだけが生き残る」中間状態が発生してもフェイルセーフ側（無効化済み）に倒れる。Redis失効が失敗した場合はDBの無効化をロールバックせず、`actor.id`/`target_id`/失敗した操作（sessions/refresh_tokens）をERROR監査ログへ出力してから503を返す。運用者はこのログを検知して同じuser_idに対する失効を再試行、または手動失効で補償する。逆に「Redisは失効したがDB更新前に失敗した」場合はトランザクションがロールバックされDB上は有効なままとなり、この場合はユーザーが再ログインすればセッションが再発行されるため実害はない。
+**判定順序の理由**：[02_patch_admin_user_role.md](./02_patch_admin_user_role.md) と同一の考え方で、自己変更禁止判定・対象存在確認・最後のadmin判定・advisory lockによる直列化はいずれも `sp_admin_update_user_status` 内部で一体的に処理される。API/service層は追加のSELECTやロック取得を行わず、SPが返すSQLSTATE（`P0007`/`P0008`/`P0010`）をそのままHTTPエラーへ変換する（#347レビューで事前存在確認SELECTを廃止し、SP呼び出し1回のみに整理。更新前is_activeはOUTパラメータで受け取る）。DB更新後にRedis失効を行う順序とすることで、「DB上は無効化されたがRedisのセッションだけが生き残る」中間状態が発生してもフェイルセーフ側（無効化済み）に倒れる。Redis失効が失敗した場合はDBの無効化をロールバックせず、`actor_user_id`/`target_user_id`/失敗した操作（sessions/refresh_tokens）をERROR監査ログへ出力してから503を返す。運用者はこのログを検知して同じuser_idに対する失効を再試行、または手動失効で補償する。逆に「Redisは失効したがDB更新前に失敗した」場合はトランザクションがロールバックされDB上は有効なままとなり、この場合はユーザーが再ログインすればセッションが再発行されるため実害はない。
 
 ## 6. 関数詳細
 
@@ -190,11 +190,11 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def change_status(actor: CurrentUser, target_id: UUID, new_is_active: bool, db: AsyncSession) -> AdminUserDetailResponse` |
+| シグネチャ | `async def change_status(actor: CurrentUser, target_id: UUID, new_is_active: bool, db: AsyncSession, request_id: str | None = None) -> AdminUserDetailResponse` |
 | 引数 | `actor`: 実行者（admin） / `target_id`: 対象ユーザーID / `new_is_active`: 変更後の値 / `db`: DBセッション |
 | 戻り値 | 更新後の `AdminUserDetailResponse` |
 | 送出例外 | `NotFoundError`（404）/ `SelfModificationError`（409）/ `LastAdminRequiredError`（409）/ `ServiceUnavailableError`（503） |
-| 処理内容 | `admin_repository.update_user_status(actor.id, target_id, new_is_active)` を1回呼ぶ。対象不存在（P0010）・自己変更禁止（P0007）・最後のadmin保護（P0008）・advisory lock・status更新はSP内部で一体実行され、更新前is_active（`old_is_active`）がOUTパラメータで返る。無効化が成功した場合だけAPI層がRedis失効（`delete_all_sessions`→`revoke_all_refresh_tokens`）を続けて実行し、失敗時は`actor.id`/`target_id`/失敗した操作をERROR監査ログへ出力してから`ServiceUnavailableError`にする。成功後は`user_repository.get_by_id`で応答を取得し、`actor.id`/`target_id`/`old_is_active`/`new_is_active`/失効件数を監査ログへINFO出力する（#347レビューで事前存在確認SELECTを廃止） |
+| 処理内容 | `admin_repository.update_user_status(actor.id, target_id, new_is_active)` を1回呼ぶ。対象不存在（P0010）・自己変更禁止（P0007）・最後のadmin保護（P0008）・advisory lock・status更新はSP内部で一体実行され、更新前is_active（`old_is_active`）がOUTパラメータで返る。無効化が成功した場合だけAPI層がRedis失効（`delete_all_sessions`→`revoke_all_refresh_tokens`）を続けて実行し、失敗時は`actor_user_id`/`target_user_id`/失敗した操作をERROR監査ログへ出力してから`ServiceUnavailableError`にする。成功後は`user_repository.get_by_id`で応答を取得し、`actor_user_id`/`target_user_id`/`old_is_active`/`new_is_active`/失効件数を監査ログへINFO出力する（#347レビューで事前存在確認SELECTを廃止） |
 | 副作用 | SP内で `users.is_active` を更新。無効化時はDB更新成功後にRedisの `session:{sid}` / `csrf:{sid}` / `user_sessions:{uid}` / `refresh:{hash}` / `user_refresh:{uid}` をAPI層が全削除 |
 
 ### 6.3 `repository/admin_repository.py :: update_user_status`
@@ -302,11 +302,11 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 
 | 観点 | 内容 |
 |------|------|
-| ログ出力 | 監査ログ対象。`actor.id`, `target_id`, `old_is_active`, `new_is_active`, Redis失効件数（session/refreshそれぞれ）, `X-Request-ID` をINFO出力 |
+| ログ出力 | 監査ログ対象。`actor_user_id`, `target_user_id`, `old_is_active`, `new_is_active`, Redis失効件数（session/refreshそれぞれ）, `X-Request-ID` をINFO出力 |
 | ユーザー列挙対策 | admin専用APIのため対象外 |
 | タイミング攻撃対策 | 該当なし |
 | レート制限 | なし |
-| fail-close方針 | PostgreSQL/Redis接続不能時は `503 SERVICE_UNAVAILABLE`。DB更新を先に行うため、Redis失効が失敗してもDBの無効化はロールバックしない。Redis失効の失敗時は`actor.id`/`target_id`/失敗した操作（`delete_all_sessions`/`revoke_all_refresh_tokens`のどちらか）をERROR出力し、運用者が検知して同じuser_idで再試行または手動失効できるようにする（#347レビューで追加） |
+| fail-close方針 | PostgreSQL/Redis接続不能時は `503 SERVICE_UNAVAILABLE`。DB更新を先に行うため、Redis失効が失敗してもDBの無効化はロールバックしない。Redis失効の失敗時は`actor_user_id`/`target_user_id`/失敗した操作（`delete_all_sessions`/`revoke_all_refresh_tokens`のどちらか）をERROR出力し、運用者が検知して同じuser_idで再試行または手動失効できるようにする（#347レビューで追加） |
 | sessionモードへの効果 | `session:{sid}` の即時DELにより、無効化直後のリクエストから `401 SESSION_EXPIRED` となる |
 | jwtモードへの効果 | アクセストークンはRedisを参照しない署名検証のみのため、`user_refresh` 配下のリフレッシュトークンを失効させても既発行のアクセストークンは失効しない。ただし `deps.get_current_user` は認証成立後に必ず `users` テーブルの `is_active` を再確認するため（[03_auth.md §9.2](../../../basic_design/03_auth.md#92-依存性関数coredepspy)）、無効化直後のリクエストからは `403 USER_INACTIVE` で拒否される。すなわち「アクセストークンの署名は有効だがDB確認により403で弾かれる」という形で実質的に即時遮断される |
 | 最後のadmin保護 | ロール変更API（[02](./02_patch_admin_user_role.md)）と同一の `pg_advisory_xact_lock` キーを用いた直列化で、無効化とロール変更が同時に発生しても有効adminが0人になることを防ぐ |

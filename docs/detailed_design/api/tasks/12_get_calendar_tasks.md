@@ -25,7 +25,13 @@
 
 ### 2.2 Response
 
-`GET /api/tasks`の`items[]`と同じ`TaskListItem`を配列で返す。レスポンスには`meta`を付与しない。`project_is_active`にはプロジェクトの有効状態を含め、未所属タスクは`null`とする。
+`GET /api/tasks`の`items[]`を拡張した`CalendarTaskItem`を配列で返す。レスポンスには`meta`を付与しない。`project_is_active`にはプロジェクトの有効状態を含め、未所属タスクは`null`とする。
+
+`CalendarTaskItem`は`TaskListItem`の全フィールドに加えて、`due_date`（`YYYY-MM-DD`）を含む。`due_date`は`due_at`を`APP_TIMEZONE`へ変換した日付であり、ブラウザのタイムゾーンに依存せずカレンダーのセル割当へ使用する。
+
+| フィールド | 型 | 説明 |
+|------------|----|------|
+| `due_date` | `date` | `due_at`を`APP_TIMEZONE`へ変換した日付。カレンダーのセルキーに使用する |
 
 ### 2.3 エラー
 
@@ -57,7 +63,7 @@ sequenceDiagram
     P->>DB: SELECT fn_list_calendar_tasks(...)
     DB-->>P: task + project_is_active
     P-->>S: TaskWithProjectStatus
-    S-->>R: list[TaskListItem]
+    S-->>R: list[CalendarTaskItem]
     R-->>U: 200 JSON配列
 ```
 
@@ -65,8 +71,8 @@ sequenceDiagram
 
 | 層 | 関数 | 入力 | 出力 |
 |----|------|------|------|
-| router | `list_calendar_tasks` | Query、CurrentUser、DB | `list[TaskListItem]` |
-| service | `list_calendar_tasks` | CurrentUser、CalendarTaskQuery、DB | `list[TaskListItem]` |
+| router | `list_calendar_tasks` | Query、CurrentUser、DB | `list[CalendarTaskItem]` |
+| service | `list_calendar_tasks` | CurrentUser、CalendarTaskQuery、DB | `list[CalendarTaskItem]` |
 | repository | `list_calendar` | user、UTC境界、scope、project_id | `list[TaskWithProjectStatus]` |
 | DB | `fn_list_calendar_tasks` | user、UTC境界、scope、project_id | task行とproject状態 |
 
@@ -87,7 +93,7 @@ flowchart LR
     V --> B["APP_TIMEZONEの日付境界"]
     B --> UTC["UTC from/to"]
     UTC --> FN["fn_list_calendar_tasks"]
-    FN --> DTO["TaskListItem[]"]
+    FN --> DTO["CalendarTaskItem[]"]
     DTO --> UI["Calendar 42セル"]
 ```
 

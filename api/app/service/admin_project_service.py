@@ -84,7 +84,9 @@ async def list_projects(query: AdminProjectListQuery, db: AsyncSession) -> Admin
 	)
 
 
-async def deactivate_project(actor: CurrentUser, project_id: UUID, db: AsyncSession) -> None:
+async def deactivate_project(
+	actor: CurrentUser, project_id: UUID, db: AsyncSession, request_id: str | None = None
+) -> None:
 	"""管理者が任意のプロジェクトを論理削除する（06_delete_admin_project.md §6.2）。
 
 	所属・オーナーシップは問わない。存在しなければNotFoundError。
@@ -108,10 +110,13 @@ async def deactivate_project(actor: CurrentUser, project_id: UUID, db: AsyncSess
 	logger.warning(
 		"admin deactivated project",
 		extra={
-			"actor_id": str(actor.id),
+			"actor_user_id": str(actor.id),
 			"project_id": str(project_id),
+			"request_id": request_id,
 			"owner_id": str(owner_id),
 			"member_count": member_count,
-			"task_counts": task_counts.model_dump(),
+			"task_count_todo": task_counts.todo,
+			"task_count_in_progress": task_counts.in_progress,
+			"task_count_done": task_counts.done,
 		},
 	)

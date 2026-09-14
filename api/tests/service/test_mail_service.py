@@ -41,8 +41,14 @@ async def test_send_password_reset_mail_uses_fragment_url_and_calls_smtp(monkeyp
 	assert "?token=" not in text_body
 
 
-async def test_mail_send_failure_is_logged_and_not_propagated(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_mail_send_failure_is_logged_without_template_extra(
+	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
 	monkeypatch.setattr(mail_service.aiosmtplib, "send", AsyncMock(side_effect=ConnectionError("smtp down")))
 
 	# 送信失敗はログのみで、呼び出し元へは伝播させない。
-	await mail_service.send_email_verification_mail("taro@example.com", "plain-token", expires_hours=24)
+	with caplog.at_level("ERROR", logger="app.mail"):
+		await mail_service.send_email_verification_mail("taro@example.com", "plain-token", expires_hours=24)
+
+	record = caplog.records[-1]
+	assert not hasattr(record, "template")

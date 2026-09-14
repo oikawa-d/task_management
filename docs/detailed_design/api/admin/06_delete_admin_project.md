@@ -103,7 +103,7 @@ sequenceDiagram
         RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>RP: 更新後の行（project_members/tasks/task_commentsは無変更）
         RP-->>S: OK
-        S->>S: 監査ログ出力（actor.id, project_id, owner_id）
+        S->>S: 監査ログ出力（actor_user_id, project_id, owner_id）
         S-->>R: None
         R-->>FE: 204 No Content
     end
@@ -147,14 +147,14 @@ flowchart TB
 | 引数 | `project_id`: パス / `actor`: admin確認済みユーザー / `db`: DBセッション |
 | 戻り値 | `Response(status_code=204)` |
 | 送出例外 | なし（サービス層の例外を `AppError` としてそのまま伝播） |
-| 処理内容 | 1. `require_admin`・`verify_csrf` を通過 2. `admin_project_service.sp_admin_deactivate_project(db, actor, project_id)` を呼び出す 3. `204 No Content` を返す |
+| 処理内容 | 1. `require_admin`・`verify_csrf` を通過 2. `admin_project_service.deactivate_project(actor, project_id, db, request_id)` を呼び出す 3. `204 No Content` を返す |
 | 副作用 | なし（副作用はservice層に委譲） |
 
 ### 6.2 `service/admin_project_service.py :: sp_admin_deactivate_project`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def sp_admin_deactivate_project(db: AsyncSession, actor: CurrentUser, project_id: UUID) -> None` |
+| シグネチャ | `async def deactivate_project(actor: CurrentUser, project_id: UUID, db: AsyncSession, request_id: str | None = None) -> None` |
 | 引数 | `actor`: 実行者（admin） / `project_id`: 無効化対象 / `db`: DBセッション |
 | 戻り値 | なし |
 | 送出例外 | `NotFoundError`（404）、`ServiceUnavailableError`（DB接続不能）→503 |
@@ -188,7 +188,7 @@ flowchart TB
     B -->|"0件"| Z["404 NOT_FOUND"]
     B -->|"1件"| C["CALL sp_admin_deactivate_project(pid, false)"]
     C --> G["COMMIT（project_members/tasks/task_commentsは無変更）"]
-    G --> H["監査ログ出力（actor_id, project_id, owner_id）"]
+    G --> H["監査ログ出力（actor_user_id, project_id, owner_id）"]
     H --> I["204 No Content"]
     C -.->|"接続不能"| J["ROLLBACK / 503"]
 ```
@@ -230,7 +230,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 
 | 観点 | 内容 |
 |------|------|
-| ログ出力 | 監査ログ対象（状態変更操作。かつ管理者による他者所有リソースへの強制操作のため通常操作より重点的に扱う）。`actor.id`（実行した管理者）, `project_id`, 対象プロジェクトの `owner_id`, 無効化時点の `member_count`/`task_counts`（無効化前に取得）, `X-Request-ID` を **WARN** で出力する（[../projects/05_delete_project.md](../projects/05_delete_project.md) はINFOとしているのに対し、本APIは管理者による強制操作であるため常にWARN以上とする） |
+| ログ出力 | 監査ログ対象（状態変更操作。かつ管理者による他者所有リソースへの強制操作のため通常操作より重点的に扱う）。`actor_user_id`（実行した管理者）, `project_id`, 対象プロジェクトの `owner_id`, 無効化時点の `member_count`/`task_count_todo`/`task_count_in_progress`/`task_count_done`（無効化前に取得）, `X-Request-ID` を **WARN** で出力する（[../projects/05_delete_project.md](../projects/05_delete_project.md) はINFOとしているのに対し、本APIは管理者による強制操作であるため常にWARN以上とする） |
 | ユーザー列挙対策 | admin専用APIのため対象外 |
 | タイミング攻撃対策 | 該当なし |
 | レート制限 | なし |
@@ -248,7 +248,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 4 | 結合 | member（オーナー含む）はアクセス不可 | `role=member` の実行者（対象プロジェクトのオーナーであっても） | `403 FORBIDDEN` | `test_admin_delete_project_forbidden_for_non_admin` |
 | 5 | 結合 | 無効化後の再実行も204（冪等） | 同一project_idへ2回目のDELETE | `204`（`is_active=false`のまま、エラーにしない） | `test_admin_delete_project_idempotent_second_call_returns_204` |
 | 6 | 結合 | sessionモードでCSRFヘッダ欠落は403 | `X-CSRF-Token`なし | `403 CSRF_INVALID` | `test_admin_delete_project_missing_csrf_session_mode` |
-| 7 | 結合 | 監査ログにowner_id（オーナー）が出力される | ログ出力をキャプチャして検証 | ログレコードに `actor_id`/`project_id`/`owner_id` が含まれる | `test_admin_delete_project_audit_log_contains_owner` |
+| 7 | 結合 | 監査ログにowner_id（オーナー）が出力される | ログ出力をキャプチャして検証 | ログレコードに `actor_user_id`/`project_id`/`owner_id` が含まれる | `test_admin_delete_project_audit_log_contains_owner` |
 | 8 | 結合 | 無効化後に`04_patch_project.md`のadmin権限で再有効化できる | adminが無効化後、`is_active:true`でPATCH | `200`、`is_active=true`に戻る | `test_admin_delete_project_reactivatable_via_patch` |
 
 `AUTH_MODE=session` / `jwt` の両方で No.2・No.4を実施する。
