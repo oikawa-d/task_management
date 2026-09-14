@@ -302,6 +302,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 12 | 単体 | クエリ回数契約：`unread_only=true`時は`count_unread`を呼ばない | `list_by_user`が非空を返すモック、`unread_only=True` | `count_unread`が呼ばれない、`unread_count`は`total_count`と一致 | `test_list_notifications_skips_count_unread_when_unread_only` |
 | 13 | 単体 | pageが範囲外で`items`が空でも`meta.total`が正しい全体件数になる | `list_by_user`が空リストを返すモック、`count_notifications`が実際の全体件数を返すモック | `items=[]`、`meta.total`が`count_notifications`の返す全体件数と一致（0にならない） | `test_list_notifications_meta_total_uses_fallback_when_no_rows` |
 | 14 | 単体 | `task_id`が非NULLでも`tasks`側に行が無い（LEFT JOIN不一致）場合は`task=null` | `task_title is None`かつ`task_id`が非NULLのモック | レスポンスの `task` が `null`（空文字titleのオブジェクトにしない） | `test_list_notifications_task_title_none_returns_null_task` |
+| 15 | 結合 | レート制限超過時にTTLを取得できない | Redis TTLが0以下を返す | 429 `TOO_MANY_ATTEMPTS`、`Retry-After`が設定窓以上の正の整数 | `test_all_notification_rate_limited_endpoints_return_positive_retry_after_when_ttl_unavailable` |
 
 `AUTH_MODE=session` / `jwt` の両方で No.7（401判定経路の違い：`SESSION_EXPIRED` と `TOKEN_EXPIRED`）をパラメータ化して実施する。バッチ（[../../batch/02_due_notification_job.md](../../batch/02_due_notification_job.md)）による通知作成そのものはこのAPIのテスト範囲外とし、事前にDBへ直接INSERTしたフィクスチャで代替する。
 

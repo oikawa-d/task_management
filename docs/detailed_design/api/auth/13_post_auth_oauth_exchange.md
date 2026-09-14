@@ -323,6 +323,7 @@ PostgreSQLの`users`/`oauth_accounts`は本APIでは更新しない（12番フ�
 | 11 | 結合 | 交換成功後の`login_history` | 正常系 | `login_history`に`method='oauth_google', login_identifier=user.email, success=true`の行が1件追加される | `test_oauth_exchange_records_login_history` |
 | 12 | 結合 | `redirect_to`の伝播 | 11番ファイルで`redirect_to=/projects/1`を保存 → 12番でhandoffへ引き継ぎ | レスポンスの`redirect_to`が`/projects/1` | `test_oauth_exchange_returns_propagated_redirect_to` |
 | 13 | 単体 | `LoginResult`完全性検証（`auth_mode`不一致/欠落、access/refresh/CSRFの空文字・非文字列、`expires_in`の0・負数・非整数） | `JwtAuthStrategy.login`が不正な値を返す | `login_history`前に`rollback_login`を呼び、`OAuthFailedError`を送出 | `test_oauth_exchange_rolls_back_for_invalid_login_result_values` |
+| 14 | 結合 | レート制限超過時にRetry-Afterを返す | serviceが`TooManyAttemptsError(retry_after=42)`を送出 | 429 `TOO_MANY_ATTEMPTS`、`Retry-After: 42` | `test_exchange_rate_limited_returns_positive_retry_after` |
 
 網羅できない範囲：ローカルのHTTP結合テストではRedis・PostgreSQLをモックしているため、実RedisのGETDEL/SETEX、実PostgreSQLの`fn_get_user`/`sp_record_login_history`との接続・トランザクションまでは検証しない。実環境の境界確認はCIまたは統合環境で別途実施する。
 

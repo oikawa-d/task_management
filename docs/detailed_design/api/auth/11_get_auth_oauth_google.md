@@ -262,6 +262,7 @@ PostgreSQLへの書き込みは発生しない。Redisに `oauth_state:{state}` 
 | 8 | 結合 | `redirect_to=https://evil.com` 付きで呼ぶ | 実Redis | 保存される `redirect_to` は `/dashboard` に正規化されている | `test_oauth_google_start_normalizes_malicious_redirect_to` |
 | 9 | 結合 | Redis接続不能時に呼ぶ | Redis停止をモック | 503 `SERVICE_UNAVAILABLE` | `test_oauth_google_start_returns_503_on_redis_down` |
 | 10 | 結合 | `AUTH_MODE=session` / `jwt` の両方で呼ぶ | 各AUTH_MODE | 挙動に差異がないこと（同じ302形式） | `test_oauth_google_start_no_diff_between_auth_modes` |
+| 11 | 結合 | レート制限超過時にRetry-Afterを返す | serviceが`TooManyAttemptsError(retry_after=42)`を送出 | 429 `TOO_MANY_ATTEMPTS`、`Retry-After: 42` | `test_start_rate_limited_returns_positive_retry_after` |
 
 網羅できない範囲：Googleの実認可画面へのリダイレクト後の挙動（同意画面の表示・操作）はブラウザ実機での手動確認とする。
 

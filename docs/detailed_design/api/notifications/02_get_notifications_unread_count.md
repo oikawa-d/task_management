@@ -218,6 +218,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 6 | 結合 | 未認証は401 | Cookie/Bearerなし | `401 UNAUTHENTICATED` | `test_get_unread_count_unauthenticated` |
 | 7 | 結合 | 無効化ユーザーは403 | `is_active=false` | `403 USER_INACTIVE` | `test_get_unread_count_inactive_user` |
 | 8 | 性能・回帰 | DB呼び出しが1回で完結する | 実DBでFN呼び出し回数を検証 | `SELECT fn_count_unread_notifications(:user_id)` 1回のみ | `test_get_unread_count_single_fn_call` |
+| 9 | 結合 | レート制限超過時にTTLを取得できない | Redis TTLが0以下を返す | 429 `TOO_MANY_ATTEMPTS`、`Retry-After`が設定窓以上の正の整数 | `test_all_notification_rate_limited_endpoints_return_positive_retry_after_when_ttl_unavailable` |
 
 `AUTH_MODE=session` / `jwt` の両方で No.6（401判定経路の違い：`SESSION_EXPIRED` と `TOKEN_EXPIRED`）をパラメータ化して実施する。実行計画が実際に `ix_notifications_user_unread` を使用しているか（`EXPLAIN` 確認）は自動テストでは網羅できない。理由：実行計画の選択はPostgreSQLのオプティマイザとテーブル統計情報に依存し、CI環境の小規模データでは異なる計画が選ばれ得るため、単体・結合テストでの厳密な検証対象からは外し、目視での `EXPLAIN ANALYZE` 確認を運用上の補完手段とする（要検討）。
 
