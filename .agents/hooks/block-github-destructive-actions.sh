@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -euo pipefail
+set -eEuo pipefail
 
 REVIEWED_LABEL="reviewed"
 # ブロックメッセージが案内するラベル付与コマンドのプレースホルダ。
@@ -26,6 +26,8 @@ LINKED_PR_QUERY='query($owner:String!,$repo:String!,$number:Int!,$cursor:String)
 # 想定外のエラー(パイプラインの異常終了等)は必ずブロック側に倒す(fail-close)。
 # Claude CodeのPreToolUse hookはexit 2のみをブロックとして扱い、それ以外の非ゼロ終了は
 # 非ブロッキングエラーとしてツール実行を継続してしまうため、想定外の失敗でも確実にexit 2にする。
+# ERRトラップはerrtrace(set -E)が無いとシェル関数へ継承されず、判定処理の大半を占める関数内の
+# 失敗がexit 1(非ブロッキング)になってしまうため、errexitと併せてerrtraceを有効にする。
 trap 'echo "ブロック: hookスクリプト内で想定外のエラーが発生したため、安全側でブロックします。" >&2; exit 2' ERR
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -50,6 +52,7 @@ strip_heredocs() {
 	awk '
 		BEGIN {
 			in_heredoc = 0
+			parse_error = 0
 			strip_tabs = 0
 			word = ""
 			heredoc_quoted = 0
@@ -68,7 +71,9 @@ strip_heredocs() {
 					print $0
 					next
 				}
-				if (!heredoc_quoted && has_command_substitution($0)) { exit 4 }
+				# awkは exit でENDブロックへ移り、ENDの exit が終了コードを上書きする。
+				# ブロック理由を区別できるよう、終了コードを変数で引き継ぐ。
+				if (!heredoc_quoted && has_command_substitution($0)) { parse_error = 4; exit 4 }
 				next
 			}
 			print $0
@@ -158,6 +163,7 @@ strip_heredocs() {
 			return 0
 		}
 		END {
+			if (parse_error) { exit parse_error }
 			# 終端語が現れないheredocは以降の行を検査できないため、解析不能として扱う。
 			if (in_heredoc) { exit 3 }
 		}
@@ -167,7 +173,13 @@ strip_heredocs() {
 heredoc_status=0
 command_for_match=$(strip_heredocs <<<"$command") || heredoc_status=$?
 if (( heredoc_status != 0 )); then
-	echo "ブロック: heredocの終端語が見つからず入力を解析できないため、安全側でブロックします。" >&2
+	# strip_heredocsはexit 3(終端語なし)とexit 4(未クォートheredoc本文のコマンド置換)を
+	# 区別して返すため、利用者が対処を判断できるよう理由を出し分ける。
+	if (( heredoc_status == 4 )); then
+		echo "ブロック: クォートされていないheredoc本文にコマンド置換が含まれ、実行される内容を検査できないため、安全側でブロックします。終端語を引用符で囲む(<<'WORD')か、コマンド置換を除去してください。" >&2
+	else
+		echo "ブロック: heredocの終端語が見つからず入力を解析できないため、安全側でブロックします。" >&2
+	fi
 	exit 2
 fi
 # シェルのバックスラッシュ改行はトークン間の空白として扱われるため、

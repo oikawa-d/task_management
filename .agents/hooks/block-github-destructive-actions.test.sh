@@ -146,6 +146,30 @@ assert_blocked_without_jq() {
 	fi
 }
 
+# 判定処理の大半はシェル関数内にあるため、関数内で想定外のエラーが起きた場合も
+# exit 2(ブロック)になることを検証する。ERRトラップはerrtrace(set -E)が無いと関数へ
+# 継承されず、終了コードが1になってClaude Codeがツール実行を継続してしまう。
+# 実際に失敗を注入した複製で確認する(元のhookは変更しない)。
+assert_fail_close_on_internal_error() {
+	local command=$1
+	local fixture_dir status=0
+	fixture_dir=$(mktemp -d)
+	cp -R "$script_dir/." "$fixture_dir/"
+	sed -i 's/^gh_collect_executable_segments() {$/&\n\tfalse/' "$fixture_dir/lib/gh-command-parse.sh"
+	# 注入が効いていないと常に成功する空振りテストになるため、注入結果を確認する。
+	if [[ "$(sed -n '/^gh_collect_executable_segments() {$/{n;p;}' "$fixture_dir/lib/gh-command-parse.sh")" != $'\tfalse' ]]; then
+		echo "テスト用のエラー注入に失敗しました: $fixture_dir/lib/gh-command-parse.sh" >&2
+		rm -rf "$fixture_dir"
+		return 1
+	fi
+	payload "$command" | "$fixture_dir/block-github-destructive-actions.sh" >/dev/null 2>&1 || status=$?
+	rm -rf "$fixture_dir"
+	if [[ "$status" -ne 2 ]]; then
+		echo "関数内の想定外エラーがexit 2でブロックされませんでした (exit=$status): $command" >&2
+		return 1
+	fi
+}
+
 # hookがレビュー状態の確認に使った引数(=対象番号)を検証する。
 assert_gh_called_with() {
 	local command=$1
@@ -591,5 +615,14 @@ assert_allowed '$GH pr view 123'
 
 # 11. jq不在時 -> exit 2 (fail-close, #339)
 assert_blocked_without_jq "gh pr view 123"
+
+# 12. heredocのブロック理由を終了コードごとに出し分けること
+export GH_STUB_MATCH="pr view" GH_STUB_EXIT="0" GH_STUB_JSON="$unreviewed_json"
+assert_blocked_with_message $'cat <<EOF11\ngh pr merge 123\n' "終端語が見つからず"
+assert_blocked_with_message $'cat <<EOF12\n$(gh pr merge 123)\nEOF12' "コマンド置換が含まれ"
+unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON
+
+# 13. 関数内の想定外エラーもexit 2でブロックすること(errtrace未設定だとexit 1で素通りする)
+assert_fail_close_on_internal_error "gh pr merge 123"
 
 echo "block-github-destructive-actions: すべてのケースが期待通りです"

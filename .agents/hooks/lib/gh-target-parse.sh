@@ -166,7 +166,7 @@ gh_parse_target() {
 		take_status=0
 		gh_take_repo_flag "${tokens[pre_index]}" "${tokens[pre_index + 1]:-}" || take_status=$?
 		if [[ "$take_status" -eq 1 ]]; then
-			(( pre_index++ ))
+			pre_index=$(( pre_index + 1 ))
 		fi
 	done
 
