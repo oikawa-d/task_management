@@ -291,8 +291,8 @@ flowchart LR
 | 8 | 結合 | 依存キャッシュが効くこと | 同一ロックファイルで2回目のCI実行 | 2回目の`pip install`/`npm ci`が短時間で完了（キャッシュhit） | `test_ci_cache_hit_reduces_install_time` |
 | 9 | 設定 | baseがfeatureブランチのスタックPR | `pull_request`にbaseブランチ指定がないworkflow | `detect`を含むCI workflowが起動し、各ジョブの結果がPRへ報告される | `test_pull_request_trigger_has_no_base_branch_filter` |
 | 10 | 設定 | 同一PRへ短時間に連続push | 同じPR番号で複数の`pull_request`実行が発生 | 後続実行が先行実行をキャンセルし、古い実行のrunner消費を抑制する | `test_concurrency_cancels_previous_run_for_same_pr` |
+| 11 | 受入 | feature-base PRの実イベントとチェック表示 | PR #424（base=`feature/issue-412-stacked-pr-ci`） | `gh pr checks 424`でdetect、docs-check、workflow-lint、hook-test、backend-lint、backend-test（session/jwt）、frontend-lint、frontend-test、batch-test、batch-container-integration、docker-buildの全チェックが`pass` | [PR #424](https://github.com/oikawa-d/task_management/pull/424)、Actions run [34811431199](https://github.com/oikawa-d/task_management/actions/runs/34811431199) |
 | 網羅できない範囲 | フォークPRでSecretsが渡されないことの実挙動確認 | - | GitHub側のプラットフォーム仕様であり自動テスト不可。ドキュメント記載の前提として扱う | - |
-| 網羅できない範囲 | 実際のfeature-base PRのイベント起動と`gh pr checks`表示 | featureブランチをbaseとするPRをGitHub上に作成する必要がある | ローカルのYAMLテストではGitHubイベント配送、ジョブ実行、表示結果を確認できないため、PR作成後に手動確認する | - |
 
 ## 12. 不明点・要検討事項
 
