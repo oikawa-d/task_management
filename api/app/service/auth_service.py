@@ -171,6 +171,7 @@ _LOGIN_FAILURE_INVALID_CREDENTIALS = "INVALID_CREDENTIALS"
 _LOGIN_FAILURE_USER_INACTIVE = "USER_INACTIVE"
 _LOGIN_FAILURE_EMAIL_NOT_VERIFIED = "EMAIL_NOT_VERIFIED"
 _LOGIN_FAILURE_TOO_MANY_ATTEMPTS = "too_many_attempts"
+_LOGIN_FAILURE_SERVICE_UNAVAILABLE = "service_unavailable"
 
 
 def _duplicate_error_for(exc: DBAPIError) -> DuplicateUsernameError | DuplicateEmailError | None:
@@ -265,6 +266,9 @@ async def login(
 		)
 		raise
 	except Exception as exc:
+		_log_login_attempt(
+			request, None, client_info, identifier, strategy.mode, False, _LOGIN_FAILURE_SERVICE_UNAVAILABLE
+		)
 		raise ServiceUnavailableError() from exc
 
 	user = await user_repository.get_by_login_identifier(db, identifier)
@@ -275,6 +279,9 @@ async def login(
 		try:
 			await record_login_failure(identifier, client_ip, settings)
 		except Exception as exc:
+			_log_login_attempt(
+				request, user, client_info, identifier, strategy.mode, False, _LOGIN_FAILURE_SERVICE_UNAVAILABLE
+			)
 			raise ServiceUnavailableError() from exc
 		try:
 			await _record_login_attempt(
@@ -297,6 +304,9 @@ async def login(
 	try:
 		await record_login_success(identifier, client_ip)
 	except Exception as exc:
+		_log_login_attempt(
+			request, user, client_info, identifier, strategy.mode, False, _LOGIN_FAILURE_SERVICE_UNAVAILABLE
+		)
 		raise ServiceUnavailableError() from exc
 	if not user.is_active:
 		try:
@@ -336,16 +346,27 @@ async def login(
 	try:
 		login_result = await strategy.login(user, request, response)
 	except Exception as exc:
+		_log_login_attempt(
+			request, user, client_info, identifier, strategy.mode, False, _LOGIN_FAILURE_SERVICE_UNAVAILABLE
+		)
 		raise ServiceUnavailableError() from exc
 	try:
 		await _record_login_attempt(
 			db, user, identifier, request, strategy.mode, client_ip, success=True, failure_reason=None
 		)
 	except Exception as exc:
+		_log_login_history_write_failed(
+			request,
+			user,
+			client_info,
+			operation="login",
+			login_method=strategy.mode,
+			failure_reason=_LOGIN_FAILURE_SERVICE_UNAVAILABLE,
+		)
 		try:
 			await strategy.rollback_login(user, login_result, response)
 		except Exception as rollback_exc:
-			logger.exception("login state rollback failed", extra={"user_id": str(user.id)})
+			_log_auth_state_revoke_failed(request, user, "login_rollback", login_result, client_info)
 			raise ServiceUnavailableError() from rollback_exc
 		raise ServiceUnavailableError() from exc
 	_log_login_attempt(request, user, client_info, identifier, strategy.mode, True, None)
@@ -588,14 +609,23 @@ def _log_user_registered(request: Request, user: User) -> None:
 	)
 
 
-def _log_login_history_write_failed(request: Request, user: User, client_info: ClientIpInfo) -> None:
+def _log_login_history_write_failed(
+	request: Request,
+	user: User,
+	client_info: ClientIpInfo,
+	*,
+	operation: str = "oauth_login",
+	login_method: str = "oauth_google",
+	failure_reason: str = _LOGIN_FAILURE_SERVICE_UNAVAILABLE,
+) -> None:
 	logger.warning(
-		"OAuth login history write failed",
+		"Login history write failed",
 		extra={
-			"operation": "oauth_login",
+			"operation": operation,
 			"event": "login_history_write_failed",
 			"user_id": str(user.id),
-			"login_method": "oauth_google",
+			"login_method": login_method,
+			"failure_reason": failure_reason,
 			"client_ip": client_info.client_ip,
 			"proxy_peer_ip": client_info.proxy_peer_ip,
 			"ip_source": client_info.ip_source,
@@ -612,7 +642,7 @@ def _log_auth_state_revoke_failed(
 	client_info: ClientIpInfo,
 ) -> None:
 	logger.error(
-		"OAuth authentication state revoke failed",
+		"Authentication state revoke failed",
 		extra={
 			"operation": operation,
 			"event": "auth_state_revoke_failed",
