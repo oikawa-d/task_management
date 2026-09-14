@@ -53,9 +53,10 @@ gh issue view <番号> --json labels --jq '[.labels[].name]|join(", ")'
 
 ## `reviewed`ラベルの付与
 
-- `reviewed`ラベルは、PRを作成した本人以外がこの方針に沿ったレビューを行い、PR上に「受入可」のコメントを投稿したうえで付与します。
-- PRを作成したエージェントは、自身が作成したPRに`reviewed`ラベルを付与してはいけません。
-- `reviewed`ラベル付与済み、かつCIの全チェックが成功したPRは、PR作成者以外が都度のユーザー承認なしにsquash mergeしてよく、Issue closeも同様です。
-- `gh pr merge`は`.agents/hooks/block-github-destructive-actions.sh`により、対象PRに`reviewed`ラベルが無い場合はブロックされます（fail-close）。このhookの実装は`.agents/hooks/`に一本化し、`.claude/hooks/`・`.codex/hooks/`には共通実装を呼び出すラッパーのみを置きます（Claude CodeとCodexで判定が乖離しないようにするため）。
+- `reviewed`ラベルは、PR作成もしくはコード修正を行ったエージェント以外がこの方針に沿ったレビューを行い、PR上に「受入可」のコメントを投稿したうえで付与します。
+- PR作成もしくはコード修正を行ったエージェント本人は、自身が作成または修正したPRに`reviewed`ラベルを付与してはいけません。ここでの判定はGitHubアカウントではなく、PR作成またはコード修正を行ったエージェントかどうかで行います。
+- `reviewed`ラベル付与済み、かつCIの全チェックが成功したPRは、PR作成もしくはコード修正を行ったエージェント以外が都度のユーザー承認なしにsquash mergeしてよく、Issue closeも同様です。
+- レビュー担当エージェントとPR作成もしくはコード修正を行ったエージェントが同一GitHubアカウントになる場合、GitHubの承認レビューは利用できないため、`gh pr comment`で「受入可」を記録し、`gh api -X POST repos/<owner>/<repo>/issues/<PR番号>/labels -f "labels[]=reviewed"`でラベルを付与します。hookはPR作成・コード修正を行ったエージェントの識別までは行わず、`reviewed`ラベルの有無を検証します。
+- `gh pr merge`は`.agents/hooks/block-github-destructive-actions.sh`（Claude Codeは`.claude/hooks/`、Codexは`.codex/hooks/`のラッパー経由）により、対象PRに`reviewed`ラベルが無い場合はブロックされます（fail-close）。
 - `gh issue close`は同hookにより、**そのissueを閉じるPR**（本文の`Closes #<Issue番号>`でリンクされたPR）に`reviewed`ラベルが無い場合はブロックされます（fail-close）。`reviewed`はPRに付与するラベルであり、issueには付与しません。
 - 上記のとおりissue closeの可否はPRとのリンクを前提とするため、PR本文の「関連Issue」欄には必ず`Closes #<Issue番号>`を記載してください。記載があればマージ時にissueは自動closeされ、手動closeは不要です。

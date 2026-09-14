@@ -68,7 +68,7 @@ CIでは、`api/`・`batch/`それぞれに対して`ruff check`、`ruff format 
 
 変更をコミットまたはPRにする前に、[共通レビュー方針](./.agents/review-policy.md)に従ったレビューを必ず実施し、結果を作業報告またはPR本文に記載してください。
 
-PR作成後は作成した時点で作業完了とせず、PR作成者以外が[共通レビュー方針](./.agents/review-policy.md)に沿ったレビューを行い「受入可」のコメントを投稿したうえで`reviewed`ラベルを付与してください。`reviewed`ラベルが付与済みかつCIの全チェックが成功したPRは、PR作成者以外が都度のユーザー承認を得ることなくsquash mergeを実施してよく、Issue closeも同様です。PRを作成したエージェントは、自身が作成したPRに`reviewed`ラベルを付与すること、および自身が作成したPRをmergeすることのいずれも行ってはいけません。`gh pr merge`・`gh issue close`は`.agents/hooks/block-github-destructive-actions.sh`（Claude Codeは`.claude/hooks/`、Codexは`.codex/hooks/`のラッパー経由で呼び出します）によりブロックされます（判定条件は[共通レビュー方針](./.agents/review-policy.md)を参照）。hookを変更した場合は`bash .agents/hooks/block-github-destructive-actions.test.sh`と`bash .agents/hooks/hook-config.test.sh`を実行してください。マージ後はリモート・ローカルの作業ブランチを削除します。CIが失敗した場合はmergeせず、原因を修正してから再度確認してください。
+PR作成後は作成した時点で作業完了とせず、PR作成もしくはコード修正を行ったエージェント以外が[共通レビュー方針](./.agents/review-policy.md)に沿ったレビューを行い「受入可」のコメントを投稿したうえで`reviewed`ラベルを付与してください。`reviewed`ラベルが付与済みかつCIの全チェックが成功したPRは、PR作成もしくはコード修正を行ったエージェント以外が都度のユーザー承認を得ることなくsquash mergeを実施してよく、Issue closeも同様です。PR作成もしくはコード修正を行ったエージェント本人は、自身が作成または修正したPRへの`reviewed`ラベル付与・merge・Issue closeを行ってはいけません。ここでの判定はGitHubアカウントではなく、PR作成またはコード修正を行ったエージェントかどうかで行います。同一GitHubアカウントを使用する別エージェントがレビューする場合、GitHubの承認レビューではなく`gh pr comment`で「受入可」を記録し、REST APIでラベルを付与してください。`gh pr merge`・`gh issue close`は`.agents/hooks/block-github-destructive-actions.sh`（Claude Codeは`.claude/hooks/`、Codexは`.codex/hooks/`のラッパー経由で呼び出します）によりブロックされます（判定条件は[共通レビュー方針](./.agents/review-policy.md)を参照）。hookを変更した場合は`bash .agents/hooks/block-github-destructive-actions.test.sh`と`bash .agents/hooks/hook-config.test.sh`を実行してください。マージ後はリモート・ローカルの作業ブランチを削除します。CIが失敗した場合はmergeせず、原因を修正してから再度確認してください。
 
 ## セキュリティ・設定
 
