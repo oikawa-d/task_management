@@ -11,6 +11,7 @@
 #   GH_API_FIELD_KINDS        : 各フィールドの種別(raw_field=-f / file_field=-F)
 #   GH_API_HAS_INPUT          : --input でリクエスト本文を外部から渡す場合1
 #   GH_API_IS_GRAPHQL         : endpointが graphql の場合1
+#   GH_API_HAS_DYNAMIC_ENDPOINT: endpointがシェル展開の場合1
 # endpointを最初の非オプショントークン1件に限定すると、値付きオプションの追随漏れで
 # 実endpointを取りこぼす(値がendpointとして確定してしまう)ため、候補は全件保持する。
 gh_parse_api_segment() {
@@ -22,6 +23,7 @@ gh_parse_api_segment() {
 	GH_API_FIELD_KINDS=()
 	GH_API_HAS_INPUT=0
 	GH_API_IS_GRAPHQL=0
+	GH_API_HAS_DYNAMIC_ENDPOINT=0
 
 	gh_load_segment_tokens "$segment"
 	gh_find_executable_gh_index || return 1
@@ -61,7 +63,11 @@ gh_parse_api_segment() {
 			-*) continue ;;
 		esac
 
-		[[ "$token" == "graphql" ]] && GH_API_IS_GRAPHQL=1
+		if [[ "$token" == "graphql" ]]; then
+			GH_API_IS_GRAPHQL=1
+		elif gh_token_is_dynamic "$token"; then
+			GH_API_HAS_DYNAMIC_ENDPOINT=1
+		fi
 		GH_API_ENDPOINTS+=("$token")
 	done
 	return 0
@@ -108,6 +114,7 @@ gh_api_match_endpoint() {
 gh_segment_is_api_merge() {
 	local match_status=0
 	gh_parse_api_segment "$1" || return 1
+	(( GH_COMMAND_PREFIX_UNCERTAIN )) && return 0
 	gh_api_match_endpoint '^/?repos/[^/]+/[^/]+/pulls/[0-9]+/merge(\?.*)?$' || match_status=$?
 	# endpointが確定している場合もシェル展開で判定不能な場合も、
 	# メソッドがPUTまたは判定不能であれば破壊操作の候補としてブロックする(fail-close)。
@@ -124,6 +131,7 @@ gh_segment_is_api_merge() {
 gh_segment_is_api_issue_close() {
 	local index field kind value match_status=0 has_state_closed=0
 	gh_parse_api_segment "$1" || return 1
+	(( GH_COMMAND_PREFIX_UNCERTAIN )) && return 0
 	for (( index = 0; index < ${#GH_API_FIELDS[@]}; index++ )); do
 		field="${GH_API_FIELDS[index]}"
 		kind="${GH_API_FIELD_KINDS[index]}"
@@ -154,6 +162,15 @@ gh_segment_is_api_issue_close() {
 gh_segment_is_api_graphql_destructive() {
 	local segment="$1" field value lowered has_query=0
 	gh_parse_api_segment "$segment" || return 1
+	(( GH_COMMAND_PREFIX_UNCERTAIN )) && return 0
+	if (( GH_API_HAS_DYNAMIC_ENDPOINT )); then
+		# 動的endpointがgraphqlか判定できずqueryがある場合は、mutationでないと
+		# 確認できないため安全側でブロックする。
+		for field in "${GH_API_FIELDS[@]}"; do
+			[[ "$field" == query=* ]] && return 0
+		done
+		return 1
+	fi
 	(( GH_API_IS_GRAPHQL )) || return 1
 	for field in "${GH_API_FIELDS[@]}"; do
 		[[ "$field" == query=* ]] || continue

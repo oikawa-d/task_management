@@ -52,8 +52,10 @@ strip_heredocs() {
 			in_heredoc = 0
 			strip_tabs = 0
 			word = ""
+			heredoc_quoted = 0
 			quote = ""
 			arith_depth = 0
+			parameter_depth = 0
 			single_quote = sprintf("%c", 39)
 			double_quote = sprintf("%c", 34)
 		}
@@ -64,7 +66,9 @@ strip_heredocs() {
 				if (line == word) {
 					in_heredoc = 0
 					print $0
+					next
 				}
+				if (!heredoc_quoted && has_command_substitution($0)) { exit 4 }
 				next
 			}
 			print $0
@@ -85,6 +89,19 @@ strip_heredocs() {
 				if (char == "\\") { i++; continue }
 				if (char == single_quote) { quote = "single"; continue }
 				if (char == double_quote) { quote = "double"; continue }
+				# コメント中の記号はshell構文ではないため、heredoc開始として扱わない。
+				if (char == "#" && (i == 1 || substr(line, i - 1, 1) ~ /[[:space:];|&()<>]/)) { break }
+				# パラメータ展開内の `<<` は文字列操作のパターンであり、heredocではない。
+				if (parameter_depth > 0) {
+					if (char == "{") { parameter_depth++ }
+					else if (char == "}") { parameter_depth-- }
+					continue
+				}
+				if (char == "$" && substr(line, i + 1, 1) == "{") {
+					parameter_depth = 1
+					i++
+					continue
+				}
 				# 算術式 `$(( ))` 内のシフト演算子はheredoc開始ではない。
 				# `$((1<<shift))` を開始語と誤認すると、終端語が現れないため
 				# 以降の全行が検査対象から消え、ブロックを回避できてしまう。
@@ -109,8 +126,10 @@ strip_heredocs() {
 				while (substr(line, j, 1) ~ /[[:space:]]/) { j++ }
 
 				word = ""
+				heredoc_quoted = 0
 				marker_quote = substr(line, j, 1)
 				if (marker_quote == single_quote || marker_quote == double_quote) {
+					heredoc_quoted = 1
 					j++
 					while (j <= length(line) && substr(line, j, 1) != marker_quote) {
 						word = word substr(line, j, 1)
@@ -128,6 +147,15 @@ strip_heredocs() {
 					break
 				}
 			}
+		}
+		function has_command_substitution(text, i, char) {
+			for (i = 1; i <= length(text); i++) {
+				char = substr(text, i, 1)
+				if (char == "\\") { i++; continue }
+				if (char == "`") { return 1 }
+				if (char == "$" && substr(text, i + 1, 1) == "(") { return 1 }
+			}
+			return 0
 		}
 		END {
 			# 終端語が現れないheredocは以降の行を検査できないため、解析不能として扱う。
@@ -274,6 +302,10 @@ check_merge_segment() {
 	local merge_segment="$1"
 	local parse_status=0 status=0
 	gh_parse_target "pr-merge" "$merge_segment" || parse_status=$?
+	if (( GH_COMMAND_PREFIX_UNCERTAIN )); then
+		echo "ブロック: ghの前置ラッパーを解析できないコマンド形式のため、安全側でmergeをブロックします。" >&2
+		return 2
+	fi
 	if [[ "$parse_status" -ne 0 ]]; then
 		echo "ブロック: 対象PRを特定できないコマンド形式のため、安全側でmergeをブロックします。PR番号・URL・ブランチ名を位置引数で指定してください。" >&2
 		return 2
@@ -302,6 +334,10 @@ check_close_segment() {
 	local parse_status=0 issue_number="" issue_repo="" status=0
 	# オプション値やリポジトリ名に含まれる数字を拾わないよう、位置引数のみを対象番号として扱う。
 	gh_parse_target "issue-close" "$close_segment" || parse_status=$?
+	if (( GH_COMMAND_PREFIX_UNCERTAIN )); then
+		echo "ブロック: ghの前置ラッパーを解析できないコマンド形式のため、安全側でcloseをブロックします。" >&2
+		return 2
+	fi
 	if [[ "$parse_status" -eq 0 && -n "$GH_TARGET_SELECTOR" ]]; then
 		issue_number=$(gh_selector_to_number "$GH_TARGET_SELECTOR") || issue_number=""
 	fi
@@ -333,6 +369,10 @@ check_close_segment() {
 # 正規表現による行単位の抽出ではタブや引用符内改行で対象引数が欠落するため、共通トークン解析を使う。
 gh_collect_executable_segments "$command_for_match"
 for command_segment in "${GH_COMMAND_SEGMENTS[@]}"; do
+	if gh_segment_has_unparsed_wrapper "$command_segment"; then
+		echo "ブロック: env --split-string/-S の実行文字列を解析できないため、安全側でブロックします。" >&2
+		exit 2
+	fi
 	if gh_segment_is_action "$command_segment" "pr" "merge"; then
 		check_merge_segment "$command_segment" || exit 2
 	fi

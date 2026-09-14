@@ -400,6 +400,24 @@ quoted_double_heredoc_marker=$(printf '%s\n' \
 	"gh pr merge 123" \
 	"EOF2")
 assert_blocked "$quoted_double_heredoc_marker"
+# コメント中のheredoc風記号は構文として扱わず、後続の破壊操作を検査すること。
+comment_heredoc_marker=$(printf '%s\n' \
+	"# <<EOF4" \
+	"gh pr merge 123" \
+	"EOF4")
+assert_blocked "$comment_heredoc_marker"
+inline_comment_heredoc_marker=$(printf '%s\n' \
+	"true # <<EOF5" \
+	"gh pr merge 123" \
+	"EOF5")
+assert_blocked "$inline_comment_heredoc_marker"
+# クォートされていないheredoc本文のコマンド置換・backtickは実行され得るためブロックする。
+assert_blocked $'cat <<EOF6\n$(gh pr merge 123)\nEOF6'
+assert_blocked $'cat <<EOF7\n$(gh issue close 123)\nEOF7'
+assert_blocked $'cat <<EOF8\n$(gh api -X PUT repos/oikawa-d/task_management/pulls/123/merge)\nEOF8'
+assert_blocked $'cat <<EOF9\n`gh pr merge 123`\nEOF9'
+# クォートされたheredoc本文は展開されないため、従来どおり除外する。
+assert_allowed $'cat <<\'EOF10\n$(gh pr merge 123)\nEOF10'
 unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON
 
 # 8. 実際のマージコマンドは引き続きブロックされること(区切り文字経由も含む)
@@ -501,6 +519,7 @@ assert_blocked $'shift=2\nvalue=$((1<<shift))\ngh pr merge 123'
 assert_blocked $'value=$((1<<N))\ngh issue close 123'
 assert_blocked $'value=$((1 << 2))\ngh pr merge 123'
 assert_blocked $'value=$(( (1<<shift) + 1 ))\ngh pr merge 123'
+assert_blocked $'x=${x#foo<<EOF}\ngh pr merge 123\nEOF'
 assert_blocked $'cat <<EOF\ngh pr merge 123\n'
 assert_allowed $'value=$((1<<shift))\necho "$value"'
 unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON GH_STUB_GRAPHQL_JSON
@@ -510,6 +529,8 @@ assert_blocked 'QUERY=mutation; gh api graphql -f query="$QUERY"'
 assert_blocked 'gh api graphql -f query="$(cat query.graphql)"'
 assert_blocked "gh api graphql -F query=@query.graphql"
 assert_blocked "gh api graphql --input payload.json"
+assert_blocked 'GRAPHQL=graphql; gh api "$GRAPHQL" -f '\''query=query{closeIssue(input:{issueId:"x"}){clientMutationId}}'\'''
+assert_blocked 'gh api "$(printf graphql)" -f '\''query=query{mergePullRequest(input:{pullRequestId:"x"}){clientMutationId}}'\'''
 assert_allowed "gh api graphql -f query='query{viewer{login}}' -F number=1"
 
 # 10-6. REST mergeのmethod・endpointを同時にシェル展開した場合もブロックすること
@@ -537,6 +558,22 @@ assert_blocked '$(gh pr merge 123)'
 assert_blocked '`gh pr merge 123`'
 assert_blocked "gh pr merge \$(cat pr.txt)"
 assert_blocked 'gh api -X PUT "$(cat endpoint.txt)"'
+assert_blocked '/usr/bin/gh pr merge 123'
+assert_blocked './bin/gh issue close 123'
+assert_blocked 'exec gh pr merge 123'
+assert_blocked 'exec gh api -X PUT repos/oikawa-d/task_management/pulls/123/merge'
+assert_blocked 'env -- gh pr merge 123'
+assert_blocked 'command -- gh issue close 123'
+assert_blocked 'command -- gh api -X PUT repos/oikawa-d/task_management/pulls/123/merge'
+# 既知ラッパーの未知オプションは実行位置を判定できないためfail-closeする。
+assert_blocked 'env --unknown gh pr merge 123'
+assert_blocked 'X=1 gh pr merge 123'
+assert_blocked 'X=1 gh api -X PUT repos/oikawa-d/task_management/pulls/123/merge'
+assert_blocked "env -S 'gh pr merge 123'"
+assert_blocked "env --split-string='gh issue close 123'"
+assert_blocked "env -S 'gh api -X PUT repos/oikawa-d/task_management/pulls/123/merge'"
+assert_blocked "env -S'gh pr merge 123'"
+assert_blocked 'env -S"gh issue close 123"'
 unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON
 
 # 破壊操作を伴わないシェル展開は許可すること(過剰遮断の防止)
