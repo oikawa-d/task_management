@@ -23,13 +23,13 @@
 | ガード | 認証必須（`RequireAuth`）。未認証は `/login` へリダイレクト |
 | 対応要件 | 要件書§2-3 |
 | 主なユースケース | 自分が所属するプロジェクトを一覧し、カードから `/projects/:projectId` へ遷移する。新規プロジェクトを作成する |
-| 現行実装ファイル | `frontend/src/features/dashboard/pages/DashboardPage.tsx`、`frontend/src/features/dashboard/components/ProjectList.tsx`、`frontend/src/features/dashboard/components/ProjectCreateForm.tsx`、`frontend/src/features/dashboard/components/Calendar.tsx`、`frontend/src/features/dashboard/hooks/useProjects.ts`、`frontend/src/features/dashboard/hooks/useCreateProject.ts`、`frontend/src/features/dashboard/hooks/useCalendarTasks.ts`、`frontend/src/features/dashboard/api/projectsApi.ts`、`frontend/src/features/dashboard/errors.ts`、`frontend/src/stores/projectStore.ts` |
+| 現行実装ファイル | `frontend/src/features/dashboard/pages/DashboardPage.tsx`、`frontend/src/features/dashboard/components/ProjectList.tsx`、`frontend/src/features/dashboard/components/ProjectCreateForm.tsx`、`frontend/src/features/dashboard/components/Calendar.tsx`、`frontend/src/features/dashboard/hooks/useDashboard.ts`、`frontend/src/features/dashboard/hooks/useProjects.ts`、`frontend/src/features/dashboard/hooks/useCreateProject.ts`、`frontend/src/features/dashboard/hooks/useCalendarTasks.ts`、`frontend/src/features/dashboard/api/projectsApi.ts`、`frontend/src/features/dashboard/errors.ts`、`frontend/src/stores/projectStore.ts` |
 
-> プロジェクト一覧・作成・カレンダー・ボードへの遷移を`features/dashboard`配下の実装で提供する。選択中プロジェクトは`stores/projectStore.ts`（Zustand）が保持し、一覧そのものはTanStack Queryが保持する。複数の取得stateを束ねる`useDashboard`は設けず、`useProjects` / `useCreateProject` / `useCalendarTasks`を`DashboardPage`が直接利用する。
+> プロジェクト一覧・作成・カレンダー・ボードへの遷移を`features/dashboard`配下の実装で提供する。選択中プロジェクトIDは`stores/projectStore.ts`（Zustand）が保持し、プロジェクト本体を含む一覧データはTanStack Queryが保持する。`useDashboard`が`useProjects` / `useCreateProject` / `useCalendarTasks`と選択stateを集約し、`DashboardPage`へ公開する。
 >
 > §2以降のUI・処理仕様は現行実装を示す。作成UIは`ProjectCreateForm`として表示され、カレンダーは`Calendar`で期限タスクを表示する。
 >
-> 409はプロジェクトAPI（[01_get_projects.md](../api/projects/01_get_projects.md)、[02_post_projects.md](../api/projects/02_post_projects.md)）に定義がないため、本画面では扱わない（issue #159で確定）。
+> 409はプロジェクトAPI（[01_get_projects.md](../api/projects/01_get_projects.md)、[02_post_projects.md](../api/projects/02_post_projects.md)）に発生契機・エラーコードの定義がないため、本画面では扱わない。Issue #159の受入条件はこのAPI契約に合わせて訂正し、判断根拠をIssueコメントへ記録する。
 
 ## 2. 画面レイアウト
 
@@ -101,7 +101,7 @@
 | ローカルstate | `isCreateModalOpen` | `boolean` | `false` | ④⑧クリックで`true`、作成成功/キャンセルで`false` | なし |
 | ローカルstate | `page` / `perPage` | `number` | `1` / `20` | ⑬操作。作成成功時は`page=1`へ戻して再取得 | なし |
 | React Hook Form | `ProjectCreateForm`（`name`, `description`） | `zod` スキーマ由来 | `{name:'', description:''}` | 入力・送信・リセット | なし |
-| Zustand（`projectStore`） | `selectedProjectId`, `selectedProject` | `string \| null` / `ProjectSummary \| null` | `null` / `null` | カードクリック、作成成功（201）時に作成したプロジェクトを選択 | メモリのみ |
+| Zustand（`projectStore`） | `selectedProjectId` | `string \| null` | `null` | カードクリック、作成成功（201）時に作成したプロジェクトIDを選択。ログアウト時にクリア | メモリのみ |
 | Zustand（`uiStore`） | `sidebarOpen`, `fontScale` | `boolean` / `number` | localStorage復元値、無ければ `true` / `1.0` | ①操作、設定画面での変更 | localStorage |
 | Zustand（`authStore`） | `user.role` | `'member'\|'admin'` | `/auth/me` 由来 | ログイン/ログアウト | メモリのみ |
 | TanStack Query | `['projects', {page, perPage}]` | `Page<ProjectSummary>` | 未取得 | `page` / `perPage`変更時fetch、`createProject`成功時に`invalidate` | しない（[05_frontend.md §5](../../basic_design/05_frontend.md#5-状態管理)） |
@@ -142,7 +142,8 @@ sequenceDiagram
     participant API as FastAPI
 
     U->>DP: `/dashboard` にアクセス（AppLayoutマウント済み）
-    DP->>Q: useQuery(['projects', {page:1}])
+    DP->>DS: useDashboard({calendarParams})
+    DS->>Q: useProjects()
     Q->>EP: getProjects({page:1, per_page:20})
     EP->>AA: attach(config)
     AA-->>EP: Cookie/Bearer付与済みconfig
@@ -150,7 +151,8 @@ sequenceDiagram
     alt 成功
         API-->>EP: 200 {items, meta}
         EP-->>Q: data
-        Q-->>DP: items
+        Q-->>DS: items
+        DS-->>DP: projectsQuery
         DP-->>U: カード一覧 or 空状態を描画
     else 401
         API-->>EP: 401 UNAUTHENTICATED
@@ -191,7 +193,7 @@ sequenceDiagram
         alt 201
             API-->>EP: {project}
             EP-->>Q: data
-            Q->>PS: selectProject(created)
+            Q->>PS: selectProject(created.id)
             Q->>Q: invalidateQueries(['projects'])
             Q-->>PCF: onSuccess
             PCF->>PCF: isCreateOpen=false
@@ -224,47 +226,58 @@ flowchart TB
     APL --> OUT["Outlet"]
     OUT --> DP["DashboardPage"]
 
-    DP -->|"useQuery(['projects'])"| Q["TanStack Query Cache"]
-    DP -->|"useProjectStore"| PS["Zustand projectStore<br/>selectedProjectId, selectedProject"]
+    DP -->|"useDashboard"| DS["useDashboard"]
+    DS -->|"useProjects / useCreateProject / useCalendarTasks"| Q["TanStack Query Cache"]
+    DS -->|"useProjectStore"| PS["Zustand projectStore<br/>selectedProjectId"]
     DP --> PCL["ProjectList<br/>props: projects, selectedProjectId, error, onSelect, onRetry, onCreateClick"]
     PCL --> PC["project button × N<br/>props: project, onSelect"]
     DP --> EMP["ProjectListのEmptyState<br/>props: onCreateClick"]
     DP --> PCM["ProjectCreateForm<br/>props: onSubmit, onCancel"]
     PCM --> RHF["useForm(projectCreateSchema)"]
     DP --> CAL["Calendar<br/>props: month, tasks, onPreviousMonth, onNextMonth"]
-    CAL --> CT["useCalendarTasks"]
+    DS --> CT["useCalendarTasks"]
     PCM --> BTN["Button（送信/キャンセル）"]
 
-    PC -->|"onClick"| SEL["projectStore.selectProject(project)"]
+    PC -->|"onClick"| SEL["projectStore.selectProject(project.id)"]
     SEL --> NAV["router.navigate(/projects/:id)"]
     PCM -->|"mutate"| EP["features/dashboard/api/projectsApi.ts :: createProject"]
 ```
 
 ## 9. 関数・カスタムフック詳細
 
-### 9.1 `features/dashboard/hooks/useProjects.ts :: useProjects` / `useCreateProject` / `useCalendarTasks`
+### 9.1 `features/dashboard/hooks/useDashboard.ts :: useDashboard`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `useProjects(params?)`、`useCreateProject()`、`useCalendarTasks(params, enabled?)` |
+| シグネチャ | `function useDashboard(options?: { projectsParams?: ProjectListParams; calendarParams?: CalendarTaskParams }): DashboardState` |
+| 引数 | 一覧のページング、カレンダーの日付範囲・scope（いずれも任意） |
+| 戻り値 | 一覧Query、作成mutation、カレンダーQuery、選択中プロジェクトIDと更新関数。`selectedProject`は一覧Queryから導出する |
+| 処理内容 | `useProjects` / `useCreateProject` / `useCalendarTasks`を呼び出し、`projectStore`の選択stateを画面へ集約する。サーバーデータはStoreへ保存しない |
+| 副作用 | 各下位フック経由で`GET /api/projects`、`GET /api/tasks/calendar`、`POST /api/projects`を呼び出す |
+
+### 9.2 `features/dashboard/hooks/useProjects.ts :: useProjects` / `useCreateProject` / `useCalendarTasks`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `useProjects(params?)`、`useCreateProject()`、`useCalendarTasks(params?, enabled?)` |
 | 引数 | 一覧・カレンダーのページングまたは日付範囲、表示可否 |
 | 戻り値 | TanStack Queryの一覧・作成mutation・カレンダー取得結果 |
-| 処理内容 | `useProjects`が`['projects', {page, perPage}]`、`useCalendarTasks`が`['tasks-calendar', scope, projectId, from, to]`で取得し、`useCreateProject`成功時に`['projects']`を無効化したうえで`projectStore.selectProject`へ作成結果を反映する |
-| 副作用 | `GET /api/projects`、`GET /api/tasks/calendar`、`POST /api/projects`呼び出し、選択stateの更新 |
+| 処理内容 | `useProjects`が一覧、`useCalendarTasks`がカレンダーを取得し、`useCreateProject`成功時に一覧を無効化して作成プロジェクトIDをStoreへ反映する |
+| 副作用 | `GET /api/projects`、`GET /api/tasks/calendar`、`POST /api/projects`呼び出し |
 
-### 9.2 `features/dashboard/api/projectsApi.ts :: getProjects / createProject / getCalendarTasks`
+### 9.3 `features/dashboard/api/projectsApi.ts :: getProjects / createProject / getCalendarTasks`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `function useCreateProject(): UseMutationResult<ProjectSummary, unknown, ProjectCreateRequest>` |
-| 引数 | `mutate(payload)` または `mutateAsync(payload)` にプロジェクト作成入力を渡す |
-| 戻り値 | TanStack Queryのプロジェクト作成mutation結果 |
-| 処理内容 | `projectsApi.createProject`をmutationFnとして実行し、成功時に`['projects']`をinvalidateする |
-| 副作用 | `POST /api/projects` 呼び出し、成功時にプロジェクト一覧を再取得 |
+| シグネチャ | `getProjects(params?, client?)`、`createProject(payload, client?)`、`getCalendarTasks(params, client?)` |
+| 引数 | 一覧取得条件、作成入力、カレンダー取得条件。HTTP clientは共通`getApiClient()`を既定値とする |
+| 戻り値 | APIレスポンスの型付きPromise |
+| 処理内容 | 共通API clientを使用してプロジェクト一覧取得、作成、カレンダータスク取得を行う |
+| 副作用 | `GET /api/projects`、`POST /api/projects`、`GET /api/tasks/calendar`呼び出し |
 
 `getCalendarTasks(params)`は`GET /api/tasks/calendar`を呼び出し、`CalendarTaskItem[]`を返す。`CalendarTaskItem.due_date`はサーバーが`APP_TIMEZONE`で算出した日付キーであり、`Calendar`は`due_at`のブラウザ側変換を行わず、この値でタスクをセルへ割り当てる。
 
-### 9.3 `features/dashboard/components/ProjectCreateForm.tsx :: ProjectCreateForm`
+### 9.4 `features/dashboard/components/ProjectCreateForm.tsx :: ProjectCreateForm`
 
 | 項目 | 内容 |
 |------|------|
@@ -274,14 +287,14 @@ flowchart TB
 | 処理内容 | 1. `useForm(zodResolver(projectCreateSchema))` でフォーム初期化 2. `onSubmit`へ入力値を渡す 3. 403時は`errors.root`へ`resolveForbiddenMessage`の個別メッセージを表示 4. 422時は`setError`でフィールドへ反映 5. その他の失敗はフォーム内へ表示 |
 | 副作用 | `POST /api/projects` 呼び出し、入力エラー表示 |
 
-### 9.4 `stores/projectStore.ts :: useProjectStore`
+### 9.5 `stores/projectStore.ts :: useProjectStore`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `useProjectStore(selector)`。stateは`{ selectedProjectId, selectedProject, selectProject, selectProjectById, clearSelectedProject }` |
-| 引数 | `selectProject(project: ProjectSummary)`、`selectProjectById(projectId: string)`、`clearSelectedProject()` |
+| シグネチャ | `useProjectStore(selector)`。stateは`{ selectedProjectId, selectProject, clearSelectedProject }` |
+| 引数 | `selectProject(projectId: string)`、`clearSelectedProject()` |
 | 戻り値 | セレクタが返す選択state、または更新関数 |
-| 処理内容 | 選択中プロジェクトのIDと本体を保持する。`selectProjectById`はIDのみ判明している場合に用い、保持中の本体とIDが一致しないときは本体を`null`へ落とす |
+| 処理内容 | 選択中プロジェクトのIDだけを保持する。プロジェクト本体はTanStack Queryの一覧から`useDashboard`が導出する |
 | 副作用 | なし（メモリのみ。永続化しない） |
 
 一覧データそのものはTanStack Queryが保持するため、本storeはサーバーデータを複製せず「どれを選択したか」だけを持つ。
@@ -369,12 +382,14 @@ flowchart LR
 | 8 | コンポーネント | カレンダーの月送り | 前月/次月ボタンを操作 | 6週グリッドと取得範囲が切り替わる | `DashboardPage changes calendar month and query range` |
 | 9 | 境界 | UTC 16:00の期限タスク | `due_at=2026-09-09T16:00:00Z`、`due_date=2026-09-10` | ブラウザTZに依存せずJSTの10日セルへ表示 | `Calendar assigns task by server APP_TIMEZONE date` |
 | 10 | 結合 | 未認証アクセス | authStore=`unauthenticated` | `/login` にリダイレクト | `RequireAuth redirects unauthenticated user from dashboard` |
-| 11 | 単体（store） | 選択stateの更新 | `selectProject` / `selectProjectById` / `clearSelectedProject`を呼ぶ | 選択ID・本体が期待どおり更新される | `projectStore keeps and clears selected project` |
+| 11 | 単体（store） | 選択stateの更新 | `selectProject` / `clearSelectedProject`を呼ぶ | 選択IDが期待どおり更新・消去される | `projectStore keeps and clears selected project ID` |
 | 12 | コンポーネント | カード選択時の選択state反映 | `GET /projects` → 1件 | `projectStore.selectedProjectId`が選択IDになる | `DashboardPage stores selected project on card click` |
-| 13 | コンポーネント | 作成成功時の選択state反映 | `POST /projects` → 201 | 作成したプロジェクトが選択stateへ入り、一覧で`aria-current`が付く | `DashboardPage selects created project` |
+| 13 | コンポーネント | 作成成功時の選択state反映 | `POST /projects` → 201 | 作成したプロジェクトIDが選択stateへ入り、一覧で`aria-current`が付く | `DashboardPage selects created project ID` |
 | 14 | コンポーネント | 一覧403 | `GET /projects` → 403 `USER_INACTIVE` | 個別メッセージを表示し、再試行ボタンを出さない | `ProjectList shows inactive message on 403` |
 | 15 | コンポーネント | 作成403 | `POST /projects` → 403 `CSRF_INVALID` | フォーム内にメッセージを表示し、フォームは開いたまま | `ProjectCreateForm shows csrf message on 403` |
-| 16 | 網羅できない範囲 | 実際のカードグリッドのレスポンシブ折返し | - | - | ピクセル単位のレイアウト崩れはCSSの視覚回帰テスト対象外のため手動確認とする |
+| 16 | 結合 | ログアウト | 選択IDがStoreに保持されている | 認証状態とともに選択IDをクリアする | `AppLayout clears selected project on logout` |
+| 17 | 単体 | `useDashboard`の集約 | 一覧・作成・カレンダーAPIをモック | 3つのQuery/mutationと選択IDを公開する | `useDashboard aggregates dashboard state` |
+| 18 | 網羅できない範囲 | 実際のカードグリッドのレスポンシブ折返し | - | - | ピクセル単位のレイアウト崩れはCSSの視覚回帰テスト対象外のため手動確認とする |
 
 ## 15. 日付境界方針（Issue #396）
 
@@ -389,7 +404,7 @@ flowchart LR
 | 区分 | 内容 | 影響 |
 |------|------|------|
 | なし | ページングは`meta.page` / `meta.total_pages`を⑬として定義済み | - |
-| 確定 | 409はプロジェクトAPIに定義がないため本画面では扱わない（issue #159で確定） | - |
+| 確定 | 409はプロジェクトAPIに発生契機・エラーコードの定義がないため本画面では扱わない。Issue #159の受入条件をAPI契約に合わせて訂正する | - |
 | 確定 | `description` の文字数上限はissue #40で0〜2000文字に確定（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） | - |
 | 要検討 | サイドバー開閉の画面幅によるデフォルト値切り替え（狭幅時の自動折りたたみ等）の要否が [05_frontend.md](../../basic_design/05_frontend.md) に明記されていない | レスポンシブ挙動の実装方針 |
 | 要検討 | ユーザー単位のタイムゾーン設定を将来導入する場合のカレンダー日付キー | `due_date`の算出元とAPI契約の再設計 |

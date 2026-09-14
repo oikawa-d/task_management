@@ -10,6 +10,7 @@ import type { AuthAdapter } from "../api/authAdapter";
 import { useAuthStore } from "../auth/authStore";
 import { buildNotification } from "../features/notifications/testFixtures";
 import { ROUTES } from "../routes";
+import { useProjectStore } from "../stores/projectStore";
 import { AppLayout } from "./AppLayout";
 
 function createAuthAdapter(overrides: Partial<AuthAdapter> = {}): AuthAdapter {
@@ -57,6 +58,7 @@ describe("AppLayout", () => {
 		vi.unstubAllGlobals();
 		clearAuthAdapter();
 		act(() => useAuthStore.getState().reset());
+		act(() => useProjectStore.getState().clearSelectedProject());
 	});
 
 	it("設定リンク・通知ベル・adminリンクを実アプリ用レイアウトで表示する", async () => {
@@ -103,7 +105,10 @@ describe("AppLayout", () => {
 		let resolveLogout: (() => void) | undefined;
 		const logout = vi.fn(() => new Promise<void>((resolve) => (resolveLogout = resolve)));
 		const adapter = createAuthAdapter({ logout });
-		act(() => useAuthStore.setState({ status: "authenticated", user: { id: "u1", role: "member" }, authAdapter: adapter }));
+		act(() => {
+			useAuthStore.setState({ status: "authenticated", user: { id: "u1", role: "member" }, authAdapter: adapter });
+			useProjectStore.getState().selectProject("project-1");
+		});
 		renderAppLayout();
 
 		const button = screen.getByRole("button", { name: "ログアウト" });
@@ -115,5 +120,6 @@ describe("AppLayout", () => {
 		act(() => resolveLogout?.());
 		expect(await screen.findByRole("heading", { name: "ログイン" })).toBeInTheDocument();
 		expect(useAuthStore.getState().status).toBe("unauthenticated");
+		expect(useProjectStore.getState().selectedProjectId).toBeNull();
 	});
 });

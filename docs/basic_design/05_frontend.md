@@ -257,6 +257,7 @@ flowchart TB
 |--------|----------|--------|------|
 | `authStore`（Zustand） | `user`, `status`（`loading` / `authenticated` / `unauthenticated`）, `googleLoginEnabled` | **しない**（メモリのみ） | JWTのアクセストークンは`AuthAdapter`へ注入したメモリ上の`TokenStore`が保持し、authStoreには保持しない。adapterと`googleLoginEnabled`は`GET /auth/config`の実行時設定から選択・保持する（`authBootstrap`が起動時に設定） |
 | `uiStore`（Zustand + persist） | `fontScale`, `sidebarOpen`, `dashboardView`（`"cards"` / `"calendar"`） | localStorage | 文字サイズ・サイドバー開閉・ダッシュボードの表示モードはクライアント側のみで保持。次回起動時も選択中の表示モードを復元する |
+| `projectStore`（Zustand） | `selectedProjectId` | しない（メモリのみ） | ダッシュボードで選択中のプロジェクトIDだけを保持する。プロジェクト本体はTanStack Queryのキャッシュから参照し、ログアウト時にクリアする |
 | 通知（React Query） | `['notifications','unread-count']` / `['notifications', page]` | しない | 未読件数はポーリング、一覧はパネルを開いたときに取得。既読操作の失敗はパネル内で再試行でき、パネルの開閉状態と再試行状態はコンポーネントのローカルstateで持つ |
 | TanStack Query | プロジェクト一覧・ボード・ユーザー一覧 | しない | `queryKey` は `['projects']` / `['board', projectId]`。タスク詳細コメントは`taskDetailStore`で管理する（下段参照） |
 | `taskDetailStore`（singleton） | タスク詳細・コメント詳細の取得結果、更新中/エラー、`notFound`、`closeRequested`、`boardRefreshToken` | しない | タスク詳細モーダルは既存実装との互換性を優先し、`subscribe`/`getSnapshot`を`useSyncExternalStore`から購読する。TanStack Queryへ移行しない方針は[タスク詳細モーダル詳細設計](../detailed_design/screen/08_task_detail_modal.md)を正とする |

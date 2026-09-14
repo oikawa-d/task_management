@@ -213,7 +213,6 @@ describe("DashboardPage", () => {
 		fireEvent.click(await screen.findByRole("button", { name: "Cerberus開発" }));
 
 		expect(useProjectStore.getState().selectedProjectId).toBe("project-1");
-		expect(useProjectStore.getState().selectedProject?.name).toBe("Cerberus開発");
 	});
 
 	it("作成成功時は作成したプロジェクトを選択stateへ反映する", async () => {

@@ -18,7 +18,7 @@ export function useCreateProject(): UseMutationResult<ProjectSummary, unknown, P
 		mutationKey: [CREATE_PROJECT_MUTATION_KEY],
 		mutationFn: (payload: ProjectCreateRequest) => createProject(payload),
 		onSuccess: (created) => {
-			selectProject(created);
+			selectProject(created.id);
 			void queryClient.invalidateQueries({ queryKey: [PROJECTS_QUERY_KEY] });
 		},
 	});

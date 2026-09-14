@@ -6,6 +6,7 @@ import { NotificationCenter } from "../features/notifications";
 import { useUnreadCount } from "../features/notifications/hooks/useUnreadCount";
 import type { NotificationItemData } from "../features/notifications/types";
 import { ROUTES } from "../routes";
+import { useProjectStore } from "../stores/projectStore";
 
 export interface AppLayoutProps {
 	notifications?: NotificationItemData[];
@@ -28,6 +29,7 @@ export function AppLayout({
 	const status = useAuthStore((state) => state.status);
 	const authAdapter = useAuthStore((state) => state.authAdapter);
 	const clearAuth = useAuthStore((state) => state.clear);
+	const clearSelectedProject = useProjectStore((state) => state.clearSelectedProject);
 	const navigate = useNavigate();
 	const [isLoggingOut, setIsLoggingOut] = useState(false);
 	const [unreadOverride, setUnreadOverride] = useState<number | null>(null);
@@ -55,6 +57,7 @@ export function AppLayout({
 			// API失敗時もクライアント側の認証状態を破棄する
 		} finally {
 			clearAuth();
+			clearSelectedProject();
 			navigate(ROUTES.LOGIN, { replace: true });
 		}
 	};
