@@ -237,6 +237,7 @@ linked_unreviewed_json='{"data":{"repository":{"issue":{"closedByPullRequestsRef
 linked_none_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}'
 linked_page_one_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"},"nodes":[{"number":374,"labels":{"nodes":[{"name":"review-requested"}]}}]}}}}}'
 linked_page_two_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"number":375,"labels":{"nodes":[{"name":"reviewed"}]}}]}}}}}'
+linked_partial_error_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"number":376,"labels":{"nodes":[{"name":"reviewed"}]}}]}}}},"errors":[{"message":"partial failure"}]}'
 
 # 5-1. リンクPRにreviewedあり -> exit 0
 export GH_STUB_GRAPHQL_JSON="$linked_reviewed_json"
@@ -263,7 +264,12 @@ export GH_STUB_GRAPHQL_JSON="$linked_reviewed_json" GH_STUB_GRAPHQL_EXIT="1"
 assert_blocked "gh issue close 123"
 unset GH_STUB_GRAPHQL_EXIT
 
-# 5-6. リポジトリ解決失敗 -> exit 2 (fail-close)。--repo指定があれば解決不要で許可される。
+# 5-6. GraphQLの部分成功(data + errors)は成功扱いせず、fail-closeする
+export GH_STUB_GRAPHQL_JSON="$linked_partial_error_json"
+assert_blocked "gh issue close 123"
+export GH_STUB_GRAPHQL_JSON="$linked_reviewed_json"
+
+# 5-7. リポジトリ解決失敗 -> exit 2 (fail-close)。--repo指定があれば解決不要で許可される。
 export GH_STUB_REPO_EXIT="1"
 assert_blocked "gh issue close 123"
 assert_allowed "gh issue close 123 --repo oikawa-d/task_management"
@@ -399,7 +405,12 @@ assert_blocked_raw_stdin "これは不正なJSONです"
 
 # 10. `gh pr merge` / `gh issue close` の代替経路 -> exit 2 (#339)
 assert_blocked "gh api -X PUT repos/oikawa-d/task_management/pulls/123/merge"
+assert_blocked "gh api -XPUT repos/oikawa-d/task_management/pulls/123/merge"
+assert_blocked "gh api -X=PUT repos/oikawa-d/task_management/pulls/123/merge"
 assert_blocked "gh api repos/oikawa-d/task_management/pulls/123/merge --method PUT"
+assert_blocked "gh api repos/oikawa-d/task_management/pulls/123/merge --method=PUT"
+assert_blocked "gh api repos/oikawa-d/task_management/pulls/123/merge -XPUT"
+assert_blocked "gh api repos/oikawa-d/task_management/pulls/123/merge -X=PUT"
 assert_blocked "gh issue edit 123 --state closed"
 assert_blocked "gh --repo oikawa-d/task_management issue edit 123 --state=closed"
 

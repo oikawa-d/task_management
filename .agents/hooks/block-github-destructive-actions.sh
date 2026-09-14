@@ -205,6 +205,12 @@ linked_pr_has_reviewed_label() {
 		fi
 		response=$(gh "${request_args[@]}" 2>/dev/null) || return 2
 
+		# GraphQLはdataとerrorsを同時に返す部分成功があるため、トップレベルの
+		# errorsフィールドが存在する応答は判定不能として安全側に倒す。
+		if ! jq -e 'type == "object" and (has("errors") | not)' <<<"$response" >/dev/null 2>&1; then
+			return 2
+		fi
+
 		if ! jq -e '
 			.data.repository.issue.closedByPullRequestsReferences
 			| (type == "object")
@@ -317,7 +323,7 @@ done < <(grep -Eo "$close_pattern" <<<"$command_for_match" || true)
 
 # `gh pr merge` の代替経路となるGitHub API直叩き(PUT .../pulls/<番号>/merge)を塞ぐ。
 # こちらはreviewedラベルの有無にかかわらず禁止し、mergeは `gh pr merge` に一本化する。
-api_put_regex="${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+api[^;&|[:cntrl:]]*((--method[=[:space:]]+|-X[[:space:]]+)PUT[^;&|[:cntrl:]]*repos/[^[:space:];|&]+/pulls/[0-9]+/merge|repos/[^[:space:];|&]+/pulls/[0-9]+/merge[^;&|[:cntrl:]]*((--method[=[:space:]]+|-X[[:space:]]+)PUT))"
+api_put_regex="${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+api[^;&|[:cntrl:]]*((--method(=|[[:space:]]+)PUT|-X[=[:space:]]*PUT)[^;&|[:cntrl:]]*repos/[^[:space:];|&]+/pulls/[0-9]+/merge|repos/[^[:space:];|&]+/pulls/[0-9]+/merge[^;&|[:cntrl:]]*((--method(=|[[:space:]]+)PUT|-X[=[:space:]]*PUT)))"
 if grep -Eiq "$api_put_regex" <<<"$command_for_match"; then
 	echo "ブロック: GitHub API経由のPR mergeは禁止されています。レビュー完了後に '${REVIEWED_LABEL}' ラベルを付与し、gh pr merge を使用してください。" >&2
 	exit 2
