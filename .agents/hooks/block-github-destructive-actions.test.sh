@@ -128,6 +128,23 @@ assert_gh_called_with() {
 	return 1
 }
 
+# hookが指定リポジトリ以外へ照会していないことを検証する。
+assert_gh_not_called_with() {
+	local command=$1
+	local pattern=$2
+	local calls
+	calls=$(mktemp)
+	GH_STUB_CALLS="$calls" payload "$command" | GH_STUB_CALLS="$calls" "$hook" >/dev/null 2>&1 || true
+	if grep -q -- "$pattern" "$calls"; then
+		echo "想定外のリポジトリ・番号へ照会しました (禁止: $pattern): $command" >&2
+		cat "$calls" >&2
+		rm -f "$calls"
+		return 1
+	fi
+	rm -f "$calls"
+	return 0
+}
+
 reviewed_json='{"labels":[{"name":"reviewed"}]}'
 unreviewed_json='{"labels":[]}'
 
@@ -156,6 +173,17 @@ export GH_STUB_JSON="$unreviewed_json"
 assert_gh_called_with 'gh pr merge --subject "fix 999" 123 --squash' 'pr view 123'
 assert_gh_called_with 'gh pr merge --body-file /tmp/999.md 123' 'pr view 123'
 assert_gh_called_with "gh pr merge --squash feature/issue-999" 'pr view feature/issue-999'
+
+# 3-4. `--repo` やURLで指定した別リポジトリのPRを照会すること
+# カレントリポジトリの同番号PRのreviewed状態で許可・拒否してはならない。
+assert_gh_called_with "gh pr merge --repo evil/other 123" 'pr view 123 --json labels --repo evil/other'
+assert_gh_called_with "gh pr merge 123 -R evil/other" 'pr view 123 --json labels --repo evil/other'
+assert_gh_called_with "gh pr merge --repo=evil/other 123" 'pr view 123 --json labels --repo evil/other'
+assert_gh_called_with "gh pr merge https://github.com/evil/other/pull/123" '--repo evil/other'
+# `--repo` 未指定ならカレントリポジトリ(=`--repo` を付けない)で照会すること
+assert_gh_not_called_with "gh pr merge 123" '--repo'
+# 引用文字列に含まれる `--repo` は実オプションではないため照会先に使わないこと
+assert_gh_not_called_with 'gh pr merge --subject "see --repo evil/other" 123' 'evil/other'
 
 # 3-3. 未知のフラグはブロックすること(fail-close)
 assert_blocked "gh pr merge --unknown-option 999 123"
@@ -215,6 +243,16 @@ assert_gh_called_with "gh issue close --reason 'not planned' 123" 'number=123'
 assert_gh_called_with 'gh issue close --comment="tracking 999" 123' 'number=123'
 assert_gh_called_with 'gh issue close -R oikawa-d/task-999 123' 'number=123'
 assert_blocked 'gh issue close --comment "tracking 999" 123'
+
+# 5-10. Issue URLが別リポジトリを示す場合、そのリポジトリのリンクPRを照会すること
+assert_gh_called_with "gh issue close https://github.com/evil/other/issues/123" \
+	'owner=evil -F repo=other -F number=123'
+assert_gh_called_with "gh issue close --repo evil/other 123" 'owner=evil -F repo=other -F number=123'
+
+# 5-11. コメント等の引用文字列に含まれる `--repo` は照会先に使わず、カレントリポジトリを照会すること
+assert_gh_called_with 'gh issue close --comment "text --repo evil/other" 123' \
+	'owner=oikawa-d -F repo=task_management -F number=123'
+assert_gh_not_called_with 'gh issue close --comment "text --repo evil/other" 123' 'owner=evil'
 
 # 5-9. 未知のフラグは値を取るか判断できないため解析不能としてブロックすること(fail-close)
 assert_blocked "gh issue close --unknown-option 999 123"

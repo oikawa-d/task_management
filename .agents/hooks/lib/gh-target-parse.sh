@@ -72,16 +72,32 @@ gh_contains() {
 	return 1
 }
 
-# コマンド断片から操作対象のセレクタ(番号・URL・ブランチ名)を抽出する。
+# セレクタがPR/IssueのURLの場合、URLに含まれるリポジトリ(owner/repo)を取り出す。
+gh_selector_to_repo() {
+	local selector="$1"
+
+	if [[ "$selector" =~ ^https?://[^/]+/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)/(issues|pull)/[0-9]+ ]]; then
+		printf '%s/%s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+		return 0
+	fi
+	return 1
+}
+
+# コマンド断片から操作対象のセレクタ(番号・URL・ブランチ名)と対象リポジトリを抽出する。
 # 第1引数: pr-merge | issue-close
 # 第2引数: コマンド断片
-# stdout: セレクタ(位置引数が無い場合は空文字)
+# 結果は GH_TARGET_SELECTOR / GH_TARGET_REPO へ格納する(いずれも該当が無ければ空文字)。
+# リポジトリは「トークン化後の実オプション `--repo`/`-R`」→「セレクタのURL」の順で決定し、
+# コメントや引用文字列の内容からは取得しない(誤ったリポジトリへ照会しないため)。
 # 戻り値: 0=解析成功 / 2=解析不能(未知のフラグ等。呼び出し側でfail-closeする)
 gh_parse_target() {
 	local kind="$1"
 	local segment="$2"
 	local -a tokens=() value_flags=() bool_flags=()
-	local subcommand='' action=''
+	local subcommand='' action='' repo_from_url=''
+
+	GH_TARGET_SELECTOR=""
+	GH_TARGET_REPO=""
 
 	case "$kind" in
 		pr-merge)
@@ -132,6 +148,9 @@ gh_parse_target() {
 			# `--flag=value` 形式は値が同一トークンに含まれるため、次トークンは消費しない。
 			if [[ "$token" == --?*=* ]]; then
 				if gh_contains "${token%%=*}" "${value_flags[@]}" || gh_contains "${token%%=*}" "${bool_flags[@]}"; then
+					if [[ "${token%%=*}" == "--repo" ]]; then
+						GH_TARGET_REPO="${token#*=}"
+					fi
 					continue
 				fi
 				return 2
@@ -139,6 +158,9 @@ gh_parse_target() {
 
 			if [[ "$token" == -* && "$token" != "-" ]]; then
 				if gh_contains "$token" "${value_flags[@]}"; then
+					if [[ "$token" == "--repo" || "$token" == "-R" ]]; then
+						GH_TARGET_REPO="${tokens[index + 1]:-}"
+					fi
 					(( index++ ))
 					continue
 				fi
@@ -150,11 +172,23 @@ gh_parse_target() {
 			fi
 		fi
 
-		printf '%s' "$token"
-		return 0
+		# 位置引数は最初の1つだけが操作対象。以降のトークンは `--repo` の検出のみ継続する。
+		if [[ -z "$GH_TARGET_SELECTOR" ]]; then
+			GH_TARGET_SELECTOR="$token"
+		fi
 	done
 
-	# 位置引数なし(`gh pr merge --squash` のようにカレントブランチを対象とする形)。
+	# `--repo` の明示が無い場合のみ、セレクタのURLからリポジトリを決定する。
+	if [[ -z "$GH_TARGET_REPO" ]]; then
+		repo_from_url=$(gh_selector_to_repo "$GH_TARGET_SELECTOR") || repo_from_url=""
+		GH_TARGET_REPO="$repo_from_url"
+	fi
+
+	if [[ -n "$GH_TARGET_REPO" && ! "$GH_TARGET_REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+		return 2
+	fi
+
+	# 位置引数なし(`gh pr merge --squash` のようにカレントブランチを対象とする形)もあり得る。
 	return 0
 }
 

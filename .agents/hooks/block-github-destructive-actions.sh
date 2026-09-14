@@ -88,13 +88,21 @@ CMD_BOUNDARY='(^|[;&|(`])[[:space:]]*'
 # 0=ラベルあり / 1=ラベルなし / 2=判定不能
 has_reviewed_pr_label() {
 	local selector="$1" # 空文字ならカレントブランチのPRで判定する(番号・URL・ブランチ名を受け付ける)
+	local repo="$2" # 空文字ならカレントリポジトリ
 	local labels_json
+	local -a args=()
 
 	if [[ -n "$selector" ]]; then
-		labels_json=$(gh pr view "$selector" --json labels 2>/dev/null) || return 2
-	else
-		labels_json=$(gh pr view --json labels 2>/dev/null) || return 2
+		args+=("$selector")
 	fi
+	args+=(--json labels)
+	# `--repo` やURLで別リポジトリが指定された場合、同じリポジトリのPRを照会しなければ
+	# 実対象とは別のPRのreviewed状態で許可・拒否してしまう。
+	if [[ -n "$repo" ]]; then
+		args+=(--repo "$repo")
+	fi
+
+	labels_json=$(gh pr view "${args[@]}" 2>/dev/null) || return 2
 
 	if jq -e --arg label "$REVIEWED_LABEL" '.labels // [] | any(.name == $label)' <<<"$labels_json" >/dev/null 2>&1; then
 		return 0
@@ -102,17 +110,14 @@ has_reviewed_pr_label() {
 	return 1
 }
 
-# コマンド断片の `--repo <owner>/<repo>` / `-R <owner>/<repo>` を優先し、
-# 指定が無ければカレントリポジトリを解決する。解決できない場合は失敗を返す(fail-close)。
+# 解析済みの対象リポジトリを優先し、指定が無ければカレントリポジトリを解決する。
+# 解析前のコマンド文字列をgrepすると、コメントや引用文字列に含まれる `--repo` を実オプションと
+# 誤認して別リポジトリへ照会してしまうため、トークン解析の結果のみを使う。
 resolve_repo() {
-	local segment="$1"
-	local repo
+	local parsed_repo="$1"
 
-	repo=$(grep -Eo -- '(--repo|-R)[=[:space:]]+[A-Za-z0-9._-]+/[A-Za-z0-9._-]+' <<<"$segment" \
-		| head -1 \
-		| grep -Eo '[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' || true)
-	if [[ -n "$repo" ]]; then
-		printf '%s' "$repo"
+	if [[ -n "$parsed_repo" ]]; then
+		printf '%s' "$parsed_repo"
 		return 0
 	fi
 
@@ -125,14 +130,14 @@ resolve_repo() {
 # 0=リンクPRにreviewedあり / 1=リンクPRはあるがreviewedなし / 3=リンクPRなし / 2=判定不能
 linked_pr_has_reviewed_label() {
 	local issue_number="$1"
-	local segment="$2"
+	local parsed_repo="$2" # コマンドで明示されたリポジトリ(空文字ならカレントリポジトリ)
 	local repo owner name response
 
 	if [[ -z "$issue_number" ]]; then
 		return 2
 	fi
 
-	repo=$(resolve_repo "$segment") || return 2
+	repo=$(resolve_repo "$parsed_repo") || return 2
 	if [[ "$repo" != */* ]]; then
 		return 2
 	fi
@@ -160,14 +165,14 @@ linked_pr_has_reviewed_label() {
 if grep -Eq "${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+pr[[:space:]]+merge([[:space:]]|\$)" <<<"$command_for_match"; then
 	merge_segment=$(grep -Eo "${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+pr[[:space:]]+merge[^;&|[:cntrl:]]*" <<<"$command_for_match" | head -1)
 	parse_status=0
-	pr_selector=$(gh_parse_target "pr-merge" "$merge_segment") || parse_status=$?
+	gh_parse_target "pr-merge" "$merge_segment" || parse_status=$?
 	if [[ "$parse_status" -ne 0 ]]; then
 		echo "ブロック: 対象PRを特定できないコマンド形式のため、安全側でmergeをブロックします。PR番号・URL・ブランチ名を位置引数で指定してください。" >&2
 		exit 2
 	fi
 
 	status=0
-	has_reviewed_pr_label "$pr_selector" || status=$?
+	has_reviewed_pr_label "$GH_TARGET_SELECTOR" "$GH_TARGET_REPO" || status=$?
 
 	if [[ "$status" -eq 0 ]]; then
 		exit 0
@@ -188,14 +193,19 @@ if grep -Eq "${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+issue[[:space:]]+close
 	close_segment=$(grep -Eo "${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+issue[[:space:]]+close[^;&|[:cntrl:]]*" <<<"$command_for_match" | head -1)
 	# オプション値やリポジトリ名に含まれる数字を拾わないよう、位置引数のみを対象番号として扱う。
 	parse_status=0
-	issue_selector=$(gh_parse_target "issue-close" "$close_segment") || parse_status=$?
+	gh_parse_target "issue-close" "$close_segment" || parse_status=$?
 	issue_number=""
-	if [[ "$parse_status" -eq 0 && -n "$issue_selector" ]]; then
-		issue_number=$(gh_selector_to_number "$issue_selector") || issue_number=""
+	if [[ "$parse_status" -eq 0 && -n "$GH_TARGET_SELECTOR" ]]; then
+		issue_number=$(gh_selector_to_number "$GH_TARGET_SELECTOR") || issue_number=""
+	fi
+	# URLで別リポジトリのissueが指定された場合、そのリポジトリのリンクPRを照会する。
+	issue_repo=""
+	if [[ "$parse_status" -eq 0 ]]; then
+		issue_repo="$GH_TARGET_REPO"
 	fi
 
 	status=0
-	linked_pr_has_reviewed_label "$issue_number" "$close_segment" || status=$?
+	linked_pr_has_reviewed_label "$issue_number" "$issue_repo" || status=$?
 
 	if [[ "$status" -eq 0 ]]; then
 		exit 0
