@@ -217,7 +217,7 @@ async def test_change_password_with_current_password_success(monkeypatch):
 	assert args[2] == "hashed:NewPass1!"
 	delete_sessions_mock.assert_awaited_once_with(user_id)
 	revoke_refresh_mock.assert_awaited_once_with(user_id)
-	db.commit.assert_not_awaited()
+	db.commit.assert_awaited_once_with()
 
 
 async def test_change_password_wrong_current_password(monkeypatch):
@@ -275,13 +275,15 @@ async def test_change_password_set_initial_password_without_current(monkeypatch)
 	monkeypatch.setattr(user_service, "hash_password", lambda plain: f"hashed:{plain}")
 
 	payload = PasswordChangeRequest(current_password=None, new_password="NewPass1!", password_confirm="NewPass1!")
+	db = AsyncMock()
 	await user_service.change_password(
 		_current_user(user_id),
 		payload,
-		db=object(),
+		db=db,
 	)
 
 	update_password_mock.assert_awaited_once()
+	db.commit.assert_awaited_once_with()
 
 
 async def test_change_password_current_password_not_allowed_when_unset(monkeypatch):
@@ -333,15 +335,17 @@ async def test_change_password_redis_failure_returns_service_unavailable_and_ski
 	payload = PasswordChangeRequest(
 		current_password="OldPass1!", new_password="NewPass1!", password_confirm="NewPass1!"
 	)
+	db = AsyncMock()
 
 	with pytest.raises(ServiceUnavailableError):
 		await user_service.change_password(
 			_current_user(user_id),
 			payload,
-			db=object(),
+			db=db,
 		)
 
 	update_password_mock.assert_not_awaited()
+	db.commit.assert_not_awaited()
 
 
 # --- get_login_history ---------------------------------------------------------

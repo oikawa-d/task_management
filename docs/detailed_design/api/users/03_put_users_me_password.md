@@ -26,7 +26,7 @@
 | AUTH_MODE差異 | 成功時の失効対象がsessionは`session:{sid}`系、jwtは`refresh:{hash}`系という保存先の違いのみ。判定ロジック・レスポンスに差異なし |
 | 冪等性 | なし（同一`current_password`/`new_password`で2回目を実行すると1回目成功後は`current_password`が新パスワードと一致しなくなるため2回目は`401 INVALID_CREDENTIALS`となる） |
 | レート制限 | 対象外（ログイン試行のレート制限とは別事象。ログイン済みユーザーの操作のため`login_fail`は使用しない） |
-| トランザクション境界 | Redisの全セッション/全リフレッシュトークン失効を先に完了し、その後`users.password_hash`をUPDATEする。Redis失敗時はDBを更新せず503。DB失敗時は安全側にログアウト状態を維持する |
+| トランザクション境界 | Redisの全セッション/全リフレッシュトークン失効を先に完了し、その後`users.password_hash`をUPDATEしてcommitする。Redis失敗時はDBを更新せず503。DB失敗時は安全側にログアウト状態を維持する |
 
 ## 2. 入出力仕様
 
@@ -117,6 +117,8 @@ sequenceDiagram
             S->>URP: update_password(db, user_id, new_hash)
             URP->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
             PG-->>URP: 更新完了
+            S->>PG: db.commit()
+            PG-->>S: commit完了
             S-->>R: None
             R-->>FE: 204
         end
@@ -181,8 +183,8 @@ flowchart TB
 | シグネチャ | `async def change_password(current_user: CurrentUser, payload: PasswordChangeRequest, db: AsyncSession) -> None` |
 | 引数 | `current_user`、`payload`、`db` |
 | 戻り値 | `None` |
-| 送出例外 | `InvalidCredentialsError`(401)、`ValidationError`(422) |
-| 処理内容 | 1. `fn_get_user(user_id)` で現在のhashを取得 2. `core/security.py` の `verify_password` で現在パスワードを検証 3. 同モジュールの `hash_password` で `new_password` をargon2idでハッシュ化 4. Redisセッション/refreshを失効 5. Redis成功後に `CALL sp_update_user_password(user_id, new_hash)`を呼び出す。Redis失敗時はDBを更新せず503。commitは呼び出し元のトランザクション境界に委譲する |
+| 送出例外 | `InvalidCredentialsError`(401)、`ValidationError`(422)、`ServiceUnavailableError`(503) |
+| 処理内容 | 1. `fn_get_user(user_id)` で現在のhashを取得 2. `core/security.py` の `verify_password` で現在パスワードを検証 3. 同モジュールの `hash_password` で `new_password` をargon2idでハッシュ化 4. Redisセッション/refreshを失効 5. Redis成功後に `CALL sp_update_user_password(user_id, new_hash)`を呼び出す 6. `db.commit()`でDB更新を確定する。Redis失敗時はDBを更新せず503 |
 | 副作用 | DB更新（`password_hash`）、Redis全失効（`session:*` / `csrf:*` / `user_sessions:{uid}` / `refresh:*` / `user_refresh:{uid}`） |
 
 ### 6.4 `repository/user_repository.py :: sp_update_user_password`
@@ -193,7 +195,7 @@ flowchart TB
 | 引数 | `user_id`、`password_hash`（ハッシュ化済み） |
 | 戻り値 | `None` |
 | 送出例外 | なし |
-| 処理内容 | `CALL sp_update_user_password(:user_id, :password_hash)`。commitは呼び出し元のトランザクション境界に委譲し、`updated_at`更新はSP内部のトリガに委譲 |
+| 処理内容 | `CALL sp_update_user_password(:user_id, :password_hash)`を実行する。commitはサービス層のトランザクション境界で行い、`updated_at`更新はSP内部のトリガに委譲 |
 | 副作用 | DB更新1件 |
 
 ### 6.5 `repository/redis_store.py :: delete_all_sessions` / `revoke_all_refresh_tokens`
@@ -275,10 +277,10 @@ sessionモードの認証解決・CSRF検証自体の`GET`/`EXPIRE`は本APIの�
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 単体 | has_password=true、current_password一致 | 正しい現在パスワード | パスワード更新・全失効が呼ばれる | `test_change_password_with_current_password_success` |
+| 1 | 単体 | has_password=true、current_password一致 | 正しい現在パスワード | パスワード更新・全失効・commitが呼ばれる | `test_change_password_with_current_password_success` |
 | 2 | 単体 | has_password=true、current_password不一致 | 誤った現在パスワード | `InvalidCredentialsError` | `test_change_password_wrong_current_password` |
 | 3 | 単体 | has_password=true、current_password未送信 | `current_password=None` | `ValidationError`（422相当） | `test_change_password_missing_current_password_when_required` |
-| 4 | 単体 | has_password=false、current_password省略 | Googleのみ登録ユーザー | パスワード新規設定に成功 | `test_change_password_set_initial_password_without_current` |
+| 4 | 単体 | has_password=false、current_password省略 | Googleのみ登録ユーザー | パスワード新規設定・commitに成功 | `test_change_password_set_initial_password_without_current` |
 | 5 | 単体 | has_password=false、current_password送信 | 何らかの値を送信 | `ValidationError` | `test_change_password_current_password_not_allowed_when_unset` |
 | 6 | 単体 | new_password/password_confirm不一致 | 異なる値 | pydantic `ValidationError` | `test_password_change_request_confirm_mismatch` |
 | 7 | 単体 | new_passwordがポリシー違反 | 7文字・1種類のみ | pydantic `ValidationError` | `test_password_change_request_policy_violation` |
