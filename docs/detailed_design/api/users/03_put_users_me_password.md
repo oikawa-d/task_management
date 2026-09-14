@@ -146,7 +146,7 @@ flowchart TB
     K -->|"送信あり"| E6["422 VALIDATION_ERROR<br/>（未設定ユーザーは送信不可）"]
     K -->|"未送信"| J
     J --> L["全リフレッシュトークン失効<br/>revoke_all_refresh_tokens"]
-    L --> M["password_hash更新<br/>DBトランザクションでcommit"]
+    L --> M["password_hash更新<br/>DB更新を呼び出し"]
     M --> N["204"]
 ```
 
@@ -182,18 +182,18 @@ flowchart TB
 | 引数 | `current_user`、`payload`、`db` |
 | 戻り値 | `None` |
 | 送出例外 | `InvalidCredentialsError`(401)、`ValidationError`(422) |
-| 処理内容 | 1. `fn_get_user(user_id)` で現在のhashを取得 2. `core/security.py` の `verify_password` で現在パスワードを検証 3. 同モジュールの `hash_password` で `new_password` をargon2idでハッシュ化 4. Redisセッション/refreshを失効 5. Redis成功後に `CALL sp_update_user_password(user_id, new_hash)`。Redis失敗時はDBを更新せず503 |
+| 処理内容 | 1. `fn_get_user(user_id)` で現在のhashを取得 2. `core/security.py` の `verify_password` で現在パスワードを検証 3. 同モジュールの `hash_password` で `new_password` をargon2idでハッシュ化 4. Redisセッション/refreshを失効 5. Redis成功後に `CALL sp_update_user_password(user_id, new_hash)`を呼び出す。Redis失敗時はDBを更新せず503。commitは呼び出し元のトランザクション境界に委譲する |
 | 副作用 | DB更新（`password_hash`）、Redis全失効（`session:*` / `csrf:*` / `user_sessions:{uid}` / `refresh:*` / `user_refresh:{uid}`） |
 
 ### 6.4 `repository/user_repository.py :: sp_update_user_password`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def update_password(db: AsyncSession, user_id: UUID, password_hash: str) -> User` |
+| シグネチャ | `async def update_password(db: AsyncSession, user_id: UUID, password_hash: str) -> None` |
 | 引数 | `user_id`、`password_hash`（ハッシュ化済み） |
-| 戻り値 | 更新後の`User` |
+| 戻り値 | `None` |
 | 送出例外 | なし |
-| 処理内容 | `CALL sp_update_user_password(:user_id, :password_hash)`。`updated_at`更新はSP内部のトリガに委譲 |
+| 処理内容 | `CALL sp_update_user_password(:user_id, :password_hash)`。commitは呼び出し元のトランザクション境界に委譲し、`updated_at`更新はSP内部のトリガに委譲 |
 | 副作用 | DB更新1件 |
 
 ### 6.5 `repository/redis_store.py :: delete_all_sessions` / `revoke_all_refresh_tokens`
@@ -228,7 +228,7 @@ flowchart LR
         F1["refresh:{hash1..N}<br/>user_refresh:{uid}"] --> F2["全DEL（当該ユーザーの<br/>全リフレッシュトークン失効）"]
     end
     S2 -.->|"全セッション失効後"| F2
-    F2 -.->|"全Redis失効後にDBトランザクションでUPDATE/commit"| U2
+    F2 -.->|"全Redis失効後にDB UPDATE"| U2
 ```
 
 パスワード変更を行った端末自身のCookie/アクセストークンも同時に失効するため、フロントは`204`受信後に自発的にログイン画面へ遷移させる（サーバーからのCookie破棄指示はない点に注意）。jwtモードのアクセストークンは署名検証のみのため、失効済みリフレッシュトークンとは独立して最大`ACCESS_TOKEN_TTL_SECONDS`（既定15分）有効なまま残り得る（`03_auth.md`§4.5の即時失効の限界と同様）。
