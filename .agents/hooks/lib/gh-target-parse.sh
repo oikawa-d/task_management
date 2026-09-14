@@ -81,6 +81,10 @@ gh_take_repo_flag() {
 			GH_TARGET_REPO="${token#*=}"
 			return 0
 			;;
+		-R=*)
+			GH_TARGET_REPO="${token#-R=}"
+			return 0
+			;;
 		# pflagは短縮形に値を続けて書く `-Rowner/repo` 形式も受け付ける。
 		-R?*)
 			GH_TARGET_REPO="${token#-R}"

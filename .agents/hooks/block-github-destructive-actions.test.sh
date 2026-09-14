@@ -231,8 +231,10 @@ assert_gh_called_with "gh --repo evil/other pr merge 123" 'pr view 123 --json la
 assert_gh_called_with "gh --repo=evil/other pr merge 123" 'pr view 123 --json labels --repo evil/other'
 assert_gh_called_with "gh -R evil/other pr merge 123" 'pr view 123 --json labels --repo evil/other'
 assert_gh_called_with "gh -Revil/other pr merge 123" 'pr view 123 --json labels --repo evil/other'
+assert_gh_called_with "gh -R=evil/other pr merge 123" 'pr view 123 --json labels --repo evil/other'
 # サブコマンド後の短縮形の値連結(`-Rowner/repo`)も同様に解析すること
 assert_gh_called_with "gh pr merge 123 -Revil/other" 'pr view 123 --json labels --repo evil/other'
+assert_gh_called_with "gh pr merge 123 -R=evil/other" 'pr view 123 --json labels --repo evil/other'
 
 # 3-3. 未知のフラグはブロックすること(fail-close)
 assert_blocked "gh pr merge --unknown-option 999 123"
@@ -346,7 +348,9 @@ assert_gh_called_with "gh --repo evil/other issue close 123" 'owner=evil -F repo
 assert_gh_called_with "gh --repo=evil/other issue close 123" 'owner=evil -F repo=other -F number=123'
 assert_gh_called_with "gh -R evil/other issue close 123" 'owner=evil -F repo=other -F number=123'
 assert_gh_called_with "gh -Revil/other issue close 123" 'owner=evil -F repo=other -F number=123'
+assert_gh_called_with "gh -R=evil/other issue close 123" 'owner=evil -F repo=other -F number=123'
 assert_gh_called_with "gh issue close 123 -Revil/other" 'owner=evil -F repo=other -F number=123'
+assert_gh_called_with "gh issue close 123 -R=evil/other" 'owner=evil -F repo=other -F number=123'
 # サブコマンド前後いずれの位置でも、引用文字列の内容は実オプションとして扱わないこと
 assert_gh_not_called_with 'gh issue close --comment "see gh --repo evil/other issue close 999" 123' 'owner=evil'
 
@@ -378,6 +382,9 @@ assert_allowed "$heredoc_cmd_dash"
 # 7. クォート内・echoの引数にコマンド名を含む場合 -> exit 0
 assert_allowed 'echo "gh pr merge 123 --squash"'
 assert_allowed "echo 'gh issue close 123'"
+assert_allowed 'echo '\''$(gh pr merge 123)'\'''
+assert_allowed 'echo "\$(gh pr merge 123)"'
+assert_allowed 'echo "$(gh pr view 123)"'
 assert_allowed "# gh pr merge 123 (コメント例)"
 
 # heredoc風の記号が引用符内にある場合、後続行をheredoc本文として削除しないこと。
@@ -403,6 +410,16 @@ assert_blocked "gh pr merge 123 || echo fallback"
 # この文字列は実行されず、hookへの入力データとして渡すだけのため展開させない意図で単一引用符を使用する。
 # shellcheck disable=SC2016
 assert_blocked '$(echo dummy); gh pr merge 123'
+assert_blocked "if true; then gh pr merge 123; fi"
+assert_blocked "{ gh pr merge 123; }"
+assert_blocked 'echo "$(gh pr merge 123)"'
+assert_blocked 'echo "$(gh issue close 123)"'
+assert_blocked 'echo "$(gh api -X PUT repos/oikawa-d/task_management/pulls/123/merge)"'
+assert_blocked 'echo "$(echo "$(gh pr merge 123)")"'
+assert_blocked 'echo "`gh pr merge 123`"'
+export GH_STUB_JSON="$reviewed_json"
+assert_allowed "if true; then gh pr merge 123; fi"
+assert_allowed 'echo "$(gh pr merge 123)"'
 unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON
 
 # バックスラッシュ改行で分断されたコマンドも、実行時のコマンドとして検査すること。
@@ -437,6 +454,12 @@ assert_blocked "gh api repos/oikawa-d/task_management/pulls/123/merge --method=P
 assert_blocked "gh api repos/oikawa-d/task_management/pulls/123/merge -XPUT"
 assert_blocked "gh api repos/oikawa-d/task_management/pulls/123/merge -X=PUT"
 assert_blocked $'gh api -X PUT\trepos/oikawa-d/task_management/pulls/123/merge'
+assert_blocked 'METHOD=PUT; gh api -X "$METHOD" repos/oikawa-d/task_management/pulls/123/merge'
+assert_blocked 'ENDPOINT=repos/oikawa-d/task_management/pulls/123/merge; gh api -X PUT "$ENDPOINT"'
+assert_blocked 'ENDPOINT=repos/oikawa-d/task_management/pulls/123/merge; gh api -X PUT "${ENDPOINT}?foo=bar"'
+assert_blocked "gh api -X PUT /repos/oikawa-d/task_management/pulls/123/merge"
+assert_blocked "gh api -X PUT 'repos/oikawa-d/task_management/pulls/123/merge?foo=bar'"
+assert_allowed 'gh api -X PUT repos/oikawa-d/task_management/issues/123 -f body="$BODY"'
 assert_blocked "gh issue edit 123 --state closed"
 assert_blocked "gh --repo oikawa-d/task_management issue edit 123 --state=closed"
 

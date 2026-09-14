@@ -10,6 +10,8 @@ REPO_PLACEHOLDER="<owner>/<repo>"
 # 操作対象(PR/Issue)の解析は共通ライブラリへ切り出している。
 # jq不在時のfail-close(#339)を検証できるよう、外部コマンドに依存せずシェル組み込みで解決する。
 HOOK_DIR=$(cd "${BASH_SOURCE[0]%/*}" 2>/dev/null && pwd) || HOOK_DIR="."
+# shellcheck source=lib/gh-substitution-parse.sh
+source "$HOOK_DIR/lib/gh-substitution-parse.sh"
 # shellcheck source=lib/gh-command-parse.sh
 source "$HOOK_DIR/lib/gh-command-parse.sh"
 # shellcheck source=lib/gh-target-parse.sh
@@ -120,14 +122,15 @@ command_for_match=$(strip_heredocs <<<"$command")
 command_for_match=${command_for_match//\\$'\n'/}
 
 # コマンド位置の判定を厳格化する(#388)。
-# 引用符外のコマンド区切り文字で操作単位へ分割し、先頭トークンが `gh` の場合のみ対象にする。
+# 引用符外のコマンド区切り文字とコマンド置換で実行単位へ分割し、複合構文の予約語を
+# 読み飛ばした実行位置が `gh` の場合のみ対象にする。
 #
 # 【検出できないケース(既知の限界)】この判定は誤検知の抑制が目的であり、意図的な回避を防ぐ
 # ものではない。以下のような形は `gh` の直前に区切り文字が来ないため検出されない。
 #   - クォートで包まれたコマンド: bash -c "gh pr merge 123 --squash" / sh -c 'gh issue close 123'
 #   - コマンド文字列をファイルへ書き出してから実行する形: cat > run.sh ...; bash run.sh
 #     (hookはBashツールのcommand文字列のみを見ており、ファイルの中身は読まない)
-#   - `gh` の前に別コマンドが付く形: sudo gh pr merge 123 / env FOO=1 gh pr merge 123
+#   - 未対応のラッパーコマンドが `gh` の前に付く形: sudo gh pr merge 123
 # 本hookは事故防止のガードレール(通常operationでの誤操作・誤検知の防止)であり、
 # 迂回を意図した操作までは防げない。検出範囲の拡張は別途 #390 で検討する。
 
@@ -303,7 +306,7 @@ check_close_segment() {
 
 # 1回のBash入力に複数の破壊操作が含まれる場合も、引用符外の区切り文字で分割して全件を検査する。
 # 正規表現による行単位の抽出ではタブや引用符内改行で対象引数が欠落するため、共通トークン解析を使う。
-gh_split_command_segments "$command_for_match"
+gh_collect_executable_segments "$command_for_match"
 for command_segment in "${GH_COMMAND_SEGMENTS[@]}"; do
 	if gh_segment_is_action "$command_segment" "pr" "merge"; then
 		check_merge_segment "$command_segment" || exit 2

@@ -87,6 +87,29 @@ gh_split_command_segments() {
 	fi
 }
 
+# トップレベルとコマンド置換内の実行単位をまとめて返す。
+gh_collect_executable_segments() {
+	local input="$1" substitution current queue_index
+	local -a result=() substitutions=() split_segments=() queue=("$1")
+
+	gh_split_command_segments "$input"
+	result=("${GH_COMMAND_SEGMENTS[@]}")
+	for (( queue_index = 0; queue_index < ${#queue[@]}; queue_index++ )); do
+		current="${queue[queue_index]}"
+		gh_extract_command_substitutions "$current"
+		substitutions=("${GH_COMMAND_SUBSTITUTIONS[@]}")
+		gh_extract_backtick_substitutions "$current"
+		substitutions+=("${GH_BACKTICK_SUBSTITUTIONS[@]}")
+		for substitution in "${substitutions[@]}"; do
+			gh_split_command_segments "$substitution"
+			split_segments=("${GH_COMMAND_SEGMENTS[@]}")
+			result+=("${split_segments[@]}")
+			queue+=("$substitution")
+		done
+	done
+	GH_COMMAND_SEGMENTS=("${result[@]}")
+}
+
 gh_load_segment_tokens() {
 	local segment="$1" token
 	GH_SEGMENT_TOKENS=()
@@ -95,11 +118,31 @@ gh_load_segment_tokens() {
 	done < <(gh_tokenize_segment "$segment")
 }
 
+# 複合構文の予約語等を読み飛ばし、実行位置にあるghのトークン番号を返す。
+gh_find_executable_gh_index() {
+	local index prefix_index token
+	GH_COMMAND_INDEX=-1
+	for (( index = 0; index < ${#GH_SEGMENT_TOKENS[@]}; index++ )); do
+		[[ "${GH_SEGMENT_TOKENS[index]}" == "gh" ]] || continue
+		for (( prefix_index = 0; prefix_index < index; prefix_index++ )); do
+			token="${GH_SEGMENT_TOKENS[prefix_index]}"
+			case "$token" in
+				if|then|elif|else|while|until|do|'{'|'('|!|time|command|builtin|env) ;;
+				[A-Za-z_][A-Za-z0-9_]*=*) ;;
+				*) break 2 ;;
+			esac
+		done
+		GH_COMMAND_INDEX=$index
+		return 0
+	done
+	return 1
+}
+
 gh_segment_is_action() {
 	local segment="$1" subcommand="$2" action="$3" index
 	gh_load_segment_tokens "$segment"
-	[[ "${GH_SEGMENT_TOKENS[0]:-}" == "gh" ]] || return 1
-	for (( index = 1; index + 1 < ${#GH_SEGMENT_TOKENS[@]}; index++ )); do
+	gh_find_executable_gh_index || return 1
+	for (( index = GH_COMMAND_INDEX + 1; index + 1 < ${#GH_SEGMENT_TOKENS[@]}; index++ )); do
 		if [[ "${GH_SEGMENT_TOKENS[index]}" == "$subcommand" &&
 			"${GH_SEGMENT_TOKENS[index + 1]}" == "$action" ]]; then
 			return 0
@@ -109,20 +152,68 @@ gh_segment_is_action() {
 }
 
 gh_segment_is_api_merge() {
-	local segment="$1" token previous='' has_api=0 has_put=0 has_endpoint=0
+	local segment="$1" token method_value option_value_kind='' endpoint=''
+	local has_put=0 has_dynamic_method=0 api_index=-1 index
 	gh_load_segment_tokens "$segment"
-	[[ "${GH_SEGMENT_TOKENS[0]:-}" == "gh" ]] || return 1
-	for token in "${GH_SEGMENT_TOKENS[@]:1}"; do
-		[[ "$token" == "api" ]] && has_api=1
-		if [[ "${token^^}" =~ ^(-X=?|--METHOD=)PUT$ ||
-			"${previous^^}" == "-X" && "${token^^}" == "PUT" ||
-			"${previous^^}" == "--METHOD" && "${token^^}" == "PUT" ]]; then
-			has_put=1
+	gh_find_executable_gh_index || return 1
+	for (( index = GH_COMMAND_INDEX + 1; index < ${#GH_SEGMENT_TOKENS[@]}; index++ )); do
+		token="${GH_SEGMENT_TOKENS[index]}"
+		if [[ "$token" == "api" ]]; then
+			api_index=$index
+			break
 		fi
-		[[ "$token" =~ ^repos/[^/]+/[^/]+/pulls/[0-9]+/merge$ ]] && has_endpoint=1
-		previous="$token"
 	done
-	(( has_api && has_put && has_endpoint ))
+	(( api_index >= 0 )) || return 1
+
+	for (( index = api_index + 1; index < ${#GH_SEGMENT_TOKENS[@]}; index++ )); do
+		token="${GH_SEGMENT_TOKENS[index]}"
+		if [[ -n "$option_value_kind" ]]; then
+			if [[ "$option_value_kind" == "method" ]]; then
+				[[ "${token^^}" == "PUT" ]] && has_put=1
+				[[ "$token" == *'$'* || "$token" == *'`'* ]] && has_dynamic_method=1
+			fi
+			option_value_kind=''
+			continue
+		fi
+
+		case "$token" in
+			-X|--method) option_value_kind='method'; continue ;;
+			-X?*|--method=*)
+				if [[ "$token" == -X* ]]; then
+					method_value="${token#-X}"
+					method_value="${method_value#=}"
+				else
+					method_value="${token#--method=}"
+				fi
+				if [[ "$method_value" == *'$'* || "$method_value" == *'`'* ]]; then
+					has_dynamic_method=1
+				elif [[ "${method_value^^}" == "PUT" ]]; then
+					has_put=1
+				fi
+				continue
+				;;
+			-f|-F|--raw-field|--field|--input|--hostname|--cache)
+				option_value_kind='other'
+				continue
+				;;
+			-f?*|-F?*|--raw-field=*|--field=*|--input=*|--hostname=*|--cache=*) continue ;;
+			--) continue ;;
+			-*) continue ;;
+		esac
+		if [[ -z "$endpoint" ]]; then
+			endpoint="$token"
+		fi
+	done
+
+	if [[ "$endpoint" =~ ^/?repos/[^/]+/[^/]+/pulls/[0-9]+/merge(\?.*)?$ ]]; then
+		(( has_put || has_dynamic_method ))
+		return
+	fi
+	if [[ "$endpoint" == *'$'* || "$endpoint" == *'`'* ]]; then
+		(( has_put ))
+		return
+	fi
+	return 1
 }
 
 gh_segment_is_issue_state_close() {
