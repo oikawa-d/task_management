@@ -17,7 +17,7 @@ from app.core.exceptions import (
 )
 from app.service import auth_service
 from redis.exceptions import ConnectionError as RedisConnectionError
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, OperationalError
 
 
 class _FakeBackgroundTasks:
@@ -389,7 +389,7 @@ async def test_register_converts_sqlstate_to_conflict(
 ) -> None:
 	monkeypatch.setattr(auth_service.user_repository, "get_by_login_identifier", AsyncMock(return_value=None))
 	monkeypatch.setattr(auth_service.user_repository, "get_by_email", AsyncMock(return_value=None))
-	error = DBAPIError("CALL sp_register_user", {}, SimpleNamespace(sqlstate=sqlstate))  # type: ignore[arg-type]
+	error = OperationalError("CALL sp_register_user", {}, SimpleNamespace(sqlstate=sqlstate))
 	monkeypatch.setattr(auth_service.user_repository, "create", AsyncMock(side_effect=error))
 	db = _RegisterDb()
 
@@ -405,8 +405,28 @@ async def test_register_reraises_unknown_sqlstate(monkeypatch: pytest.MonkeyPatc
 	error = DBAPIError("CALL sp_register_user", {}, SimpleNamespace(sqlstate="P0009"))  # type: ignore[arg-type]
 	monkeypatch.setattr(auth_service.user_repository, "create", AsyncMock(side_effect=error))
 
+	db = _RegisterDb()
+
 	with pytest.raises(DBAPIError):
-		await auth_service.register(_register_payload(), _FakeBackgroundTasks(), _FakeRequest(), _RegisterDb())  # type: ignore[arg-type]
+		await auth_service.register(_register_payload(), _FakeBackgroundTasks(), _FakeRequest(), db)  # type: ignore[arg-type]
+
+	assert db.calls == ["db.rollback"]
+
+
+@pytest.mark.parametrize("sqlstate", ["08006", "57P03"])
+async def test_register_converts_connection_sqlstate_to_service_unavailable(
+	monkeypatch: pytest.MonkeyPatch, sqlstate: str
+) -> None:
+	monkeypatch.setattr(auth_service.user_repository, "get_by_login_identifier", AsyncMock(return_value=None))
+	monkeypatch.setattr(auth_service.user_repository, "get_by_email", AsyncMock(return_value=None))
+	error = OperationalError("CALL sp_register_user", {}, SimpleNamespace(sqlstate=sqlstate))
+	monkeypatch.setattr(auth_service.user_repository, "create", AsyncMock(side_effect=error))
+	db = _RegisterDb()
+
+	with pytest.raises(ServiceUnavailableError):
+		await auth_service.register(_register_payload(), _FakeBackgroundTasks(), _FakeRequest(), db)  # type: ignore[arg-type]
+
+	assert db.calls == ["db.rollback"]
 
 
 async def test_login_success_records_history_and_resets_failures(monkeypatch: pytest.MonkeyPatch) -> None:

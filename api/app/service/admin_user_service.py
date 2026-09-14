@@ -22,7 +22,13 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_backend_settings
-from app.core.exceptions import LastAdminRequiredError, NotFoundError, SelfModificationError, ServiceUnavailableError
+from app.core.exceptions import (
+	LastAdminRequiredError,
+	NotFoundError,
+	SelfModificationError,
+	ServiceUnavailableError,
+	raise_database_error,
+)
 from app.models.user import User
 from app.repository import admin_repository, redis_store, user_repository
 from app.schemas.admin import (
@@ -72,14 +78,14 @@ def _raise_for_sqlstate(
 		raise SelfModificationError(self_message) from exc
 	if sqlstate == _LAST_ADMIN_SQLSTATE:
 		raise LastAdminRequiredError(last_admin_message) from exc
-	raise ServiceUnavailableError() from exc
+	raise_database_error(exc)
 
 
 async def _fetch_user_or_error(db: AsyncSession, target_id: UUID) -> User:
 	try:
 		target = await user_repository.get_by_id(db, target_id)
 	except DBAPIError as exc:
-		raise ServiceUnavailableError() from exc
+		raise_database_error(exc)
 	if target is None:
 		raise NotFoundError("ユーザーが見つかりません")
 	return target
@@ -101,7 +107,7 @@ async def list_users(query: AdminUserListQuery, db: AsyncSession) -> AdminUserLi
 			else await admin_repository.count_users(db, query.q, query.role, query.is_active)
 		)
 	except DBAPIError as exc:
-		raise ServiceUnavailableError() from exc
+		raise_database_error(exc)
 	total_pages = (total + query.per_page - 1) // query.per_page if total else 0
 	return AdminUserListResponse(
 		items=[_to_item(row.user) for row in rows],

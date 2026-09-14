@@ -5,6 +5,7 @@ import {
 } from "../api/authAdapter/constants";
 import { createAuthAdapter } from "../api/authAdapter";
 import { configureApiClient, getApiClient } from "../api/client";
+import { clearUserSessionState } from "./sessionCleanup";
 import type { AuthUser } from "./authStore";
 import { useAuthStore } from "./authStore";
 
@@ -32,7 +33,10 @@ export async function bootstrapAuth(): Promise<AuthUser | null> {
 
 	configureApiClient(client, {
 		authAdapter: adapter,
-		onLogout: () => useAuthStore.getState().setUnauthenticated(),
+		onLogout: () => {
+			clearUserSessionState();
+			useAuthStore.getState().setUnauthenticated();
+		},
 	});
 	if (!(await adapter.restoreSession())) {
 		return null;
