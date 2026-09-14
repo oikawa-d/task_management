@@ -3,7 +3,7 @@
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ServiceUnavailableError
+from app.core.exceptions import raise_database_error
 from app.models.login_history import LoginHistory
 from app.models.user import User
 from app.repository import admin_repository
@@ -62,7 +62,7 @@ async def search(query: AdminLoginHistoryQuery, db: AsyncSession) -> AdminLoginH
 			)
 		)
 	except DBAPIError as exc:
-		raise ServiceUnavailableError() from exc
+		raise_database_error(exc)
 
 	items = [_to_item(row.history, row.user) for row in rows]
 	total_pages = (total + query.per_page - 1) // query.per_page if total else 0

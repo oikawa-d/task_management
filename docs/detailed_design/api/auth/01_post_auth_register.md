@@ -182,7 +182,7 @@ flowchart TB
 | シグネチャ | `async def exists_by_username_or_email(db: AsyncSession, username: str, email: str) -> DuplicateField | None` |
 | 引数 | `db`、`username`、`email` |
 | 戻り値 | 重複がなければ `None`。重複があれば `"username"` または `"email"` を示す列挙値 |
-| 送出例外 | なし（DB接続不能時は上位で`RedisError`同様に`OperationalError`が伝播し503へ変換） |
+| 送出例外 | なし（DB接続不能を示すSQLSTATEの`OperationalError`は上位で503へ変換。その他の未定義DB例外は500） |
 | 処理内容 | `fn_find_user_by_identifier` 相当のFNで重複候補を取得する。登録本体の一意性保証は `sp_register_user` がP0001/P0002で行う |
 | 副作用 | なし（参照のみ） |
 

@@ -1,4 +1,5 @@
 import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -39,7 +40,7 @@ async def test_create_calls_record_login_history_procedure() -> None:
 @pytest.mark.asyncio
 async def test_create_translates_database_connection_error() -> None:
 	db = AsyncMock()
-	db.execute.side_effect = OperationalError("CALL", {}, ConnectionError("database unavailable"))
+	db.execute.side_effect = OperationalError("CALL", {}, SimpleNamespace(sqlstate="08006"))
 
 	with pytest.raises(ServiceUnavailableError):
 		await login_history_repository.create(
@@ -57,7 +58,7 @@ async def test_create_translates_database_connection_error() -> None:
 @pytest.mark.asyncio
 async def test_all_login_history_db_operations_translate_operational_error() -> None:
 	db = AsyncMock()
-	db.execute.side_effect = OperationalError("statement", {}, ConnectionError("database unavailable"))
+	db.execute.side_effect = OperationalError("statement", {}, SimpleNamespace(sqlstate="08006"))
 
 	operations = (
 		login_history_repository.create(db, None, "unknown", "jwt", None, None, False, "invalid_credentials"),
