@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 from redis.exceptions import ConnectionError as RedisConnectionError
-from sqlalchemy.exc import DisconnectionError, InterfaceError, OperationalError
+from sqlalchemy.exc import DBAPIError, DisconnectionError, InterfaceError, OperationalError
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 
@@ -53,6 +53,22 @@ def _build_app() -> FastAPI:
 	@app.get("/boom-operational-error")
 	async def boom_operational_error() -> None:
 		raise OperationalError("SELECT 1", {}, SimpleNamespace(sqlstate="08006"))
+
+	@app.get("/boom-operational-error-pgcode")
+	async def boom_operational_error_pgcode() -> None:
+		raise OperationalError("SELECT 1", {}, SimpleNamespace(sqlstate=None, pgcode="08006"))
+
+	@app.get("/boom-operational-error-retryable")
+	async def boom_operational_error_retryable() -> None:
+		raise OperationalError("SELECT 1", {}, SimpleNamespace(sqlstate="57P03"))
+
+	@app.get("/boom-operational-error-no-sqlstate")
+	async def boom_operational_error_no_sqlstate() -> None:
+		raise OperationalError("SELECT 1", {}, SimpleNamespace())
+
+	@app.get("/boom-dbapi-error")
+	async def boom_dbapi_error() -> None:
+		raise DBAPIError("SELECT 1", {}, SimpleNamespace(sqlstate="08006"))  # type: ignore[arg-type]
 
 	@app.get("/boom-unknown-operational-error")
 	async def boom_unknown_operational_error() -> None:
@@ -119,6 +135,13 @@ def test_unhandled_exception_converted_to_internal_error() -> None:
 	assert body["error"]["message"] == "サーバーエラーが発生しました"
 
 
+def test_unhandled_exception_emits_event() -> None:
+	with patch.object(exceptions_module.logger, "exception") as log_exception:
+		_client().get("/boom-unhandled")
+
+	assert log_exception.call_args.kwargs["extra"]["event"] == "unhandled_exception"
+
+
 def _assert_service_unavailable_body(body: dict) -> None:
 	assert body["error"]["code"] == "SERVICE_UNAVAILABLE"
 	assert body["error"]["message"] == "現在サービスをご利用いただけません"
@@ -172,6 +195,34 @@ def test_operational_error_is_converted_to_503_by_infra_error_handler() -> None:
 
 	assert res.status_code == 503
 	_assert_service_unavailable_body(res.json())
+
+
+def test_operational_error_uses_pgcode_when_sqlstate_is_missing() -> None:
+	res = _client().get("/boom-operational-error-pgcode")
+
+	assert res.status_code == 503
+	_assert_service_unavailable_body(res.json())
+
+
+def test_operational_error_with_retryable_sqlstate_is_converted_to_503() -> None:
+	res = _client().get("/boom-operational-error-retryable")
+
+	assert res.status_code == 503
+	_assert_service_unavailable_body(res.json())
+
+
+def test_operational_error_without_sqlstate_returns_internal_error() -> None:
+	res = _client().get("/boom-operational-error-no-sqlstate")
+
+	assert res.status_code == 500
+	assert res.json()["error"]["code"] == "INTERNAL_ERROR"
+
+
+def test_non_operational_dbapi_error_returns_internal_error() -> None:
+	res = _client().get("/boom-dbapi-error")
+
+	assert res.status_code == 500
+	assert res.json()["error"]["code"] == "INTERNAL_ERROR"
 
 
 def test_operational_error_with_unmapped_sqlstate_returns_internal_error() -> None:

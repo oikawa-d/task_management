@@ -1,12 +1,12 @@
 import logging
 import uuid
-from typing import Any
+from typing import Any, NoReturn
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from redis.exceptions import RedisError
-from sqlalchemy.exc import DisconnectionError, InterfaceError, OperationalError
+from sqlalchemy.exc import DBAPIError, DisconnectionError, InterfaceError, OperationalError
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 logger = logging.getLogger("app.error")
@@ -209,8 +209,21 @@ def _is_connection_operational_error(exc: OperationalError) -> bool:
 	)
 
 
+def raise_database_error(exc: DBAPIError) -> NoReturn:
+	"""SQLSTATEに基づきDB障害だけを503へ変換し、それ以外は元の例外を伝播する。"""
+	if isinstance(exc, OperationalError) and _is_connection_operational_error(exc):
+		raise ServiceUnavailableError() from exc
+	raise exc
+
+
 def _infrastructure_error_response(exc: Exception) -> tuple[int, str, str]:
-	if isinstance(exc, OperationalError) and not _is_connection_operational_error(exc):
+	if isinstance(exc, InterfaceError):
+		return 503, ServiceUnavailableError.code, ServiceUnavailableError.message
+	if isinstance(exc, OperationalError):
+		if not _is_connection_operational_error(exc):
+			return 500, "INTERNAL_ERROR", "サーバーエラーが発生しました"
+		return 503, ServiceUnavailableError.code, ServiceUnavailableError.message
+	if isinstance(exc, DBAPIError):
 		return 500, "INTERNAL_ERROR", "サーバーエラーが発生しました"
 	return 503, ServiceUnavailableError.code, ServiceUnavailableError.message
 
@@ -254,6 +267,7 @@ def register_error_handling(app: FastAPI) -> None:
 		)
 
 	app.add_exception_handler(OperationalError, infra_error_handler)
+	app.add_exception_handler(DBAPIError, infra_error_handler)
 	app.add_exception_handler(InterfaceError, infra_error_handler)
 	app.add_exception_handler(SQLAlchemyTimeoutError, infra_error_handler)
 	app.add_exception_handler(DisconnectionError, infra_error_handler)
@@ -270,7 +284,7 @@ def register_error_handling(app: FastAPI) -> None:
 	@app.exception_handler(Exception)
 	async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
 		request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
-		logger.exception("unhandled exception", extra={"request_id": request_id})
+		logger.exception("unhandled exception", extra={"event": "unhandled_exception", "request_id": request_id})
 		return JSONResponse(
 			status_code=500,
 			content=_build_error_body("INTERNAL_ERROR", "サーバーエラーが発生しました", None, request_id),

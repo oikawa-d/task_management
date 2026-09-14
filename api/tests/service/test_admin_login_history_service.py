@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -39,6 +40,10 @@ def _history(**overrides: object) -> LoginHistory:
 	}
 	defaults.update(overrides)
 	return LoginHistory(**defaults)
+
+
+def _connection_error(statement: str = "x") -> OperationalError:
+	return OperationalError(statement, {}, SimpleNamespace(sqlstate="08006"))
 
 
 @pytest.mark.asyncio
@@ -133,9 +138,7 @@ async def test_list_admin_login_history_invalid_date_range_rejected_by_schema() 
 @pytest.mark.asyncio
 @pytest.mark.asyncio
 async def test_list_admin_login_history_service_unavailable_on_db_error(monkeypatch: pytest.MonkeyPatch) -> None:
-	monkeypatch.setattr(
-		admin_repository, "list_login_history", AsyncMock(side_effect=OperationalError("x", {}, Exception()))
-	)
+	monkeypatch.setattr(admin_repository, "list_login_history", AsyncMock(side_effect=_connection_error()))
 
 	with pytest.raises(ServiceUnavailableError):
 		await admin_login_history_service.search(AdminLoginHistoryQuery(), AsyncMock())

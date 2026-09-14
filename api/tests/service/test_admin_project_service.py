@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -12,6 +13,10 @@ from app.schemas.admin import AdminProjectListQuery
 from app.schemas.auth import CurrentUser
 from app.service import admin_project_service
 from sqlalchemy.exc import OperationalError
+
+
+def _connection_error(statement: str = "x") -> OperationalError:
+	return OperationalError(statement, {}, SimpleNamespace(sqlstate="08006"))
 
 
 def _owner() -> User:
@@ -141,9 +146,7 @@ async def test_list_admin_projects_query_count_does_not_depend_on_project_count(
 
 @pytest.mark.asyncio
 async def test_list_admin_projects_service_unavailable_on_db_error(monkeypatch: pytest.MonkeyPatch) -> None:
-	monkeypatch.setattr(
-		admin_repository, "list_projects", AsyncMock(side_effect=OperationalError("x", {}, Exception()))
-	)
+	monkeypatch.setattr(admin_repository, "list_projects", AsyncMock(side_effect=_connection_error()))
 
 	with pytest.raises(ServiceUnavailableError):
 		await admin_project_service.list_projects(AdminProjectListQuery(), AsyncMock())
@@ -151,7 +154,7 @@ async def test_list_admin_projects_service_unavailable_on_db_error(monkeypatch: 
 
 @pytest.mark.asyncio
 async def test_admin_delete_project_service_unavailable_when_lookup_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-	monkeypatch.setattr(project_repository, "get_by_id", AsyncMock(side_effect=OperationalError("x", {}, Exception())))
+	monkeypatch.setattr(project_repository, "get_by_id", AsyncMock(side_effect=_connection_error()))
 
 	with pytest.raises(ServiceUnavailableError):
 		await admin_project_service.deactivate_project(_actor(), uuid4(), AsyncMock())
@@ -216,9 +219,7 @@ async def test_admin_delete_project_service_unavailable_on_db_error(monkeypatch:
 	monkeypatch.setattr(project_repository, "get_by_id", AsyncMock(return_value=project))
 	monkeypatch.setattr(project_member_repository, "list_by_project", AsyncMock(return_value=[]))
 	monkeypatch.setattr(task_repository, "list_board", AsyncMock(return_value=[]))
-	monkeypatch.setattr(
-		admin_repository, "deactivate_project", AsyncMock(side_effect=OperationalError("x", {}, Exception()))
-	)
+	monkeypatch.setattr(admin_repository, "deactivate_project", AsyncMock(side_effect=_connection_error()))
 
 	with pytest.raises(ServiceUnavailableError):
 		await admin_project_service.deactivate_project(_actor(), project.id, AsyncMock())

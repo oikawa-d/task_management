@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -85,7 +86,7 @@ async def test_create_calls_register_procedure_and_returns_user_id() -> None:
 @pytest.mark.asyncio
 async def test_get_by_id_translates_database_connection_error() -> None:
 	db = AsyncMock()
-	db.execute.side_effect = OperationalError("SELECT", {}, ConnectionError("database unavailable"))
+	db.execute.side_effect = OperationalError("SELECT", {}, SimpleNamespace(sqlstate="08006"))
 
 	with pytest.raises(ServiceUnavailableError):
 		await user_repository.get_by_id(db, uuid.uuid4())
@@ -94,7 +95,7 @@ async def test_get_by_id_translates_database_connection_error() -> None:
 @pytest.mark.asyncio
 async def test_all_user_db_operations_translate_operational_error() -> None:
 	db = AsyncMock()
-	db.execute.side_effect = OperationalError("statement", {}, ConnectionError("database unavailable"))
+	db.execute.side_effect = OperationalError("statement", {}, SimpleNamespace(sqlstate="08006"))
 	user_id = uuid.uuid4()
 
 	operations = (
