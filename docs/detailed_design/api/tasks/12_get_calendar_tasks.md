@@ -25,7 +25,13 @@
 
 ### 2.2 Response
 
-`GET /api/tasks`の`items[]`と同じ`TaskListItem`を配列で返す。レスポンスには`meta`を付与しない。`project_is_active`にはプロジェクトの有効状態を含め、未所属タスクは`null`とする。
+`GET /api/tasks`の`items[]`を拡張した`CalendarTaskItem`を配列で返す。レスポンスには`meta`を付与しない。`project_is_active`にはプロジェクトの有効状態を含め、未所属タスクは`null`とする。
+
+`CalendarTaskItem`は`TaskListItem`の全フィールドに加えて、`due_date`（`YYYY-MM-DD`）を含む。`due_date`は`due_at`を`APP_TIMEZONE`へ変換した日付であり、ブラウザのタイムゾーンに依存せずカレンダーのセル割当へ使用する。
+
+| フィールド | 型 | 説明 |
+|------------|----|------|
+| `due_date` | `date` | `due_at`を`APP_TIMEZONE`へ変換した日付。カレンダーのセルキーに使用する |
 
 ### 2.3 エラー
 

@@ -7,10 +7,24 @@ import { Calendar } from "./Calendar";
 
 describe("Calendar", () => {
 	it("期限日のセルにタスクを表示する", () => {
-		render(<Calendar month={new Date(2026, 8, 1)} tasks={[{ id: "task-1", project_id: null, title: "期限タスク", due_at: "2026-09-10T03:00:00Z", status: "todo" }]} onPreviousMonth={vi.fn()} onNextMonth={vi.fn()} onRetry={vi.fn()} />);
+		render(<Calendar month={new Date(2026, 8, 1)} tasks={[{ id: "task-1", project_id: null, title: "期限タスク", due_at: "2026-09-10T03:00:00Z", due_date: "2026-09-10", status: "todo" }]} onPreviousMonth={vi.fn()} onNextMonth={vi.fn()} onRetry={vi.fn()} />);
 
 		expect(screen.getByText("期限タスク")).toBeInTheDocument();
 		expect(screen.getByText("期限タスク").parentElement).toHaveTextContent("10");
+	});
+
+	it("サーバーのAPP_TIMEZONE日付キーでUTC境界のタスクを割り当てる", () => {
+		render(
+			<Calendar
+				month={new Date(2026, 8, 1)}
+				tasks={[{ id: "task-1", project_id: null, title: "境界タスク", due_at: "2026-09-09T16:00:00Z", due_date: "2026-09-10", status: "todo" }]}
+				onPreviousMonth={vi.fn()}
+				onNextMonth={vi.fn()}
+				onRetry={vi.fn()}
+			/>,
+		);
+
+		expect(screen.getByText("境界タスク").parentElement).toHaveTextContent("10");
 	});
 
 	it("月送りボタンを親へ通知する", () => {

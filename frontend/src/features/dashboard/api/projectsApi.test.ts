@@ -107,7 +107,7 @@ describe("projectsApi", () => {
 
 	it("getCalendarTasks: 日付範囲とscopeを指定してタスク配列を返す", async () => {
 		const client = createMockClient();
-		const tasks = [{ id: "task-1", project_id: null, title: "期限", due_at: "2026-09-10T00:00:00Z", status: "todo" as const }];
+		const tasks = [{ id: "task-1", project_id: null, title: "期限", due_at: "2026-09-10T00:00:00Z", due_date: "2026-09-10", status: "todo" as const }];
 		(client.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: tasks });
 
 		await expect(getCalendarTasks({ from: "2026-09-01", to: "2026-09-30", scope: "me" }, client)).resolves.toEqual(tasks);

@@ -9,11 +9,11 @@ from app.models.project import Project
 from app.schemas.auth import CurrentUser
 from app.schemas.task import (
 	BoardResponse,
+	CalendarTaskItem,
 	CalendarTaskQuery,
 	TaskCreateFlatRequest,
 	TaskCreateRequest,
 	TaskDetailResponse,
-	TaskListItem,
 	TaskListQuery,
 	TaskListResponse,
 	TaskResponse,
@@ -62,12 +62,12 @@ async def list_tasks(
 	)
 
 
-@router.get("/api/tasks/calendar", response_model=list[TaskListItem])
+@router.get("/api/tasks/calendar", response_model=list[CalendarTaskItem])
 async def list_calendar_tasks(
 	query: CalendarTaskQuery = Depends(),
 	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
-) -> list[TaskListItem]:
+) -> list[CalendarTaskItem]:
 	return await task_service.list_calendar_tasks(user, query, db)
 
 
