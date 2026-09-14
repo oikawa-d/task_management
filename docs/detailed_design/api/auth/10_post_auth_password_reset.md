@@ -96,7 +96,7 @@ sequenceDiagram
     participant PG as "PostgreSQL"
 
     FE->>R: "POST /api/auth/password/reset {token, new_password, password_confirm}"
-    R->>S: "reset_password(token, new_password)"
+    R->>S: "reset_password(token, new_password, db)"
     S->>RD: "consume_password_reset_token(token)"
     RD->>RD: "GETDEL pwreset:{sha256(token)}"
     alt トークンが存在しない
@@ -106,14 +106,15 @@ sequenceDiagram
     else トークンが有効
         RD-->>S: "user_id"
         S->>S: "password_hash = argon2.hash(new_password)"
-        S->>UR: "update_password(user_id, password_hash)"
-        UR->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
-        PG-->>UR: "更新後の行"
-        UR-->>S: "User"
         S->>RD: "delete_all_sessions(user_id)"
         RD->>RD: "SMEMBERS user_sessions:{uid} → 各session/csrfをDEL → DEL user_sessions:{uid}"
         S->>RD: "revoke_all_refresh_tokens(user_id)"
         RD->>RD: "SMEMBERS user_refresh:{uid} → 各refreshをDEL → DEL user_refresh:{uid}"
+        S->>UR: "update_password(db, user_id, password_hash)"
+        UR->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
+        PG-->>UR: "更新後の行"
+        UR-->>S: "User"
+        S->>S: "db.commit()"
         S-->>R: "None"
         R-->>FE: "204 No Content"
     end
@@ -143,22 +144,22 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def password_reset(payload: PasswordResetRequest, service: AuthService = Depends(get_auth_service)) -> Response` |
-| 引数 | `payload: PasswordResetRequest`、`service: AuthService` |
+| シグネチャ | `async def password_reset(payload: PasswordResetRequest, db: AsyncSession = Depends(get_db_session)) -> None` |
+| 引数 | `payload: PasswordResetRequest`、`db: AsyncSession`（DI） |
 | 戻り値 | `Response`（`204 No Content`） |
-| 送出例外 | なし（`email_verification_service.reset_password` が送出した `InvalidResetTokenError` はグローバル例外ハンドラで400に変換） |
-| 処理内容 | 1. `service.reset_password(payload.token, payload.new_password)` を呼び出す 2. 成功時は `Response(status_code=204)` を返す |
+| 送出例外 | `InvalidResetTokenError` はグローバル例外ハンドラで400に変換。RedisまたはDB接続不能時は503 |
+| 処理内容 | 1. `email_verification_service.reset_password(payload.token, payload.new_password, db)` を呼び出す 2. 成功時は `Response(status_code=204)` を返す |
 | 副作用 | なし（副作用は service 層に委譲） |
 
 ### 6.2 `api/app/service/email_verification_service.py :: reset_password`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def reset_password(token: str, new_password: str) -> None` |
-| 引数 | `token: str`（メールリンクのトークン）、`new_password: str`（バリデーション済み平文） |
+| シグネチャ | `async def reset_password(token: str, new_password: str, db: AsyncSession) -> None` |
+| 引数 | `token: str`（メールリンクのトークン）、`new_password: str`（バリデーション済み平文）、`db: AsyncSession`（ユーザー更新用DBセッション） |
 | 戻り値 | `None` |
-| 送出例外 | `InvalidResetTokenError`（HTTP 400） |
-| 処理内容 | 1. `redis_store.consume_password_reset_token(token)` を呼び user_id を取得 2. `None` の場合は `InvalidResetTokenError` を送出 3. `core/security.py` の `hash_password(new_password)` で argon2 ハッシュを生成 4. `user_repository.sp_update_user_password(user_id, password_hash)` を呼ぶ 5. `redis_store.delete_all_sessions(user_id)` を呼ぶ 6. `redis_store.revoke_all_refresh_tokens(user_id)` を呼ぶ |
+| 送出例外 | `InvalidResetTokenError`（HTTP 400）、RedisまたはDB接続不能時は共通例外ハンドラで503 |
+| 処理内容 | 1. `redis_store.consume_password_reset_token(token)` を呼び user_id を取得 2. `None` の場合は `InvalidResetTokenError` を送出 3. `core/security.py` の `hash_password(new_password)` で argon2 ハッシュを生成 4. `redis_store.delete_all_sessions(user_id)` を呼ぶ 5. `redis_store.revoke_all_refresh_tokens(user_id)` を呼ぶ 6. `user_repository.update_password(db, user_id, password_hash)` を呼ぶ 7. `db.commit()` でDB更新を確定する。RedisまたはDB接続不能時は503とし、Redis失効に失敗した場合はDB更新へ進まない |
 | 副作用 | Redis：`pwreset:{hash}` 削除、`session:*` / `csrf:*` / `user_sessions:{uid}` 全削除、`refresh:*` / `user_refresh:{uid}` 全削除。PostgreSQL：`users.password_hash` 更新 |
 
 ### 6.3 `repository/user_repository.py :: sp_update_user_password`

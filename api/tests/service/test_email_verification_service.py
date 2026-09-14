@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from app.core.exceptions import InvalidVerifyTokenError
+from app.core.exceptions import InvalidResetTokenError, InvalidVerifyTokenError
 from app.service import email_verification_service
 from redis.exceptions import ConnectionError as RedisConnectionError
 
@@ -50,6 +50,26 @@ async def test_issue_email_verify_token_replaces_old_and_schedules_mail(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_issue_email_verify_token_passes_token_and_expiration_to_mail(monkeypatch: pytest.MonkeyPatch) -> None:
+	user = _user()
+	monkeypatch.setattr(email_verification_service, "_generate_token", lambda: "new-token")
+	replace_mock = AsyncMock()
+	sent_mock = AsyncMock(return_value=True)
+	monkeypatch.setattr(email_verification_service.redis_store, "replace_email_verify_token", replace_mock)
+	monkeypatch.setattr(email_verification_service.redis_store, "mark_email_verify_sent", sent_mock)
+	background = _FakeBackgroundTasks()
+
+	await email_verification_service.issue_email_verify_token(user, background)  # type: ignore[arg-type]
+
+	settings = email_verification_service.get_backend_settings()
+	replace_mock.assert_awaited_once_with("new-token", user.id, ttl=settings.email_verify_ttl_seconds)
+	sent_mock.assert_awaited_once_with(user.id, interval=settings.email_verify_resend_interval_seconds)
+	func, args = background.tasks[0]
+	assert func is email_verification_service.mail_service.send_email_verification_mail
+	assert args == (user.email, "new-token", settings.email_verify_ttl_seconds // 3600)
+
+
+@pytest.mark.asyncio
 async def test_verify_email_rejects_invalid_or_reused_token(monkeypatch: pytest.MonkeyPatch) -> None:
 	user_id = uuid4()
 	consume_mock = AsyncMock(side_effect=[user_id, None])
@@ -59,6 +79,24 @@ async def test_verify_email_rejects_invalid_or_reused_token(monkeypatch: pytest.
 	await email_verification_service.verify_email("token", _FakeDb())  # type: ignore[arg-type]
 	with pytest.raises(InvalidVerifyTokenError):
 		await email_verification_service.verify_email("token", _FakeDb())  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_verify_email_commits_database_update(monkeypatch: pytest.MonkeyPatch) -> None:
+	user_id = uuid4()
+	monkeypatch.setattr(
+		email_verification_service.redis_store,
+		"consume_email_verify_token",
+		AsyncMock(return_value=user_id),
+	)
+	mark_verified = AsyncMock()
+	monkeypatch.setattr(email_verification_service.user_repository, "mark_email_verified", mark_verified)
+	db = _FakeDb()
+
+	await email_verification_service.verify_email("token", db)  # type: ignore[arg-type]
+
+	mark_verified.assert_awaited_once_with(db, user_id)
+	assert db.calls == ["db.commit"]
 
 
 @pytest.mark.asyncio
@@ -108,6 +146,52 @@ async def test_request_password_reset_schedules_mail(monkeypatch: pytest.MonkeyP
 	save.assert_awaited_once()
 	assert save.await_args.args[1] == user.id
 	assert len(background.tasks) == 1
+
+
+@pytest.mark.asyncio
+async def test_resend_verification_issues_token_and_schedules_mail_after_interval(
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	user = _user()
+	monkeypatch.setattr(email_verification_service.user_repository, "get_by_email", AsyncMock(return_value=user))
+	monkeypatch.setattr(email_verification_service, "_generate_token", lambda: "resend-token")
+	sent_mock = AsyncMock(side_effect=[True, True])
+	replace_mock = AsyncMock()
+	monkeypatch.setattr(email_verification_service.redis_store, "mark_email_verify_sent", sent_mock)
+	monkeypatch.setattr(email_verification_service.redis_store, "replace_email_verify_token", replace_mock)
+	background = _FakeBackgroundTasks()
+
+	await email_verification_service.resend_verification("taro@example.com", background, _FakeDb())  # type: ignore[arg-type]
+
+	settings = email_verification_service.get_backend_settings()
+	replace_mock.assert_awaited_once_with("resend-token", user.id, ttl=settings.email_verify_ttl_seconds)
+	func, args = background.tasks[0]
+	assert func is email_verification_service.mail_service.send_email_verification_mail
+	assert args == (user.email, "resend-token", settings.email_verify_ttl_seconds // 3600)
+
+
+@pytest.mark.asyncio
+async def test_reset_password_invalid_token_does_not_revoke_or_update_database(
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	monkeypatch.setattr(
+		email_verification_service.redis_store,
+		"consume_password_reset_token",
+		AsyncMock(return_value=None),
+	)
+	delete_sessions = AsyncMock()
+	revoke_refresh = AsyncMock()
+	update_password = AsyncMock()
+	monkeypatch.setattr(email_verification_service.redis_store, "delete_all_sessions", delete_sessions)
+	monkeypatch.setattr(email_verification_service.redis_store, "revoke_all_refresh_tokens", revoke_refresh)
+	monkeypatch.setattr(email_verification_service.user_repository, "update_password", update_password)
+
+	with pytest.raises(InvalidResetTokenError):
+		await email_verification_service.reset_password("bad-token", "NewPassw0rd!", _FakeDb())  # type: ignore[arg-type]
+
+	delete_sessions.assert_not_awaited()
+	revoke_refresh.assert_not_awaited()
+	update_password.assert_not_awaited()
 
 
 @pytest.mark.asyncio

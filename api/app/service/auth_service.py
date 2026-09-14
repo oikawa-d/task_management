@@ -17,6 +17,7 @@ from app.core.exceptions import (
 	ServiceUnavailableError,
 	TooManyAttemptsError,
 	UserInactiveError,
+	is_service_unavailable_database_error,
 	raise_database_error,
 )
 from app.core.security import get_dummy_password_hash, hash_password, verify_password
@@ -161,6 +162,13 @@ async def login(
 			request, None, client_info, identifier, strategy.mode, False, SERVICE_UNAVAILABLE_FAILURE_REASON
 		)
 		raise
+	except Exception as exc:
+		if not is_service_unavailable_database_error(exc):
+			raise
+		log_login_attempt(
+			request, None, client_info, identifier, strategy.mode, False, SERVICE_UNAVAILABLE_FAILURE_REASON
+		)
+		raise ServiceUnavailableError() from exc
 	stored_hash = user.password_hash if user is not None and user.password_hash is not None else None
 	password_matched = verify_password(password, stored_hash or get_dummy_password_hash())
 	if user is None or stored_hash is None or not password_matched:
