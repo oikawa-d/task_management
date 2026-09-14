@@ -365,17 +365,6 @@ async def refresh(request: Request, response: Response, strategy: AuthStrategy) 
 	return await strategy.refresh(request, response)
 
 
-def get_auth_config(settings: BackendSettings | None = None) -> AuthConfigResponse:
-	config = settings or get_backend_settings()
-	return AuthConfigResponse(
-		auth_mode=config.auth_mode,
-		google_login_enabled=bool(
-			config.google_login_enabled and config.google_client_id and config.google_client_secret
-		),
-		csrf_cookie_name=config.cookie_name_csrf,
-	)
-
-
 def normalize_redirect_to(raw: str | None, settings: BackendSettings | None = None) -> str:
 	config = settings or get_backend_settings()
 	if not raw:
