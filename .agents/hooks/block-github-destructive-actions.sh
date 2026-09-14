@@ -42,7 +42,14 @@ command=$(jq -r '.tool_input.command // empty' <<<"$input")
 # heredocの開始行自体(<<WORDの行)は残すため、開始行に別コマンドが同居していても検査は継続される。
 strip_heredocs() {
 	awk '
-		BEGIN { in_heredoc = 0; strip_tabs = 0; word = "" }
+		BEGIN {
+			in_heredoc = 0
+			strip_tabs = 0
+			word = ""
+			quote = ""
+			single_quote = sprintf("%c", 39)
+			double_quote = sprintf("%c", 34)
+		}
 		{
 			if (in_heredoc) {
 				line = $0
@@ -54,19 +61,61 @@ strip_heredocs() {
 				next
 			}
 			print $0
-			if (match($0, /<<-?[[:space:]]*"?'"'"'?[A-Za-z_][A-Za-z0-9_]*"?'"'"'?/)) {
-				tok = substr($0, RSTART, RLENGTH)
-				strip_tabs = (tok ~ /^<<-/) ? 1 : 0
-				gsub(/<<-?[[:space:]]*/, "", tok)
-				gsub(/["'"'"']/, "", tok)
-				word = tok
-				in_heredoc = 1
+			# 引用符内・エスケープされた `<<` はheredoc開始ではない。
+			# quoteは行をまたいで保持するため、複数行の文字列も正しく扱う。
+			line = $0
+			for (i = 1; i <= length(line); i++) {
+				char = substr(line, i, 1)
+				if (quote == "single") {
+					if (char == single_quote) { quote = "" }
+					continue
+				}
+				if (quote == "double") {
+					if (char == "\\") { i++ }
+					else if (char == double_quote) { quote = "" }
+					continue
+				}
+				if (char == "\\") { i++; continue }
+				if (char == single_quote) { quote = "single"; continue }
+				if (char == double_quote) { quote = "double"; continue }
+				if (char != "<" || substr(line, i + 1, 1) != "<") { continue }
+
+				j = i + 2
+				strip_tabs = 0
+				if (substr(line, j, 1) == "-") {
+					strip_tabs = 1
+					j++
+				}
+				while (substr(line, j, 1) ~ /[[:space:]]/) { j++ }
+
+				word = ""
+				marker_quote = substr(line, j, 1)
+				if (marker_quote == single_quote || marker_quote == double_quote) {
+					j++
+					while (j <= length(line) && substr(line, j, 1) != marker_quote) {
+						word = word substr(line, j, 1)
+						j++
+					}
+					if (j > length(line)) { word = "" }
+				} else if (substr(line, j, 1) ~ /[A-Za-z_]/) {
+					while (substr(line, j, 1) ~ /[A-Za-z0-9_]/) {
+						word = word substr(line, j, 1)
+						j++
+					}
+				}
+				if (word != "") {
+					in_heredoc = 1
+					break
+				}
 			}
 		}
 	'
 }
 
 command_for_match=$(strip_heredocs <<<"$command")
+# シェルのバックスラッシュ改行はトークン間の空白として扱われるため、
+# 操作名が改行で分断されても同じコマンドとして検査する。
+command_for_match=${command_for_match//\\$'\n'/}
 
 # コマンド位置の判定を厳格化する(#388)。
 # `gh` が実際にコマンドとして実行され得る位置(行頭、または `;` `&` `|` `` ` `` `(` の直後)に
