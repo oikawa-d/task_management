@@ -44,6 +44,7 @@ def _login_history_id_comment() -> str | None:
 
 
 def _mark_all_notifications_read_after_downgrade() -> tuple[int, int]:
+	"""0022時点の署名（入力引数1個・OUTなし）で一括既読を実行し、テーブル状態を返す。"""
 	engine = create_engine(_sync_database_url())
 	try:
 		with engine.begin() as connection:
@@ -68,14 +69,31 @@ def _mark_all_notifications_read_after_downgrade() -> tuple[int, int]:
 				),
 				{"user_id": user_id, "read_key": f"read-{uuid4().hex}"},
 			)
-			updated_count = connection.execute(
-				text("CALL sp_mark_all_notifications_read(:user_id, NULL)"), {"user_id": user_id}
-			).scalar_one()
+			connection.execute(text("CALL sp_mark_all_notifications_read(:user_id)"), {"user_id": user_id})
 			unread_count = connection.execute(
 				text("SELECT count(*) FROM notifications WHERE user_id = :user_id AND read_at IS NULL"),
 				{"user_id": user_id},
 			).scalar_one()
-			return int(updated_count), int(unread_count)
+			read_count = connection.execute(
+				text("SELECT count(*) FROM notifications WHERE user_id = :user_id AND read_at IS NOT NULL"),
+				{"user_id": user_id},
+			).scalar_one()
+			return int(unread_count), int(read_count)
+	finally:
+		engine.dispose()
+
+
+def _procedure_arguments(name: str) -> str | None:
+	engine = create_engine(_sync_database_url())
+	try:
+		with engine.connect() as connection:
+			return connection.execute(
+				text(
+					"SELECT pg_get_function_arguments(oid) FROM pg_proc "
+					"WHERE proname = :name AND pronamespace = 'public'::regnamespace"
+				),
+				{"name": name},
+			).scalar_one_or_none()
 	finally:
 		engine.dispose()
 
@@ -132,7 +150,12 @@ def test_notification_procedure_contract_is_restored_by_0023_downgrade() -> None
 	command.upgrade(cfg, "head")
 	command.downgrade(cfg, "0022")
 
-	updated_count, unread_count = _mark_all_notifications_read_after_downgrade()
+	assert _procedure_arguments("sp_mark_all_notifications_read") == "IN p_user_id uuid"
+	assert _procedure_arguments("sp_mark_notification_read") == (
+		"IN p_notification_id uuid, IN p_user_id uuid, OUT p_read_at timestamp with time zone"
+	)
 
-	assert updated_count == 1
+	unread_count, read_count = _mark_all_notifications_read_after_downgrade()
+
 	assert unread_count == 0
+	assert read_count == 2
