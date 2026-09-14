@@ -405,8 +405,12 @@ async def test_register_reraises_unknown_sqlstate(monkeypatch: pytest.MonkeyPatc
 	error = DBAPIError("CALL sp_register_user", {}, SimpleNamespace(sqlstate="P0009"))  # type: ignore[arg-type]
 	monkeypatch.setattr(auth_service.user_repository, "create", AsyncMock(side_effect=error))
 
+	db = _RegisterDb()
+
 	with pytest.raises(DBAPIError):
-		await auth_service.register(_register_payload(), _FakeBackgroundTasks(), _FakeRequest(), _RegisterDb())  # type: ignore[arg-type]
+		await auth_service.register(_register_payload(), _FakeBackgroundTasks(), _FakeRequest(), db)  # type: ignore[arg-type]
+
+	assert db.calls == ["db.rollback"]
 
 
 @pytest.mark.parametrize("sqlstate", ["08006", "57P03"])

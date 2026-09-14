@@ -93,6 +93,21 @@ async def test_get_by_id_translates_database_connection_error() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+	("sqlstate", "expected_error"),
+	[("57P03", ServiceUnavailableError), ("40P01", OperationalError), (None, OperationalError)],
+)
+async def test_get_by_id_preserves_non_connection_operational_errors(
+	sqlstate: str | None, expected_error: type[Exception]
+) -> None:
+	db = AsyncMock()
+	db.execute.side_effect = OperationalError("SELECT", {}, SimpleNamespace(sqlstate=sqlstate))
+
+	with pytest.raises(expected_error):
+		await user_repository.get_by_id(db, uuid.uuid4())
+
+
+@pytest.mark.asyncio
 async def test_all_user_db_operations_translate_operational_error() -> None:
 	db = AsyncMock()
 	db.execute.side_effect = OperationalError("statement", {}, SimpleNamespace(sqlstate="08006"))

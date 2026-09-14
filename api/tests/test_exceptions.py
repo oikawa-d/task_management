@@ -135,11 +135,14 @@ def test_unhandled_exception_converted_to_internal_error() -> None:
 	assert body["error"]["message"] == "サーバーエラーが発生しました"
 
 
-def test_unhandled_exception_emits_event() -> None:
+def test_unhandled_exception_emits_event_and_request_id() -> None:
 	with patch.object(exceptions_module.logger, "exception") as log_exception:
-		_client().get("/boom-unhandled")
+		response = _client().get("/boom-unhandled")
 
-	assert log_exception.call_args.kwargs["extra"]["event"] == "unhandled_exception"
+	assert log_exception.call_args.kwargs["extra"] == {
+		"event": "unhandled_exception",
+		"request_id": response.json()["error"]["request_id"],
+	}
 
 
 def _assert_service_unavailable_body(body: dict) -> None:
@@ -230,6 +233,16 @@ def test_operational_error_with_unmapped_sqlstate_returns_internal_error() -> No
 
 	assert res.status_code == 500
 	assert res.json()["error"]["code"] == "INTERNAL_ERROR"
+
+
+def test_unmapped_operational_error_emits_internal_event_and_request_id() -> None:
+	with patch.object(exceptions_module.logger, "exception") as log_exception:
+		response = _client().get("/boom-unknown-operational-error")
+
+	assert log_exception.call_args.kwargs["extra"] == {
+		"event": "infrastructure_error",
+		"request_id": response.json()["error"]["request_id"],
+	}
 
 
 def test_interface_error_is_converted_to_503_by_infra_error_handler() -> None:
