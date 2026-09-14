@@ -165,6 +165,7 @@ async def change_password(
 		raise ServiceUnavailableError() from exc
 
 	await user_repository.update_password(db, current_user.id, new_password_hash)
+	await db.commit()
 
 
 async def get_login_history(current_user: CurrentUser, db: AsyncSession, limit: int) -> LoginHistoryListResponse:

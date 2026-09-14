@@ -156,8 +156,8 @@ sequenceDiagram
     alt トークンが無効・期限切れ
         API-->>FE: "400 INVALID_RESET_TOKEN"
     else 有効
-        API->>PG: "UPDATE users SET password_hash = argon2(new_password)"
         API->>RD: "全セッション/全リフレッシュトークンを失効（08_redis_store.md参照）"
+        API->>PG: "UPDATE users SET password_hash = argon2(new_password)（Redis失効後にcommit）"
         API-->>FE: "204"
     end
 ```
@@ -265,11 +265,11 @@ stateDiagram-v2
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ / 定義 | `async def reset_password(token: str, new_password: str) -> None` |
-| 引数 / 入力 | `token`（平文）、`new_password`（バリデーション済み） |
+| シグネチャ / 定義 | `async def reset_password(token: str, new_password: str, db: AsyncSession) -> None` |
+| 引数 / 入力 | `token`（平文）、`new_password`（バリデーション済み）、`db` |
 | 戻り値 / 出力 | `None` |
-| 送出例外 / 失敗条件 | `InvalidResetTokenError`（→400 `INVALID_RESET_TOKEN`）：`consume_password_reset_token`が`None`を返した場合 |
-| 処理内容 | 1. `user_id = await redis_store.consume_password_reset_token(token)` 2. `None`なら例外 3. `delete_all_sessions` と `revoke_all_refresh_tokens` を実行 4. 成功後に `hash_password` と `user_repository.update_password` を同一DBトランザクションで実行。Redis失敗時はDB更新しない |
+| 送出例外 / 失敗条件 | `InvalidResetTokenError`（→400 `INVALID_RESET_TOKEN`）：`consume_password_reset_token`が`None`を返した場合。Redis障害またはPostgreSQL接続障害はグローバル例外ハンドラで503 `SERVICE_UNAVAILABLE`へ変換する。Redis失効に失敗した場合はfail-closeとし、DB更新・`commit()`を行わない |
+| 処理内容 | 1. `user_id = await redis_store.consume_password_reset_token(token)` 2. `None`なら例外 3. `hash_password`で新パスワードをハッシュ化 4. `delete_all_sessions`を実行 5. `revoke_all_refresh_tokens`を実行 6. Redis成功後に`user_repository.update_password(db, user_id, password_hash)`を実行 7. `db.commit()`を実行 |
 | 副作用 | Redis削除（ワンタイム消費＋全失効）、PostgreSQL UPDATE |
 
 ### 8.6 `service/mail_service.py :: send_email_verification_mail` / `send_password_reset_mail`

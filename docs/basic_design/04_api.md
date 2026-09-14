@@ -618,7 +618,7 @@ sequenceDiagram
 | `oauth_callback` | `code: str`, `state: str`, `request`, `response` | `OAuthCallbackResult` | `api/app/service/oauth_service.py`。state Cookie/Redis消費 → code交換 → id_token検証 → ユーザー解決。sessionはここでlogin、jwtはhandoff codeを発行 |
 | `oauth_exchange` | `code: str`, `request`, `response` | `OAuthExchangeResult` | `api/app/service/oauth_service.py`。jwtのみ。handoff codeをGETDELで消費 → `SELECT fn_get_user` → JwtStrategy.login → `CALL sp_record_login_history` |
 | `request_password_reset` | `email: str` | `None` | `api/app/service/email_verification_service.py`。ユーザー検索 → トークン生成 → Redis保存 → メール送信（存在しなくても例外を出さない） |
-| `reset_password` | `token: str`, `new_password: str` | `None` | `api/app/service/email_verification_service.py`。トークン消費 → 全セッション/トークン失効 → `CALL sp_update_user_password` → DB commit |
+| `reset_password` | `token: str`, `new_password: str`, `db: AsyncSession` | `None` | `api/app/service/email_verification_service.py`。トークン消費 → パスワードハッシュ化 → 全セッション/トークン失効 → `CALL sp_update_user_password` → DB commit |
 
 ### 7.2 `service/project_service.py` / `task_service.py`
 

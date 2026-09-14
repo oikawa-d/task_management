@@ -75,7 +75,7 @@ gh pr comment <番号> --body-file <file>
 
 ## マージとclose
 
-**PR作成もしくはコード修正を行ったエージェントはmerge・issue closeを実施しない。** それ以外のエージェントは、レビューで「受入可」を記録し、`reviewed`ラベルとCI全pass・mergeableを確認した場合、追加のユーザー承認なしにsquash mergeとIssue closeを実施してよい。同一GitHubアカウントを使用する場合も、PR作成またはコード修正を行ったエージェントでなければこの運用の対象とする。`.claude/hooks/block-github-destructive-actions.sh` は`reviewed`ラベルの有無を検証するが、PR作成・コード修正を行ったエージェントの識別は行わない。
+**PR作成もしくはコード修正を行ったエージェントはmerge・issue closeを実施しない。** それ以外のエージェントは、レビューで「受入可」を記録し、`reviewed`ラベルとCI全pass・mergeableを確認した場合、追加のユーザー承認なしにsquash mergeとIssue closeを実施してよい。同一GitHubアカウントを使用する場合も、PR作成またはコード修正を行ったエージェントでなければこの運用の対象とする。`.agents/hooks/block-github-destructive-actions.sh`（Claude Codeは`.claude/hooks/`、Codexは`.codex/hooks/`のラッパー経由で呼び出される）は`reviewed`ラベルの有無を検証するが、PR作成・コード修正を行ったエージェントの識別は行わない。
 
 PR作成もしくはコード修正を行ったエージェントはここまでで作業を止め、「CI全pass・mergeable」であることと未解決の指摘の有無をユーザーに報告する。
 

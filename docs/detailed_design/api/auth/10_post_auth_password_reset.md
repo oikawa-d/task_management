@@ -113,7 +113,9 @@ sequenceDiagram
         S->>UR: "update_password(db, user_id, password_hash)"
         UR->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
         PG-->>UR: "更新完了"
-        S->>S: "db.commit()"
+        UR-->>S: "None"
+        S->>PG: "db.commit()"
+        PG-->>S: "commit完了"
         S-->>R: "None"
         R-->>FE: "204 No Content"
     end
@@ -129,10 +131,11 @@ flowchart TB
     C --> D{"値が存在したか?"}
     D -->|"No"| E2["400 INVALID_RESET_TOKEN"]
     D -->|"Yes（user_id取得）"| F["argon2でnew_passwordをハッシュ化"]
-    F --> G["CALL sp_update_user_password"]
-    G --> H["delete_all_sessions(user_id)"]
-    H --> I["revoke_all_refresh_tokens(user_id)"]
-    I --> J["204 No Content"]
+    F --> G["delete_all_sessions(user_id)"]
+    G --> H["revoke_all_refresh_tokens(user_id)"]
+    H --> I["user_repository.update_password"]
+    I --> J["db.commit()"]
+    J --> K["204 No Content"]
 ```
 
 認証・認可の分岐は存在しない。`current_password` の検証は行わない（トークン自体が本人確認の代替であり、`PUT /users/me/password` とは異なる方式）。
@@ -146,8 +149,8 @@ flowchart TB
 | シグネチャ | `async def password_reset(payload: PasswordResetRequest, db: AsyncSession = Depends(get_db_session)) -> None` |
 | 引数 | `payload: PasswordResetRequest`、`db: AsyncSession`（DI） |
 | 戻り値 | `Response`（`204 No Content`） |
-| 送出例外 | `InvalidResetTokenError` はグローバル例外ハンドラで400に変換。RedisまたはDB接続不能時は503 |
-| 処理内容 | 1. `email_verification_service.reset_password(payload.token, payload.new_password, db)` を呼び出す 2. 成功時は `Response(status_code=204)` を返す |
+| 送出例外 | `InvalidResetTokenError`（グローバル例外ハンドラで400 `INVALID_RESET_TOKEN`に変換）。Redis障害またはPostgreSQL接続障害はグローバル例外ハンドラで503 `SERVICE_UNAVAILABLE`に変換 |
+| 処理内容 | `email_verification_service.reset_password(payload.token, payload.new_password, db)` を呼び出す。成功時は`204 No Content`を返す |
 | 副作用 | なし（副作用は service 層に委譲） |
 
 ### 6.2 `api/app/service/email_verification_service.py :: reset_password`
@@ -157,19 +160,17 @@ flowchart TB
 | シグネチャ | `async def reset_password(token: str, new_password: str, db: AsyncSession) -> None` |
 | 引数 | `token: str`（メールリンクのトークン）、`new_password: str`（バリデーション済み平文）、`db: AsyncSession`（ユーザー更新用DBセッション） |
 | 戻り値 | `None` |
-| 送出例外 | `InvalidResetTokenError`（HTTP 400）、RedisまたはDB接続不能時は共通例外ハンドラで503 |
-| 処理内容 | 1. `redis_store.consume_password_reset_token(token)` を呼び user_id を取得 2. `None` の場合は `InvalidResetTokenError` を送出 3. `core/security.py` の `hash_password(new_password)` で argon2 ハッシュを生成 4. `redis_store.delete_all_sessions(user_id)` を呼ぶ 5. `redis_store.revoke_all_refresh_tokens(user_id)` を呼ぶ 6. `user_repository.update_password(db, user_id, password_hash)` を呼ぶ 7. `db.commit()` でDB更新を確定する。RedisまたはDB接続不能時は503とし、Redis失効に失敗した場合はDB更新へ進まない |
+| 送出例外 | `InvalidResetTokenError`（HTTP 400）。Redis障害またはPostgreSQL接続障害はグローバル例外ハンドラで503 `SERVICE_UNAVAILABLE`に変換 |
+| 処理内容 | 1. `redis_store.consume_password_reset_token(token)` を呼び user_id を取得 2. `None` の場合は `InvalidResetTokenError` を送出 3. `core/security.py` の `hash_password(new_password)` で argon2 ハッシュを生成 4. `redis_store.delete_all_sessions(user_id)` を呼ぶ 5. `redis_store.revoke_all_refresh_tokens(user_id)` を呼ぶ 6. Redis失効成功後に `user_repository.update_password(db, user_id, password_hash)` を呼ぶ 7. `db.commit()` を呼ぶ。Redis失効に失敗した場合はfail-closeとし、DB更新・`commit()`を行わない |
 | 副作用 | Redis：`pwreset:{hash}` 削除、`session:*` / `csrf:*` / `user_sessions:{uid}` 全削除、`refresh:*` / `user_refresh:{uid}` 全削除。PostgreSQL：`users.password_hash` 更新 |
-
-### 6.3 `api/app/repository/user_repository.py :: update_password`
 
 | 項目 | 内容 |
 |------|------|
 | シグネチャ | `async def update_password(db: AsyncSession, user_id: UUID, password_hash: str) -> None` |
 | 引数 | `db: AsyncSession`（DBセッション）、`user_id: UUID`、`password_hash: str`（argon2ハッシュ済み） |
 | 戻り値 | `None` |
-| 送出例外 | `OperationalError` は `raise_database_error` で共通DBエラーへ変換 |
-| 処理内容 | `CALL sp_update_user_password(:user_id, :password_hash)` を実行する。対象なしはAPI層で404へ変換する |
+| 送出例外 | `ServiceUnavailableError`（PostgreSQL接続障害時。グローバル例外ハンドラで503 `SERVICE_UNAVAILABLE`に変換） |
+| 処理内容 | `CALL sp_update_user_password(:user_id, :password_hash)` を実行する |
 | 副作用 | PostgreSQL：`users` テーブル1行の更新 |
 
 ### 6.4 `repository/redis_store.py :: consume_password_reset_token`
@@ -179,7 +180,7 @@ flowchart TB
 | シグネチャ | `async def consume_password_reset_token(token: str) -> UUID \| None` |
 | 引数 | `token: str`（平文） |
 | 戻り値 | `UUID` または `None` |
-| 送出例外 | なし（Redis接続不能時は `RedisError`） |
+| 送出例外 | `RedisError`（Redis障害時。グローバル例外ハンドラで503 `SERVICE_UNAVAILABLE`に変換） |
 | 処理内容 | 1. `hash = sha256(token).hexdigest()` を計算 2. `GETDEL pwreset:{hash}` を実行 3. 値が存在すれば `user_id` を返す |
 | 副作用 | Redis：`pwreset:{hash}` を削除（ワンタイム消費） |
 
@@ -190,7 +191,7 @@ flowchart TB
 | シグネチャ | `async def delete_all_sessions(user_id: UUID) -> int` |
 | 引数 | `user_id: UUID` |
 | 戻り値 | `int`（削除件数） |
-| 送出例外 | なし |
+| 送出例外 | `RedisError`（Redis障害時。グローバル例外ハンドラで503 `SERVICE_UNAVAILABLE`に変換） |
 | 処理内容 | 1. `SMEMBERS user_sessions:{uid}` で有効session_id一覧を取得 2. 各 `session:{sid}` / `csrf:{sid}` を `DEL` 3. `DEL user_sessions:{uid}` |
 | 副作用 | Redis：sessionモードの全ログイン状態を削除 |
 
@@ -201,7 +202,7 @@ flowchart TB
 | シグネチャ | `async def revoke_all_refresh_tokens(user_id: UUID) -> int` |
 | 引数 | `user_id: UUID` |
 | 戻り値 | `int`（削除件数） |
-| 送出例外 | なし |
+| 送出例外 | `RedisError`（Redis障害時。グローバル例外ハンドラで503 `SERVICE_UNAVAILABLE`に変換） |
 | 処理内容 | 1. `SMEMBERS user_refresh:{uid}` で有効token_hash一覧を取得 2. 各 `refresh:{hash}` を `DEL` 3. `DEL user_refresh:{uid}` |
 | 副作用 | Redis：jwtモードの全リフレッシュトークンを削除。既発行のアクセストークンは署名検証のみのため最大 `ACCESS_TOKEN_TTL_SECONDS`（既定900秒）は有効なまま残り得る（`basic_design/03_auth.md` §7.2 末尾） |
 
@@ -237,10 +238,10 @@ flowchart LR
 ```mermaid
 stateDiagram-v2
     [*] --> トークン発行済み: "09_post_auth_password_forgot.mdで<br/>SETEX pwreset:{hash} TTL=1800"
-    トークン発行済み --> パスワード更新済み: "POST /auth/password/reset 成功<br/>GETDEL pwreset:{hash}<br/>UPDATE users.password_hash"
+    トークン発行済み --> Redis失効済み: "POST処理中のRedis失効完了<br/>GETDEL pwreset:{hash}<br/>delete_all_sessions<br/>revoke_all_refresh_tokens"
     トークン発行済み --> 期限切れ: "TTL満了（Redisが自動削除）"
-    パスワード更新済み --> 全セッション失効: "delete_all_sessions<br/>revoke_all_refresh_tokens"
-    全セッション失効 --> [*]
+    Redis失効済み --> パスワード更新済み: "UPDATE users.password_hash<br/>DBトランザクションでcommit"
+    パスワード更新済み --> [*]
     期限切れ --> [*]
 ```
 
@@ -251,9 +252,9 @@ stateDiagram-v2
 | ストア | テーブル／キー | 操作 | 条件・TTL | 備考 |
 |--------|----------------|------|-----------|------|
 | Redis | `pwreset:{sha256(token)}` | `GETDEL` | TTL `PASSWORD_RESET_TTL_SECONDS`（既定1800） | ワンタイム消費 |
-| PostgreSQL | `users` | `UPDATE` | `WHERE id = :user_id` | `password_hash` のみ更新 |
 | Redis | `session:{sid}` / `csrf:{sid}` / `user_sessions:{uid}` | `SMEMBERS` → `DEL`（複数） | 該当ユーザーの全件 | sessionモードの全失効 |
 | Redis | `refresh:{hash}` / `user_refresh:{uid}` | `SMEMBERS` → `DEL`（複数） | 該当ユーザーの全件 | jwtモードの全失効 |
+| PostgreSQL | `users` | `UPDATE` | `WHERE id = :user_id` | `password_hash` のみ更新（Redis失効後にcommit） |
 
 ## 10. バリデーション規則
 
@@ -280,15 +281,16 @@ stateDiagram-v2
 |----|------|--------|------|----------|-----------------|
 | 1 | 単体（モック） | 有効なトークンで更新成功 | `consume_password_reset_token` が `user_id` を返す | `update_password` / `delete_all_sessions` / `revoke_all_refresh_tokens` が呼ばれる | `test_reset_password_service_success` |
 | 2 | 単体（モック） | 無効なトークン | `consume_password_reset_token` が `None` | `InvalidResetTokenError` 送出、以降の処理が呼ばれない | `test_reset_password_service_invalid_token` |
-| 3 | 結合（実Redis/PostgreSQL、`AUTH_MODE=session`） | パスワードリセット後にログイン中セッションが失効すること | ログイン済みsession Cookie保持、リセット要求済み | リセット成功後、旧session Cookieでのアクセスが `401 SESSION_EXPIRED` | `test_password_reset_endpoint_session_invalidated` |
-| 4 | 結合（実Redis/PostgreSQL、`AUTH_MODE=jwt`） | パスワードリセット後にリフレッシュトークンが失効すること | ログイン済みrefresh Cookie保持 | リセット成功後、`/auth/refresh` が `401 TOKEN_REVOKED` | `test_password_reset_endpoint_refresh_revoked` |
-| 5 | 結合 | 同一トークンを2回送信 | 1回目成功済み | 2回目は `400 INVALID_RESET_TOKEN` | `test_password_reset_endpoint_reuse_rejected` |
-| 6 | 結合 | 存在しないトークン | ランダム文字列 | `400 INVALID_RESET_TOKEN` | `test_password_reset_endpoint_unknown_token` |
-| 7 | 結合 | パスワードポリシー違反 | `new_password` が7文字 | `422 VALIDATION_ERROR` | `test_password_reset_endpoint_weak_password` |
-| 8 | 結合 | `password_confirm` 不一致 | `new_password` と異なる値 | `422 VALIDATION_ERROR` | `test_password_reset_endpoint_confirm_mismatch` |
-| 9 | 結合 | 更新後の新パスワードでログイン成功 | リセット完了後 | `POST /auth/login` が新パスワードで成功する | `test_password_reset_then_login_success` |
+| 3 | 単体（モック） | Redis失効失敗時にDBパスワードが更新されない | `delete_all_sessions` がRedis例外を送出 | `update_password` / `db.commit` が呼ばれず、Redis例外が伝播する | `test_reset_password_db_not_updated_when_session_revocation_fails` |
+| 4 | 結合（実Redis/PostgreSQL、`AUTH_MODE=session`） | パスワードリセット後にログイン中セッションが失効すること | ログイン済みsession Cookie保持、リセット要求済み | リセット成功後、旧session Cookieでのアクセスが `401 SESSION_EXPIRED` | `test_password_reset_endpoint_session_invalidated` |
+| 5 | 結合（実Redis/PostgreSQL、`AUTH_MODE=jwt`） | パスワードリセット後にリフレッシュトークンが失効すること | ログイン済みrefresh Cookie保持 | リセット成功後、`/auth/refresh` が `401 TOKEN_REVOKED` | `test_password_reset_endpoint_refresh_revoked` |
+| 6 | 結合 | 同一トークンを2回送信 | 1回目成功済み | 2回目は `400 INVALID_RESET_TOKEN` | `test_password_reset_endpoint_reuse_rejected` |
+| 7 | 結合 | 存在しないトークン | ランダム文字列 | `400 INVALID_RESET_TOKEN` | `test_password_reset_endpoint_unknown_token` |
+| 8 | 結合 | パスワードポリシー違反 | `new_password` が7文字 | `422 VALIDATION_ERROR` | `test_password_reset_endpoint_weak_password` |
+| 9 | 結合 | `password_confirm` 不一致 | `new_password` と異なる値 | `422 VALIDATION_ERROR` | `test_password_reset_endpoint_confirm_mismatch` |
+| 10 | 結合 | 更新後の新パスワードでログイン成功 | リセット完了後 | `POST /auth/login` が新パスワードで成功する | `test_password_reset_then_login_success` |
 
-このAPIの本体処理は `AUTH_MODE` に依存しないが、失効対象がsession/jwtで異なるため、No.3/4はそれぞれのモードで個別に実施する。
+このAPIの本体処理は `AUTH_MODE` に依存しないが、失効対象がsession/jwtで異なるため、No.4/5はそれぞれのモードで個別に実施する。
 
 ## 13. 不明点・要検討事項
 
