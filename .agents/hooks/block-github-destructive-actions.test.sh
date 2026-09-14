@@ -329,6 +329,20 @@ quoted_double_heredoc_marker=$(printf '%s\n' \
 	"gh pr merge 123" \
 	"EOF2")
 assert_blocked "$quoted_double_heredoc_marker"
+
+# コメント内のheredoc風記号はheredoc開始ではないため、後続の実行コマンドを検査すること。
+comment_heredoc_marker=$(printf '%s\n' \
+	"# docs: <<EOF" \
+	"gh pr merge 123" \
+	"EOF")
+assert_blocked "$comment_heredoc_marker"
+export GH_STUB_GRAPHQL_JSON="$linked_unreviewed_json"
+comment_issue_heredoc_marker=$(printf '%s\n' \
+	"# docs: <<EOF2" \
+	"gh issue close 123" \
+	"EOF2")
+assert_blocked "$comment_issue_heredoc_marker"
+unset GH_STUB_GRAPHQL_JSON
 unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON
 
 # 8. 実際のマージコマンドは引き続きブロックされること(区切り文字経由も含む)
@@ -354,6 +368,10 @@ assert_blocked_raw_stdin "これは不正なJSONです"
 # 10. `gh pr merge` / `gh issue close` の代替経路 -> exit 2 (#339)
 assert_blocked "gh api -X PUT repos/oikawa-d/task_management/pulls/123/merge"
 assert_blocked "gh api repos/oikawa-d/task_management/pulls/123/merge --method PUT"
+assert_blocked "gh api -XPUT repos/oikawa-d/task_management/pulls/123/merge"
+assert_blocked "gh api repos/oikawa-d/task_management/pulls/123/merge -XPUT"
+assert_blocked "gh api -X=PUT repos/oikawa-d/task_management/pulls/123/merge"
+assert_blocked "gh api repos/oikawa-d/task_management/pulls/123/merge -X=PUT"
 assert_blocked "gh issue edit 123 --state closed"
 assert_blocked "gh --repo oikawa-d/task_management issue edit 123 --state=closed"
 

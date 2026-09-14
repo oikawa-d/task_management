@@ -62,51 +62,60 @@ strip_heredocs() {
 			}
 			print $0
 			# 引用符内・エスケープされた `<<` はheredoc開始ではない。
-			# quoteは行をまたいで保持するため、複数行の文字列も正しく扱う。
+			# コメント内の `<<` もheredoc開始ではない。quoteは行をまたいで保持するため、
+			# 複数行の文字列も正しく扱う。
 			line = $0
+			word_start = (quote == "")
 			for (i = 1; i <= length(line); i++) {
 				char = substr(line, i, 1)
 				if (quote == "single") {
-					if (char == single_quote) { quote = "" }
+					if (char == single_quote) { quote = ""; word_start = 0 }
 					continue
 				}
 				if (quote == "double") {
 					if (char == "\\") { i++ }
-					else if (char == double_quote) { quote = "" }
+					else if (char == double_quote) { quote = ""; word_start = 0 }
 					continue
 				}
-				if (char == "\\") { i++; continue }
-				if (char == single_quote) { quote = "single"; continue }
-				if (char == double_quote) { quote = "double"; continue }
-				if (char != "<" || substr(line, i + 1, 1) != "<") { continue }
+				if (char == "\\") { i++; word_start = 0; continue }
+				if (char == "#" && word_start) { break }
+				if (char == single_quote) { quote = "single"; word_start = 0; continue }
+				if (char == double_quote) { quote = "double"; word_start = 0; continue }
+				if (char == "<" && substr(line, i + 1, 1) == "<") {
 
-				j = i + 2
-				strip_tabs = 0
-				if (substr(line, j, 1) == "-") {
-					strip_tabs = 1
-					j++
-				}
-				while (substr(line, j, 1) ~ /[[:space:]]/) { j++ }
-
-				word = ""
-				marker_quote = substr(line, j, 1)
-				if (marker_quote == single_quote || marker_quote == double_quote) {
-					j++
-					while (j <= length(line) && substr(line, j, 1) != marker_quote) {
-						word = word substr(line, j, 1)
+					j = i + 2
+					strip_tabs = 0
+					if (substr(line, j, 1) == "-") {
+						strip_tabs = 1
 						j++
 					}
-					if (j > length(line)) { word = "" }
-				} else if (substr(line, j, 1) ~ /[A-Za-z_]/) {
-					while (substr(line, j, 1) ~ /[A-Za-z0-9_]/) {
-						word = word substr(line, j, 1)
+					while (substr(line, j, 1) ~ /[[:space:]]/) { j++ }
+
+					word = ""
+					marker_quote = substr(line, j, 1)
+					if (marker_quote == single_quote || marker_quote == double_quote) {
 						j++
+						while (j <= length(line) && substr(line, j, 1) != marker_quote) {
+							word = word substr(line, j, 1)
+							j++
+						}
+						if (j > length(line)) { word = "" }
+					} else if (substr(line, j, 1) ~ /[A-Za-z_]/) {
+						while (substr(line, j, 1) ~ /[A-Za-z0-9_]/) {
+							word = word substr(line, j, 1)
+							j++
+						}
 					}
+					if (word != "") {
+						in_heredoc = 1
+						break
+					}
+					word_start = 1
+					continue
 				}
-				if (word != "") {
-					in_heredoc = 1
-					break
-				}
+				if (char ~ /[[:space:]]/) { word_start = 1; continue }
+				if (char ~ /[;&|()<>]/) { word_start = 1; continue }
+				word_start = 0
 			}
 		}
 	'
@@ -302,7 +311,7 @@ done < <(grep -Eo "$close_pattern" <<<"$command_for_match" || true)
 
 # `gh pr merge` の代替経路となるGitHub API直叩き(PUT .../pulls/<番号>/merge)を塞ぐ。
 # こちらはreviewedラベルの有無にかかわらず禁止し、mergeは `gh pr merge` に一本化する。
-api_put_regex="${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+api[^;&|[:cntrl:]]*((--method[=[:space:]]+|-X[[:space:]]+)PUT[^;&|[:cntrl:]]*repos/[^[:space:];|&]+/pulls/[0-9]+/merge|repos/[^[:space:];|&]+/pulls/[0-9]+/merge[^;&|[:cntrl:]]*((--method[=[:space:]]+|-X[[:space:]]+)PUT))"
+api_put_regex="${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+api[^;&|[:cntrl:]]*((--method[=[:space:]]+|-X([[:space:]]+|=)?PUT)[^;&|[:cntrl:]]*repos/[^[:space:];|&]+/pulls/[0-9]+/merge|repos/[^[:space:];|&]+/pulls/[0-9]+/merge[^;&|[:cntrl:]]*((--method[=[:space:]]+|-X([[:space:]]+|=)?PUT)))"
 if grep -Eiq "$api_put_regex" <<<"$command_for_match"; then
 	echo "ブロック: GitHub API経由のPR mergeは禁止されています。レビュー完了後に '${REVIEWED_LABEL}' ラベルを付与し、gh pr merge を使用してください。" >&2
 	exit 2
