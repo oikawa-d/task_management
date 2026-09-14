@@ -11,7 +11,7 @@
 |------|------|
 | 対象 | `api/app/auth/oauth.py :: GoogleOAuthProvider`（Authorization Code Flow + PKCE(S256) による Google ログイン） |
 | 責務 | 認可URLの組み立て、state/PKCE/nonceの発行と検証、token/userinfoエンドポイント呼び出し、id_token検証（JWKS）、ユーザー解決・新規作成、jwtモード向けhandoffコード発行 |
-| 適用条件 | `AUTH_MODE` に関わらず常時有効。`GOOGLE_LOGIN_ENABLED` で無効化可能（認証設定APIに反映） |
+| 適用条件 | `AUTH_MODE` に関わらず、`GOOGLE_LOGIN_ENABLED=true`かつGoogleクライアント設定がある場合のみ有効。無効時は`GET /auth/config`を`false`とし、開始・callback・exchangeを拒否する |
 | 依存先 | Redis（`oauth_state` / `oauth_handoff`）、PostgreSQL（`users` / `oauth_accounts`）、Google 認可サーバー・token/userinfo/JWKSエンドポイント |
 | 実装ファイル | `api/app/auth/oauth.py`（Provider本体）、`api/app/service/auth_service.py`（`oauth_start` / `oauth_callback` / `oauth_exchange`） |
 
@@ -35,7 +35,7 @@
 | `GOOGLE_CLIENT_ID` | str | なし（必須） | Google OAuthクライアントID | `.env` / GitHub Secrets |
 | `GOOGLE_CLIENT_SECRET` | str | なし（必須） | Google OAuthクライアントシークレット | `.env` / GitHub Secrets |
 | `GOOGLE_REDIRECT_URI` | str | なし（必須） | コールバックURL（`/api/auth/oauth/google/callback`） | `.env` |
-| `GOOGLE_LOGIN_ENABLED` | bool | `true` | Googleログインボタンの有効/無効（`/auth/config`に反映） | `.env` |
+| `GOOGLE_LOGIN_ENABLED` | bool | `true` | Googleログイン機能の有効/無効（`/auth/config`に反映）。`false`時は進行中フローも完了させない | `.env` |
 | `GOOGLE_AUTHORIZE_ENDPOINT` | str | `https://accounts.google.com/o/oauth2/v2/auth` | 認可エンドポイント | `.env` |
 | `GOOGLE_TOKEN_ENDPOINT` | str | `https://oauth2.googleapis.com/token` | tokenエンドポイント | `.env` |
 | `GOOGLE_USERINFO_ENDPOINT` | str | `https://openidconnect.googleapis.com/v1/userinfo` | userinfoエンドポイント | `.env` |
@@ -59,6 +59,7 @@
 | 出力（コールバック・session） | `302 Location: {FRONTEND_BASE_URL}/oauth/callback#redirect_to=...` + セッションCookie（[01_session_auth.md](./01_session_auth.md)） |
 | 出力（コールバック・jwt） | `302 Location: {FRONTEND_BASE_URL}/oauth/callback#code=...` + Redis `SETEX oauth_handoff:{code}` |
 | 出力（交換） | `200 {access_token, token_type, expires_in, redirect_to}` + refresh/CSRF Cookie |
+| 無効時の出力 | 開始・exchangeは`404 OAUTH_DISABLED`、callbackは`302 /login?error=oauth_disabled`。state/handoffを消費せず、Google APIを呼び出さない |
 | 副作用 | `oauth_accounts` / `users` へのINSERT・UPDATE、`login_history` へのINSERT（`login_identifier`は検証済みGoogle email） |
 
 ## 5. シーケンス図
@@ -281,6 +282,8 @@ flowchart LR
 | リプレイ（OIDC） | nonceをid_token claimと照合 | 認可コード横取り・トークン再利用対策 |
 | open redirect | `redirect_to` は同一オリジン相対パスのみ許可。違反時は既定値`OAUTH_DEFAULT_REDIRECT_TO`（既定`/dashboard`） | [../../basic_design/03_auth.md](../../basic_design/03_auth.md) 5.1 |
 | アカウント乗っ取り | `email_verified=false` は紐付け拒否（service内部400、callback外部302） | 5.3節 |
+| 機能無効化 | `GOOGLE_LOGIN_ENABLED=false`またはGoogleクライアント設定不足時は、開始・callback・exchangeを拒否する。callbackはブラウザ向けに`oauth_disabled`へ変換する | Issue #397 |
+| アカウント乗っ取り | `email_verified=false` は紐付け拒否（service内部400、callback外部302） | 5.3節 |
 | トークン露出防止 | jwtモードのaccess_tokenをURLに載せず、handoffコード＋fragment経由で受け渡す | 5.4節 |
 | ログ出力 | `code`/`id_token`/`access_token`/`code_verifier` は平文ログに出さない。stateは検証結果（成功/失敗）のみINFO出力 | 共通ルール |
 | fail-close | Google側（token/userinfo/JWKS）が不通の場合はログインを成立させず失敗リダイレクト | 要検討：具体的なHTTPステータス／リトライ方針は未定義 |
@@ -300,7 +303,8 @@ flowchart LR
 | 8 | 結合 | 外部`redirect_to` | `redirect_to=https://evil.example` | 既定値`/dashboard`に正規化される | `test_oauth_start_normalizes_external_redirect_to` |
 | 9 | 結合 | jwtモードのhandoff交換 | 正常フロー完了後 | access_token/redirect_to が返り、Cookieが設定される | `test_oauth_exchange_returns_tokens` |
 | 10 | 結合 | handoff二重消費 | 同一codeで2回exchange | 2回目は400 `OAUTH_HANDOFF_INVALID` | `test_oauth_exchange_rejects_reused_code` |
-| 11 | 網羅できない範囲 | 実際のGoogle認可画面での同意操作 | - | 自動テスト対象外（手動確認） | - |
+| 11 | 結合 | Googleログイン無効 | `GOOGLE_LOGIN_ENABLED=false` | 開始・exchangeは404 `OAUTH_DISABLED`、callbackは302 `/login?error=oauth_disabled` | `test_start_returns_oauth_disabled_when_google_login_is_disabled`等 |
+| 12 | 網羅できない範囲 | 実際のGoogle認可画面での同意操作 | - | 自動テスト対象外（手動確認） | - |
 
 ## 12. 不明点・要検討事項
 

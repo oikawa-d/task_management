@@ -121,6 +121,11 @@ class OAuthFailedError(AppError):
 	message = "OAuth認証に失敗しました"
 
 
+class OAuthDisabledError(NotFoundError):
+	code = "OAUTH_DISABLED"
+	message = "Googleログインは現在無効です"
+
+
 class OAuthEmailUnverifiedError(AppError):
 	code = "OAUTH_EMAIL_UNVERIFIED"
 	status_code = 400

@@ -23,7 +23,7 @@
 | 目的 | jwtモードのOAuthログインにおいて、コールバックで発行された一時ハンドオフコードをアクセストークン・refresh/CSRF Cookieに交換する |
 | ルーター責務 | OAuthの3 endpointを `oauth_router.py` に分離する。通常の認証endpointは `api/app/api/routers/auth_router.py` が担当する |
 | 認証 | 一時コード（ボディの`code`）。session/refresh Cookie・Authorizationヘッダは不要 |
-| 認可 | 未認証可（ただし有効な`code`の保有が事実上の認可条件） |
+| 認可 | 未認証可（Googleログイン有効時かつ有効な`code`の保有が事実上の認可条件） |
 | CSRF検証 | 不要（本APIはCookieを読み取らず、一時codeという単発トークンで保護されているため。Origin検証のみ実施） |
 | Origin検証 | 必要（`basic_design/03_auth.md` §5.4・§8。第三者サイトからのfetchによるcode窃用を防ぐ） |
 | AUTH_MODE差異 | **jwtモード専用**。`AUTH_MODE=session`時は`405 NOT_SUPPORTED_IN_MODE`を返す |
@@ -100,6 +100,7 @@ Set-Cookie 一覧
 | 405 | `NOT_SUPPORTED_IN_MODE` | `AUTH_MODE=session`で呼び出された | このAPIは現在のモードでは利用できません | `basic_design/04_api.md` §4.2 |
 | 422 | `VALIDATION_ERROR` | `code`が未指定・空文字 | 入力内容に誤りがあります | pydanticバリデーション |
 | 503 | `SERVICE_UNAVAILABLE` | Redis接続不能 | 現在サービスをご利用いただけません | fail-close |
+| 404 | `OAUTH_DISABLED` | `GOOGLE_LOGIN_ENABLED=false`、またはGoogleクライアント設定が不足 | Googleログインは現在無効です | `auth_mode`判定とhandoff消費より先に拒否 |
 
 ## 4. 処理シーケンス
 
@@ -122,10 +123,14 @@ sequenceDiagram
         D-->>R: CsrfInvalidError
         R-->>FE: 403 CSRF_INVALID
     else Origin正当
-        R->>R: AUTH_MODE確認
-        alt AUTH_MODE=session
-            R-->>FE: 405 NOT_SUPPORTED_IN_MODE
-        else AUTH_MODE=jwt
+        R->>R: Googleログイン有効性を確認
+        alt Googleログイン無効
+            R-->>FE: 404 OAUTH_DISABLED
+        else Googleログイン有効
+            R->>R: AUTH_MODE確認
+            alt AUTH_MODE=session
+                R-->>FE: 405 NOT_SUPPORTED_IN_MODE
+            else AUTH_MODE=jwt
             R->>S: oauth_exchange(code, request, response)
             S->>RS: consume_oauth_handoff(code)
             RS->>RD: GETDEL oauth_handoff:{code}
@@ -165,6 +170,7 @@ sequenceDiagram
             end
         end
     end
+end
 ```
 
 ## 5. 処理フロー・分岐
@@ -175,20 +181,22 @@ flowchart TB
     B -->|不正| Z1["422 VALIDATION_ERROR"]
     B -->|OK| C{"Origin検証"}
     C -->|不正| Z2["403 CSRF_INVALID"]
-    C -->|OK| D{"AUTH_MODE"}
-    D -->|session| Z3["405 NOT_SUPPORTED_IN_MODE"]
-    D -->|jwt| E["consume_oauth_handoff(code)"]
-    E --> F{"有効?"}
-    F -->|No| Z4["400 OAUTH_HANDOFF_INVALID"]
-    F -->|Yes| G["get_by_id(db, user_id)"]
-    G --> H{"is_active?"}
-    H -->|No| Z5["403 USER_INACTIVE"]
-    H -->|Yes| I["JwtAuthStrategy.login()\nLoginResult発行・Redis/Cookie作成"]
-    I --> J{"LoginResult完全性検証\nauth_mode='jwt'\naccess/refresh/CSRFは非空str\nexpires_inはint(>=1)"}
-    J -->|失敗| R["rollback_login\nrefresh失効・Cookie破棄"]
-    R --> Z6["400 OAUTH_FAILED\nlogin_history前に終了"]
-    J -->|成功| K["login_history INSERT"]
-    K --> L["200 {access_token, redirect_to}"]
+    C -->|OK| D{"Googleログイン有効?"}
+    D -->|No| Z3["404 OAUTH_DISABLED"]
+    D -->|Yes| E{"AUTH_MODE"}
+    E -->|session| Z4["405 NOT_SUPPORTED_IN_MODE"]
+    E -->|jwt| F["consume_oauth_handoff(code)"]
+    F --> G{"有効?"}
+    G -->|No| Z5["400 OAUTH_HANDOFF_INVALID"]
+    G -->|Yes| H["get_active_user(user_id)"]
+    H --> I{"is_active?"}
+    I -->|No| Z6["403 USER_INACTIVE"]
+    I -->|Yes| J["JwtAuthStrategy.login()\nLoginResult発行・Redis/Cookie作成"]
+    J --> K{"LoginResult完全性検証\nauth_mode='jwt'\naccess/refresh/CSRFは非空str\nexpires_inはint(>=1)"}
+    K -->|失敗| R["rollback_login\nrefresh失効・Cookie破棄"]
+    R --> Z7["400 OAUTH_FAILED\nlogin_history前に終了"]
+    K -->|成功| L["login_history INSERT"]
+    L --> M["200 {access_token, redirect_to}"]
 ```
 
 ## 6. 関数詳細
@@ -200,8 +208,9 @@ flowchart TB
 | シグネチャ | `async def oauth_exchange(payload: OAuthExchangeRequest, request: Request, response: Response, db: AsyncSession = Depends(get_db_session), settings: BackendSettings = Depends(get_backend_settings)) -> OAuthExchangeResponse`（ルートデコレーターで`dependencies=[Depends(verify_origin)]`を指定） |
 | 引数 | `payload`：`code`を含むリクエストボディ。`request`/`response`：Cookie操作用 |
 | 戻り値 | `OAuthExchangeResponse`（200） |
-| 送出例外 | `NotSupportedInModeError`（405）、`OAuthHandoffInvalidError`（400）、`UserInactiveError`（403）、`OAuthFailedError`（`oauth_failed`）、`TooManyAttemptsError`（429）、`ServiceUnavailableError`（503）、`CsrfInvalidError`（403、`verify_origin`内） |
-| 処理内容 | 1. `settings.auth_mode != 'jwt'`なら`NotSupportedInModeError` 2. `auth_service.oauth_exchange(payload.code, request, response, db)`を呼ぶ 3. `Cache-Control: no-store`を付与して戻り値を返す |
+| 送出例外 | `OAuthDisabledError`（404）、`NotSupportedInModeError`（405）、`OAuthHandoffInvalidError`（400）、`UserInactiveError`（403）、`CsrfInvalidError`（403、`verify_origin`内） |
+| 送出例外 | `OAuthDisabledError`（404）、`NotSupportedInModeError`（405）、`OAuthHandoffInvalidError`（400）、`UserInactiveError`（403）、`OAuthFailedError`（`oauth_failed`）、`TooManyAttemptsError`（429）、`ServiceUnavailableError`（503）、`CsrfInvalidError`（403、`verify_origin`内） |
+| 処理内容 | 1. Googleログインの有効性を確認し、無効ならhandoffを消費せず`OAuthDisabledError` 2. `settings.auth_mode != 'jwt'`なら`NotSupportedInModeError` 3. `auth_service.oauth_exchange(payload.code, request, response, db)`を呼ぶ 4. `Cache-Control: no-store`を付与して戻り値を返す |
 | 副作用 | Cookie発行（`cerberus_rt`/`cerberus_csrf`。`service`内の`JwtAuthStrategy.login`が実施） |
 
 ### 6.2 `service/auth_service.py :: oauth_exchange`
