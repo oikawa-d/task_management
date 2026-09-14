@@ -283,7 +283,6 @@ flowchart LR
 | open redirect | `redirect_to` は同一オリジン相対パスのみ許可。違反時は既定値`OAUTH_DEFAULT_REDIRECT_TO`（既定`/dashboard`） | [../../basic_design/03_auth.md](../../basic_design/03_auth.md) 5.1 |
 | アカウント乗っ取り | `email_verified=false` は紐付け拒否（service内部400、callback外部302） | 5.3節 |
 | 機能無効化 | `GOOGLE_LOGIN_ENABLED=false`またはGoogleクライアント設定不足時は、開始・callback・exchangeを拒否する。callbackはブラウザ向けに`oauth_disabled`へ変換する | Issue #397 |
-| アカウント乗っ取り | `email_verified=false` は紐付け拒否（service内部400、callback外部302） | 5.3節 |
 | トークン露出防止 | jwtモードのaccess_tokenをURLに載せず、handoffコード＋fragment経由で受け渡す | 5.4節 |
 | ログ出力 | `code`/`id_token`/`access_token`/`code_verifier` は平文ログに出さない。stateは検証結果（成功/失敗）のみINFO出力 | 共通ルール |
 | fail-close | Google側（token/userinfo/JWKS）が不通の場合はログインを成立させず失敗リダイレクト | 要検討：具体的なHTTPステータス／リトライ方針は未定義 |

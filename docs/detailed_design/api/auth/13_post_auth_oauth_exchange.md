@@ -208,7 +208,6 @@ flowchart TB
 | シグネチャ | `async def oauth_exchange(payload: OAuthExchangeRequest, request: Request, response: Response, db: AsyncSession = Depends(get_db_session), settings: BackendSettings = Depends(get_backend_settings)) -> OAuthExchangeResponse`（ルートデコレーターで`dependencies=[Depends(verify_origin)]`を指定） |
 | 引数 | `payload`：`code`を含むリクエストボディ。`request`/`response`：Cookie操作用 |
 | 戻り値 | `OAuthExchangeResponse`（200） |
-| 送出例外 | `OAuthDisabledError`（404）、`NotSupportedInModeError`（405）、`OAuthHandoffInvalidError`（400）、`UserInactiveError`（403）、`CsrfInvalidError`（403、`verify_origin`内） |
 | 送出例外 | `OAuthDisabledError`（404）、`NotSupportedInModeError`（405）、`OAuthHandoffInvalidError`（400）、`UserInactiveError`（403）、`OAuthFailedError`（`oauth_failed`）、`TooManyAttemptsError`（429）、`ServiceUnavailableError`（503）、`CsrfInvalidError`（403、`verify_origin`内） |
 | 処理内容 | 1. Googleログインの有効性を確認し、無効ならhandoffを消費せず`OAuthDisabledError` 2. `settings.auth_mode != 'jwt'`なら`NotSupportedInModeError` 3. `auth_service.oauth_exchange(payload.code, request, response, db)`を呼ぶ 4. `Cache-Control: no-store`を付与して戻り値を返す |
 | 副作用 | Cookie発行（`cerberus_rt`/`cerberus_csrf`。`service`内の`JwtAuthStrategy.login`が実施） |
