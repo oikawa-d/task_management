@@ -70,7 +70,7 @@ gh_api_record_value() {
 	local kind="$1" value="$2"
 	case "$kind" in
 		method)
-			if gh_api_is_dynamic "$value"; then
+			if gh_token_is_dynamic "$value"; then
 				GH_API_HAS_DYNAMIC_METHOD=1
 			else
 				GH_API_METHOD="${value^^}"
@@ -78,10 +78,6 @@ gh_api_record_value() {
 			;;
 		field) GH_API_FIELDS+=("$value") ;;
 	esac
-}
-
-gh_api_is_dynamic() {
-	[[ "$1" == *'$'* || "$1" == *'`'* ]]
 }
 
 # endpoint候補のいずれかが正規表現に一致するか、シェル展開で判定不能かを返す。
@@ -92,7 +88,7 @@ gh_api_match_endpoint() {
 		if [[ "$endpoint" =~ $pattern ]]; then
 			return 0
 		fi
-		gh_api_is_dynamic "$endpoint" && has_dynamic=1
+		gh_token_is_dynamic "$endpoint" && has_dynamic=1
 	done
 	(( has_dynamic )) && return 2
 	return 1
@@ -102,11 +98,10 @@ gh_segment_is_api_merge() {
 	local match_status=0
 	gh_parse_api_segment "$1" || return 1
 	gh_api_match_endpoint '^/?repos/[^/]+/[^/]+/pulls/[0-9]+/merge(\?.*)?$' || match_status=$?
+	# endpointが確定している場合もシェル展開で判定不能な場合も、
+	# メソッドがPUTまたは判定不能であれば破壊操作の候補としてブロックする(fail-close)。
 	case "$match_status" in
-		# endpointが確定している場合、メソッドがPUTか判定不能なら破壊操作とみなす。
-		0) [[ "$GH_API_METHOD" == "PUT" ]] || (( GH_API_HAS_DYNAMIC_METHOD )) ;;
-		# endpointがシェル展開の場合、明示的なPUT指定のときだけ対象とする。
-		2) [[ "$GH_API_METHOD" == "PUT" ]] ;;
+		0|2) [[ "$GH_API_METHOD" == "PUT" ]] || (( GH_API_HAS_DYNAMIC_METHOD )) ;;
 		*) return 1 ;;
 	esac
 }
@@ -117,7 +112,7 @@ gh_segment_is_api_issue_close() {
 	gh_parse_api_segment "$1" || return 1
 	for field in "${GH_API_FIELDS[@]}"; do
 		if [[ "${field,,}" == "state=closed" ]] || \
-			{ [[ "$field" == state=* ]] && gh_api_is_dynamic "$field"; }; then
+			{ [[ "$field" == state=* ]] && gh_token_is_dynamic "$field"; }; then
 			has_state_closed=1
 		fi
 	done
@@ -129,11 +124,27 @@ gh_segment_is_api_issue_close() {
 }
 
 # GraphQL mutation経由のPR merge / Issue close。
-# クエリは -f query='...' 等で渡されるため、セグメント全体から mutation 名を検出する。
+# クエリは -f query='...' 等のリテラルで渡された場合のみ内容を判定できる。
+# `-f query="$QUERY"` や `--input` のようにクエリ本体を静的に確認できない場合は、
+# mutationか否かを判定できないため安全側でブロックする(fail-close)。
 gh_segment_is_api_graphql_destructive() {
-	local segment="$1" lowered
+	local segment="$1" field value lowered has_query=0
 	gh_parse_api_segment "$segment" || return 1
 	(( GH_API_IS_GRAPHQL )) || return 1
-	lowered="${segment,,}"
-	[[ "$lowered" == *mergepullrequest* || "$lowered" == *closeissue* ]]
+	for field in "${GH_API_FIELDS[@]}"; do
+		[[ "$field" == query=* ]] || continue
+		has_query=1
+		value="${field#query=}"
+		# `@file` 指定はファイル内容を読み込むため、クエリ本体を確認できない。
+		if gh_token_is_dynamic "$value" || [[ "$value" == @* ]]; then
+			return 0
+		fi
+		lowered="${value,,}"
+		if [[ "$lowered" == *mergepullrequest* || "$lowered" == *closeissue* ]]; then
+			return 0
+		fi
+	done
+	# queryフィールドが見つからない場合(--input等)も内容を確認できない。
+	(( has_query )) && return 1
+	return 0
 }

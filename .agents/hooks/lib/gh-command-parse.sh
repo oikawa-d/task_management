@@ -2,7 +2,14 @@
 
 # ghコマンドを実行せず、シェル文字列から操作単位とトークンを解析する。
 
+# トークンがシェル展開(変数展開・コマンド置換)を含むかを判定する。
+gh_token_is_dynamic() {
+	[[ "$1" == *'$'* || "$1" == *'`'* ]]
+}
+
 # 引用符内の改行を1トークンとして保持するため、NUL区切りで出力する。
+# `$( ... )` とバッククォートは、空白や `(` `)` で分割するとコマンド名が `$(which gh)` の形の
+# ときに実行位置を見失うため、1トークンとして保持する(終端走査は gh-substitution-parse.sh)。
 gh_tokenize_segment() {
 	local input="$1"
 	local length=${#input}
@@ -14,7 +21,7 @@ gh_tokenize_segment() {
 			if [[ "$char" == "$quote" ]]; then
 				quote=''
 			elif [[ "$quote" == '"' && "$char" == '\' ]]; then
-				(( index++ ))
+				index=$(( index + 1 ))
 				token+="${input:index:1}"
 			else
 				token+="$char"
@@ -24,8 +31,26 @@ gh_tokenize_segment() {
 
 		case "$char" in
 			\'|\") quote="$char"; has_token=1 ;;
+			'$')
+				if [[ "${input:index+1:1}" == '(' ]]; then
+					gh_scan_substitution_end "$input" "$index"
+					token+="${input:index:GH_SUBSTITUTION_END - index + 1}"
+					index=$GH_SUBSTITUTION_END
+					has_token=1
+					continue
+				fi
+				token+="$char"
+				has_token=1
+				;;
+			'`')
+				gh_scan_substitution_end "$input" "$index"
+				token+="${input:index:GH_SUBSTITUTION_END - index + 1}"
+				index=$GH_SUBSTITUTION_END
+				has_token=1
+				continue
+				;;
 			'\')
-				(( index++ ))
+				index=$(( index + 1 ))
 				token+="${input:index:1}"
 				has_token=1
 				;;
@@ -59,7 +84,7 @@ gh_split_command_segments() {
 			if [[ "$char" == "$quote" ]]; then
 				quote=''
 			elif [[ "$quote" == '"' && "$char" == '\' ]]; then
-				(( index++ ))
+				index=$(( index + 1 ))
 				segment+="${input:index:1}"
 			fi
 			continue
@@ -67,12 +92,27 @@ gh_split_command_segments() {
 
 		case "$char" in
 			\'|\") quote="$char"; segment+="$char" ;;
+			'$')
+				if [[ "${input:index+1:1}" == '(' ]]; then
+					gh_scan_substitution_end "$input" "$index"
+					segment+="${input:index:GH_SUBSTITUTION_END - index + 1}"
+					index=$GH_SUBSTITUTION_END
+					continue
+				fi
+				segment+="$char"
+				;;
+			'`')
+				gh_scan_substitution_end "$input" "$index"
+				segment+="${input:index:GH_SUBSTITUTION_END - index + 1}"
+				index=$GH_SUBSTITUTION_END
+				continue
+				;;
 			'\')
 				segment+="$char"
-				(( index++ ))
+				index=$(( index + 1 ))
 				segment+="${input:index:1}"
 				;;
-			';'|'&'|'|'|'`'|'('|')'|$'\n')
+			';'|'&'|'|'|'('|')'|$'\n')
 				if [[ -n "${segment//[[:space:]]/}" ]]; then
 					GH_COMMAND_SEGMENTS+=("$segment")
 				fi
@@ -118,12 +158,19 @@ gh_load_segment_tokens() {
 	done < <(gh_tokenize_segment "$segment")
 }
 
-# 複合構文の予約語等を読み飛ばし、実行位置にあるghのトークン番号を返す。
+# 複合構文の予約語等を読み飛ばし、実行位置にあるコマンドのトークン番号を返す。
+# `gh` そのものに加え、`$GH` や `$(which gh)` のようなシェル展開も候補として扱う。
+# 静的にghか判定できないため、破壊操作の引数が続く場合は検査対象に含める(fail-close)。
 gh_find_executable_gh_index() {
-	local index prefix_index token
+	local index prefix_index token command_token
 	GH_COMMAND_INDEX=-1
 	for (( index = 0; index < ${#GH_SEGMENT_TOKENS[@]}; index++ )); do
-		[[ "${GH_SEGMENT_TOKENS[index]}" == "gh" ]] || continue
+		command_token="${GH_SEGMENT_TOKENS[index]}"
+		if [[ "$command_token" != "gh" ]]; then
+			gh_token_is_dynamic "$command_token" || continue
+			# `FOO=$BAR` のような変数代入はコマンド名ではない。
+			[[ "$command_token" == [A-Za-z_]*=* ]] && continue
+		fi
 		for (( prefix_index = 0; prefix_index < index; prefix_index++ )); do
 			token="${GH_SEGMENT_TOKENS[prefix_index]}"
 			case "$token" in

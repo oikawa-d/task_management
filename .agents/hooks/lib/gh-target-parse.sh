@@ -186,7 +186,7 @@ gh_parse_target() {
 			if [[ "$take_status" -eq 0 ]]; then
 				continue
 			elif [[ "$take_status" -eq 1 ]]; then
-				(( index++ ))
+				index=$(( index + 1 ))
 				continue
 			fi
 
@@ -203,7 +203,7 @@ gh_parse_target() {
 					continue
 				fi
 				if gh_contains "$token" "${value_flags[@]}"; then
-					(( index++ ))
+					index=$(( index + 1 ))
 					continue
 				fi
 				if gh_contains "$token" "${bool_flags[@]}"; then

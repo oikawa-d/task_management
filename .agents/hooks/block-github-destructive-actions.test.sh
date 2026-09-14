@@ -496,6 +496,46 @@ assert_blocked $'cat <<EOF\ngh pr merge 123\n'
 assert_allowed $'value=$((1<<shift))\necho "$value"'
 unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON GH_STUB_GRAPHQL_JSON
 
+# 10-5. GraphQLのqueryを静的に確認できない場合はfail-close
+assert_blocked 'QUERY=mutation; gh api graphql -f query="$QUERY"'
+assert_blocked 'gh api graphql -f query="$(cat query.graphql)"'
+assert_blocked "gh api graphql -F query=@query.graphql"
+assert_blocked "gh api graphql --input payload.json"
+assert_allowed "gh api graphql -f query='query{viewer{login}}' -F number=1"
+
+# 10-6. REST mergeのmethod・endpointを同時にシェル展開した場合もブロックすること
+assert_blocked 'METHOD=PUT ENDPOINT=repos/oikawa-d/task_management/pulls/123/merge; gh api -X "$METHOD" "$ENDPOINT"'
+assert_blocked 'gh api -X "$METHOD" "$ENDPOINT"'
+assert_allowed 'gh api "$ENDPOINT"'
+
+# 10-7. コマンド名をシェル展開した破壊操作も検査対象とすること
+export GH_STUB_MATCH="pr view" GH_STUB_EXIT="0" GH_STUB_JSON="$unreviewed_json" GH_STUB_GRAPHQL_JSON="$linked_unreviewed_json"
+assert_blocked 'GH=gh; $GH pr merge 123'
+assert_blocked 'GH=gh; "$GH" pr merge 123 --squash'
+assert_blocked 'GH=gh; $GH issue close 123'
+assert_blocked 'GH=gh; "$GH" issue close 123'
+assert_blocked '$(which gh) pr merge 123'
+assert_blocked '`which gh` pr merge 123'
+assert_blocked '$GH api -X PUT repos/oikawa-d/task_management/pulls/123/merge'
+assert_blocked 'GH=gh; $GH issue edit 123 --state closed'
+# コマンド名が動的でも、対象PRにreviewedラベルがあれば許可すること
+export GH_STUB_JSON="$reviewed_json"
+assert_allowed 'GH=gh; $GH pr merge 123 --squash'
+unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON GH_STUB_GRAPHQL_JSON
+# コマンド置換・バッククォート単体、および置換で渡された引数も検査対象とすること
+export GH_STUB_MATCH="pr view" GH_STUB_EXIT="0" GH_STUB_JSON="$unreviewed_json"
+assert_blocked '$(gh pr merge 123)'
+assert_blocked '`gh pr merge 123`'
+assert_blocked "gh pr merge \$(cat pr.txt)"
+assert_blocked 'gh api -X PUT "$(cat endpoint.txt)"'
+unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON
+
+# 破壊操作を伴わないシェル展開は許可すること(過剰遮断の防止)
+assert_allowed 'PYTHON=python3; $PYTHON scripts/run.py'
+assert_allowed 'echo "$(date)"'
+assert_allowed 'REV=$(git rev-parse HEAD); echo "$REV"'
+assert_allowed '$GH pr view 123'
+
 # 11. jq不在時 -> exit 2 (fail-close, #339)
 assert_blocked_without_jq "gh pr view 123"
 

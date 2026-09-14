@@ -348,7 +348,7 @@ for command_segment in "${GH_COMMAND_SEGMENTS[@]}"; do
 		exit 2
 	fi
 	if gh_segment_is_api_graphql_destructive "$command_segment"; then
-		echo "ブロック: GraphQL mutation(mergePullRequest / closeIssue)によるPR merge・Issue closeは禁止されています。レビュー完了後に '${REVIEWED_LABEL}' ラベルを付与し、gh pr merge / gh issue close を使用してください。" >&2
+		echo "ブロック: GraphQL mutation(mergePullRequest / closeIssue)によるPR merge・Issue closeは禁止されています。クエリ本体をシェル展開やファイルで渡す形も内容を検証できないためブロックします。レビュー完了後に '${REVIEWED_LABEL}' ラベルを付与し、gh pr merge / gh issue close を使用してください。" >&2
 		exit 2
 	fi
 	if gh_segment_is_issue_state_close "$command_segment"; then
