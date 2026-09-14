@@ -115,6 +115,26 @@ def test_start_rate_limited_returns_positive_retry_after(client: TestClient, mon
 	assert int(response.headers["Retry-After"]) > 0
 
 
+def test_start_returns_oauth_disabled_when_google_login_is_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setenv("CORS_ALLOW_ORIGINS", ALLOWED_ORIGIN)
+	monkeypatch.setenv("GOOGLE_LOGIN_ENABLED", "false")
+	get_backend_settings.cache_clear()
+	called: list[str] = []
+
+	async def _oauth_start(*_args: Any, **_kwargs: Any) -> OAuthStartResult:
+		called.append("service")
+		raise AssertionError("無効時はserviceを呼ばない")
+
+	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_start", _oauth_start)
+	app = _build_app()
+	with TestClient(app, follow_redirects=False) as test_client:
+		response = test_client.get("/api/auth/oauth/google")
+
+	assert response.status_code == 404
+	assert response.json()["error"]["code"] == "OAUTH_DISABLED"
+	assert called == []
+
+
 def test_callback_session_mode_redirects_with_redirect_to_fragment(
 	session_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -346,6 +366,28 @@ def test_callback_route_deletes_state_cookie_on_service_failure(
 	)
 
 
+def test_callback_redirects_to_login_when_google_login_is_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setenv("CORS_ALLOW_ORIGINS", ALLOWED_ORIGIN)
+	monkeypatch.setenv("GOOGLE_LOGIN_ENABLED", "false")
+	get_backend_settings.cache_clear()
+	called: list[str] = []
+
+	async def _oauth_callback(*_args: Any, **_kwargs: Any) -> OAuthCallbackResult:
+		called.append("service")
+		raise AssertionError("無効時はserviceを呼ばない")
+
+	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_callback", _oauth_callback)
+	app = _build_app()
+	with TestClient(app, follow_redirects=False) as test_client:
+		response = test_client.get(
+			"/api/auth/oauth/google/callback", params={"code": "auth-code", "state": "state-value"}
+		)
+
+	assert response.status_code == 302
+	assert response.headers["location"] == f"{FRONTEND_BASE_URL}/login?error=oauth_disabled"
+	assert called == []
+
+
 @pytest.mark.parametrize(
 	("error", "expected"),
 	[
@@ -497,6 +539,29 @@ def test_exchange_in_session_mode_returns_405(monkeypatch: pytest.MonkeyPatch) -
 
 	assert response.status_code == 405
 	assert response.json()["error"]["code"] == "NOT_SUPPORTED_IN_MODE"
+	assert called == []
+
+
+def test_exchange_returns_oauth_disabled_when_google_login_is_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setenv("CORS_ALLOW_ORIGINS", ALLOWED_ORIGIN)
+	monkeypatch.setenv("AUTH_MODE", "jwt")
+	monkeypatch.setenv("GOOGLE_LOGIN_ENABLED", "false")
+	get_backend_settings.cache_clear()
+	called: list[str] = []
+
+	async def _oauth_exchange(*_args: Any, **_kwargs: Any) -> OAuthExchangeResponse:
+		called.append("service")
+		raise AssertionError("無効時はserviceを呼ばない")
+
+	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_exchange", _oauth_exchange)
+	app = _build_app()
+	with TestClient(app, follow_redirects=False) as test_client:
+		response = test_client.post(
+			"/api/auth/oauth/exchange", json={"code": "handoff-code"}, headers={"Origin": ALLOWED_ORIGIN}
+		)
+
+	assert response.status_code == 404
+	assert response.json()["error"]["code"] == "OAUTH_DISABLED"
 	assert called == []
 
 

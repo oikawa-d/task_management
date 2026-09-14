@@ -58,6 +58,17 @@ _OAUTH_RATE_LIMIT_SCOPE = {
 }
 
 
+def get_auth_config(settings: BackendSettings | None = None) -> AuthConfigResponse:
+	config = settings or get_backend_settings()
+	return AuthConfigResponse(
+		auth_mode=config.auth_mode,
+		google_login_enabled=bool(
+			config.google_login_enabled and config.google_client_id and config.google_client_secret
+		),
+		csrf_cookie_name=config.cookie_name_csrf,
+	)
+
+
 async def ensure_login_not_rate_limited(identifier: str, client_ip: str, settings: BackendSettings) -> None:
 	"""現在の失敗回数が上限に達している場合は`TooManyAttemptsError`を送出する。"""
 	failure_count = await redis_store.get_login_failure_count(identifier, client_ip)
@@ -352,17 +363,6 @@ async def refresh(request: Request, response: Response, strategy: AuthStrategy) 
 	sessionモードのStrategyは`NotSupportedInModeError`を送出し405となる。
 	"""
 	return await strategy.refresh(request, response)
-
-
-def get_auth_config(settings: BackendSettings | None = None) -> AuthConfigResponse:
-	config = settings or get_backend_settings()
-	return AuthConfigResponse(
-		auth_mode=config.auth_mode,
-		google_login_enabled=bool(
-			config.google_login_enabled and config.google_client_id and config.google_client_secret
-		),
-		csrf_cookie_name=config.cookie_name_csrf,
-	)
 
 
 def normalize_redirect_to(raw: str | None, settings: BackendSettings | None = None) -> str:

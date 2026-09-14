@@ -18,6 +18,7 @@ from app.core.deps import verify_origin
 from app.core.exceptions import (
 	InvalidStateError,
 	NotSupportedInModeError,
+	OAuthDisabledError,
 	OAuthEmailUnverifiedError,
 	ServiceUnavailableError,
 	TooManyAttemptsError,
@@ -34,6 +35,7 @@ OAUTH_ERROR_INVALID_STATE = "invalid_state"
 OAUTH_ERROR_EMAIL_UNVERIFIED = "oauth_email_unverified"
 OAUTH_ERROR_TOO_MANY_ATTEMPTS = "too_many_attempts"
 OAUTH_ERROR_FAILED = "oauth_failed"
+OAUTH_ERROR_DISABLED = "oauth_disabled"
 
 _CALLBACK_ERROR_BY_EXCEPTION: tuple[tuple[type[Exception], str], ...] = (
 	(InvalidStateError, OAUTH_ERROR_INVALID_STATE),
@@ -51,7 +53,9 @@ async def oauth_google_start(
 	response: Response,
 	request: Request,
 	redirect_to: str | None = Query(default=None),
+	settings: BackendSettings = Depends(get_backend_settings),
 ) -> RedirectResponse:
+	_ensure_google_login_enabled(settings)
 	result = await auth_service.oauth_start(redirect_to, request, response)
 	redirect = RedirectResponse(result.authorize_url, status_code=_HTTP_FOUND)
 	redirect.raw_headers.extend(response.raw_headers)
@@ -68,6 +72,8 @@ async def oauth_google_callback(
 	db: AsyncSession = Depends(get_db_session),
 	settings: BackendSettings = Depends(get_backend_settings),
 ) -> RedirectResponse:
+	if not _is_google_login_enabled(settings):
+		return _login_error_redirect(OAUTH_ERROR_DISABLED, settings, response)
 	if error:
 		state_cookie = request.cookies.get(settings.cookie_name_oauth_state)
 		try:
@@ -128,6 +134,7 @@ async def oauth_exchange(
 	db: AsyncSession = Depends(get_db_session),
 	settings: BackendSettings = Depends(get_backend_settings),
 ) -> OAuthExchangeResponse:
+	_ensure_google_login_enabled(settings)
 	if settings.auth_mode != "jwt":
 		raise NotSupportedInModeError()
 	result = await auth_service.oauth_exchange(payload.code, request, response, db)
@@ -140,6 +147,15 @@ def _callback_error_value(exc: Exception) -> str:
 		if isinstance(exc, exception_type):
 			return error_value
 	return OAUTH_ERROR_FAILED
+
+
+def _is_google_login_enabled(settings: BackendSettings) -> bool:
+	return auth_service.get_auth_config(settings).google_login_enabled
+
+
+def _ensure_google_login_enabled(settings: BackendSettings) -> None:
+	if not _is_google_login_enabled(settings):
+		raise OAuthDisabledError()
 
 
 def _login_error_redirect(error_value: str, settings: BackendSettings, response: Response) -> RedirectResponse:
