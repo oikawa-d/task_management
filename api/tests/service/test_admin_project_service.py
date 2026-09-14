@@ -203,7 +203,7 @@ async def test_admin_delete_project_audit_log_contains_owner(
 		await admin_project_service.deactivate_project(actor, project.id, AsyncMock())
 
 	record = caplog.records[-1]
-	assert record.actor_id == str(actor.id)
+	assert record.actor_user_id == str(actor.id)
 	assert record.project_id == str(project.id)
 	assert record.owner_id == str(owner.id)
 

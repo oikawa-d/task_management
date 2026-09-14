@@ -108,10 +108,12 @@ async def deactivate_project(actor: CurrentUser, project_id: UUID, db: AsyncSess
 	logger.warning(
 		"admin deactivated project",
 		extra={
-			"actor_id": str(actor.id),
+			"actor_user_id": str(actor.id),
 			"project_id": str(project_id),
 			"owner_id": str(owner_id),
 			"member_count": member_count,
-			"task_counts": task_counts.model_dump(),
+			"task_count_todo": task_counts.todo,
+			"task_count_in_progress": task_counts.in_progress,
+			"task_count_done": task_counts.done,
 		},
 	)

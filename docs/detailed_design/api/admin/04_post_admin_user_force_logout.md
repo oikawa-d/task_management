@@ -208,7 +208,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 
 | 観点 | 内容 |
 |------|------|
-| ログ出力 | 監査ログ対象。`actor.id`, `target_id`, 失効件数（session/refreshそれぞれ）, `X-Request-ID` をINFO出力 |
+| ログ出力 | 監査ログ対象。`actor_user_id`, `target_user_id`, `mode`, `access_token_revocation_delay_seconds`, 失効件数（session/refreshそれぞれ）, `X-Request-ID` をINFO出力 |
 | ユーザー列挙対策 | admin専用APIのため対象外 |
 | タイミング攻撃対策 | 該当なし |
 | レート制限 | なし |

@@ -1,7 +1,9 @@
+import ast
 import json
 import logging
+from pathlib import Path
 
-from app.core.logger import JsonFormatter, configure_logging
+from app.core.logger import _SAFE_AUDIT_FIELDS, JsonFormatter, configure_logging
 
 
 def test_json_formatter_produces_structured_log() -> None:
@@ -87,6 +89,54 @@ def test_json_formatter_includes_safe_oauth_fields_only() -> None:
 	assert "failure_reason" not in output
 	assert "code" not in output
 	assert "email" not in output
+
+
+def test_json_formatter_includes_force_logout_fields() -> None:
+	formatter = JsonFormatter()
+	record = logging.LogRecord(
+		name="app.audit",
+		level=logging.INFO,
+		pathname=__file__,
+		lineno=1,
+		msg="admin forced logout",
+		args=(),
+		exc_info=None,
+	)
+	record.actor_user_id = "actor-123"
+	record.target_user_id = "target-123"
+	record.mode = "jwt"
+	record.access_token_revocation_delay_seconds = 900
+	record.code = "secret-code"
+	record.email = "alice@example.com"
+
+	output = json.loads(formatter.format(record))
+
+	assert output["actor_user_id"] == "actor-123"
+	assert output["target_user_id"] == "target-123"
+	assert output["mode"] == "jwt"
+	assert output["access_token_revocation_delay_seconds"] == 900
+	assert "code" not in output
+	assert "email" not in output
+
+
+def test_all_structured_log_extra_keys_are_allowlisted() -> None:
+	app_root = Path(__file__).resolve().parent.parent / "app"
+	allowed = set(_SAFE_AUDIT_FIELDS)
+	unknown: list[str] = []
+
+	for path in app_root.rglob("*.py"):
+		tree = ast.parse(path.read_text(), filename=str(path))
+		for node in ast.walk(tree):
+			if not isinstance(node, ast.Call):
+				continue
+			for keyword in node.keywords:
+				if keyword.arg != "extra" or not isinstance(keyword.value, ast.Dict):
+					continue
+				for key in keyword.value.keys:
+					if isinstance(key, ast.Constant) and isinstance(key.value, str) and key.value not in allowed:
+						unknown.append(f"{path}:{key.lineno}:{key.value}")
+
+	assert unknown == []
 
 
 def test_configure_logging_sets_level_and_json_handler() -> None:

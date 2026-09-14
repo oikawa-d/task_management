@@ -21,6 +21,7 @@ from redis.exceptions import RedisError
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_backend_settings
 from app.core.exceptions import LastAdminRequiredError, NotFoundError, SelfModificationError, ServiceUnavailableError
 from app.models.user import User
 from app.repository import admin_repository, redis_store, user_repository
@@ -125,8 +126,8 @@ async def change_role(actor: CurrentUser, target_id: UUID, new_role: str, db: As
 			logger.info(
 				"admin changed user role",
 				extra={
-					"actor_id": str(actor.id),
-					"target_id": str(target_id),
+					"actor_user_id": str(actor.id),
+					"target_user_id": str(target_id),
 					"new_role": new_role,
 					"result": app_error.code,
 				},
@@ -136,8 +137,8 @@ async def change_role(actor: CurrentUser, target_id: UUID, new_role: str, db: As
 	logger.info(
 		"admin changed user role",
 		extra={
-			"actor_id": str(actor.id),
-			"target_id": str(target_id),
+			"actor_user_id": str(actor.id),
+			"target_user_id": str(target_id),
 			"old_role": old_role,
 			"new_role": new_role,
 			"result": "success",
@@ -175,7 +176,11 @@ async def change_status(
 		except RedisError as exc:
 			logger.error(
 				"admin status change: failed to revoke sessions",
-				extra={"actor_id": str(actor.id), "target_id": str(target_id), "operation": "delete_all_sessions"},
+				extra={
+					"actor_user_id": str(actor.id),
+					"target_user_id": str(target_id),
+					"operation": "delete_all_sessions",
+				},
 			)
 			raise ServiceUnavailableError() from exc
 		try:
@@ -184,8 +189,8 @@ async def change_status(
 			logger.error(
 				"admin status change: failed to revoke refresh tokens",
 				extra={
-					"actor_id": str(actor.id),
-					"target_id": str(target_id),
+					"actor_user_id": str(actor.id),
+					"target_user_id": str(target_id),
 					"operation": "revoke_all_refresh_tokens",
 				},
 			)
@@ -195,8 +200,8 @@ async def change_status(
 	logger.info(
 		"admin changed user status",
 		extra={
-			"actor_id": str(actor.id),
-			"target_id": str(target_id),
+			"actor_user_id": str(actor.id),
+			"target_user_id": str(target_id),
 			"old_is_active": old_is_active,
 			"new_is_active": new_is_active,
 			"session_revoked_count": session_count,
@@ -213,11 +218,16 @@ async def force_logout(actor: CurrentUser, target_id: UUID, db: AsyncSession) ->
 		refresh_count = await redis_store.revoke_all_refresh_tokens(target_id)
 	except RedisError as exc:
 		raise ServiceUnavailableError() from exc
+	settings = get_backend_settings()
 	logger.info(
 		"admin forced logout",
 		extra={
-			"actor_id": str(actor.id),
-			"target_id": str(target_id),
+			"actor_user_id": str(actor.id),
+			"target_user_id": str(target_id),
+			"mode": settings.auth_mode,
+			"access_token_revocation_delay_seconds": (
+				settings.access_token_ttl_seconds if settings.auth_mode == "jwt" else 0
+			),
 			"session_revoked_count": session_count,
 			"refresh_revoked_count": refresh_count,
 		},
