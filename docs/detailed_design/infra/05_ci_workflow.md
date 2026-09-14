@@ -11,7 +11,8 @@
 |------|------|
 | 対象 | `.github/workflows/ci.yml` |
 | 責務 | push/pull_request をトリガーに、backend/frontendのLint・型チェック・テスト・カバレッジ検証、batch専用コンテナからDB/Redisへの直接接続検証、およびbackend/frontend/batch Dockerイメージのビルド確認（push なし）を行う |
-| 適用条件 | `push: branches: [main, develop]`、`pull_request: branches: [main, develop]` |
+| 適用条件 | `push: branches: [main, develop]`、`pull_request`（baseブランチ制限なし） |
+| 同時実行制御 | `group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}`、`cancel-in-progress: true`。同一PRまたは同一ブランチの古い実行をキャンセルする |
 | 依存先 | GitHub Actions `services`（PostgreSQL・Redis）、Docker Compose、GHA組み込みキャッシュ（`actions/setup-python`・`actions/setup-node`）、`docker/build-push-action` |
 | 実装ファイル | `.github/workflows/ci.yml` |
 
@@ -46,7 +47,7 @@
 
 | 区分 | 内容 |
 |------|------|
-| 入力 | `push`/`pull_request`イベント（`main`/`develop`）、リポジトリのソース一式、GitHub Secrets（`CI_JWT_SECRET_KEY`等） |
+| 入力 | `push`イベント（`main`/`develop`）、またはbaseブランチを限定しない`pull_request`イベント、リポジトリのソース一式、GitHub Secrets（`CI_JWT_SECRET_KEY`等） |
 | 出力 | 各ジョブの成功/失敗ステータス（required status checks）、カバレッジレポート（`coverage.xml`等、アーティファクト保存は任意） |
 | 副作用 | `services`またはComposeで起動した一時PostgreSQL/Redisへの接続（ジョブ終了時に破棄）。永続化なし。イメージはビルドのみでpushしない |
 
@@ -66,7 +67,8 @@ sequenceDiagram
     participant BI as batch-container-integration
     participant DB as docker-build
 
-    DEV->>GH: push / pull_request（main, develop）
+    DEV->>GH: push（main, develop）/ pull_request（base制限なし）
+    GH->>GH: concurrency group単位で旧実行をキャンセル
     GH->>BL: ジョブ起動
     GH->>BT: ジョブ起動（matrix: session, jwt）
     GH->>FL: ジョブ起動
@@ -116,7 +118,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart TB
-    A["push / pull_request<br/>(main, develop)"] --> B["5ジョブを並行起動<br/>backend-lint / backend-test<br/>frontend-lint / frontend-test<br/>batch-container-integration"]
+    A["push（main, develop）/<br/>pull_request（base制限なし）"] --> B["5ジョブを並行起動<br/>backend-lint / backend-test<br/>frontend-lint / frontend-test<br/>batch-container-integration"]
     B --> C{"backend-lint:<br/>ruff/mypyエラー0?"}
     C -->|No| F1["失敗・以降のdocker-buildへ進まない"]
     C -->|Yes| D["backend-test（matrix: session, jwt）"]
@@ -160,11 +162,11 @@ CIジョブは実行のたびに使い捨てのGitHub-hosted runner上で完結�
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ / 定義 | `name: ci`。`on: { push: { branches: [main, develop] }, pull_request: { branches: [main, develop] } }` |
+| シグネチャ / 定義 | `name: CI`。`on: { pull_request: {}, push: { branches: [develop, main] } }`。`concurrency: { group: "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}", cancel-in-progress: true }` |
 | 引数 / 入力 | GitHubイベントペイロード（`push`/`pull_request`）、GitHub Secrets |
 | 戻り値 / 出力 | 各ジョブのconclusion（`success`/`failure`） |
 | 送出例外 / 失敗条件 | いずれかのステップが非ゼロ終了した場合、そのジョブはfailureとなる |
-| 処理内容 | 6ジョブ（`backend-lint`/`backend-test`/`frontend-lint`/`frontend-test`/`batch-container-integration`/`docker-build`）を定義し、`docker-build`は品質検証4ジョブに`needs`で依存する。`batch-container-integration`はCompose上の実コンテナ検証を独立して行う。Docker buildでは`api`/`frontend`/`batch`の3イメージを作成する |
+| 処理内容 | baseブランチを限定せずPRを受け付け、`push`は`develop`/`main`だけを受け付ける。`detect`がcheckout済みツリーの実装ディレクトリ有無を判定し、該当する品質検証ジョブを起動する。`docker-build`は品質検証ジョブに`needs`で依存し、`batch-container-integration`はCompose上の実コンテナ検証を独立して行う。Docker buildでは`api`/`frontend`/`batch`の3イメージを作成する。同一PR（または同一push対象ブランチ）への新しい実行が始まると、同じconcurrency groupの実行中ジョブをキャンセルする |
 | 副作用 | なし（ワークフロー定義自体はGitHub側の実行指示） |
 
 ### 8.2 `backend-lint` ジョブ
@@ -237,7 +239,8 @@ CIジョブは実行のたびに使い捨てのGitHub-hosted runner上で完結�
 
 ```mermaid
 flowchart LR
-    TRIG["push / pull_request<br/>(main, develop)"] --> WF["ci.yml"]
+    TRIG["push（main, develop）/<br/>pull_request（base制限なし）"] --> WF["ci.yml"]
+    WF --> CONC["concurrency<br/>同一PR/ブランチの旧実行をcancel"]
     WF --> BL["backend-lint"]
     WF --> BT["backend-test<br/>(matrix: AUTH_MODE)"]
     WF --> FL["frontend-lint"]
@@ -271,7 +274,7 @@ flowchart LR
 | フォークPRからの実行 | `pull_request`トリガーではフォークPRに対してSecretsが渡されない挙動（GitHub標準仕様）を前提とし、フォークPR経由での不正なSecrets取得を防ぐ | GitHub Actions標準セキュリティモデル |
 | イメージのpush禁止 | `docker-build`ジョブは`push: false`固定とし、CI実行だけでGHCRに意図しないイメージが公開されないようにする | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §5.2 |
 | 依存キャッシュの汚染防止 | `cache-dependency-path`を`requirements*.txt`/`package-lock.json`に限定し、キャッシュキーがロックファイルのハッシュに連動するようにする（`actions/setup-python`/`actions/setup-node`標準機能） | GitHub Actions標準機能 |
-| ブランチ保護 | `backend-lint`/`backend-test`（両matrix）/`frontend-lint`/`frontend-test`/`batch-container-integration`/`docker-build`をrequired status checksに設定し、いずれか未成功のPRはmain/developへマージ不可とする | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §5.4 |
+| ブランチ保護 | `backend-lint`/`backend-test`（両matrix）/`frontend-lint`/`frontend-test`/`batch-container-integration`/`docker-build`をrequired status checksに設定し、いずれか未成功のPRは保護対象ブランチへマージ不可とする。baseがfeatureブランチのスタックPRにも同じCI結果を表示する | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §5.4 |
 | CI用ダミーSecrets | `CI_JWT_SECRET_KEY`/`CI_INITIAL_ADMIN_PASSWORD`等は本番用の値と別管理し、CI専用のGitHub Secretsとして登録する | 一般的なCI/CD運用指針 |
 
 ## 11. テスト設計
@@ -286,7 +289,10 @@ flowchart LR
 | 6 | 結合 | `docker-build`：GHCRへpushされない | 正常なpush | ビルドログに`push: false`相当（レジストリへの送信なし）が確認できる | `test_ci_docker_build_does_not_push` |
 | 7 | 受入 | `batch-container-integration`：batch専用コンテナからDB/Redisへ接続 | Docker Engine、`.env.example`、`RUN_BATCH_CONTAINER_INTEGRATION=1` | batchコンテナ内のDB `SELECT 1`とRedis `PING`が成功する | `test_batch_container_connects_to_postgres_and_redis` |
 | 8 | 結合 | 依存キャッシュが効くこと | 同一ロックファイルで2回目のCI実行 | 2回目の`pip install`/`npm ci`が短時間で完了（キャッシュhit） | `test_ci_cache_hit_reduces_install_time` |
+| 9 | 設定 | baseがfeatureブランチのスタックPR | `pull_request`にbaseブランチ指定がないworkflow | `detect`を含むCI workflowが起動し、各ジョブの結果がPRへ報告される | `test_pull_request_trigger_has_no_base_branch_filter` |
+| 10 | 設定 | 同一PRへ短時間に連続push | 同じPR番号で複数の`pull_request`実行が発生 | 後続実行が先行実行をキャンセルし、古い実行のrunner消費を抑制する | `test_concurrency_cancels_previous_run_for_same_pr` |
 | 網羅できない範囲 | フォークPRでSecretsが渡されないことの実挙動確認 | - | GitHub側のプラットフォーム仕様であり自動テスト不可。ドキュメント記載の前提として扱う | - |
+| 網羅できない範囲 | 実際のfeature-base PRのイベント起動と`gh pr checks`表示 | featureブランチをbaseとするPRをGitHub上に作成する必要がある | ローカルのYAMLテストではGitHubイベント配送、ジョブ実行、表示結果を確認できないため、PR作成後に手動確認する | - |
 
 ## 12. 不明点・要検討事項
 
@@ -295,3 +301,8 @@ flowchart LR
 | 決定 | `frontend-test`のカバレッジ閾値70%は`frontend/vite.config.ts`の`test.coverage.thresholds`で強制する方式に統一した（CIステップ側には閾値をハードコードしない） | `frontend/vite.config.ts` |
 | 要検討 | `backend-test`の`cov-fail-under`対象範囲は基本設計§5.4で「`omit`は`alembic/versions/*`のみ」と明記されている。本書もこれに従うが、`api/app/main.py`等の起動処理を含めた実測値が本当に80%を達成できるかは実装時の検証が必要 |`api/.coveragerc`または`pyproject.toml`の`[tool.coverage]`設定 |
 | 決定 | lint/test専用パッケージ群は`api/requirements-dev.txt`として分割し、`backend-lint`/`backend-test`は`pip install -r requirements.txt -r requirements-dev.txt`でインストールする（`fastapi.testclient`が必要とする`httpx2`を含む） | `api/requirements-dev.txt` |
+| 決定 | `pull_request`はbaseブランチを限定しない。GitHubの`pull_request`イベントはbaseが`develop`/`main`以外のスタックPRにもCIを起動し、`detect`はcheckout済みツリーのディレクトリ有無に基づいて従来どおりジョブを条件実行する | `.github/workflows/ci.yml`、§8.1 |
+| 決定 | `push`はrunner消費を抑えるため`develop`/`main`に限定する。featureブランチの検証は`pull_request`で行い、featureブランチへのpushだけではCIを起動しない | `.github/workflows/ci.yml`、§8.1 |
+| 決定 | concurrency groupはworkflow名とPR番号（push時はref）をキーにし、`cancel-in-progress: true`とする。同一PRへの連続pushでは最新実行を残し、先行実行をキャンセルする。workflow名を含めて他workflowとのgroup衝突を防ぐ | `.github/workflows/ci.yml`、§8.1 |
+| 決定 | スタックPRのCIはGitHubが作るbaseとheadのマージ結果を検証する。base側が壊れている場合は子PRのCIも失敗し得るため、base側を先に修正するか、必要に応じてdevelopをbaseに変更してから再実行する。CIを意図的にスキップする運用は採用しない | GitHub `pull_request`運用 |
+| 要検討 | featureブランチをbaseとするPRを実際に作成し、CI全ジョブの起動と`gh pr checks`への成功/失敗表示を確認する | GitHub上のPR作成が必要なためローカルでは未確認 | Issue #412の受入時に手動確認 |
