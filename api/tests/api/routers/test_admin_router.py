@@ -18,13 +18,19 @@ from app.schemas.admin import (
 	AdminUserStatusUpdateRequest,
 )
 from app.schemas.auth import CurrentUser
-from fastapi import Response
+from fastapi import Request, Response
 from fastapi.routing import APIRoute
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def _current_admin() -> CurrentUser:
 	return CurrentUser(id=uuid4(), username="admin", role="admin", is_active=True, email_verified_at=None)
+
+
+def _request(request_id: str = "request-123") -> Request:
+	request = Request({"type": "http", "method": "PATCH", "path": "/"})
+	request.state.request_id = request_id
+	return request
 
 
 def _user_detail() -> AdminUserDetailResponse:
@@ -118,11 +124,11 @@ async def test_patch_admin_user_role_forwards_path_payload_actor_and_db(monkeypa
 	monkeypatch.setattr(admin_router.admin_user_service, "change_role", service)
 
 	result = await admin_router.patch_admin_user_role(
-		user_id=user_id, payload=AdminUserRoleUpdateRequest(role="member"), actor=actor, db=db
+		user_id=user_id, payload=AdminUserRoleUpdateRequest(role="member"), request=_request(), actor=actor, db=db
 	)
 
 	assert result is service.return_value
-	service.assert_awaited_once_with(actor, user_id, "member", db)
+	service.assert_awaited_once_with(actor, user_id, "member", db, request_id="request-123")
 
 
 @pytest.mark.asyncio
@@ -134,11 +140,11 @@ async def test_patch_admin_user_status_forwards_path_payload_actor_and_db(monkey
 	monkeypatch.setattr(admin_router.admin_user_service, "change_status", service)
 
 	result = await admin_router.patch_admin_user_status(
-		user_id=user_id, payload=AdminUserStatusUpdateRequest(is_active=False), actor=actor, db=db
+		user_id=user_id, payload=AdminUserStatusUpdateRequest(is_active=False), request=_request(), actor=actor, db=db
 	)
 
 	assert result is service.return_value
-	service.assert_awaited_once_with(actor, user_id, False, db)
+	service.assert_awaited_once_with(actor, user_id, False, db, request_id="request-123")
 
 
 @pytest.mark.asyncio
@@ -149,12 +155,12 @@ async def test_post_admin_user_force_logout_returns_no_content(monkeypatch: pyte
 	service = AsyncMock()
 	monkeypatch.setattr(admin_router.admin_user_service, "force_logout", service)
 
-	result = await admin_router.post_admin_user_force_logout(user_id=user_id, actor=actor, db=db)
+	result = await admin_router.post_admin_user_force_logout(user_id=user_id, request=_request(), actor=actor, db=db)
 
 	assert isinstance(result, Response)
 	assert result.status_code == 204
 	assert result.body == b""
-	service.assert_awaited_once_with(actor, user_id, db)
+	service.assert_awaited_once_with(actor, user_id, db, request_id="request-123")
 
 
 @pytest.mark.asyncio
@@ -180,12 +186,12 @@ async def test_delete_admin_project_returns_no_content(monkeypatch: pytest.Monke
 	service = AsyncMock()
 	monkeypatch.setattr(admin_router.admin_project_service, "deactivate_project", service)
 
-	result = await admin_router.delete_admin_project(project_id=project_id, actor=actor, db=db)
+	result = await admin_router.delete_admin_project(project_id=project_id, request=_request(), actor=actor, db=db)
 
 	assert isinstance(result, Response)
 	assert result.status_code == 204
 	assert result.body == b""
-	service.assert_awaited_once_with(actor, project_id, db)
+	service.assert_awaited_once_with(actor, project_id, db, request_id="request-123")
 
 
 @pytest.mark.asyncio
@@ -216,11 +222,11 @@ async def test_list_admin_login_history_forwards_all_paging_filters(monkeypatch:
 def test_router_signatures_keep_query_and_path_parameters() -> None:
 	for function_name, parameter_names in {
 		"list_admin_users": {"query", "user", "db"},
-		"patch_admin_user_role": {"user_id", "payload", "actor", "_", "__csrf", "db"},
-		"patch_admin_user_status": {"user_id", "payload", "actor", "_", "__csrf", "db"},
-		"post_admin_user_force_logout": {"user_id", "actor", "_", "__csrf", "db"},
+		"patch_admin_user_role": {"user_id", "payload", "request", "actor", "_", "__csrf", "db"},
+		"patch_admin_user_status": {"user_id", "payload", "request", "actor", "_", "__csrf", "db"},
+		"post_admin_user_force_logout": {"user_id", "request", "actor", "_", "__csrf", "db"},
 		"list_admin_projects": {"query", "user", "db"},
-		"delete_admin_project": {"project_id", "actor", "_", "__csrf", "db"},
+		"delete_admin_project": {"project_id", "request", "actor", "_", "__csrf", "db"},
 		"list_admin_login_history": {"query", "user", "db"},
 	}.items():
 		assert set(signature(getattr(admin_router, function_name)).parameters) == parameter_names

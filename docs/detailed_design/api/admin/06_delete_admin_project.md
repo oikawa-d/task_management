@@ -147,14 +147,14 @@ flowchart TB
 | 引数 | `project_id`: パス / `actor`: admin確認済みユーザー / `db`: DBセッション |
 | 戻り値 | `Response(status_code=204)` |
 | 送出例外 | なし（サービス層の例外を `AppError` としてそのまま伝播） |
-| 処理内容 | 1. `require_admin`・`verify_csrf` を通過 2. `admin_project_service.sp_admin_deactivate_project(db, actor, project_id)` を呼び出す 3. `204 No Content` を返す |
+| 処理内容 | 1. `require_admin`・`verify_csrf` を通過 2. `admin_project_service.deactivate_project(actor, project_id, db, request_id)` を呼び出す 3. `204 No Content` を返す |
 | 副作用 | なし（副作用はservice層に委譲） |
 
 ### 6.2 `service/admin_project_service.py :: sp_admin_deactivate_project`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def sp_admin_deactivate_project(db: AsyncSession, actor: CurrentUser, project_id: UUID) -> None` |
+| シグネチャ | `async def deactivate_project(actor: CurrentUser, project_id: UUID, db: AsyncSession, request_id: str | None = None) -> None` |
 | 引数 | `actor`: 実行者（admin） / `project_id`: 無効化対象 / `db`: DBセッション |
 | 戻り値 | なし |
 | 送出例外 | `NotFoundError`（404）、`ServiceUnavailableError`（DB接続不能）→503 |

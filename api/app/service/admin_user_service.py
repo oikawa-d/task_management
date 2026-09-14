@@ -109,7 +109,9 @@ async def list_users(query: AdminUserListQuery, db: AsyncSession) -> AdminUserLi
 	)
 
 
-async def change_role(actor: CurrentUser, target_id: UUID, new_role: str, db: AsyncSession) -> AdminUserDetailResponse:
+async def change_role(
+	actor: CurrentUser, target_id: UUID, new_role: str, db: AsyncSession, request_id: str | None = None
+) -> AdminUserDetailResponse:
 	try:
 		old_role = await admin_repository.update_user_role(db, actor.id, target_id, new_role)
 		await db.commit()
@@ -128,6 +130,7 @@ async def change_role(actor: CurrentUser, target_id: UUID, new_role: str, db: As
 				extra={
 					"actor_user_id": str(actor.id),
 					"target_user_id": str(target_id),
+					"request_id": request_id,
 					"new_role": new_role,
 					"result": app_error.code,
 				},
@@ -139,6 +142,7 @@ async def change_role(actor: CurrentUser, target_id: UUID, new_role: str, db: As
 		extra={
 			"actor_user_id": str(actor.id),
 			"target_user_id": str(target_id),
+			"request_id": request_id,
 			"old_role": old_role,
 			"new_role": new_role,
 			"result": "success",
@@ -152,6 +156,7 @@ async def change_status(
 	target_id: UUID,
 	new_is_active: bool,
 	db: AsyncSession,
+	request_id: str | None = None,
 ) -> AdminUserDetailResponse:
 	try:
 		old_is_active = await admin_repository.update_user_status(db, actor.id, target_id, new_is_active)
@@ -179,6 +184,7 @@ async def change_status(
 				extra={
 					"actor_user_id": str(actor.id),
 					"target_user_id": str(target_id),
+					"request_id": request_id,
 					"operation": "delete_all_sessions",
 				},
 			)
@@ -191,6 +197,7 @@ async def change_status(
 				extra={
 					"actor_user_id": str(actor.id),
 					"target_user_id": str(target_id),
+					"request_id": request_id,
 					"operation": "revoke_all_refresh_tokens",
 				},
 			)
@@ -202,6 +209,7 @@ async def change_status(
 		extra={
 			"actor_user_id": str(actor.id),
 			"target_user_id": str(target_id),
+			"request_id": request_id,
 			"old_is_active": old_is_active,
 			"new_is_active": new_is_active,
 			"session_revoked_count": session_count,
@@ -211,7 +219,7 @@ async def change_status(
 	return _to_detail(updated)
 
 
-async def force_logout(actor: CurrentUser, target_id: UUID, db: AsyncSession) -> None:
+async def force_logout(actor: CurrentUser, target_id: UUID, db: AsyncSession, request_id: str | None = None) -> None:
 	await _fetch_user_or_error(db, target_id)
 	try:
 		session_count = await redis_store.delete_all_sessions(target_id)
@@ -224,6 +232,7 @@ async def force_logout(actor: CurrentUser, target_id: UUID, db: AsyncSession) ->
 		extra={
 			"actor_user_id": str(actor.id),
 			"target_user_id": str(target_id),
+			"request_id": request_id,
 			"mode": settings.auth_mode,
 			"access_token_revocation_delay_seconds": (
 				settings.access_token_ttl_seconds if settings.auth_mode == "jwt" else 0

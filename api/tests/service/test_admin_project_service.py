@@ -200,12 +200,13 @@ async def test_admin_delete_project_audit_log_contains_owner(
 	actor = _actor()
 
 	with caplog.at_level("WARNING", logger="app.audit"):
-		await admin_project_service.deactivate_project(actor, project.id, AsyncMock())
+		await admin_project_service.deactivate_project(actor, project.id, AsyncMock(), request_id="request-123")
 
 	record = caplog.records[-1]
 	assert record.actor_user_id == str(actor.id)
 	assert record.project_id == str(project.id)
 	assert record.owner_id == str(owner.id)
+	assert record.request_id == "request-123"
 
 
 @pytest.mark.asyncio

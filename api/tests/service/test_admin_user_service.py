@@ -393,11 +393,12 @@ async def test_force_logout_logs_mode_and_access_token_delay(
 
 	get_backend_settings.cache_clear()
 	with caplog.at_level("INFO", logger="app.audit"):
-		await admin_user_service.force_logout(actor, target.id, AsyncMock())
+		await admin_user_service.force_logout(actor, target.id, AsyncMock(), request_id="request-123")
 
 	record = caplog.records[-1]
 	assert record.actor_user_id == str(actor.id)
 	assert record.target_user_id == str(target.id)
+	assert record.request_id == "request-123"
 	assert record.mode == "jwt"
 	assert record.access_token_revocation_delay_seconds == 900
 	assert record.session_revoked_count == 1

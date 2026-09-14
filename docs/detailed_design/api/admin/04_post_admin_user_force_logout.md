@@ -130,7 +130,7 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def force_logout(actor: CurrentUser, target_id: UUID, db: AsyncSession) -> None` |
+| シグネチャ | `async def force_logout(actor: CurrentUser, target_id: UUID, db: AsyncSession, request_id: str | None = None) -> None` |
 | 引数 | `actor`: 実行者（admin） / `target_id`: 対象ユーザーID / `db`: DBセッション |
 | 戻り値 | なし |
 | 送出例外 | `NotFoundError`（404） |

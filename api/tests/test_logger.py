@@ -122,6 +122,7 @@ def test_json_formatter_includes_force_logout_fields() -> None:
 def test_all_structured_log_extra_keys_are_allowlisted() -> None:
 	app_root = Path(__file__).resolve().parent.parent / "app"
 	allowed = set(_SAFE_AUDIT_FIELDS)
+	log_methods = {"debug", "info", "warning", "error", "exception", "critical", "log"}
 	unknown: list[str] = []
 
 	for path in app_root.rglob("*.py"):
@@ -130,10 +131,19 @@ def test_all_structured_log_extra_keys_are_allowlisted() -> None:
 			if not isinstance(node, ast.Call):
 				continue
 			for keyword in node.keywords:
-				if keyword.arg != "extra" or not isinstance(keyword.value, ast.Dict):
+				if (
+					keyword.arg != "extra"
+					or not isinstance(node.func, ast.Attribute)
+					or node.func.attr not in log_methods
+				):
+					continue
+				if not isinstance(keyword.value, ast.Dict):
+					unknown.append(f"{path}:{keyword.value.lineno}:dynamic extra mapping")
 					continue
 				for key in keyword.value.keys:
-					if isinstance(key, ast.Constant) and isinstance(key.value, str) and key.value not in allowed:
+					if key is None:
+						unknown.append(f"{path}:{keyword.value.lineno}:dynamic extra mapping")
+					elif isinstance(key, ast.Constant) and isinstance(key.value, str) and key.value not in allowed:
 						unknown.append(f"{path}:{key.lineno}:{key.value}")
 
 	assert unknown == []
