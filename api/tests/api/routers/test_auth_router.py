@@ -34,7 +34,7 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from redis.exceptions import ConnectionError as RedisConnectionError
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DBAPIError, OperationalError
 
 ALLOWED_ORIGIN = "http://localhost:5173"
 
@@ -133,6 +133,37 @@ def test_register_duplicate_username_returns_409(client: TestClient, monkeypatch
 
 	assert response.status_code == 409
 	assert response.json()["error"]["code"] == "DUPLICATE_USERNAME"
+
+
+@pytest.mark.parametrize(
+	("register_error", "expected_status", "expected_code"),
+	[
+		(DBAPIError("CALL sp_register_user", {}, Exception("database error")), 500, "INTERNAL_ERROR"),
+		(
+			OperationalError("CALL sp_register_user", {}, SimpleNamespace(sqlstate="08006")),
+			503,
+			"SERVICE_UNAVAILABLE",
+		),
+	],
+	ids=["dbapi_error", "operational_error"],
+)
+def test_register_converts_database_errors(
+	client: TestClient,
+	monkeypatch: pytest.MonkeyPatch,
+	register_error: Exception,
+	expected_status: int,
+	expected_code: str,
+) -> None:
+	async def _register(*_args: Any, **_kwargs: Any) -> Any:
+		raise register_error
+
+	monkeypatch.setattr(auth_router_module.auth_service, "register", _register)
+
+	with TestClient(_build_app(), raise_server_exceptions=False) as error_client:
+		response = error_client.post("/api/auth/register", json=_REGISTER_PAYLOAD, headers={"Origin": ALLOWED_ORIGIN})
+
+	assert response.status_code == expected_status
+	assert response.json()["error"]["code"] == expected_code
 
 
 def test_register_validation_error_returns_422(client: TestClient) -> None:
@@ -343,6 +374,23 @@ def test_config_reports_google_login_enabled_when_flag_on_and_configured(monkeyp
 	assert response.json()["google_login_enabled"] is True
 
 
+@pytest.mark.parametrize("missing_setting", ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"])
+def test_config_reports_google_login_disabled_when_one_client_setting_is_missing(
+	monkeypatch: pytest.MonkeyPatch, missing_setting: str
+) -> None:
+	monkeypatch.setenv("GOOGLE_LOGIN_ENABLED", "true")
+	monkeypatch.setenv("GOOGLE_CLIENT_ID", "google-client-id")
+	monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "google-client-secret")
+	monkeypatch.setenv(missing_setting, "")
+	get_backend_settings.cache_clear()
+	app = _build_app()
+	with TestClient(app) as client:
+		response = client.get("/api/auth/config")
+
+	assert response.status_code == 200
+	assert response.json()["google_login_enabled"] is False
+
+
 def test_auth_endpoints_are_published_in_openapi() -> None:
 	from app.main import app as main_app
 
@@ -534,7 +582,7 @@ def test_password_reset_rejects_mismatched_confirmation(client: TestClient) -> N
 	"infra_error",
 	[
 		RedisConnectionError("redis down"),
-		OperationalError("SELECT 1", {}, Exception("connection refused")),
+		OperationalError("SELECT 1", {}, SimpleNamespace(sqlstate="08006")),
 	],
 	ids=["redis_error", "operational_error"],
 )
