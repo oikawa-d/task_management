@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel
 from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy.exc import InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 
 class _Payload(BaseModel):
@@ -51,6 +52,10 @@ def _build_app() -> FastAPI:
 	@app.get("/boom-interface-error")
 	async def boom_interface_error() -> None:
 		raise InterfaceError("SELECT 1", {}, Exception("connection lost"))
+
+	@app.get("/boom-pool-timeout-error")
+	async def boom_pool_timeout_error() -> None:
+		raise SQLAlchemyTimeoutError("接続プールの取得がタイムアウトしました")
 
 	@app.post("/validate")
 	async def validate(payload: _Payload) -> dict[str, str]:
@@ -131,6 +136,13 @@ def test_operational_error_is_converted_to_503_by_infra_error_handler() -> None:
 
 def test_interface_error_is_converted_to_503_by_infra_error_handler() -> None:
 	res = _client().get("/boom-interface-error")
+
+	assert res.status_code == 503
+	_assert_service_unavailable_body(res.json())
+
+
+def test_pool_timeout_error_is_converted_to_503_by_infra_error_handler() -> None:
+	res = _client().get("/boom-pool-timeout-error")
 
 	assert res.status_code == 503
 	_assert_service_unavailable_body(res.json())

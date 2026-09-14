@@ -121,11 +121,7 @@ async def get_auth_config(
 	settings: BackendSettings = Depends(get_backend_settings),
 ) -> AuthConfigResponse:
 	response.headers["Cache-Control"] = "no-store"
-	return AuthConfigResponse(
-		auth_mode=settings.auth_mode,
-		google_login_enabled=bool(settings.google_client_id and settings.google_client_secret),
-		csrf_cookie_name=settings.cookie_name_csrf,
-	)
+	return auth_service.get_auth_config(settings)
 
 
 @router.post("/refresh", response_model=RefreshResponse, dependencies=[Depends(verify_origin), Depends(verify_csrf)])

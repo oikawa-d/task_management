@@ -7,6 +7,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from redis.exceptions import RedisError
 from sqlalchemy.exc import InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 logger = logging.getLogger("app.error")
 
@@ -227,6 +228,7 @@ def register_error_handling(app: FastAPI) -> None:
 
 	app.add_exception_handler(OperationalError, infra_error_handler)
 	app.add_exception_handler(InterfaceError, infra_error_handler)
+	app.add_exception_handler(SQLAlchemyTimeoutError, infra_error_handler)
 
 	@app.exception_handler(RequestValidationError)
 	async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:

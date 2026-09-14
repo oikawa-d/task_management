@@ -315,6 +315,34 @@ def test_config_reports_google_login_disabled_when_unconfigured(monkeypatch: pyt
 	assert response.json()["google_login_enabled"] is False
 
 
+def test_config_reports_google_login_disabled_when_flag_off(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""GOOGLE_LOGIN_ENABLED=falseの場合、client_id/secretが設定済みでもgoogle_login_enabledはfalseを返す。"""
+	monkeypatch.setenv("GOOGLE_LOGIN_ENABLED", "false")
+	monkeypatch.setenv("GOOGLE_CLIENT_ID", "google-client-id")
+	monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "google-client-secret")
+	get_backend_settings.cache_clear()
+	app = _build_app()
+	with TestClient(app) as client:
+		response = client.get("/api/auth/config")
+
+	assert response.status_code == 200
+	assert response.json()["google_login_enabled"] is False
+
+
+def test_config_reports_google_login_enabled_when_flag_on_and_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""GOOGLE_LOGIN_ENABLED=trueかつclient_id/secretが設定済みの場合、google_login_enabledはtrueを返す。"""
+	monkeypatch.setenv("GOOGLE_LOGIN_ENABLED", "true")
+	monkeypatch.setenv("GOOGLE_CLIENT_ID", "google-client-id")
+	monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "google-client-secret")
+	get_backend_settings.cache_clear()
+	app = _build_app()
+	with TestClient(app) as client:
+		response = client.get("/api/auth/config")
+
+	assert response.status_code == 200
+	assert response.json()["google_login_enabled"] is True
+
+
 def test_auth_endpoints_are_published_in_openapi() -> None:
 	from app.main import app as main_app
 

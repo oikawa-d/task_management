@@ -44,7 +44,7 @@ from app.core.exceptions import (
 from app.core.security import get_dummy_password_hash, hash_password, verify_password
 from app.models.user import User
 from app.repository import login_history_repository, oauth_account_repository, redis_store, user_repository
-from app.schemas.auth import RegisterRequest
+from app.schemas.auth import AuthConfigResponse, RegisterRequest
 from app.schemas.oauth import OAuthCallbackResult, OAuthExchangeResponse, OAuthStartResult
 from app.service import mail_service
 
@@ -352,6 +352,17 @@ async def refresh(request: Request, response: Response, strategy: AuthStrategy) 
 	sessionモードのStrategyは`NotSupportedInModeError`を送出し405となる。
 	"""
 	return await strategy.refresh(request, response)
+
+
+def get_auth_config(settings: BackendSettings | None = None) -> AuthConfigResponse:
+	config = settings or get_backend_settings()
+	return AuthConfigResponse(
+		auth_mode=config.auth_mode,
+		google_login_enabled=bool(
+			config.google_login_enabled and config.google_client_id and config.google_client_secret
+		),
+		csrf_cookie_name=config.cookie_name_csrf,
+	)
 
 
 def normalize_redirect_to(raw: str | None, settings: BackendSettings | None = None) -> str:
