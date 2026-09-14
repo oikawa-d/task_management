@@ -134,7 +134,7 @@ flowchart TB
 | 処理内容 | 1. `service.request_password_reset(payload.email, background)` を呼ぶ 2. 常に固定メッセージのレスポンスを返す |
 | 副作用 | なし（副作用は service 層に委譲） |
 
-### 6.2 `service/auth_service.py :: request_password_reset`
+### 6.2 `api/app/service/email_verification_service.py :: request_password_reset`
 
 | 項目 | 内容 |
 |------|------|
@@ -182,7 +182,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    R["auth_router.password_forgot"] --> S["auth_service.request_password_reset"]
+    R["auth_router.password_forgot"] --> S["email_verification_service.request_password_reset"]
     S --> UR["user_repository.fn_find_user_by_email"]
     S --> RD["redis_store.save_password_reset_token"]
     S -.->|"BackgroundTasks"| MS["mail_service.send_password_reset_mail"]

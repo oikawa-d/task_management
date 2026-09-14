@@ -151,7 +151,7 @@ flowchart TB
 | 処理内容 | 1. `service.resend_verification(payload.email, background)` を呼ぶ 2. 常に固定メッセージを含むレスポンスを返す |
 | 副作用 | なし（副作用は service 層に委譲） |
 
-### 6.2 `service/auth_service.py :: resend_verification`
+### 6.2 `api/app/service/email_verification_service.py :: resend_verification`
 
 | 項目 | 内容 |
 |------|------|
@@ -210,7 +210,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    R["auth_router.resend_verify_email"] --> S["auth_service.resend_verification"]
+    R["auth_router.resend_verify_email"] --> S["email_verification_service.resend_verification"]
     S --> UR["user_repository.fn_find_user_by_email"]
     S --> RD1["redis_store.mark_email_verify_sent"]
     S --> RD2["redis_store.replace_email_verify_token"]

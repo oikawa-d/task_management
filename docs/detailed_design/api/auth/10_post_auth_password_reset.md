@@ -146,11 +146,11 @@ flowchart TB
 | シグネチャ | `async def password_reset(payload: PasswordResetRequest, service: AuthService = Depends(get_auth_service)) -> Response` |
 | 引数 | `payload: PasswordResetRequest`、`service: AuthService` |
 | 戻り値 | `Response`（`204 No Content`） |
-| 送出例外 | なし（`service.reset_password` が送出した `InvalidResetTokenError` はグローバル例外ハンドラで400に変換） |
+| 送出例外 | なし（`email_verification_service.reset_password` が送出した `InvalidResetTokenError` はグローバル例外ハンドラで400に変換） |
 | 処理内容 | 1. `service.reset_password(payload.token, payload.new_password)` を呼び出す 2. 成功時は `Response(status_code=204)` を返す |
 | 副作用 | なし（副作用は service 層に委譲） |
 
-### 6.2 `service/auth_service.py :: reset_password`
+### 6.2 `api/app/service/email_verification_service.py :: reset_password`
 
 | 項目 | 内容 |
 |------|------|
@@ -220,7 +220,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    R["auth_router.password_reset"] --> S["auth_service.reset_password"]
+    R["auth_router.password_reset"] --> S["email_verification_service.reset_password"]
     S --> RD1["redis_store.consume_password_reset_token"]
     S --> SEC["core/security.hash_password"]
     S --> UR["user_repository.sp_update_user_password"]

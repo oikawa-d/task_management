@@ -30,6 +30,7 @@ from app.core.exceptions import (
 )
 from app.db import get_db_session
 from app.schemas.user import UserProfileResponse
+from app.service import email_verification_service
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
@@ -419,7 +420,7 @@ def test_verify_email_returns_204(client: TestClient, monkeypatch: pytest.Monkey
 	async def _verify_email(token: str, _db: Any) -> None:
 		tokens.append(token)
 
-	monkeypatch.setattr(auth_router_module.auth_service, "verify_email", _verify_email)
+	monkeypatch.setattr(email_verification_service, "verify_email", _verify_email)
 
 	response = client.post("/api/auth/verify-email", json={"token": "verify-token"})
 
@@ -432,7 +433,7 @@ def test_verify_email_invalid_token_returns_400(client: TestClient, monkeypatch:
 	async def _verify_email(*_args: Any, **_kwargs: Any) -> None:
 		raise InvalidVerifyTokenError()
 
-	monkeypatch.setattr(auth_router_module.auth_service, "verify_email", _verify_email)
+	monkeypatch.setattr(email_verification_service, "verify_email", _verify_email)
 
 	response = client.post("/api/auth/verify-email", json={"token": "used-token"})
 
@@ -453,7 +454,7 @@ def test_resend_verify_email_returns_202_with_fixed_message(
 	async def _resend(*_args: Any, **_kwargs: Any) -> None:
 		return None
 
-	monkeypatch.setattr(auth_router_module.auth_service, "resend_verification", _resend)
+	monkeypatch.setattr(email_verification_service, "resend_verification", _resend)
 
 	response = client.post("/api/auth/verify-email/resend", json={"email": "taro@example.com"})
 
@@ -465,7 +466,7 @@ def test_password_forgot_returns_202_for_unknown_email(client: TestClient, monke
 	async def _request_password_reset(*_args: Any, **_kwargs: Any) -> None:
 		return None
 
-	monkeypatch.setattr(auth_router_module.auth_service, "request_password_reset", _request_password_reset)
+	monkeypatch.setattr(email_verification_service, "request_password_reset", _request_password_reset)
 
 	response = client.post("/api/auth/password/forgot", json={"email": "unknown@example.com"})
 
@@ -479,7 +480,7 @@ def test_password_reset_returns_204(client: TestClient, monkeypatch: pytest.Monk
 	async def _reset_password(token: str, new_password: str, _db: Any) -> None:
 		calls.append((token, new_password))
 
-	monkeypatch.setattr(auth_router_module.auth_service, "reset_password", _reset_password)
+	monkeypatch.setattr(email_verification_service, "reset_password", _reset_password)
 
 	response = client.post(
 		"/api/auth/password/reset",
@@ -494,7 +495,7 @@ def test_password_reset_invalid_token_returns_400(client: TestClient, monkeypatc
 	async def _reset_password(*_args: Any, **_kwargs: Any) -> None:
 		raise InvalidResetTokenError()
 
-	monkeypatch.setattr(auth_router_module.auth_service, "reset_password", _reset_password)
+	monkeypatch.setattr(email_verification_service, "reset_password", _reset_password)
 
 	response = client.post(
 		"/api/auth/password/reset",
@@ -556,7 +557,12 @@ def test_auth_endpoints_return_503_on_infra_failure(
 	async def _boom(*_args: Any, **_kwargs: Any) -> Any:
 		raise infra_error
 
-	monkeypatch.setattr(auth_router_module.auth_service, service_function, _boom)
+	service = (
+		email_verification_service
+		if service_function in {"verify_email", "resend_verification", "request_password_reset", "reset_password"}
+		else auth_router_module.auth_service
+	)
+	monkeypatch.setattr(service, service_function, _boom)
 
 	response = client.post(path, json=payload, headers=headers)
 

@@ -401,13 +401,15 @@ flowchart TB
 | レート制限 | `emailverify_sent:{user_id}` が存在する間は送信しない（既定60秒。`EMAIL_VERIFY_RESEND_INTERVAL_SECONDS`） |
 | 旧トークン | 再送時に `emailverify_current:{uid}` から旧token hashを逆引きして失効させる。常に有効な確認tokenはユーザーごとに1本 |
 
-### 6.4 登録・認証の関数（`service/auth_service.py`）
+### 6.4 登録・認証の関数
 
 | 関数 | 引数 | 戻り値 | 処理 |
 |------|------|--------|------|
 | `register` | `payload: RegisterRequest`, `background: BackgroundTasks` | `User` | 重複チェック → ハッシュ化 → `users` INSERT（`email_verified_at=NULL`）→ 認証トークン発行 → メール送信予約。**Strategy.login は呼ばない** |
-| `verify_email` | `token: str` | `None` | `consume_email_verify_token` → `UPDATE users SET email_verified_at = now()`。無効なら `InvalidVerifyTokenError`（400） |
-| `resend_verification` | `email: str`, `background: BackgroundTasks` | `None` | ユーザー検索 → 未認証かつ再送間隔外なら再送。該当なしでも例外は出さない |
+| `verify_email` | `token: str` | `None` | `api/app/service/email_verification_service.py`。`consume_email_verify_token` → `UPDATE users SET email_verified_at = now()`。無効なら `InvalidVerifyTokenError`（400） |
+| `resend_verification` | `email: str`, `background: BackgroundTasks` | `None` | `api/app/service/email_verification_service.py`。ユーザー検索 → 未認証かつ再送間隔外なら再送。該当なしでも例外は出さない |
+| `register` | `payload: RegisterRequest`, `background: BackgroundTasks` | `User` | `api/app/service/auth_service.py`。重複チェック → ハッシュ化 → `users` INSERT → 確認メール送信予約。**Strategy.login は呼ばない** |
+| `login` / `logout` / `refresh` | 基本認証パラメータ | `LoginResult` / `None` | `api/app/service/auth_service.py`。レート制限、パスワード検証、Strategyへの委譲 |
 
 ### 6.5 ログイン以外のRate Limit
 

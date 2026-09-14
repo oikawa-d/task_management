@@ -13,7 +13,7 @@
 
 | 項目 | 内容 |
 |------|------|
-| 対象 | `core/security.py`（パスワードハッシュ生成・検証）、`service/auth_service.py :: login`（ログイン失敗レート制限） |
+| 対象 | `api/app/core/security.py`（パスワードハッシュ生成・検証）、`api/app/service/auth_service.py :: login`（ログイン失敗レート制限） |
 | 責務 | argon2idによるパスワードハッシュの生成・検証・コストパラメータ管理、ログイン失敗回数のカウントによるブルートフォース対策、タイミング攻撃対策 |
 | 適用条件 | `AUTH_MODE`に依存しない（session/jwt共通）。パスワードを保有しないOAuth専用ユーザー（`password_hash IS NULL`）はログイン試行自体が別経路（[../../basic_design/03_auth.md](../../basic_design/03_auth.md) §5）となるため、本書の対象外 |
 | 依存先 | `passlib[argon2]`、Redis（`login_fail:*`）、PostgreSQL（`users.password_hash`） |
@@ -27,7 +27,7 @@
 | `verify_password` | 関数（`core/security.py`） | 平文パスワードとハッシュを照合 | 定数時間比較（argon2実装が内包） |
 | `needs_rehash` | 関数（`core/security.py`） | コストパラメータ変更時の再ハッシュ要否判定 | `passlib`の`CryptContext.needs_update`相当 |
 | `_dummy_hash` | モジュール内定数（`core/security.py`） | ユーザー不存在時のダミー検証用ハッシュ | タイミング攻撃対策（§10参照） |
-| `build_login_fail_key` | 関数（`service/auth_service.py`または`core/security.py`） | 識別子と`TRUSTED_PROXY_CIDRS`で確定したIPからRedisキーのハッシュ値を生成 | 平文の識別子・IPをキーに含めない |
+| `build_login_fail_key` | 関数（`api/app/service/auth_service.py`または`api/app/core/security.py`） | 識別子と`TRUSTED_PROXY_CIDRS`で確定したIPからRedisキーのハッシュ値を生成 | 平文の識別子・IPをキーに含めない |
 | `incr_login_failure` / `reset_login_failure` | `redis_store`関数 | 失敗回数のINCR/DEL | 詳細は[./08_redis_store.md](./08_redis_store.md) §5.3 |
 
 ## 3. 設定項目（環境変数）
@@ -196,7 +196,7 @@ stateDiagram-v2
 | 副作用 | なし |
 | 備考 | 呼び出し元（ログイン成功時等）が`True`の場合に`hash_password`で再計算し`users.password_hash`を更新する運用とする。基本設計に明記された機能ではなく、コストパラメータ変更時の段階的移行を可能にするための実装レベルの補完（§12参照） |
 
-### 8.4 `service/auth_service.py :: build_login_fail_key`
+### 8.4 `api/app/service/auth_service.py :: build_login_fail_key`
 
 | 項目 | 内容 |
 |------|------|
@@ -208,7 +208,7 @@ stateDiagram-v2
 | 副作用 | なし |
 | 備考 | メール/ユーザー名を平文でRedisキーへ保存しないための一方向ハッシュ（[../../basic_design/02_redis.md](../../basic_design/02_redis.md) §2の`login_fail`行の注記どおり） |
 
-### 8.5 `service/auth_service.py :: login`（レート制限・ハッシュ検証部分の抜粋）
+### 8.5 `api/app/service/auth_service.py :: login`（レート制限・ハッシュ検証部分の抜粋）
 
 | 項目 | 内容 |
 |------|------|
@@ -223,15 +223,15 @@ stateDiagram-v2
 
 ```mermaid
 flowchart LR
-    LOGINSVC["service/auth_service.py::login"] --> BUILDKEY["build_login_fail_key"]
+    LOGINSVC["api/app/service/auth_service.py::login"] --> BUILDKEY["build_login_fail_key"]
     LOGINSVC --> SEC1["core/security.py::verify_password"]
     LOGINSVC --> SEC2["core/security.py::needs_rehash"]
     LOGINSVC --> RS1["redis_store.get_login_failure_count / get_login_failure_ttl<br/>incr/reset_login_failure"]
 
-    REGSVC["service/auth_service.py::register"] --> SEC3["core/security.py::hash_password"]
+    REGSVC["api/app/service/auth_service.py::register"] --> SEC3["core/security.py::hash_password"]
     PWCHANGESVC["service/user_service.py::change_password"] --> SEC1
     PWCHANGESVC --> SEC3
-    RESETPWSVC["service/auth_service.py::reset_password<br/>（06_token_mail.md）"] --> SEC3
+    RESETPWSVC["api/app/service/email_verification_service.py::reset_password<br/>（06_token_mail.md）"] --> SEC3
     SEEDSCRIPT["scripts/seed.py（初期管理者投入）"] --> SEC3
 
     RS1 --> RD[("Redis: login_fail:{key_hash}")]

@@ -140,7 +140,7 @@ flowchart TB
 | 処理内容 | 1. `service.verify_email(payload.token)` を呼び出す 2. 成功時は `Response(status_code=204)` を返す |
 | 副作用 | なし（副作用は service 層に委譲） |
 
-### 6.2 `service/auth_service.py :: verify_email`
+### 6.2 `api/app/service/email_verification_service.py :: verify_email`
 
 | 項目 | 内容 |
 |------|------|
@@ -177,7 +177,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    R["auth_router.verify_email"] --> S["auth_service.verify_email"]
+    R["auth_router.verify_email"] --> S["email_verification_service.verify_email"]
     S --> RD["redis_store.consume_email_verify_token"]
     S --> UR["user_repository.sp_verify_user_email"]
     RD --> REDIS[("Redis<br/>emailverify:*")]
