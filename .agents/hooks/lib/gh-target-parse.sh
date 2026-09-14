@@ -13,54 +13,6 @@ GH_PR_MERGE_BOOL_FLAGS=(--admin --auto --disable-auto --delete-branch -d --merge
 GH_ISSUE_CLOSE_VALUE_FLAGS=(--comment -c --reason -r --repo -R)
 GH_ISSUE_CLOSE_BOOL_FLAGS=(--help -h)
 
-# コマンド断片をシェルの引用規則に沿ってトークンへ分割し、1行1トークンで出力する。
-# `eval` は使わない(hookの入力は未検証の文字列であり、実行してはならない)。
-gh_tokenize_segment() {
-	local input="$1"
-	local length=${#input}
-	local index char quote='' token='' has_token=0
-
-	for (( index = 0; index < length; index++ )); do
-		char="${input:index:1}"
-
-		if [[ -n "$quote" ]]; then
-			if [[ "$char" == "$quote" ]]; then
-				quote=''
-			else
-				token+="$char"
-			fi
-			continue
-		fi
-
-		case "$char" in
-			\'|\")
-				quote="$char"
-				has_token=1
-				;;
-			'\')
-				(( index++ ))
-				token+="${input:index:1}"
-				has_token=1
-				;;
-			[[:space:]])
-				if (( has_token )); then
-					printf '%s\n' "$token"
-					token=''
-					has_token=0
-				fi
-				;;
-			*)
-				token+="$char"
-				has_token=1
-				;;
-		esac
-	done
-
-	if (( has_token )); then
-		printf '%s\n' "$token"
-	fi
-}
-
 # 配列に値が含まれるか判定する。
 gh_contains() {
 	local needle="$1"
@@ -185,7 +137,7 @@ gh_parse_target() {
 			;;
 	esac
 
-	while IFS= read -r line; do
+	while IFS= read -r -d '' line; do
 		tokens+=("$line")
 	done < <(gh_tokenize_segment "$segment")
 

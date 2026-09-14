@@ -105,6 +105,18 @@ assert_blocked() {
 	fi
 }
 
+assert_blocked_with_message() {
+	local command=$1
+	local expected=$2
+	local status=0 output
+	output=$(payload "$command" | "$hook" 2>&1) || status=$?
+	if [[ "$status" -ne 2 || "$output" != *"$expected"* ]]; then
+		echo "期待したメッセージでブロックされませんでした (exit=$status, 期待: $expected): $command" >&2
+		echo "$output" >&2
+		return 1
+	fi
+}
+
 assert_blocked_raw_stdin() {
 	local raw_input=$1
 	local status=0
@@ -252,7 +264,7 @@ assert_blocked "gh issue close 123"
 
 # 5-3. リンクPRが無い(PR本文にClosesが無い) -> exit 2
 export GH_STUB_GRAPHQL_JSON="$linked_none_json"
-assert_blocked "gh issue close 123"
+assert_blocked_with_message "gh issue close 123" "issueを閉じるPRが見つかりません"
 
 # 5-4. issue自身にreviewedラベルがあってもリンクPRが未reviewedならブロックされること
 export GH_STUB_GRAPHQL_JSON="$linked_unreviewed_json" GH_STUB_MATCH="issue view" GH_STUB_JSON="$reviewed_json"
@@ -400,6 +412,19 @@ assert_blocked $'gh issue \\\nclose 123'
 assert_blocked $'gh api -X \\\nPUT repos/oikawa-d/task_management/pulls/123/merge'
 unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON
 
+# タブは引数区切りとして扱い、引用符内改行は同一引数の一部として保持すること。
+export GH_STUB_MATCH="pr view" GH_STUB_EXIT="0" GH_STUB_JSON="$unreviewed_json"
+assert_gh_called_with $'gh pr merge\t123' 'pr view 123'
+assert_gh_called_with $'gh pr merge 123 --subject "line one\nline two" --repo evil/other' \
+	'pr view 123 --json labels --repo evil/other'
+unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON
+
+export GH_STUB_GRAPHQL_JSON="$linked_unreviewed_json"
+assert_gh_called_with $'gh issue close\t123' 'number=123'
+assert_gh_called_with $'gh issue close 123 --comment "line one\nline two" --repo evil/other' \
+	'owner=evil -F repo=other -F number=123'
+unset GH_STUB_GRAPHQL_JSON
+
 # 9. 想定外エラー時 -> exit 2 (trap ... ERR)
 assert_blocked_raw_stdin "これは不正なJSONです"
 
@@ -411,6 +436,7 @@ assert_blocked "gh api repos/oikawa-d/task_management/pulls/123/merge --method P
 assert_blocked "gh api repos/oikawa-d/task_management/pulls/123/merge --method=PUT"
 assert_blocked "gh api repos/oikawa-d/task_management/pulls/123/merge -XPUT"
 assert_blocked "gh api repos/oikawa-d/task_management/pulls/123/merge -X=PUT"
+assert_blocked $'gh api -X PUT\trepos/oikawa-d/task_management/pulls/123/merge'
 assert_blocked "gh issue edit 123 --state closed"
 assert_blocked "gh --repo oikawa-d/task_management issue edit 123 --state=closed"
 

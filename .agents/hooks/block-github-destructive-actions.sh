@@ -10,6 +10,8 @@ REPO_PLACEHOLDER="<owner>/<repo>"
 # 操作対象(PR/Issue)の解析は共通ライブラリへ切り出している。
 # jq不在時のfail-close(#339)を検証できるよう、外部コマンドに依存せずシェル組み込みで解決する。
 HOOK_DIR=$(cd "${BASH_SOURCE[0]%/*}" 2>/dev/null && pwd) || HOOK_DIR="."
+# shellcheck source=lib/gh-command-parse.sh
+source "$HOOK_DIR/lib/gh-command-parse.sh"
 # shellcheck source=lib/gh-target-parse.sh
 source "$HOOK_DIR/lib/gh-target-parse.sh"
 
@@ -118,9 +120,7 @@ command_for_match=$(strip_heredocs <<<"$command")
 command_for_match=${command_for_match//\\$'\n'/}
 
 # コマンド位置の判定を厳格化する(#388)。
-# `gh` が実際にコマンドとして実行され得る位置(行頭、または `;` `&` `|` `` ` `` `(` の直後)に
-# ある場合のみを対象とし、クォート内・他コマンドの引数・コメント中の文字列は対象外にする。
-# (完全なシェル構文解析ではないため、あくまで現実的な緩和策。判定に迷う場合はブロック側に倒す。)
+# 引用符外のコマンド区切り文字で操作単位へ分割し、先頭トークンが `gh` の場合のみ対象にする。
 #
 # 【検出できないケース(既知の限界)】この判定は誤検知の抑制が目的であり、意図的な回避を防ぐ
 # ものではない。以下のような形は `gh` の直前に区切り文字が来ないため検出されない。
@@ -130,7 +130,6 @@ command_for_match=${command_for_match//\\$'\n'/}
 #   - `gh` の前に別コマンドが付く形: sudo gh pr merge 123 / env FOO=1 gh pr merge 123
 # 本hookは事故防止のガードレール(通常operationでの誤操作・誤検知の防止)であり、
 # 迂回を意図した操作までは防げない。検出範囲の拡張は別途 #390 で検討する。
-CMD_BOUNDARY='(^|[;&|(`])[[:space:]]*'
 
 # 対象PRにreviewedラベルが付与されているか確認する。
 # gh呼び出しに失敗した場合は必ずブロックする(fail-close)。
@@ -180,7 +179,7 @@ resolve_repo() {
 linked_pr_has_reviewed_label() {
 	local issue_number="$1"
 	local parsed_repo="$2" # コマンドで明示されたリポジトリ(空文字ならカレントリポジトリ)
-	local repo owner name host response cursor=""
+	local repo owner name host response cursor="" linked_pr_count=0 page_node_count
 	local -a graphql_args=(api graphql -f "query=$LINKED_PR_QUERY")
 
 	if [[ -z "$issue_number" ]]; then
@@ -227,20 +226,19 @@ linked_pr_has_reviewed_label() {
 		' <<<"$response" >/dev/null 2>&1; then
 			return 0
 		fi
+		page_node_count=$(jq -r '.data.repository.issue.closedByPullRequestsReferences.nodes | length' <<<"$response")
+		linked_pr_count=$(( linked_pr_count + page_node_count ))
 
 		if ! jq -e '.data.repository.issue.closedByPullRequestsReferences.pageInfo.hasNextPage' \
 			<<<"$response" >/dev/null 2>&1; then
+			if (( linked_pr_count == 0 )); then
+				return 3
+			fi
 			return 1
 		fi
 		cursor=$(jq -r '.data.repository.issue.closedByPullRequestsReferences.pageInfo.endCursor // empty' <<<"$response")
 		[[ -n "$cursor" ]] || return 2
 	done
-}
-
-# grepのマッチにはコマンド区切り文字が含まれるため、解析前に除去する。
-strip_segment_prefix() {
-	local segment="$1"
-	sed -E 's/^[;&|`([:space:]]+//' <<<"$segment"
 }
 
 # `gh pr merge` の1件を検査する。戻り値0は許可、2はブロックを表す。
@@ -303,36 +301,24 @@ check_close_segment() {
 	fi
 }
 
-# 1回のBash入力に複数の破壊操作が含まれる場合も、検出した全件を検査する。
-# いずれか1件でもブロック対象なら入力全体をブロックし、全件が許可された場合のみ通過させる。
-merge_pattern="${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+pr[[:space:]]+merge[^;&|[:cntrl:]]*"
-while IFS= read -r merge_segment; do
-	merge_segment=$(strip_segment_prefix "$merge_segment")
-	if ! check_merge_segment "$merge_segment"; then
+# 1回のBash入力に複数の破壊操作が含まれる場合も、引用符外の区切り文字で分割して全件を検査する。
+# 正規表現による行単位の抽出ではタブや引用符内改行で対象引数が欠落するため、共通トークン解析を使う。
+gh_split_command_segments "$command_for_match"
+for command_segment in "${GH_COMMAND_SEGMENTS[@]}"; do
+	if gh_segment_is_action "$command_segment" "pr" "merge"; then
+		check_merge_segment "$command_segment" || exit 2
+	fi
+	if gh_segment_is_action "$command_segment" "issue" "close"; then
+		check_close_segment "$command_segment" || exit 2
+	fi
+	if gh_segment_is_api_merge "$command_segment"; then
+		echo "ブロック: GitHub API経由のPR mergeは禁止されています。レビュー完了後に '${REVIEWED_LABEL}' ラベルを付与し、gh pr merge を使用してください。" >&2
 		exit 2
 	fi
-done < <(grep -Eo "$merge_pattern" <<<"$command_for_match" || true)
-
-close_pattern="${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+issue[[:space:]]+close[^;&|[:cntrl:]]*"
-while IFS= read -r close_segment; do
-	close_segment=$(strip_segment_prefix "$close_segment")
-	if ! check_close_segment "$close_segment"; then
+	if gh_segment_is_issue_state_close "$command_segment"; then
+		echo "ブロック: --state closedによるIssue closeは禁止されています。レビュー完了後に '${REVIEWED_LABEL}' ラベルを付与し、gh issue close を使用してください。" >&2
 		exit 2
 	fi
-done < <(grep -Eo "$close_pattern" <<<"$command_for_match" || true)
-
-# `gh pr merge` の代替経路となるGitHub API直叩き(PUT .../pulls/<番号>/merge)を塞ぐ。
-# こちらはreviewedラベルの有無にかかわらず禁止し、mergeは `gh pr merge` に一本化する。
-api_put_regex="${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+api[^;&|[:cntrl:]]*((--method(=|[[:space:]]+)PUT|-X[=[:space:]]*PUT)[^;&|[:cntrl:]]*repos/[^[:space:];|&]+/pulls/[0-9]+/merge|repos/[^[:space:];|&]+/pulls/[0-9]+/merge[^;&|[:cntrl:]]*((--method(=|[[:space:]]+)PUT|-X[=[:space:]]*PUT)))"
-if grep -Eiq "$api_put_regex" <<<"$command_for_match"; then
-	echo "ブロック: GitHub API経由のPR mergeは禁止されています。レビュー完了後に '${REVIEWED_LABEL}' ラベルを付与し、gh pr merge を使用してください。" >&2
-	exit 2
-fi
-
-# `gh issue close` の代替経路となる `gh issue edit --state closed` を塞ぐ。
-if grep -Eiq "${CMD_BOUNDARY}gh[^;&|[:cntrl:]]*[[:space:]]+issue[^;&|[:cntrl:]]*[[:space:]]+edit[^;&|[:cntrl:]]+[[:space:]]+--state([=[:space:]]+)closed([[:space:]]|\$)" <<<"$command_for_match"; then
-	echo "ブロック: --state closedによるIssue closeは禁止されています。レビュー完了後に '${REVIEWED_LABEL}' ラベルを付与し、gh issue close を使用してください。" >&2
-	exit 2
-fi
+done
 
 exit 0
