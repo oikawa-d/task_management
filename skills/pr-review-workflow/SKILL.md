@@ -67,7 +67,7 @@ gh pr comment <番号> --body-file <file>
    - レビュー指摘の全文（どのファイルの何行目を、なぜ、どう直すか）
    - テストを実行し**実測結果を報告**すること
    - コミット・push・`gh pr comment` での修正報告まで行うこと
-   - **PRを新規作成したエージェント自身による`gh pr merge`とissueのcloseは禁止**。作成者以外のエージェントは、受入可のレビュー・`reviewed`ラベル・CI全pass・mergeableを確認後に実施してよい
+   - **PR作成もしくはコード修正を行ったエージェント自身による`gh pr merge`とissueのcloseは禁止**。それ以外のエージェントは、受入可のレビュー・`reviewed`ラベル・CI全pass・mergeableを確認後に実施してよい
    - 自分のworktree外のファイルを変更しないこと
    - `.env` の読み取り・変更禁止（`.env.example` への追記は可）
 4. 修正完了後、**別のサブエージェント**に再レビューさせる。修正した本人に合否判定させない。
@@ -75,7 +75,7 @@ gh pr comment <番号> --body-file <file>
 
 ## マージとclose
 
-**PRを新規作成したエージェントはmerge・issue closeを実施しない。** 作成者以外のエージェントは、レビューで「受入可」を記録し、`reviewed`ラベルとCI全pass・mergeableを確認した場合、追加のユーザー承認なしにsquash mergeとIssue closeを実施してよい。同一GitHubアカウントを使用する場合も、作成者エージェントでなければこの運用の対象とする。`.claude/hooks/block-github-destructive-actions.sh` は`reviewed`ラベルの有無を検証するが、エージェントの作成者識別は行わない。
+**PR作成もしくはコード修正を行ったエージェントはmerge・issue closeを実施しない。** それ以外のエージェントは、レビューで「受入可」を記録し、`reviewed`ラベルとCI全pass・mergeableを確認した場合、追加のユーザー承認なしにsquash mergeとIssue closeを実施してよい。同一GitHubアカウントを使用する場合も、PR作成またはコード修正を行ったエージェントでなければこの運用の対象とする。`.claude/hooks/block-github-destructive-actions.sh` は`reviewed`ラベルの有無を検証するが、PR作成・コード修正を行ったエージェントの識別は行わない。
 
 作成者エージェントはここまでで作業を止め、「CI全pass・mergeable」であることと未解決の指摘の有無をユーザーに報告する。
 
