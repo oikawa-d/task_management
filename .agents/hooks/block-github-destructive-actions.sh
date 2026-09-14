@@ -15,7 +15,7 @@ source "$HOOK_DIR/lib/gh-target-parse.sh"
 
 # issueを閉じるPR(本文のClosing keywordsでリンクされたPR)とそのラベルを取得するGraphQLクエリ。
 # includeClosedPrs:true でクローズ済み・マージ済みのPRもリンク先として扱う。
-LINKED_PR_QUERY='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){closedByPullRequestsReferences(first:20,includeClosedPrs:true){nodes{number labels(first:50){nodes{name}}}}}}}'
+LINKED_PR_QUERY='query($owner:String!,$repo:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$repo){issue(number:$number){closedByPullRequestsReferences(first:100,after:$cursor,includeClosedPrs:true){pageInfo{hasNextPage endCursor}nodes{number labels(first:50){nodes{name}}}}}}}'
 
 # 想定外のエラー(パイプラインの異常終了等)は必ずブロック側に倒す(fail-close)。
 # Claude CodeのPreToolUse hookはexit 2のみをブロックとして扱い、それ以外の非ゼロ終了は
@@ -131,7 +131,7 @@ resolve_repo() {
 linked_pr_has_reviewed_label() {
 	local issue_number="$1"
 	local parsed_repo="$2" # コマンドで明示されたリポジトリ(空文字ならカレントリポジトリ)
-	local repo owner name host response
+	local repo owner name host response cursor=""
 	local -a graphql_args=(api graphql -f "query=$LINKED_PR_QUERY")
 
 	if [[ -z "$issue_number" ]]; then
@@ -149,22 +149,37 @@ linked_pr_has_reviewed_label() {
 	if [[ -n "$host" ]]; then
 		graphql_args+=(--hostname "$host")
 	fi
-	graphql_args+=(-F "owner=$owner" -F "repo=$name" -F "number=$issue_number")
+	while true; do
+		local -a request_args=("${graphql_args[@]}" -F "owner=$owner" -F "repo=$name" -F "number=$issue_number")
+		if [[ -n "$cursor" ]]; then
+			request_args+=(-F "cursor=$cursor")
+		fi
+		response=$(gh "${request_args[@]}" 2>/dev/null) || return 2
 
-	response=$(gh "${graphql_args[@]}" 2>/dev/null) || return 2
+		if ! jq -e '
+			.data.repository.issue.closedByPullRequestsReferences
+			| (type == "object")
+			and (.nodes | type == "array")
+			and (.pageInfo | type == "object")
+			and (.pageInfo.hasNextPage | type == "boolean")
+		' <<<"$response" >/dev/null 2>&1; then
+			return 2
+		fi
 
-	if ! jq -e '(.data.repository.issue.closedByPullRequestsReferences.nodes // []) | length > 0' \
-		<<<"$response" >/dev/null 2>&1; then
-		return 3
-	fi
+		if jq -e --arg label "$REVIEWED_LABEL" '
+			.data.repository.issue.closedByPullRequestsReferences.nodes
+			| any((.labels.nodes // []) | any(.name == $label))
+		' <<<"$response" >/dev/null 2>&1; then
+			return 0
+		fi
 
-	if jq -e --arg label "$REVIEWED_LABEL" '
-		(.data.repository.issue.closedByPullRequestsReferences.nodes // [])
-		| any((.labels.nodes // []) | any(.name == $label))
-	' <<<"$response" >/dev/null 2>&1; then
-		return 0
-	fi
-	return 1
+		if ! jq -e '.data.repository.issue.closedByPullRequestsReferences.pageInfo.hasNextPage' \
+			<<<"$response" >/dev/null 2>&1; then
+			return 1
+		fi
+		cursor=$(jq -r '.data.repository.issue.closedByPullRequestsReferences.pageInfo.endCursor // empty' <<<"$response")
+		[[ -n "$cursor" ]] || return 2
+	done
 }
 
 # grepのマッチにはコマンド区切り文字が含まれるため、解析前に除去する。
