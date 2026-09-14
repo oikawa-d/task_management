@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -6,9 +6,12 @@ from zoneinfo import ZoneInfo
 import pytest
 from app.core.exceptions import NotFoundError
 from app.models.notification import Notification
+from app.repository import notification_repository, user_repository
 from app.repository.notification_repository import NotificationListItem
 from app.schemas.auth import CurrentUser
 from app.service import notification_service
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def _user() -> CurrentUser:
@@ -57,6 +60,34 @@ def _patch_repository(
 	monkeypatch.setattr(notification_service.notification_repository, "count_notifications", count_notifications)
 	monkeypatch.setattr(notification_service.notification_repository, "count_unread", count_unread)
 	return list_by_user, count_notifications, count_unread
+
+
+async def _insert_notification(
+	db: AsyncSession,
+	user_id,
+	dedupe_key: str,
+	created_at: datetime,
+	read_at: datetime | None = None,
+	due_at: datetime | None = None,
+):
+	result = await db.execute(
+		text(
+			"INSERT INTO notifications "
+			"(user_id, type, title, body, due_at, dedupe_key, read_at, created_at) "
+			"VALUES (:user_id, 'due_today_created', :title, :body, :due_at, :dedupe_key, :read_at, :created_at) "
+			"RETURNING id"
+		),
+		{
+			"user_id": user_id,
+			"title": dedupe_key,
+			"body": "確認してください",
+			"due_at": due_at,
+			"dedupe_key": dedupe_key,
+			"read_at": read_at,
+			"created_at": created_at,
+		},
+	)
+	return result.scalar_one()
 
 
 @pytest.mark.asyncio
@@ -225,3 +256,37 @@ async def test_mark_notification_read_returns_404_when_repository_returns_none(
 		await notification_service.mark_notification_read(db, uuid4(), user)  # type: ignore[arg-type]
 
 	count_unread.assert_not_awaited()
+
+
+async def test_notification_lifecycle_uses_database_contract(db_session: AsyncSession) -> None:
+	user_id = await user_repository.create(db_session, "notification-lifecycle", "notification@example.com", "hash")
+	other_user_id = await user_repository.create(
+		db_session, "notification-other", "notification-other@example.com", "hash"
+	)
+	now = datetime(2026, 9, 4, 1, tzinfo=timezone.utc)
+	first_id = await _insert_notification(db_session, user_id, "first", now, due_at=now)
+	await _insert_notification(db_session, user_id, "second", now - timedelta(hours=1))
+	await _insert_notification(
+		db_session, user_id, "already-read", now - timedelta(hours=2), read_at=now - timedelta(days=1)
+	)
+	other_id = await _insert_notification(db_session, other_user_id, "other", now)
+	current_user = CurrentUser(
+		id=user_id, username="notification-lifecycle", role="member", is_active=True, email_verified_at=None
+	)
+
+	page = await notification_service.list_notifications(db_session, current_user, 1, 2, False)
+	assert len(page.items) == 2
+	assert page.meta.total == 3
+	assert page.unread_count == 2
+	assert all(item.id != other_id for item in page.items)
+	first_item = next(item for item in page.items if item.id == first_id)
+	assert first_item.due_at == now.astimezone(ZoneInfo("Asia/Tokyo"))
+
+	read_response = await notification_service.mark_notification_read(db_session, first_id, current_user)
+	assert read_response.id == first_id
+	assert read_response.unread_count == 1
+
+	read_all_response = await notification_service.mark_all_notifications_read(db_session, current_user)
+	assert read_all_response.updated_count == 1
+	assert read_all_response.unread_count == 0
+	assert await notification_repository.count_unread(db_session, other_user_id) == 1
