@@ -53,9 +53,12 @@
 | `0018_align_login_history_column_comments.py` | #276で付与した`id`コメントを設計書の定義に合わせて削除 |
 | `0019_update_fn_list_notifications_return_type.py` | `fn_list_notifications`の戻り値をtask情報・total_countを含む`TABLE`型へ変更（`DROP FUNCTION`後に再作成）し、`fn_count_notifications`を新設 |
 | `0020_add_admin_list_total_count_and_not_found.py` | admin一覧FNのtotal_countと更新SPのOUT/不存在エラーを追加 |
+| `0021_update_sp_mark_notification_read_return_value.py` | `sp_mark_notification_read`の`p_read_at`をOUTで返す現行定義へ再作成 |
 | `0022_optimize_admin_list_functions.py` | `fn_admin_list_projects`へmember/task集計を追加し、`fn_admin_list_login_history`へusersのLEFT JOINを追加（戻り値型変更のためDROP→CREATE。downgradeでは0020定義へ復元） |
+| `0023_return_notification_read_results.py` | 通知既読SPへ既読日時・更新件数のOUT値を追加 |
+| `0024_add_calendar_task_function.py` | カレンダー表示用の期限タスク取得FNを追加 |
 
-**要検討**：上記のリビジョン分割・命名例（`0001_...` 等の連番接頭辞）は本詳細設計での具体化であり、基本設計に明記された正の構成ではない。実装時にAlembicの自動生成ハッシュIDとの整合をどう取るか（`down_revision` チェーンの実ファイル名）は実装担当の裁量とする。
+リビジョンファイルは `NNNN_<snake_caseの変更概要>.py` で命名し、**ファイル名の4桁接頭辞は `revision` ID と一致させる**。`revision` IDは全ファイルで一意にし、`down_revision`には直前のリビジョンIDを指定して単一のチェーンを維持する。並行して作成されたリビジョンを統合する場合は、先行リビジョンを取り込んだ最新`develop`を起点に後続リビジョンを採番し直してからマージする。
 
 ### 2.2 リビジョンチェーン図
 
@@ -369,7 +372,7 @@ sequenceDiagram
 
 | 対象 | 規約 | 例 |
 |------|------|-----|
-| リビジョンファイル | `alembic revision --autogenerate -m "<snake_case英語 or 日本語要約>"` で生成される自動ハッシュIDに、レビュー時に意味のある `-m` メッセージを必ず付与する | `alembic revision --autogenerate -m "add tasks table"` |
+| リビジョンファイル | `NNNN_<snake_caseの変更概要>.py` とし、ファイル名の4桁接頭辞をファイル内の `revision` ID と一致させる。`revision` IDは一意にし、`down_revision`で直前のリビジョンから単一チェーンを構成する | `0024_add_calendar_task_function.py`（`revision = "0024"`） |
 | リビジョンメッセージ | 変更内容を1行で要約（英語推奨、動詞から開始） | `create users table`, `add position unique constraint to tasks` |
 | DB関数 | `fn_<動詞または対象>`（[08_db_functions.md](./08_db_functions.md) 準拠） | `fn_next_task_position` |
 | トリガ関数 | `trg_<対象>` | `trg_set_updated_at` |
@@ -411,10 +414,11 @@ flowchart LR
 | 12 | 正常系 | `0013`適用後に`project_id`をNULLとしてタスクをINSERTする | NOT NULL制約違反にならず成功する | `test_migration_0013_allows_null_project_id_task` |
 | 13 | 異常系 | `project_id IS NULL`の行が存在する状態で`0013`をdowngradeする | `NOT NULL`制約違反で失敗する（想定どおりの挙動であることの確認） | `test_migration_0013_downgrade_fails_with_unassigned_tasks` |
 | 14 | 正常系 | 未所属タスクが存在しない状態で`0013`のupgrade→downgrade→upgradeを実行する | 最終的なスキーマが初回`upgrade head`と一致する | `test_migration_0013_roundtrip_without_unassigned_tasks` |
+| 15 | 正常系 | `api/alembic/versions/`の全リビジョンファイルを検査する | ファイル名接頭辞と`revision` IDが一致し、リビジョンIDが重複しない | `test_migration_filename_prefix_matches_revision_id` |
 
 ## 9. 不明点・要検討事項
 
-- リビジョンファイルの連番接頭辞（`0001_`等）は本詳細設計での具体化であり、Alembic自動生成のハッシュIDとの命名整合方法（`down_revision` の実運用）は実装担当の裁量とする。
+- リビジョンファイルの4桁接頭辞はファイル内の `revision` IDと一致させ、`revision` IDの重複と複数headを許容しない。並行作業を統合する場合は、最新`develop`を起点に後続リビジョンを採番し直す。
 - ~~`INITIAL_ADMIN_PASSWORD` 等が未設定の場合の挙動~~ → [`requirements/security_business_rules.md`](../../requirements/security_business_rules.md)で起動失敗が確定済み。本書§5の記述はこれと一致している。
 - CI上でのupgrade/downgrade往復健全性検証を必須ステップにするかは基本設計に記載がなく要検討（実行時間とのトレードオフ）。
 - `db/migrations/` （手動DDL置き場）と `api/alembic/versions/` の内容をどの頻度・手順で同期させるか（自動生成スクリプトの要否）は基本設計に明記がなく要検討。
