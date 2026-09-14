@@ -5,7 +5,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ServiceUnavailableError
+from app.core.exceptions import raise_database_error
 from app.models.user import User
 
 
@@ -16,7 +16,7 @@ async def get_by_id(db: AsyncSession, user_id: uuid.UUID) -> User | None:
 		)
 		return result.scalars().one_or_none()
 	except OperationalError as exc:
-		raise ServiceUnavailableError() from exc
+		raise_database_error(exc)
 
 
 async def get_by_login_identifier(db: AsyncSession, identifier: str) -> User | None:
@@ -28,7 +28,7 @@ async def get_by_login_identifier(db: AsyncSession, identifier: str) -> User | N
 		)
 		return result.scalars().one_or_none()
 	except OperationalError as exc:
-		raise ServiceUnavailableError() from exc
+		raise_database_error(exc)
 
 
 async def get_by_email(db: AsyncSession, email: str) -> User | None:
@@ -38,7 +38,7 @@ async def get_by_email(db: AsyncSession, email: str) -> User | None:
 		)
 		return result.scalars().one_or_none()
 	except OperationalError as exc:
-		raise ServiceUnavailableError() from exc
+		raise_database_error(exc)
 
 
 async def create(db: AsyncSession, username: str, email: str, password_hash: str | None) -> uuid.UUID:
@@ -50,14 +50,14 @@ async def create(db: AsyncSession, username: str, email: str, password_hash: str
 		user_id: uuid.UUID = result.mappings().one()["p_user_id"]
 		return user_id
 	except OperationalError as exc:
-		raise ServiceUnavailableError() from exc
+		raise_database_error(exc)
 
 
 async def mark_email_verified(db: AsyncSession, user_id: uuid.UUID) -> None:
 	try:
 		await db.execute(text("CALL sp_verify_user_email(:user_id)"), {"user_id": user_id})
 	except OperationalError as exc:
-		raise ServiceUnavailableError() from exc
+		raise_database_error(exc)
 
 
 async def update_password(db: AsyncSession, user_id: uuid.UUID, password_hash: str) -> None:
@@ -67,7 +67,7 @@ async def update_password(db: AsyncSession, user_id: uuid.UUID, password_hash: s
 			{"user_id": user_id, "password_hash": password_hash},
 		)
 	except OperationalError as exc:
-		raise ServiceUnavailableError() from exc
+		raise_database_error(exc)
 
 
 async def update_profile(
@@ -95,4 +95,4 @@ async def update_profile(
 			},
 		)
 	except OperationalError as exc:
-		raise ServiceUnavailableError() from exc
+		raise_database_error(exc)

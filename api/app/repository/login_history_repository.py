@@ -4,7 +4,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ServiceUnavailableError
+from app.core.exceptions import raise_database_error
 from app.models.login_history import LoginHistory
 
 
@@ -35,7 +35,7 @@ async def create(
 			},
 		)
 	except OperationalError as exc:
-		raise ServiceUnavailableError() from exc
+		raise_database_error(exc)
 
 
 async def list_by_user_id(db: AsyncSession, user_id: uuid.UUID, limit: int = 50, offset: int = 0) -> list[LoginHistory]:
@@ -47,11 +47,11 @@ async def list_by_user_id(db: AsyncSession, user_id: uuid.UUID, limit: int = 50,
 		)
 		return list(result.scalars().all())
 	except OperationalError as exc:
-		raise ServiceUnavailableError() from exc
+		raise_database_error(exc)
 
 
 async def purge_expired(db: AsyncSession, retention_days: int) -> None:
 	try:
 		await db.execute(text("CALL sp_purge_login_history(:retention_days)"), {"retention_days": retention_days})
 	except OperationalError as exc:
-		raise ServiceUnavailableError() from exc
+		raise_database_error(exc)

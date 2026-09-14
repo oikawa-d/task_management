@@ -6,7 +6,7 @@ from uuid import UUID
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError, ServiceUnavailableError
+from app.core.exceptions import NotFoundError, raise_database_error
 from app.models.user import User
 from app.repository import admin_repository, project_member_repository, project_repository, task_repository
 from app.repository.admin_repository import AdminProjectListItem
@@ -75,7 +75,7 @@ async def list_projects(query: AdminProjectListQuery, db: AsyncSession) -> Admin
 		rows = await admin_repository.list_projects(db, query.q, None, query.per_page, offset)
 		total = rows[0].total_count if rows else await admin_repository.count_projects(db, query.q, None)
 	except DBAPIError as exc:
-		raise ServiceUnavailableError() from exc
+		raise_database_error(exc)
 	items = [_to_summary(row) for row in rows]
 	total_pages = (total + query.per_page - 1) // query.per_page if total else 0
 	return AdminProjectListResponse(
@@ -95,7 +95,7 @@ async def deactivate_project(
 	try:
 		project = await project_repository.get_by_id(db, project_id)
 	except DBAPIError as exc:
-		raise ServiceUnavailableError() from exc
+		raise_database_error(exc)
 	if project is None:
 		raise NotFoundError("プロジェクトが見つかりません")
 	owner_id = project.owner_id
@@ -106,7 +106,7 @@ async def deactivate_project(
 		await db.commit()
 	except DBAPIError as exc:
 		await db.rollback()
-		raise ServiceUnavailableError() from exc
+		raise_database_error(exc)
 	logger.warning(
 		"admin deactivated project",
 		extra={

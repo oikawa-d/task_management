@@ -1,15 +1,17 @@
 import logging
 import uuid
-from typing import Any
+from typing import Any, NoReturn
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from redis.exceptions import RedisError
-from sqlalchemy.exc import InterfaceError, OperationalError
+from sqlalchemy.exc import DBAPIError, DisconnectionError, InterfaceError, OperationalError
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 logger = logging.getLogger("app.error")
+_POSTGRES_CONNECTION_SQLSTATE_PREFIX = "08"
+_POSTGRES_RETRYABLE_CONNECTION_STATES = frozenset({"57P03"})
 
 
 class AppError(Exception):
@@ -200,6 +202,32 @@ def _build_error_body(code: str, message: str, details: Any, request_id: str) ->
 	}
 
 
+def _is_connection_operational_error(exc: OperationalError) -> bool:
+	sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
+	return isinstance(sqlstate, str) and (
+		sqlstate.startswith(_POSTGRES_CONNECTION_SQLSTATE_PREFIX) or sqlstate in _POSTGRES_RETRYABLE_CONNECTION_STATES
+	)
+
+
+def raise_database_error(exc: DBAPIError) -> NoReturn:
+	"""SQLSTATEに基づきDB障害だけを503へ変換し、それ以外は元の例外を伝播する。"""
+	if isinstance(exc, OperationalError) and _is_connection_operational_error(exc):
+		raise ServiceUnavailableError() from exc
+	raise exc
+
+
+def _infrastructure_error_response(exc: Exception) -> tuple[int, str, str]:
+	if isinstance(exc, InterfaceError):
+		return 503, ServiceUnavailableError.code, ServiceUnavailableError.message
+	if isinstance(exc, OperationalError):
+		if not _is_connection_operational_error(exc):
+			return 500, "INTERNAL_ERROR", "サーバーエラーが発生しました"
+		return 503, ServiceUnavailableError.code, ServiceUnavailableError.message
+	if isinstance(exc, DBAPIError):
+		return 500, "INTERNAL_ERROR", "サーバーエラーが発生しました"
+	return 503, ServiceUnavailableError.code, ServiceUnavailableError.message
+
+
 def register_error_handling(app: FastAPI) -> None:
 	@app.middleware("http")
 	async def request_id_middleware(request: Request, call_next: Any) -> Any:
@@ -212,6 +240,11 @@ def register_error_handling(app: FastAPI) -> None:
 	@app.exception_handler(AppError)
 	async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
 		request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+		if exc.status_code >= 500:
+			event = (
+				"service_unavailable" if exc.status_code == ServiceUnavailableError.status_code else "application_error"
+			)
+			logger.exception("application error", extra={"event": event, "request_id": request_id})
 		headers = {}
 		if isinstance(exc, TooManyAttemptsError) and exc.retry_after is not None:
 			headers["Retry-After"] = str(exc.retry_after)
@@ -223,17 +256,21 @@ def register_error_handling(app: FastAPI) -> None:
 
 	@app.exception_handler(RedisError)
 	async def infra_error_handler(request: Request, exc: Exception) -> JSONResponse:
-		"""Redis/PostgreSQLの接続不能例外をfail-closeで503へ変換する（AppError由来の例外は対象外）。"""
+		"""Redis/PostgreSQLの障害を設計上のステータスへ変換する。"""
 		request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
-		logger.exception("infrastructure error", extra={"request_id": request_id})
+		status_code, error_code, message = _infrastructure_error_response(exc)
+		event = "service_unavailable" if status_code == ServiceUnavailableError.status_code else "infrastructure_error"
+		logger.exception("infrastructure error", extra={"event": event, "request_id": request_id})
 		return JSONResponse(
-			status_code=ServiceUnavailableError.status_code,
-			content=_build_error_body(ServiceUnavailableError.code, ServiceUnavailableError.message, None, request_id),
+			status_code=status_code,
+			content=_build_error_body(error_code, message, None, request_id),
 		)
 
 	app.add_exception_handler(OperationalError, infra_error_handler)
+	app.add_exception_handler(DBAPIError, infra_error_handler)
 	app.add_exception_handler(InterfaceError, infra_error_handler)
 	app.add_exception_handler(SQLAlchemyTimeoutError, infra_error_handler)
+	app.add_exception_handler(DisconnectionError, infra_error_handler)
 
 	@app.exception_handler(RequestValidationError)
 	async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -247,7 +284,7 @@ def register_error_handling(app: FastAPI) -> None:
 	@app.exception_handler(Exception)
 	async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
 		request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
-		logger.exception("unhandled exception", extra={"request_id": request_id})
+		logger.exception("unhandled exception", extra={"event": "unhandled_exception", "request_id": request_id})
 		return JSONResponse(
 			status_code=500,
 			content=_build_error_body("INTERNAL_ERROR", "サーバーエラーが発生しました", None, request_id),
