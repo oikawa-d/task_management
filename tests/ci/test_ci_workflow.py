@@ -103,5 +103,6 @@ def test_api_dev_requirements_cover_lint_and_test_tools() -> None:
 def test_hook_test_runs_all_hook_tests() -> None:
 	job = _load_workflow()["jobs"]["hook-test"]
 	runs = [step.get("run", "") for step in job["steps"]]
-	hook_run = next(run for run in runs if ".claude/hooks/*.test.sh" in run)
+	# hookの実装・テストは .agents/hooks/ に一本化している(.claude/.codex はラッパーのみ)。
+	hook_run = next(run for run in runs if ".agents/hooks/*.test.sh" in run)
 	assert 'bash "$test_file"' in hook_run
