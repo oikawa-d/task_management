@@ -17,7 +17,8 @@ from app.core.exceptions import (
 )
 from app.service import auth_service
 from redis.exceptions import ConnectionError as RedisConnectionError
-from sqlalchemy.exc import DBAPIError, OperationalError
+from sqlalchemy.exc import DBAPIError, DisconnectionError, InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 
 class _FakeBackgroundTasks:
@@ -772,6 +773,38 @@ async def test_login_propagates_non_connection_user_lookup_operational_error(
 		)  # type: ignore[arg-type]
 
 	assert not [record for record in caplog.records if getattr(record, "event", None) == "login_attempt"]
+
+
+@pytest.mark.parametrize(
+	"error",
+	[
+		InterfaceError("SELECT user", {}, Exception("connection lost")),
+		OperationalError("SELECT user", {}, SimpleNamespace(sqlstate="08006")),
+		SQLAlchemyTimeoutError("connection pool timeout"),
+		DisconnectionError("connection invalidated"),
+	],
+	ids=["interface", "connection_operational", "pool_timeout", "disconnection"],
+)
+async def test_login_logs_and_fails_closed_for_connection_user_lookup_errors(
+	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, error: Exception
+) -> None:
+	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
+	monkeypatch.setattr(
+		auth_service.user_repository,
+		"get_by_login_identifier",
+		AsyncMock(side_effect=error),
+	)
+
+	with caplog.at_level("INFO", logger="app.oauth"), pytest.raises(ServiceUnavailableError):
+		await auth_service.login(
+			"ghost", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), _FakeStrategy()
+		)  # type: ignore[arg-type]
+
+	record = next(record for record in caplog.records if getattr(record, "event", None) == "login_attempt")
+	assert record.failure_reason == "service_unavailable"
+	assert record.user_id is None
+	assert record.success is False
+	assert "ghost" not in caplog.text
 
 
 async def test_login_fails_closed_when_strategy_login_raises(

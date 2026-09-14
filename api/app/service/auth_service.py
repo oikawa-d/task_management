@@ -40,6 +40,7 @@ from app.core.exceptions import (
 	ServiceUnavailableError,
 	TooManyAttemptsError,
 	UserInactiveError,
+	is_service_unavailable_database_error,
 	raise_database_error,
 )
 from app.core.security import get_dummy_password_hash, hash_password, verify_password
@@ -279,6 +280,13 @@ async def login(
 			request, None, client_info, identifier, strategy.mode, False, _LOGIN_FAILURE_SERVICE_UNAVAILABLE
 		)
 		raise
+	except Exception as exc:
+		if not is_service_unavailable_database_error(exc):
+			raise
+		_log_login_attempt(
+			request, None, client_info, identifier, strategy.mode, False, _LOGIN_FAILURE_SERVICE_UNAVAILABLE
+		)
+		raise ServiceUnavailableError() from exc
 	# ユーザー不存在・OAuth専用アカウントでもダミーハッシュを検証し、応答時間差によるユーザー列挙を防ぐ。
 	stored_hash = user.password_hash if user is not None and user.password_hash is not None else None
 	password_matched = verify_password(password, stored_hash or get_dummy_password_hash())
