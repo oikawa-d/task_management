@@ -224,9 +224,14 @@ flowchart TB
 on:
   push:
     branches: [main, develop]
-  pull_request:
-    branches: [main, develop]
+  pull_request: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 ```
+
+`pull_request`はbaseブランチを限定せず、featureブランチをbaseとするスタックPRでもCIを実行する。`push`はrunner消費を抑えるため`main`/`develop`に限定する。同一PR（push時は同一ブランチ）への連続実行では、concurrencyにより先行実行をキャンセルして最新の実行を残す。
 
 ### 5.2 ジョブ構成
 
