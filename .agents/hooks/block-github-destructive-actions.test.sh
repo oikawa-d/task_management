@@ -565,6 +565,13 @@ assert_blocked 'exec gh api -X PUT repos/oikawa-d/task_management/pulls/123/merg
 assert_blocked 'env -- gh pr merge 123'
 assert_blocked 'command -- gh issue close 123'
 assert_blocked 'command -- gh api -X PUT repos/oikawa-d/task_management/pulls/123/merge'
+# 前置wrapperを絶対・相対パスで指定しても、basenameが既知wrapperなら検出すること。
+assert_blocked '/usr/bin/env gh pr merge 123'
+assert_blocked '/usr/bin/env -- gh pr merge 123'
+assert_blocked '/usr/bin/time gh pr merge 123'
+assert_blocked '/usr/bin/command gh issue close 123'
+assert_blocked "/usr/bin/env -S 'gh pr merge 123'"
+assert_blocked "/usr/bin/env --split-string='gh issue close 123'"
 # 既知ラッパーの未知オプションは実行位置を判定できないためfail-closeする。
 assert_blocked 'env --unknown gh pr merge 123'
 assert_blocked 'X=1 gh pr merge 123'

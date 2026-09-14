@@ -12,6 +12,14 @@ gh_token_is_gh_command() {
 	[[ "$1" == "gh" || "${1##*/}" == "gh" ]] || gh_token_is_dynamic "$1"
 }
 
+# 実行可能な前置wrapperは、絶対・相対パスで指定される場合もあるためbasenameで判定する。
+gh_token_is_known_wrapper() {
+	case "${1##*/}" in
+		time|command|builtin|env|exec) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
 # 引用符内の改行を1トークンとして保持するため、NUL区切りで出力する。
 # `$( ... )` とバッククォートは、空白や `(` `)` で分割するとコマンド名が `$(which gh)` の形の
 # ときに実行位置を見失うため、1トークンとして保持する(終端走査は gh-substitution-parse.sh)。
@@ -184,9 +192,12 @@ gh_find_executable_gh_index() {
 			if [[ "$token" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
 				continue
 			fi
+			if gh_token_is_known_wrapper "$token"; then
+				wrapper="${token##*/}"
+				continue
+			fi
 			case "$token" in
 				if|then|elif|else|while|until|do|'{'|'('|!) ;;
-				time|command|builtin|env|exec) wrapper="$token" ;;
 				--)
 					case "$wrapper" in
 						time|command|builtin|env|exec) wrapper='' ;;
@@ -246,7 +257,8 @@ gh_segment_has_unparsed_wrapper() {
 	for (( index = 0; index + 1 < ${#GH_SEGMENT_TOKENS[@]}; index++ )); do
 		token="${GH_SEGMENT_TOKENS[index]}"
 		next="${GH_SEGMENT_TOKENS[index + 1]}"
-		if [[ "$token" == "env" && ( "$next" == "-S" || "$next" == -S?* || "$next" == "--split-string" || "$next" == --split-string=* ) ]]; then
+		if gh_token_is_known_wrapper "$token" && [[ "${token##*/}" == "env" &&
+			( "$next" == "-S" || "$next" == -S?* || "$next" == "--split-string" || "$next" == --split-string=* ) ]]; then
 			return 0
 		fi
 	done
