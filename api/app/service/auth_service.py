@@ -271,7 +271,13 @@ async def login(
 		)
 		raise ServiceUnavailableError() from exc
 
-	user = await user_repository.get_by_login_identifier(db, identifier)
+	try:
+		user = await user_repository.get_by_login_identifier(db, identifier)
+	except Exception as exc:
+		_log_login_attempt(
+			request, None, client_info, identifier, strategy.mode, False, _LOGIN_FAILURE_SERVICE_UNAVAILABLE
+		)
+		raise ServiceUnavailableError() from exc
 	# ユーザー不存在・OAuth専用アカウントでもダミーハッシュを検証し、応答時間差によるユーザー列挙を防ぐ。
 	stored_hash = user.password_hash if user is not None and user.password_hash is not None else None
 	password_matched = verify_password(password, stored_hash or get_dummy_password_hash())
@@ -295,6 +301,13 @@ async def login(
 				failure_reason=_LOGIN_FAILURE_INVALID_CREDENTIALS,
 			)
 		except Exception as exc:
+			_log_login_history_write_failed(
+				request,
+				user,
+				client_info,
+				operation="login",
+				login_method=strategy.mode,
+			)
 			raise ServiceUnavailableError() from exc
 		_log_login_attempt(
 			request, user, client_info, identifier, strategy.mode, False, _LOGIN_FAILURE_INVALID_CREDENTIALS
@@ -366,7 +379,7 @@ async def login(
 		try:
 			await strategy.rollback_login(user, login_result, response)
 		except Exception as rollback_exc:
-			_log_auth_state_revoke_failed(request, user, "login_rollback", login_result, client_info)
+			_log_auth_state_revoke_failed(request, user, "login_rollback", client_info)
 			raise ServiceUnavailableError() from rollback_exc
 		raise ServiceUnavailableError() from exc
 	_log_login_attempt(request, user, client_info, identifier, strategy.mode, True, None)
@@ -583,7 +596,7 @@ def _log_login_attempt(
 		extra={
 			"operation": "login",
 			"event": "login_attempt",
-			"identifier": identifier,
+			"identifier": hashlib.sha256(identifier.strip().lower().encode()).hexdigest(),
 			"user_id": str(user.id) if user is not None else None,
 			"success": success,
 			"auth_mode": auth_mode,
@@ -611,7 +624,7 @@ def _log_user_registered(request: Request, user: User) -> None:
 
 def _log_login_history_write_failed(
 	request: Request,
-	user: User,
+	user: User | None,
 	client_info: ClientIpInfo,
 	*,
 	operation: str = "oauth_login",
@@ -623,7 +636,7 @@ def _log_login_history_write_failed(
 		extra={
 			"operation": operation,
 			"event": "login_history_write_failed",
-			"user_id": str(user.id),
+			"user_id": str(user.id) if user is not None else None,
 			"login_method": login_method,
 			"failure_reason": failure_reason,
 			"client_ip": client_info.client_ip,
@@ -638,7 +651,6 @@ def _log_auth_state_revoke_failed(
 	request: Request,
 	user: User,
 	operation: str,
-	login_result: Any,
 	client_info: ClientIpInfo,
 ) -> None:
 	logger.error(
@@ -647,8 +659,8 @@ def _log_auth_state_revoke_failed(
 			"operation": operation,
 			"event": "auth_state_revoke_failed",
 			"user_id": str(user.id),
-			"deleted_session_count": 0 if getattr(login_result, "session_id", None) is None else 1,
-			"deleted_refresh_count": 0 if getattr(login_result, "refresh_token", None) is None else 1,
+			"deleted_session_count": None,
+			"deleted_refresh_count": None,
 			"client_ip": client_info.client_ip,
 			"proxy_peer_ip": client_info.proxy_peer_ip,
 			"ip_source": client_info.ip_source,
@@ -692,7 +704,7 @@ async def _rollback_oauth_login(
 			raise RuntimeError("auth strategy does not support login rollback")
 		await rollback(user, login_result, response)
 	except Exception:
-		_log_auth_state_revoke_failed(request, user, operation, login_result, client_info)
+		_log_auth_state_revoke_failed(request, user, operation, client_info)
 		raise
 	finally:
 		if clear_state_cookie:

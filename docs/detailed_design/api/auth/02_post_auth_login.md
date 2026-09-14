@@ -330,7 +330,7 @@ stateDiagram-v2
 
 | 項目 | 内容 |
 |------|------|
-| 監査ログ | `login_history`に成功/失敗を必ず記録（`failure_reason`：`invalid_credentials`/`user_inactive`/`email_not_verified`）。INSERT失敗時はログインを拒否して503とし、Redis状態を補償する。構造化ログにも`event=login_attempt`, `success`, `auth_mode`, `request_id`をINFO出力する。Redis障害・Strategy.login失敗時は`failure_reason=service_unavailable`、成功後の`login_history` INSERT失敗時は`event=login_history_write_failed`、`failure_reason=service_unavailable`を出力する。`identifier`はマスクしない設計だが**パスワードは絶対に出力しない** |
+| 監査ログ | `login_history`に成功/失敗を必ず記録（`failure_reason`：`invalid_credentials`/`user_inactive`/`email_not_verified`）。INSERT失敗時はログインを拒否して503とし、Redis状態を補償する。構造化ログにも`event=login_attempt`, `success`, `auth_mode`, `request_id`をINFO出力する。Redis障害・DBのユーザー検索・Strategy.login失敗時は`failure_reason=service_unavailable`、成功・失敗後の`login_history` INSERT失敗時は`event=login_history_write_failed`、`failure_reason=service_unavailable`を出力する。構造化ログの`identifier`は正規化値のSHA-256ハッシュとし、DBの`login_identifier`とは異なる。パスワードは絶対に出力しない。 |
 | ユーザー列挙対策 | ユーザー不存在とパスワード不一致を同一の`401 INVALID_CREDENTIALS`に統合。存在しないユーザーでもダミーハッシュ検証を行いレスポンス時間を均一化する |
 | タイミング攻撃対策 | 上記ダミーハッシュ検証、および`secrets.compare_digest`は本APIでは不使用（argon2 verifyが定数時間比較を内包） |
 | 判定順序 | パスワード検証 → `is_active` → `email_verified_at` の順（`03_auth.md` §6.2）。この順序を変えるとユーザー列挙・アカウント存在漏洩のリスクが生じるため厳守 |
@@ -357,7 +357,9 @@ stateDiagram-v2
 | 13 | 単体 | Redis障害（レート制限確認） | `get_login_failure_count`が例外 | `503 SERVICE_UNAVAILABLE`、構造化ログ`event=login_attempt` / `failure_reason='service_unavailable'` | `test_login_fails_closed_when_rate_limit_check_raises` |
 | 14 | 単体 | セッション・JWT発行失敗 | `strategy.login()`が例外 | `503 SERVICE_UNAVAILABLE`、構造化ログ`event=login_attempt` / `failure_reason='service_unavailable'` | `test_login_fails_closed_when_strategy_login_raises` |
 | 15 | 単体 | 成功後の`login_history` INSERT失敗 | `login_history_repository.create`が例外 | `503 SERVICE_UNAVAILABLE`、構造化ログ`event=login_history_write_failed` / `failure_reason='service_unavailable'`、Redis状態をrollback | `test_login_rolls_back_auth_state_when_history_write_fails` |
-| 16 | 単体 | rollback失敗 | `rollback_login`が例外 | `503 SERVICE_UNAVAILABLE`、構造化ログ`event=auth_state_revoke_failed` | `test_login_returns_service_unavailable_when_auth_state_rollback_fails` |
+| 16 | 単体 | 失敗後の`login_history` INSERT失敗 | 不正資格情報の履歴INSERTが例外 | `503 SERVICE_UNAVAILABLE`、`user_id` NULLの構造化ログ`event=login_history_write_failed` | `test_login_fails_closed_when_login_history_write_raises_on_failure_path` |
+| 17 | 単体 | ユーザー検索のDB障害 | `get_by_login_identifier`が例外 | `503 SERVICE_UNAVAILABLE`、構造化ログ`event=login_attempt` / `failure_reason='service_unavailable'` | `test_login_fails_closed_when_user_lookup_raises` |
+| 18 | 単体 | rollback失敗 | `rollback_login`が例外 | `503 SERVICE_UNAVAILABLE`、構造化ログ`event=auth_state_revoke_failed`。削除件数はNULL（不明） | `test_login_returns_service_unavailable_when_auth_state_rollback_fails` |
 
 `AUTH_MODE`両モードでのパラメータ化テストを7・8で実施。それ以外の異常系はモード非依存のためsessionモードのみで代表させる（jwtモードでの重複確認は工数対効果が低いため実施しない旨を明記）。
 
