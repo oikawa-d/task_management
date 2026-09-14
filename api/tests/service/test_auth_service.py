@@ -14,7 +14,6 @@ from app.core.exceptions import (
 	UserInactiveError,
 )
 from app.service import auth_service, email_verification_service
-from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy.exc import DBAPIError, OperationalError
 
 
