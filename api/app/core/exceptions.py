@@ -209,6 +209,15 @@ def _is_connection_operational_error(exc: OperationalError) -> bool:
 	)
 
 
+def is_service_unavailable_database_error(exc: Exception) -> bool:
+	"""共通例外ハンドラが503へ変換するDB接続系例外か判定する。"""
+	if isinstance(exc, InterfaceError):
+		return True
+	if isinstance(exc, OperationalError):
+		return _is_connection_operational_error(exc)
+	return isinstance(exc, (SQLAlchemyTimeoutError, DisconnectionError))
+
+
 def raise_database_error(exc: DBAPIError) -> NoReturn:
 	"""SQLSTATEに基づきDB障害だけを503へ変換し、それ以外は元の例外を伝播する。"""
 	if isinstance(exc, OperationalError) and _is_connection_operational_error(exc):
@@ -217,11 +226,7 @@ def raise_database_error(exc: DBAPIError) -> NoReturn:
 
 
 def _infrastructure_error_response(exc: Exception) -> tuple[int, str, str]:
-	if isinstance(exc, InterfaceError):
-		return 503, ServiceUnavailableError.code, ServiceUnavailableError.message
-	if isinstance(exc, OperationalError):
-		if not _is_connection_operational_error(exc):
-			return 500, "INTERNAL_ERROR", "サーバーエラーが発生しました"
+	if is_service_unavailable_database_error(exc):
 		return 503, ServiceUnavailableError.code, ServiceUnavailableError.message
 	if isinstance(exc, DBAPIError):
 		return 500, "INTERNAL_ERROR", "サーバーエラーが発生しました"
