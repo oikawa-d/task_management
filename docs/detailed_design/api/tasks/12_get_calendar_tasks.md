@@ -93,7 +93,7 @@ flowchart LR
     V --> B["APP_TIMEZONEの日付境界"]
     B --> UTC["UTC from/to"]
     UTC --> FN["fn_list_calendar_tasks"]
-    FN --> DTO["TaskListItem[]"]
+    FN --> DTO["CalendarTaskItem[]"]
     DTO --> UI["Calendar 42セル"]
 ```
 
