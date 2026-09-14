@@ -228,6 +228,8 @@
 
 このエンドポイントは秘密情報を返さず、`Cache-Control: no-store` を付与する。フロントは起動時に取得した `auth_mode` でAuthAdapterを選択するため、frontendを再ビルドせずにbackendのモードを切り替えても認証方式が不一致にならない。
 
+`google_login_enabled`は`GOOGLE_LOGIN_ENABLED=true`かつ`GOOGLE_CLIENT_ID`・`GOOGLE_CLIENT_SECRET`が設定されている場合のみ`true`となる。`false`の場合、Google OAuthの開始とjwtのexchangeは404 `OAUTH_DISABLED`、callbackは302 `/login?error=oauth_disabled`を返す。開始済みのフローも完了させず、stateやhandoffの消費、Google API呼び出しは行わない。
+
 **`POST /auth/oauth/exchange`** レスポンス `200`
 
 ```json
@@ -431,6 +433,7 @@ status 別にグルーピングして返すことで、フロント側のカン�
 | 400 | `INVALID_VERIFY_TOKEN` | メール認証トークンが無効・期限切れ・使用済み |
 | 400相当 | `OAUTH_EMAIL_UNVERIFIED` | Google 側でメール未検証のため紐付け不可（callbackは302リダイレクト） |
 | 400 | `OAUTH_HANDOFF_INVALID` | OAuthの一時コードが無効・期限切れ・使用済み（exchangeはJSONの400） |
+| 404 | `OAUTH_DISABLED` | Googleログインが設定または`GOOGLE_LOGIN_ENABLED`により無効（開始・exchange） |
 | 401 | `UNAUTHENTICATED` | 認証情報なし |
 | 401 | `INVALID_CREDENTIALS` | ID/パスワード不一致 |
 | 401 | `SESSION_EXPIRED` | セッションが Redis に存在しない |

@@ -23,7 +23,7 @@
 | 目的 | Googleからの認可コードを受け取り、state/PKCE/id_tokenを検証してユーザーを解決・作成し、`AUTH_MODE` に応じてログイン状態を確立する |
 | ルーター責務 | OAuthの3 endpointを `oauth_router.py` に分離する。通常の認証endpointは `api/app/api/routers/auth_router.py` が担当する |
 | 認証 | 不要（Googleからのリダイレクトを直接受ける） |
-| 認可 | 未認証可 |
+| 認可 | 未認証可（ただしGoogleログイン有効時のみ） |
 | CSRF検証 | 不要（GETかつstate/Cookie一致検証が同等の役割を果たす） |
 | Origin検証 | 不要（Googleからのブラウザリダイレクトのため、通常Originヘッダは付与されない） |
 | AUTH_MODE差異 | **あり**。sessionモードはここで`SessionAuthStrategy.login()`を完了させCookieを発行する。jwtモードはログインを完了させず、`oauth_handoff:{code}` を発行してフロントの`/oauth/exchange`呼び出しを待つ |
@@ -89,6 +89,7 @@ Cookie
 | `oauth_denied` | Googleからの`error`パラメータあり（ユーザーが同意拒否等） |
 | `oauth_email_unverified` | Google側`email_verified=false` |
 | `oauth_failed` | 上記以外の検証失敗（id_token署名不正、userinfo.sub不一致、code交換失敗等） |
+| `oauth_disabled` | `GOOGLE_LOGIN_ENABLED=false`、またはGoogleクライアント設定が不足 |
 
 本APIはブラウザの直接ナビゲーションを受けるため、通常の検証エラーはJSON形式のエラーボディではなく`/login`へのリダイレクトで通知する。一方、レート制限超過・Redis障害は要件に従い429/503の共通JSONエラーを返す（`basic_design/04_api.md` §4のエラーコード体系を使用する）。
 
@@ -105,6 +106,7 @@ Cookie
 | 429 | `TOO_MANY_ATTEMPTS` | callbackのレート制限超過 | - | `Retry-After`に残り秒数を設定し、認証処理を行わない |
 | 503 | `SERVICE_UNAVAILABLE` | Redis接続不能（レート制限判定・`consume_oauth_state`・`save_oauth_handoff`） | - | fail-close。認証処理を行わない |
 | 302 | - | 未捕捉例外 | `oauth_failed` | ログにのみ詳細を出力。`event=oauth_callback_failed`、`failure_reason=<例外クラス名>`をWARNで出力する |
+| 302 | `OAUTH_DISABLED` | Googleログイン無効時（開始済みのstateを含む） | `oauth_disabled` | callback・進行中フローも完了させず、ログイン画面へ戻す。state消費やGoogle API呼び出しは行わない |
 
 `basic_design/04_api.md` §4.2のコード体系（`INVALID_STATE`/`OAUTH_EMAIL_UNVERIFIED`）はサーバー内部の例外クラス・ログ記録に用い、ブラウザへの応答は上表の`error`クエリ値に変換する。
 
@@ -261,7 +263,7 @@ flowchart TB
 | 引数 | `code`/`state`/`error`：クエリパラメータ。`request`：Cookie読み取り用 |
 | 戻り値 | `RedirectResponse`（正常系・通常失敗時は302） |
 | 送出例外 | `TooManyAttemptsError`（429、`Retry-After`付与）、`ServiceUnavailableError`（503）以外は対応する`/login?error=...`への302リダイレクトに変換する |
-| 処理内容 | 1. `error`クエリがあれば`auth_service.oauth_callback_denied`へstate・Cookie・request・responseを渡す 2. serviceがstateを検証・消費し、callbackレート制限を適用してstate Cookieを削除する 3. 通常の失敗は例外の種別に応じ`error`クエリ値をマッピングし、レート制限超過・Redis障害は共通429/503ハンドラへ送出する 4. 通常callbackでは`auth_service.oauth_callback`を呼ぶ 5. 成功時は`OAuthCallbackResult`の`auth_mode`とhandoff codeの整合性を確認しfragment付きURLを組み立てる |
+| 処理内容 | 1. Googleログインの有効性を確認し、無効なら`oauth_disabled`へ 2. `error`クエリがあれば`auth_service.oauth_callback_denied`へstate・Cookie・request・responseを渡す 3. serviceがstateを検証・消費し、callbackレート制限を適用してstate Cookieを削除する 4. 通常の失敗は例外の種別に応じ`error`クエリ値をマッピングし、レート制限超過・Redis障害は共通429/503ハンドラへ送出する 5. 通常callbackでは`auth_service.oauth_callback`を呼ぶ 6. 成功時は`OAuthCallbackResult`の`auth_mode`とhandoff codeの整合性を確認しfragment付きURLを組み立てる |
 | 副作用 | Cookie発行（sessionモード時）、Cookie削除（`cerberus_oauth_state`。Google拒否時も含む） |
 
 ### 6.1.1 `service/auth_service.py :: oauth_callback_denied`

@@ -118,6 +118,9 @@ class _FakeRedis:
 	async def ttl(self, name: str) -> int:
 		return self.ttls.get(name, -1)
 
+	async def pttl(self, name: str) -> int:
+		return self.ttls.get(name, -1) * 1000
+
 	async def eval(self, *_args: Any, **_kwargs: Any) -> list[Any]:
 		return []
 
@@ -237,6 +240,23 @@ async def test_login_failures_and_rate_limit_are_hashed_and_expiring(redis: _Fak
 	assert await redis_store.check_rate_limit("register", "127.0.0.1", 2, 60) == 2
 	assert await redis_store.check_rate_limit("register", "127.0.0.1", 2, 60) == 3
 	assert await redis_store.get_rate_limit_ttl("register", "127.0.0.1") == 60
+
+
+async def test_rate_limit_ttl_rounds_up_remaining_milliseconds(
+	redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+	monkeypatch.setattr(redis, "pttl", AsyncMock(return_value=1234))
+
+	assert await redis_store.get_rate_limit_ttl("register", "127.0.0.1") == 2
+
+
+async def test_rate_limit_ttl_returns_zero_when_key_is_missing(
+	redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+	"""TTL不明時は`0`を返し、呼び出し側（deps.py）のwindowフォールバックを機能させる。"""
+	monkeypatch.setattr(redis, "pttl", AsyncMock(return_value=-2))
+
+	assert await redis_store.get_rate_limit_ttl("register", "127.0.0.1") == 0
 
 
 async def test_rotate_refresh_token_returns_reuse_marker(redis: _FakeRedis) -> None:

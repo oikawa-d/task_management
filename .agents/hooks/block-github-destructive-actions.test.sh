@@ -12,6 +12,10 @@ trap 'rm -rf "$stub_dir"' EXIT
 
 cat > "$stub_dir/gh" <<'STUB'
 #!/usr/bin/env bash
+# どの番号でレビュー状態を確認したかを検証できるよう、呼び出し引数を記録する。
+if [[ -n "${GH_STUB_CALLS:-}" ]]; then
+	printf '%s\n' "$*" >> "$GH_STUB_CALLS"
+fi
 cmd="$1 $2"
 case "$cmd" in
 	# issue closeの判定で使うリポジトリ解決。GH_STUB_REPO_EXITで失敗を再現する。
@@ -61,6 +65,9 @@ if [[ "$cmd" == "${GH_STUB_MATCH:-}" ]]; then
 		exit "${GH_STUB_EXIT}"
 	fi
 	json="${GH_STUB_JSON:-}"
+	if [[ "$cmd" == "pr view" && -n "${GH_STUB_UNREVIEWED_PR:-}" && "$3" == "$GH_STUB_UNREVIEWED_PR" ]]; then
+		json='{"labels":[]}'
+	fi
 	if [[ -z "$json" ]]; then
 		json='{"labels":[]}'
 	fi
@@ -127,6 +134,41 @@ assert_blocked_without_jq() {
 	fi
 }
 
+# hookがレビュー状態の確認に使った引数(=対象番号)を検証する。
+assert_gh_called_with() {
+	local command=$1
+	local pattern=$2
+	local calls
+	calls=$(mktemp)
+	GH_STUB_CALLS="$calls" payload "$command" | GH_STUB_CALLS="$calls" "$hook" >/dev/null 2>&1 || true
+	if grep -q -- "$pattern" "$calls"; then
+		rm -f "$calls"
+		return 0
+	fi
+	echo "対象番号の判定が想定と異なります (期待: $pattern): $command" >&2
+	echo "実際のgh呼び出し:" >&2
+	cat "$calls" >&2
+	rm -f "$calls"
+	return 1
+}
+
+# hookが指定リポジトリ以外へ照会していないことを検証する。
+assert_gh_not_called_with() {
+	local command=$1
+	local pattern=$2
+	local calls
+	calls=$(mktemp)
+	GH_STUB_CALLS="$calls" payload "$command" | GH_STUB_CALLS="$calls" "$hook" >/dev/null 2>&1 || true
+	if grep -q -- "$pattern" "$calls"; then
+		echo "想定外のリポジトリ・番号へ照会しました (禁止: $pattern): $command" >&2
+		cat "$calls" >&2
+		rm -f "$calls"
+		return 1
+	fi
+	rm -f "$calls"
+	return 0
+}
+
 reviewed_json='{"labels":[{"name":"reviewed"}]}'
 unreviewed_json='{"labels":[]}'
 
@@ -149,6 +191,39 @@ assert_allowed "gh pr merge 123 --squash"
 assert_allowed "gh pr merge --squash"
 export GH_STUB_JSON="$unreviewed_json"
 assert_blocked "gh pr merge --squash"
+
+# 3-2. オプション値・フラグの数字を対象PRと誤認しないこと
+export GH_STUB_JSON="$unreviewed_json"
+assert_gh_called_with 'gh pr merge --subject "fix 999" 123 --squash' 'pr view 123'
+assert_gh_called_with 'gh pr merge --body-file /tmp/999.md 123' 'pr view 123'
+assert_gh_called_with "gh pr merge --squash feature/issue-999" 'pr view feature/issue-999'
+assert_gh_called_with "gh pr merge -A author@example.com 123" 'pr view 123'
+assert_gh_called_with "gh pr merge -Aauthor@example.com 123" 'pr view 123'
+
+# 3-4. `--repo` やURLで指定した別リポジトリのPRを照会すること
+# カレントリポジトリの同番号PRのreviewed状態で許可・拒否してはならない。
+assert_gh_called_with "gh pr merge --repo evil/other 123" 'pr view 123 --json labels --repo evil/other'
+assert_gh_called_with "gh pr merge 123 -R evil/other" 'pr view 123 --json labels --repo evil/other'
+assert_gh_called_with "gh pr merge --repo=evil/other 123" 'pr view 123 --json labels --repo evil/other'
+assert_gh_called_with "gh pr merge https://github.com/evil/other/pull/123" '--repo github.com/evil/other'
+assert_gh_called_with "gh pr merge --repo ghe.example/evil/other 123" 'pr view 123 --json labels --repo ghe.example/evil/other'
+assert_gh_called_with "gh pr merge https://ghe.example/evil/other/pull/123" '--repo ghe.example/evil/other'
+assert_blocked "gh pr merge --repo invalid 123"
+# `--repo` 未指定ならカレントリポジトリ(=`--repo` を付けない)で照会すること
+assert_gh_not_called_with "gh pr merge 123" '--repo'
+# 引用文字列に含まれる `--repo` は実オプションではないため照会先に使わないこと
+assert_gh_not_called_with 'gh pr merge --subject "see --repo evil/other" 123' 'evil/other'
+
+# 3-5. サブコマンドより前に置かれたグローバルな `--repo` / `-R` も照会先へ反映すること
+assert_gh_called_with "gh --repo evil/other pr merge 123" 'pr view 123 --json labels --repo evil/other'
+assert_gh_called_with "gh --repo=evil/other pr merge 123" 'pr view 123 --json labels --repo evil/other'
+assert_gh_called_with "gh -R evil/other pr merge 123" 'pr view 123 --json labels --repo evil/other'
+assert_gh_called_with "gh -Revil/other pr merge 123" 'pr view 123 --json labels --repo evil/other'
+# サブコマンド後の短縮形の値連結(`-Rowner/repo`)も同様に解析すること
+assert_gh_called_with "gh pr merge 123 -Revil/other" 'pr view 123 --json labels --repo evil/other'
+
+# 3-3. 未知のフラグはブロックすること(fail-close)
+assert_blocked "gh pr merge --unknown-option 999 123"
 
 # 4. gh pr view 失敗時 -> exit 2 (fail-close)
 export GH_STUB_EXIT="1"
@@ -222,6 +297,46 @@ unset GH_STUB_GRAPHQL_NEXT_JSON
 
 unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON GH_STUB_GRAPHQL_JSON GH_STUB_GRAPHQL_NEXT_JSON
 
+# 5-8. オプション値の数字を対象番号と誤認しないこと
+# `--comment` の値に含まれる 999 ではなく、位置引数の 123 を対象にしなければならない。
+export GH_STUB_GRAPHQL_JSON="$linked_unreviewed_json"
+assert_gh_called_with 'gh issue close --comment "tracking 999" 123' 'number=123'
+assert_gh_called_with "gh issue close --reason 'not planned' 123" 'number=123'
+assert_gh_called_with 'gh issue close --comment="tracking 999" 123' 'number=123'
+assert_gh_called_with 'gh issue close -R oikawa-d/task-999 123' 'number=123'
+assert_blocked 'gh issue close --comment "tracking 999" 123'
+
+# 5-10. Issue URLが別リポジトリを示す場合、そのリポジトリのリンクPRを照会すること
+assert_gh_called_with "gh issue close https://github.com/evil/other/issues/123" \
+	'owner=evil -F repo=other -F number=123'
+assert_gh_called_with "gh issue close --repo evil/other 123" 'owner=evil -F repo=other -F number=123'
+assert_gh_called_with "gh issue close --repo github.com/evil/other 123" \
+	'api graphql .*--hostname github.com .*owner=evil -F repo=other -F number=123'
+assert_gh_called_with "gh issue close --repo ghe.example/evil/other 123" \
+	'api graphql .*--hostname ghe.example .*owner=evil -F repo=other -F number=123'
+assert_gh_called_with "gh issue close https://ghe.example/evil/other/issues/123" \
+	'api graphql .*--hostname ghe.example .*owner=evil -F repo=other -F number=123'
+assert_blocked "gh issue close --repo invalid 123"
+
+# 5-11. コメント等の引用文字列に含まれる `--repo` は照会先に使わず、カレントリポジトリを照会すること
+assert_gh_called_with 'gh issue close --comment "text --repo evil/other" 123' \
+	'owner=oikawa-d -F repo=task_management -F number=123'
+assert_gh_not_called_with 'gh issue close --comment "text --repo evil/other" 123' 'owner=evil'
+
+# 5-12. サブコマンドより前に置かれたグローバルな `--repo` / `-R` も照会先へ反映すること
+assert_gh_called_with "gh --repo evil/other issue close 123" 'owner=evil -F repo=other -F number=123'
+assert_gh_called_with "gh --repo=evil/other issue close 123" 'owner=evil -F repo=other -F number=123'
+assert_gh_called_with "gh -R evil/other issue close 123" 'owner=evil -F repo=other -F number=123'
+assert_gh_called_with "gh -Revil/other issue close 123" 'owner=evil -F repo=other -F number=123'
+assert_gh_called_with "gh issue close 123 -Revil/other" 'owner=evil -F repo=other -F number=123'
+# サブコマンド前後いずれの位置でも、引用文字列の内容は実オプションとして扱わないこと
+assert_gh_not_called_with 'gh issue close --comment "see gh --repo evil/other issue close 999" 123' 'owner=evil'
+
+# 5-9. 未知のフラグは値を取るか判断できないため解析不能としてブロックすること(fail-close)
+assert_blocked "gh issue close --unknown-option 999 123"
+
+unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON GH_STUB_GRAPHQL_JSON
+
 # 6. heredoc本文にコマンド名を含むだけのコマンド -> exit 0 (#388の回帰テスト)
 heredoc_cmd=$(printf '%s\n' \
 	"cat > ./tmp/handover.md <<'XEOF'" \
@@ -265,6 +380,12 @@ assert_blocked "gh api -X PUT repos/oikawa-d/task_management/pulls/123/merge"
 assert_blocked "gh api repos/oikawa-d/task_management/pulls/123/merge --method PUT"
 assert_blocked "gh issue edit 123 --state closed"
 assert_blocked "gh --repo oikawa-d/task_management issue edit 123 --state=closed"
+
+# 10-2. 1回の入力に複数の破壊操作がある場合、全件を検査すること
+export GH_STUB_JSON="$reviewed_json" GH_STUB_UNREVIEWED_PR="456" GH_STUB_GRAPHQL_JSON="$linked_unreviewed_json"
+assert_blocked "gh pr merge 123 && gh pr merge 456"
+assert_blocked "gh pr merge 123 && gh issue close 456"
+unset GH_STUB_JSON GH_STUB_UNREVIEWED_PR GH_STUB_GRAPHQL_JSON
 
 # 11. jq不在時 -> exit 2 (fail-close, #339)
 assert_blocked_without_jq "gh pr view 123"
