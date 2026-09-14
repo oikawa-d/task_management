@@ -156,6 +156,7 @@ _SQLSTATE_DUPLICATE_EMAIL = "P0002"
 _LOGIN_FAILURE_INVALID_CREDENTIALS = "INVALID_CREDENTIALS"
 _LOGIN_FAILURE_USER_INACTIVE = "USER_INACTIVE"
 _LOGIN_FAILURE_EMAIL_NOT_VERIFIED = "EMAIL_NOT_VERIFIED"
+_LOGIN_FAILURE_TOO_MANY_ATTEMPTS = "too_many_attempts"
 
 
 def _duplicate_error_for(exc: DBAPIError) -> DuplicateUsernameError | DuplicateEmailError | None:
@@ -199,6 +200,7 @@ async def register(payload: RegisterRequest, background: BackgroundTasks, reques
 	if user is None:
 		raise ServiceUnavailableError()
 	await issue_email_verify_token(user, background)
+	_log_user_registered(request, user)
 	return user
 
 
@@ -234,56 +236,93 @@ async def login(
 	db: AsyncSession,
 	strategy: AuthStrategy,
 ) -> LoginResult:
-	"""認証を成立させ、AUTH_MODEに応じた認証状態を確立する（02_post_auth_login.md §6.2の判定順序）。"""
+	"""認証を成立させ、AUTH_MODEに応じた認証状態を確立する（02_post_auth_login.md §6.2の判定順序）。
+
+	Redis/PostgreSQL接続不能時はfail-closeで503を返す（02_post_auth_login.md §11）。
+	"""
 	settings = get_backend_settings()
-	client_ip = resolve_client_ip(request, settings.trusted_proxy_cidrs).client_ip
-	await ensure_login_not_rate_limited(identifier, client_ip, settings)
+	client_info = resolve_client_ip(request, settings.trusted_proxy_cidrs)
+	client_ip = client_info.client_ip
+	try:
+		await ensure_login_not_rate_limited(identifier, client_ip, settings)
+	except TooManyAttemptsError:
+		_log_login_attempt(
+			request, None, client_info, identifier, strategy.mode, False, _LOGIN_FAILURE_TOO_MANY_ATTEMPTS
+		)
+		raise
+	except Exception as exc:
+		raise ServiceUnavailableError() from exc
 
 	user = await user_repository.get_by_login_identifier(db, identifier)
 	# ユーザー不存在・OAuth専用アカウントでもダミーハッシュを検証し、応答時間差によるユーザー列挙を防ぐ。
 	stored_hash = user.password_hash if user is not None and user.password_hash is not None else None
 	password_matched = verify_password(password, stored_hash or get_dummy_password_hash())
 	if user is None or stored_hash is None or not password_matched:
-		await record_login_failure(identifier, client_ip, settings)
-		await _record_login_attempt(
-			db,
-			user,
-			identifier,
-			request,
-			strategy.mode,
-			client_ip,
-			success=False,
-			failure_reason=_LOGIN_FAILURE_INVALID_CREDENTIALS,
+		try:
+			await record_login_failure(identifier, client_ip, settings)
+		except Exception as exc:
+			raise ServiceUnavailableError() from exc
+		try:
+			await _record_login_attempt(
+				db,
+				user,
+				identifier,
+				request,
+				strategy.mode,
+				client_ip,
+				success=False,
+				failure_reason=_LOGIN_FAILURE_INVALID_CREDENTIALS,
+			)
+		except Exception as exc:
+			raise ServiceUnavailableError() from exc
+		_log_login_attempt(
+			request, user, client_info, identifier, strategy.mode, False, _LOGIN_FAILURE_INVALID_CREDENTIALS
 		)
 		raise InvalidCredentialsError()
 
-	await record_login_success(identifier, client_ip)
+	try:
+		await record_login_success(identifier, client_ip)
+	except Exception as exc:
+		raise ServiceUnavailableError() from exc
 	if not user.is_active:
-		await _record_login_attempt(
-			db,
-			user,
-			identifier,
-			request,
-			strategy.mode,
-			client_ip,
-			success=False,
-			failure_reason=_LOGIN_FAILURE_USER_INACTIVE,
-		)
+		try:
+			await _record_login_attempt(
+				db,
+				user,
+				identifier,
+				request,
+				strategy.mode,
+				client_ip,
+				success=False,
+				failure_reason=_LOGIN_FAILURE_USER_INACTIVE,
+			)
+		except Exception as exc:
+			raise ServiceUnavailableError() from exc
+		_log_login_attempt(request, user, client_info, identifier, strategy.mode, False, _LOGIN_FAILURE_USER_INACTIVE)
 		raise UserInactiveError()
 	if user.email_verified_at is None:
-		await _record_login_attempt(
-			db,
-			user,
-			identifier,
-			request,
-			strategy.mode,
-			client_ip,
-			success=False,
-			failure_reason=_LOGIN_FAILURE_EMAIL_NOT_VERIFIED,
+		try:
+			await _record_login_attempt(
+				db,
+				user,
+				identifier,
+				request,
+				strategy.mode,
+				client_ip,
+				success=False,
+				failure_reason=_LOGIN_FAILURE_EMAIL_NOT_VERIFIED,
+			)
+		except Exception as exc:
+			raise ServiceUnavailableError() from exc
+		_log_login_attempt(
+			request, user, client_info, identifier, strategy.mode, False, _LOGIN_FAILURE_EMAIL_NOT_VERIFIED
 		)
 		raise EmailNotVerifiedError()
 
-	login_result = await strategy.login(user, request, response)
+	try:
+		login_result = await strategy.login(user, request, response)
+	except Exception as exc:
+		raise ServiceUnavailableError() from exc
 	try:
 		await _record_login_attempt(
 			db, user, identifier, request, strategy.mode, client_ip, success=True, failure_reason=None
@@ -295,6 +334,7 @@ async def login(
 			logger.exception("login state rollback failed", extra={"user_id": str(user.id)})
 			raise ServiceUnavailableError() from rollback_exc
 		raise ServiceUnavailableError() from exc
+	_log_login_attempt(request, user, client_info, identifier, strategy.mode, True, None)
 	return login_result
 
 
@@ -491,6 +531,47 @@ def _request_id(request: Request) -> str | None:
 	request_state = getattr(request, "state", None)
 	value = getattr(request_state, "request_id", None)
 	return value if isinstance(value, str) else None
+
+
+def _log_login_attempt(
+	request: Request,
+	user: User | None,
+	client_info: ClientIpInfo,
+	identifier: str,
+	auth_mode: str,
+	success: bool,
+	failure_reason: str | None,
+) -> None:
+	"""ログイン試行を構造化ログへ出力する（02_post_auth_login.md §11）。パスワードは出力しない。"""
+	logger.info(
+		"Login attempt",
+		extra={
+			"operation": "login",
+			"event": "login_attempt",
+			"identifier": identifier,
+			"user_id": str(user.id) if user is not None else None,
+			"success": success,
+			"auth_mode": auth_mode,
+			"failure_reason": failure_reason,
+			"client_ip": client_info.client_ip,
+			"proxy_peer_ip": client_info.proxy_peer_ip,
+			"ip_source": client_info.ip_source,
+			"request_id": _request_id(request),
+		},
+	)
+
+
+def _log_user_registered(request: Request, user: User) -> None:
+	"""ユーザー登録完了を構造化ログへ出力する（01_post_auth_register.md §11）。メール・パスワードは出力しない。"""
+	logger.info(
+		"User registered",
+		extra={
+			"operation": "register",
+			"event": "user_registered",
+			"user_id": str(user.id),
+			"request_id": _request_id(request),
+		},
+	)
 
 
 def _log_login_history_write_failed(request: Request, user: User, client_info: ClientIpInfo) -> None:

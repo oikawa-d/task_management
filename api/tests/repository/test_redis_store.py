@@ -250,12 +250,13 @@ async def test_rate_limit_ttl_rounds_up_remaining_milliseconds(
 	assert await redis_store.get_rate_limit_ttl("register", "127.0.0.1") == 2
 
 
-async def test_rate_limit_ttl_uses_minimum_retry_after_when_key_is_missing(
+async def test_rate_limit_ttl_returns_zero_when_key_is_missing(
 	redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+	"""TTL不明時は`0`を返し、呼び出し側（deps.py）のwindowフォールバックを機能させる。"""
 	monkeypatch.setattr(redis, "pttl", AsyncMock(return_value=-2))
 
-	assert await redis_store.get_rate_limit_ttl("register", "127.0.0.1") == 1
+	assert await redis_store.get_rate_limit_ttl("register", "127.0.0.1") == 0
 
 
 async def test_rotate_refresh_token_returns_reuse_marker(redis: _FakeRedis) -> None:

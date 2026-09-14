@@ -186,14 +186,13 @@ def _resolved_client_ip(request: Request) -> str:
 	return request.client.host if request.client else "unknown"
 
 
-async def _enforce_rate_limit(
-	request: Request,
-	user: CurrentUser,
+async def _enforce_rate_limit_by_key(
 	scope: str,
+	value: str,
 	max_requests: int,
 	window: int,
 ) -> None:
-	value = f"{user.id}:{_resolved_client_ip(request)}"
+	"""Redisベースのレート制限を判定する共通処理。Redis障害時はfail-closeで503を返す。"""
 	try:
 		count = await redis_store.check_rate_limit(scope, value, max_requests, window)
 		if count <= max_requests:
@@ -203,6 +202,17 @@ async def _enforce_rate_limit(
 		raise ServiceUnavailableError() from exc
 	if count > max_requests:
 		raise TooManyAttemptsError(retry_after=retry_after if retry_after > 0 else window)
+
+
+async def _enforce_rate_limit(
+	request: Request,
+	user: CurrentUser,
+	scope: str,
+	max_requests: int,
+	window: int,
+) -> None:
+	value = f"{user.id}:{_resolved_client_ip(request)}"
+	await _enforce_rate_limit_by_key(scope, value, max_requests, window)
 
 
 async def enforce_notification_read_rate_limit(
@@ -267,14 +277,6 @@ def enforce_rate_limit(scope: str, max_requests_field: str, window_field: str) -
 		max_requests: int = getattr(settings, max_requests_field)
 		window: int = getattr(settings, window_field)
 		client_ip = resolve_client_ip(request, settings.trusted_proxy_cidrs).client_ip
-		try:
-			count = await redis_store.check_rate_limit(scope, client_ip, max_requests, window)
-			if count <= max_requests:
-				return
-			retry_after = await redis_store.get_rate_limit_ttl(scope, client_ip)
-		except Exception as exc:
-			raise ServiceUnavailableError() from exc
-		if count > max_requests:
-			raise TooManyAttemptsError(retry_after=retry_after if retry_after > 0 else window)
+		await _enforce_rate_limit_by_key(scope, client_ip, max_requests, window)
 
 	return _enforce
