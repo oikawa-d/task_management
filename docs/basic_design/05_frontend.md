@@ -37,7 +37,9 @@ frontend/
 │   │   ├── authStore.ts            # Zustand（user / status）
 │   │   ├── AuthProvider.tsx        # /auth/config → 必要ならrefresh → /auth/me
 │   │   ├── AuthLoading.tsx         # 認証状態確定まで表示するローディングUI
+│   │   ├── sessionCleanup.ts       # ユーザー切替時のクライアント状態破棄
 │   │   └── guards.tsx              # RequireAuth / RequireAdmin
+│   ├── lib/queryClient.ts          # アプリ共通のTanStack QueryClient
 │   ├── components/                 # 汎用UI（Button, Modal, Field, Toast, Avatar…）
 │   ├── layouts/
 │   │   ├── AppLayout.tsx           # サイドバー付き共通レイアウト
@@ -257,7 +259,7 @@ flowchart TB
 |--------|----------|--------|------|
 | `authStore`（Zustand） | `user`, `status`（`loading` / `authenticated` / `unauthenticated`）, `googleLoginEnabled` | **しない**（メモリのみ） | JWTのアクセストークンは`AuthAdapter`へ注入したメモリ上の`TokenStore`が保持し、authStoreには保持しない。adapterと`googleLoginEnabled`は`GET /auth/config`の実行時設定から選択・保持する（`authBootstrap`が起動時に設定） |
 | `uiStore`（Zustand + persist） | `fontScale`, `sidebarOpen`, `dashboardView`（`"cards"` / `"calendar"`） | localStorage | 文字サイズ・サイドバー開閉・ダッシュボードの表示モードはクライアント側のみで保持。次回起動時も選択中の表示モードを復元する |
-| `projectStore`（Zustand） | `selectedProjectId` | しない（メモリのみ） | ダッシュボードで選択中のプロジェクトIDだけを保持する。プロジェクト本体はTanStack Queryのキャッシュから参照し、ログアウト時にクリアする |
+| `projectStore`（Zustand） | `selectedProjectId` | しない（メモリのみ） | ダッシュボードで選択中のプロジェクトIDだけを保持する。プロジェクト本体はTanStack Queryのキャッシュから参照し、通常ログアウト・401による自動ログアウト時に共通処理でクリアする |
 | 通知（React Query） | `['notifications','unread-count']` / `['notifications', page]` | しない | 未読件数はポーリング、一覧はパネルを開いたときに取得。既読操作の失敗はパネル内で再試行でき、パネルの開閉状態と再試行状態はコンポーネントのローカルstateで持つ |
 | TanStack Query | プロジェクト一覧・ボード・ユーザー一覧 | しない | `queryKey` は `['projects']` / `['board', projectId]`。タスク詳細コメントは`taskDetailStore`で管理する（下段参照） |
 | `taskDetailStore`（singleton） | タスク詳細・コメント詳細の取得結果、更新中/エラー、`notFound`、`closeRequested`、`boardRefreshToken` | しない | タスク詳細モーダルは既存実装との互換性を優先し、`subscribe`/`getSnapshot`を`useSyncExternalStore`から購読する。TanStack Queryへ移行しない方針は[タスク詳細モーダル詳細設計](../detailed_design/screen/08_task_detail_modal.md)を正とする |
@@ -276,6 +278,8 @@ stateDiagram-v2
 ```
 
 `loading` 中は `RequireAuth` / `RequireAdmin` / `RequireGuest` のいずれもリダイレクトせず、`AuthLoading` を表示する。`AuthLoading` は `role="status"` と「認証状態を確認中...」のラベルを持ち、`AuthProvider` が初期化を完了するまで現在のURLを維持する。
+
+通常ログアウトと復帰不能な401では、共通のセッション破棄処理でTanStack Queryのキャッシュ全体、`projectStore`の選択ID、`taskDetailStore`の取得結果を破棄してから未認証状態へ遷移する。これにより、ユーザー切替時に前ユーザーのサーバーデータを再表示しない。
 
 ```mermaid
 sequenceDiagram

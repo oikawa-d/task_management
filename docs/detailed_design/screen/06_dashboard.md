@@ -299,7 +299,7 @@ flowchart TB
 
 一覧データそのものはTanStack Queryが保持するため、本storeはサーバーデータを複製せず「どれを選択したか」だけを持つ。
 
-### 9.5 `features/dashboard/errors.ts :: resolveForbiddenMessage`
+### 9.6 `features/dashboard/errors.ts :: resolveForbiddenMessage`
 
 | 項目 | 内容 |
 |------|------|
@@ -389,7 +389,8 @@ flowchart LR
 | 15 | コンポーネント | 作成403 | `POST /projects` → 403 `CSRF_INVALID` | フォーム内にメッセージを表示し、フォームは開いたまま | `ProjectCreateForm shows csrf message on 403` |
 | 16 | 結合 | ログアウト | 選択IDがStoreに保持されている | 認証状態とともに選択IDをクリアする | `AppLayout clears selected project on logout` |
 | 17 | 単体 | `useDashboard`の集約 | 一覧・作成・カレンダーAPIをモック | 3つのQuery/mutationと選択IDを公開する | `useDashboard aggregates dashboard state` |
-| 18 | 網羅できない範囲 | 実際のカードグリッドのレスポンシブ折返し | - | - | ピクセル単位のレイアウト崩れはCSSの視覚回帰テスト対象外のため手動確認とする |
+| 18 | 結合 | 認証喪失時のキャッシュ破棄 | 通常ログアウトまたは復帰不能な401 | Query cacheと選択stateを破棄し、前ユーザーの一覧を再表示しない | `logout clears user-scoped query cache and project selection` |
+| 19 | 網羅できない範囲 | 実際のカードグリッドのレスポンシブ折返し | - | - | ピクセル単位のレイアウト崩れはCSSの視覚回帰テスト対象外のため手動確認とする |
 
 ## 15. 日付境界方針（Issue #396）
 

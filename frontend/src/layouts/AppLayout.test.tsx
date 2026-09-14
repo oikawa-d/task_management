@@ -38,11 +38,12 @@ function renderAppLayout(props: Parameters<typeof AppLayout>[0] = {}) {
 		{ initialEntries: [ROUTES.DASHBOARD] },
 	);
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	return render(
+	render(
 		<QueryClientProvider client={queryClient}>
 			<RouterProvider router={router} />
 		</QueryClientProvider>,
 	);
+	return queryClient;
 }
 
 function mockUnreadCount(unreadCount: number) {
@@ -109,7 +110,8 @@ describe("AppLayout", () => {
 			useAuthStore.setState({ status: "authenticated", user: { id: "u1", role: "member" }, authAdapter: adapter });
 			useProjectStore.getState().selectProject("project-1");
 		});
-		renderAppLayout();
+		const queryClient = renderAppLayout();
+		queryClient.setQueryData(["projects", { page: 1 }], { items: [{ id: "project-1" }] });
 
 		const button = screen.getByRole("button", { name: "ログアウト" });
 		fireEvent.click(button);
@@ -121,5 +123,6 @@ describe("AppLayout", () => {
 		expect(await screen.findByRole("heading", { name: "ログイン" })).toBeInTheDocument();
 		expect(useAuthStore.getState().status).toBe("unauthenticated");
 		expect(useProjectStore.getState().selectedProjectId).toBeNull();
+		expect(queryClient.getQueryData(["projects", { page: 1 }])).toBeUndefined();
 	});
 });
