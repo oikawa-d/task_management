@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { clearAuthAdapter, setAuthAdapterMode } from "../../../api/authAdapter/client";
-import { AuthApiError, requestPasswordReset, resendVerification, resetPassword } from "./authApi";
+import { AuthApiError, requestPasswordReset, resendVerification, resetPassword, verifyEmail } from "./authApi";
 
 function response(body: unknown, init: { ok: boolean; status: number; headers?: Record<string, string> }) {
 	return {
@@ -89,6 +89,32 @@ describe("authApi", () => {
 			"/api/auth/verify-email/resend",
 			expect.objectContaining({ method: "POST", body: JSON.stringify({ email: "user@example.com" }) }),
 		);
+	});
+
+	it("verifyEmailは204を正常終了として扱う", async () => {
+		const fetchMock = vi.fn().mockResolvedValue(response(undefined, { ok: true, status: 204 }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(verifyEmail("verify-token")).resolves.toBeUndefined();
+		expect(fetchMock).toHaveBeenCalledWith(
+			"/api/auth/verify-email",
+			expect.objectContaining({ method: "POST", body: JSON.stringify({ token: "verify-token" }) }),
+		);
+	});
+
+	it("verifyEmailの400 INVALID_VERIFY_TOKENをAuthApiErrorとして返す", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(
+				response(
+					{ error: { code: "INVALID_VERIFY_TOKEN", message: "認証リンクが無効です" } },
+					{ ok: false, status: 400 },
+				),
+			),
+		);
+
+		const error = await verifyEmail("expired-token").catch((e: unknown) => e);
+		expect(error).toEqual(expect.objectContaining({ status: 400, code: "INVALID_VERIFY_TOKEN" }));
 	});
 
 	it("ネットワークエラー時はAuthApiError(NETWORK_ERROR)を投げる", async () => {

@@ -8,7 +8,7 @@ from app.core.deps import (
 	enforce_notification_write_rate_limit,
 	get_current_user,
 	verify_csrf_if_session,
-	verify_origin,
+	verify_origin_if_session,
 )
 from app.db import get_db_session
 from app.schemas.auth import CurrentUser
@@ -49,7 +49,7 @@ async def mark_notification_read(
 	notification_id: UUID,
 	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
-	_: None = Depends(verify_origin),
+	_: None = Depends(verify_origin_if_session),
 	__csrf: None = Depends(verify_csrf_if_session),
 	___: None = Depends(enforce_notification_write_rate_limit),
 ) -> NotificationReadResponse:
@@ -60,7 +60,7 @@ async def mark_notification_read(
 async def mark_all_notifications_read(
 	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
-	_: None = Depends(verify_origin),
+	_: None = Depends(verify_origin_if_session),
 	__csrf: None = Depends(verify_csrf_if_session),
 	___: None = Depends(enforce_notification_write_rate_limit),
 ) -> NotificationReadAllResponse:

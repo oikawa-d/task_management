@@ -6,7 +6,7 @@ from app.core.deps import (
 	get_current_user,
 	get_task_for_member,
 	verify_csrf_if_session,
-	verify_origin,
+	verify_origin_if_session,
 )
 from app.db import get_db_session
 from app.models.task import Task
@@ -37,7 +37,7 @@ async def create_task_comment(
 	task: Task = Depends(get_task_for_member),
 	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
-	_: None = Depends(verify_origin),
+	_: None = Depends(verify_origin_if_session),
 	__csrf: None = Depends(verify_csrf_if_session),
 ) -> CommentResponse:
 	return await task_comment_service.add_comment(task, payload, user, db)
@@ -49,7 +49,7 @@ async def update_task_comment(
 	comment: TaskComment = Depends(get_comment_for_member),
 	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
-	_: None = Depends(verify_origin),
+	_: None = Depends(verify_origin_if_session),
 	__csrf: None = Depends(verify_csrf_if_session),
 ) -> CommentResponse:
 	return await task_comment_service.update_comment(comment.task, comment, payload, user, db)
@@ -60,7 +60,7 @@ async def delete_task_comment(
 	comment: TaskComment = Depends(get_comment_for_member),
 	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
-	_: None = Depends(verify_origin),
+	_: None = Depends(verify_origin_if_session),
 	__csrf: None = Depends(verify_csrf_if_session),
 ) -> Response:
 	await task_comment_service.delete_comment(comment.task, comment, user, db)

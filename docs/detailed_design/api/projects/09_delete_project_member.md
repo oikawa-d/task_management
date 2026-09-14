@@ -20,7 +20,7 @@
 | 認証 | session モード：`cerberus_sid` Cookie ／ jwt モード：`Authorization: Bearer {access_token}` |
 | 認可 | オーナー / admin（`require_project_owner`） |
 | CSRF検証 | 必要（sessionモードの更新系リクエストは `X-CSRF-Token` ヘッダ必須） |
-| Origin検証 | 不要（Cookieを新規発行しないリクエストのため） |
+| Origin検証 | 必要（sessionモードのみ。jwtモードはAuthorizationヘッダのみのため不要） |
 | AUTH_MODE差異 | CSRF検証の要否のみ |
 | 冪等性 | なし（1回目は204、2回目は対象不存在のため404となり厳密には冪等でない。§13参照） |
 | レート制限 | 対象外 |

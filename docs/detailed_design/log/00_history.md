@@ -91,7 +91,10 @@ sequenceDiagram
 | `rate_limit_rejected` | route、scope、limit、window、client_ip、request_id | APIは429。Redis障害なら503 |
 | `login_history_write_failed` | user_id（NULL可）、login_method、client_ip、request_id | ログインを成立させず、作成済みRedis状態を補償削除 |
 | `auth_state_revoke_failed` | user_id、operation、deleted_session_count、deleted_refresh_count、request_id | DB更新を行わず503。Redis復旧後に同じ操作を再実行 |
+| `oauth_callback_failed` | operation、event、failure_reason（例外クラス名） | ブラウザへは302で`error=oauth_failed`等へ変換し、詳細はログにのみ出力 |
 | `force_logout` | actor_user_id、target_user_id、mode、access_token_revocation_delay_seconds、request_id | 成功時INFO。JWTの遅延上限は`ACCESS_TOKEN_TTL_SECONDS` |
+
+`extra`へ渡す記録項目のキーは `core/logger.py` の `_SAFE_AUDIT_FIELDS` に列挙されたものだけがJSONへ出力され、列挙外のキーは出力時に破棄される。新しい記録項目を追加する場合は `_SAFE_AUDIT_FIELDS` へ追加する。
 
 監査IPは `TRUSTED_PROXY_CIDRS` で確定した `client_ip` とし、`proxy_peer_ip`、`ip_source`（`direct` / `trusted_xff`）も記録する。パスワード、トークン、Cookie、Authorization値、未ハッシュの識別子は記録しない。
 

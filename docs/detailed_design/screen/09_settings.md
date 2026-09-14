@@ -20,7 +20,7 @@
 | ガード | 認証必須（`RequireAuth`） |
 | 対応要件 | 要件書§2-6 |
 | 主なユースケース | プロフィール編集（OAuth新規ユーザーの未完了プロフィール補完を含む）、パスワード変更、文字サイズ変更、ログイン履歴閲覧 |
-| 実装ファイル | `src/features/settings/SettingsPage.tsx`、`ProfileForm.tsx`、`PasswordChangeForm.tsx`、`FontSizeSelector.tsx`、`LoginHistoryTable.tsx` |
+| 実装ファイル | `frontend/src/features/settings/pages/SettingsPage.tsx`、`frontend/src/features/settings/ProfileForm.tsx`、`frontend/src/features/settings/PasswordChangeForm.tsx`、`frontend/src/features/settings/components/FontSizeSelector.tsx`、`frontend/src/features/settings/components/LoginHistoryTable.tsx`、`frontend/src/features/settings/hooks/useLoginHistory.ts`、`frontend/src/stores/uiStore.ts` |
 
 `?complete_profile=1` クエリ付きで遷移してきた場合（OAuthコールバック後、`profile_completed=false`）は、プロフィール編集タブを初期選択し、案内バナーを表示する。
 

@@ -56,6 +56,17 @@ jobs:
           python -m pip install pytest pyyaml
           python -m pytest tests/ci/test_ci_workflow.py -q
 
+  hook-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: GitHub破壊操作hookのテスト
+        run: |
+          for test_file in .claude/hooks/*.test.sh; do
+            bash "$test_file"
+          done
+
   backend-lint:
     needs: detect
     if: needs.detect.outputs.api == 'true'

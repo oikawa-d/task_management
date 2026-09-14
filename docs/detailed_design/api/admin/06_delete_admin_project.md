@@ -20,7 +20,7 @@
 | 認証 | 必要 |
 | 認可 | admin固定 |
 | CSRF検証 | 必要（session モードの更新系） |
-| Origin検証 | 必要 |
+| Origin検証 | 必要（sessionモードのみ。jwtモードはAuthorizationヘッダのみのため不要） |
 | AUTH_MODE差異 | session: `X-CSRF-Token` 検証あり／jwt: ヘッダ方式のためCSRF検証なし |
 | 冪等性 | あり（既に`is_active=false`の対象への再実行も`UPDATE`が0件更新になるだけで204として扱う。プロジェクト自体が存在しない場合のみ404） |
 | レート制限 | 対象外 |
@@ -85,7 +85,7 @@ sequenceDiagram
     participant PG as "PostgreSQL"
 
     FE->>R: DELETE /api/admin/projects/{project_id}
-    R->>R: verify_origin / verify_csrf（session時）
+    R->>R: verify_origin_if_session / verify_csrf_if_session
     R->>D: 認証 + admin確認
     D-->>R: CurrentUser(role=admin)
     R->>S: sp_admin_deactivate_project(actor, project_id)
@@ -120,7 +120,7 @@ sequenceDiagram
 flowchart TB
     A["リクエスト受信"] --> B["pydanticでproject_idを検証"]
     B -->|"UUID形式でない"| B1["422 VALIDATION_ERROR"]
-    B -->|"OK"| C["verify_origin"]
+    B -->|"OK"| C["verify_origin_if_session"]
     C -->|"不一致"| C1["403 CSRF_INVALID"]
     C -->|"OK"| D["session時のみ verify_csrf"]
     D -->|"不一致"| C1

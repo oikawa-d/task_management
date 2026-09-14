@@ -20,7 +20,7 @@
 | ガード | 公開（認証不要）。認証済みユーザーがアクセスしてもリダイレクトはしない（ログイン中でも別アカウントのリセットを要求できる必要はないが、基本設計に排他規定がないため未認証専用ガードは課さない。要検討：§15参照） |
 | 対応要件 | 要件書§3.1（認証機能）。画面自体は要件書§2の画面一覧No.8に定義される |
 | 主なユースケース | メールアドレスを入力し、パスワード再設定用メールの送信を要求する |
-| 実装ファイル | `src/features/auth/pages/PasswordForgotPage.tsx`、`src/features/auth/components/PasswordForgotForm.tsx` |
+| 実装ファイル | `frontend/src/features/auth/pages/PasswordForgotPage.tsx`、`frontend/src/features/auth/components/PasswordForgotForm.tsx` |
 
 ## 2. 画面レイアウト
 

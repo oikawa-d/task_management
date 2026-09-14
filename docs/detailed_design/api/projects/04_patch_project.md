@@ -19,7 +19,7 @@
 | 認証 | 必要 |
 | 認可 | オーナー／admin（所属memberであっても非オーナーは不可）。`is_active` フィールドの更新（無効化の取り消し＝再有効化を含む）も同じくオーナー／admin限定 |
 | CSRF検証 | 必要（session モードの更新系） |
-| Origin検証 | 必要 |
+| Origin検証 | 必要（sessionモードのみ。jwtモードはAuthorizationヘッダのみのため不要） |
 | AUTH_MODE差異 | session: `X-CSRF-Token` 検証あり／jwt: ヘッダ方式のためCSRF検証なし |
 | 冪等性 | あり（同一内容の複数回PATCHは同じ結果になる部分更新） |
 | レート制限 | 対象外 |
@@ -99,7 +99,7 @@ sequenceDiagram
     participant PG as "PostgreSQL"
 
     FE->>R: PATCH /api/projects/{project_id} {name?, description?, start_at?, end_at?, is_active?}
-    R->>R: verify_origin / verify_csrf（session時）
+    R->>R: verify_origin_if_session / verify_csrf_if_session
     R->>D: 認証 + 所属チェック + オーナー判定
     D->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>D: project行 または 0件
@@ -147,7 +147,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart TB
-    A["リクエスト受信"] --> B["verify_origin"]
+    A["リクエスト受信"] --> B["verify_origin_if_session"]
     B -->|"不一致"| B1["403 CSRF_INVALID"]
     B -->|"OK"| C["session時のみ verify_csrf"]
     C -->|"不一致"| B1

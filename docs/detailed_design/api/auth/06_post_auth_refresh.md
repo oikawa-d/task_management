@@ -94,7 +94,7 @@ sequenceDiagram
     participant FE as "フロント(React SPA)"
     participant R as "router: auth_router"
     participant D as "deps: verify_origin / verify_csrf"
-    participant S as "service: auth_service.refresh"
+    participant S as "AuthStrategy.refresh"
     participant STR as "auth/factory: get_auth_strategy()"
     participant RS as "repository: redis_store"
     participant RD as Redis
@@ -105,10 +105,10 @@ sequenceDiagram
         D-->>R: CsrfInvalidError
         R-->>FE: 403 CSRF_INVALID
     else Origin一致
-        R->>S: refresh(request, response, strategy)
+        R->>STR: get_auth_strategy()
+        STR-->>R: strategy
+        R->>S: strategy.refresh(request, response)
         alt AUTH_MODE=session
-            S->>STR: strategy.refresh(...)
-            STR-->>S: raises NotSupportedError
             S-->>R: NotSupportedError
             R-->>FE: 405 NOT_SUPPORTED_IN_MODE
         else AUTH_MODE=jwt
@@ -175,19 +175,19 @@ flowchart TB
 | 引数 | `request`、`response`、`strategy` |
 | 戻り値 | `RefreshResponse`（200） |
 | 送出例外 | `CsrfInvalidError`(403)、`NotSupportedError`(405)、`UnauthenticatedError`(401)、`TokenRevokedError`(401) |
-| 処理内容 | 1. `verify_origin`でOrigin確認 2. `auth_service.refresh(request, response, strategy)`を呼び出す 3. 結果を`RefreshResponse`として200で返す |
+| 処理内容 | 1. `verify_origin`でOrigin確認 2. `strategy.refresh(request, response)`を呼び出す 3. 結果を`RefreshResponse`として200で返す |
 | 副作用 | `response`へのSet-Cookie設定 |
 
-### 6.2 `service/auth_service.py :: refresh`
+### 6.2 `auth/base.py :: AuthStrategy.refresh`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def refresh(request: Request, response: Response, strategy: AuthStrategy) -> LoginResult` |
-| 引数 | `request`、`response`、`strategy` |
+| シグネチャ | `async def refresh(self, request: Request, response: Response) -> LoginResult` |
+| 引数 | `request`、`response` |
 | 戻り値 | `LoginResult`（`access_token`等を保持） |
-| 送出例外 | `strategy.refresh`からの伝播（`NotSupportedError`/`UnauthenticatedError`/`TokenRevokedError`） |
-| 処理内容 | 1. `strategy.refresh(request, response)`を呼び出すのみ（モード分岐はStrategyに委譲。sessionモードのStrategyは`NotSupportedError`を送出） |
-| 副作用 | Strategy内でRedis更新・Cookie設定 |
+| 送出例外 | 各Strategy実装からの伝播（`NotSupportedError`/`UnauthenticatedError`/`TokenRevokedError`） |
+| 処理内容 | 認証方式ごとのStrategyがrefresh処理を実装するための抽象インターフェース。モード分岐やRedis更新は具象Strategyへ委譲する |
+| 副作用 | 具象Strategy内でRedis更新・Cookie設定 |
 
 ### 6.3 `auth/session_auth.py :: SessionAuthStrategy.refresh`
 
@@ -237,10 +237,10 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    R["auth_router.refresh"] --> S["auth_service.refresh"]
-    S --> FACT["auth/factory.get_auth_strategy"]
-    FACT --> SESS["SessionAuthStrategy.refresh<br/>常にNotSupportedError"]
-    FACT --> JWTS["JwtAuthStrategy.refresh"]
+    R["auth_router.refresh"] --> FACT["auth/factory.get_auth_strategy"]
+    FACT --> S["AuthStrategy.refresh"]
+    S --> SESS["SessionAuthStrategy.refresh<br/>常にNotSupportedError"]
+    S --> JWTS["JwtAuthStrategy.refresh"]
     JWTS --> RS1["redis_store.rotate_refresh_token"]
     RS1 -.->|"再利用検知時"| RS2["redis_store.revoke_token_family"]
     RS1 --> RD[("Redis")]

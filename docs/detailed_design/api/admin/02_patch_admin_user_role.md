@@ -20,7 +20,7 @@
 | 認証 | 必要 |
 | 認可 | admin のみ |
 | CSRF検証 | 必要（session モードの更新系メソッド。`X-CSRF-Token` ヘッダ + `csrf:{sid}` 一致） |
-| Origin検証 | 必要（Cookieを利用する更新系のため。jwt モードはAuthorizationヘッダのみで良くOriginは必須検証としない） |
+| Origin検証 | 必要（sessionモードのみ。jwtモードはAuthorizationヘッダのみのため不要） |
 | AUTH_MODE差異 | 差異なし。認証確立後の業務ロジックはモードに依存しない |
 | 冪等性 | なし（現在のroleと同じ値を指定した場合は実質変化なしだが、自己変更禁止・最終admin判定は毎回同一ロジックを通過させるため厳密な冪等操作としては扱わない） |
 | レート制限 | 対象外 |

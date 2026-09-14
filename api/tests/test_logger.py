@@ -64,7 +64,11 @@ def test_json_formatter_includes_safe_oauth_fields_only() -> None:
 	record.ip_source = "trusted_xff"
 	record.request_id = "request-123"
 	record.user_id = "user-123"
+	record.identifier = "alice@example.com"
 	record.login_method = "oauth_google"
+	record.auth_mode = "jwt"
+	record.success = True
+	record.failure_reason = None
 	record.deleted_session_count = 1
 	record.deleted_refresh_count = 0
 	record.code = "secret-code"
@@ -77,6 +81,10 @@ def test_json_formatter_includes_safe_oauth_fields_only() -> None:
 	assert output["route"] == "/api/auth/oauth/google/callback"
 	assert output["client_ip"] == "198.51.100.4"
 	assert output["deleted_session_count"] == 1
+	assert output["identifier"] == "alice@example.com"
+	assert output["auth_mode"] == "jwt"
+	assert output["success"] is True
+	assert "failure_reason" not in output
 	assert "code" not in output
 	assert "email" not in output
 
@@ -89,3 +97,26 @@ def test_configure_logging_sets_level_and_json_handler() -> None:
 	assert root_logger.level == logging.WARNING
 	assert len(root_logger.handlers) == 1
 	assert isinstance(root_logger.handlers[0].formatter, JsonFormatter)
+
+
+def test_json_formatter_emits_failure_reason_and_drops_unlisted_keys() -> None:
+	formatter = JsonFormatter()
+	record = logging.LogRecord(
+		name="app.oauth",
+		level=logging.WARNING,
+		pathname=__file__,
+		lineno=1,
+		msg="OAuth callback failed",
+		args=(),
+		exc_info=None,
+	)
+	record.operation = "oauth_callback"
+	record.event = "oauth_callback_failed"
+	record.failure_reason = "InvalidStateError"
+	# _SAFE_AUDIT_FIELDSに無いキーはフォーマッタ通過時に落ちる。
+	record.error = "InvalidStateError"
+
+	output = json.loads(formatter.format(record))
+
+	assert output["failure_reason"] == "InvalidStateError"
+	assert "error" not in output

@@ -5,7 +5,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 from app.core import security
-from app.core.deps import _origin_from_referer, verify_csrf, verify_csrf_if_session, verify_origin
+from app.core.deps import (
+	_origin_from_referer,
+	verify_csrf,
+	verify_csrf_if_session,
+	verify_origin,
+	verify_origin_if_session,
+)
 from app.core.exceptions import CsrfInvalidError
 from starlette.requests import Request
 
@@ -99,6 +105,24 @@ class TestVerifyOrigin:
 		assert _origin_from_referer("") is None
 		assert _origin_from_referer(None) is None
 		assert _origin_from_referer("not-a-url") is None
+
+
+class TestVerifyOriginIfSession:
+	async def test_session_mode_requires_allowed_origin(self) -> None:
+		request = _request(headers={"origin": "http://localhost:5173"})
+
+		await verify_origin_if_session(request, _strategy("session"), _settings())
+
+	async def test_session_mode_rejects_missing_origin(self) -> None:
+		request = _request()
+
+		with pytest.raises(CsrfInvalidError):
+			await verify_origin_if_session(request, _strategy("session"), _settings())
+
+	async def test_jwt_mode_skips_origin_check_without_header(self) -> None:
+		request = _request()
+
+		await verify_origin_if_session(request, _strategy("jwt"), _settings())
 
 
 class TestVerifyCsrfSessionMode:

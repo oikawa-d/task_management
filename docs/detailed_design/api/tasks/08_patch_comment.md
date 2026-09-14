@@ -19,7 +19,7 @@
 | 認証 | 必要 |
 | 認可 | 投稿者本人 または admin（§3・§5で403/404の切り分けを規定） |
 | CSRF検証 | 必要（sessionモードの更新系） |
-| Origin検証 | 必要 |
+| Origin検証 | 必要（sessionモードのみ。jwtモードはAuthorizationヘッダのみのため不要） |
 | AUTH_MODE差異 | CSRF検証の要否のみ差異あり |
 | 冪等性 | あり（同一bodyでの再送信は同じ結果になる。ただし`updated_at`は都度更新される） |
 | レート制限 | 対象外 |
@@ -99,7 +99,7 @@ sequenceDiagram
     autonumber
     participant FE as "React SPA"
     participant R as "comments_router"
-    participant V as "verify_origin/verify_csrf"
+    participant V as "verify_origin_if_session/verify_csrf_if_session"
     participant D as "deps.get_comment_for_member"
     participant S as "task_service"
     participant TR as "task_repository"
@@ -230,7 +230,7 @@ flowchart LR
     S --> TR2["sp_update_task_comment"]
     TR1 --> M["models.Comment"]
     TR2 --> M
-    R --> V["deps.verify_origin / verify_csrf"]
+    R --> V["deps.verify_origin_if_session / verify_csrf_if_session"]
 ```
 
 ## 8. データ遷移図

@@ -1,4 +1,6 @@
 :root {
+	--font-scale: 1;
+	font-size: calc(100% * var(--font-scale));
 	--color-header-fg: inherit;
 	--color-header-hover: rgb(0 0 0 / 6%);
 	--color-danger: rgb(211 47 47);

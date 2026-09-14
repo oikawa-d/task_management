@@ -12,12 +12,12 @@ function response(body: unknown, init: { ok: boolean; status: number }) {
 	return { ok: init.ok, status: init.status, headers: new Headers(), json: vi.fn().mockResolvedValue(body) };
 }
 
-function renderPanel(phase: "noToken" | "verifying" | "success" | "error", onRedirectNow?: () => void) {
+function renderPanel(phase: "noToken" | "verifying" | "success" | "error", onRedirectNow?: () => void, errorMessage?: string) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 	function Wrapper({ children }: { children: ReactNode }) {
 		return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
 	}
-	return render(<VerifyEmailPanel phase={phase} onRedirectNow={onRedirectNow} />, { wrapper: Wrapper });
+	return render(<VerifyEmailPanel phase={phase} errorMessage={errorMessage} onRedirectNow={onRedirectNow} />, { wrapper: Wrapper });
 }
 
 describe("VerifyEmailPanel", () => {
@@ -49,6 +49,11 @@ describe("VerifyEmailPanel", () => {
 		renderPanel("error");
 		expect(screen.getByRole("alert")).toHaveTextContent("リンクの有効期限が切れているか、既に使用済みです");
 		expect(screen.getByLabelText("メールアドレス")).toBeInTheDocument();
+	});
+
+	it("errorMessage指定時は共通エラーを表示する", () => {
+		renderPanel("error", undefined, "エラーが発生しました。しばらくしてから再度お試しください");
+		expect(screen.getByRole("alert")).toHaveTextContent("エラーが発生しました。しばらくしてから再度お試しください");
 	});
 
 	it("noToken状態ではリンク不正メッセージと再送フォームを表示する（APIは呼ばれない）", () => {

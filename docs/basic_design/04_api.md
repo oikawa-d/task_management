@@ -73,7 +73,7 @@
 | POST | `/projects/{project_id}/tasks` | タスク作成 | プロジェクトメンバー |
 | GET | `/tasks` | タスク横断一覧（`project_id`で絞込可、`project_id=null`で未所属タスクのみ） | 本人が参照可能な範囲（所属プロジェクト全部＋自分の未所属タスク。adminは全件） |
 | POST | `/tasks` | タスク作成（`project_id`任意。未指定・`null`ならプロジェクト未所属タスクとして作成） | member |
-| GET | `/tasks/calendar?from=&to=&scope=&project_id=` | カレンダー表示用タスク一覧（`due_at`が期間内かつ非NULLのタスクのみ、ページングなし。issue #38で新設） | scope=`me`：ログイン済みなら誰でも（自分担当分のみ）／scope=`project`：プロジェクトメンバー |
+| GET | `/tasks/calendar?from=&to=&scope=&project_id=` | カレンダー表示用タスク一覧（`due_at`が期間内かつ非NULLのタスクのみ、ページングなし。issue #38で新設） | scope=`me`：ログイン済みなら誰でも（自分担当分＋自分の未所属分）／scope=`project`：プロジェクトメンバー |
 | GET | `/tasks/{task_id}` | タスク詳細 | プロジェクトメンバー（`project_id`がNULLの場合は作成者本人） |
 | PATCH | `/tasks/{task_id}` | タスク更新（title/description/status/assignee/position/due_at/version/`is_active`） | プロジェクトメンバー（`project_id`がNULLの場合は作成者本人）。`is_active`の変更のみ作成者本人/プロジェクトオーナー/adminに限定 |
 | DELETE | `/tasks/{task_id}` | タスク論理削除（`is_active=false`。position詰めは行わない） | プロジェクトメンバー（`project_id`がNULLの場合は作成者本人） |

@@ -5,12 +5,9 @@ from uuid import uuid4
 import pytest
 from app.core.exceptions import NotFoundError, ServiceUnavailableError
 from app.models.project import Project
-from app.models.project_member import ProjectMember
-from app.models.task import Task
 from app.models.user import User
 from app.repository import admin_repository, project_member_repository, project_repository, task_repository
 from app.repository.admin_repository import AdminProjectListItem
-from app.repository.task_repository import TaskWithProjectStatus
 from app.schemas.admin import AdminProjectListQuery
 from app.schemas.auth import CurrentUser
 from app.service import admin_project_service
@@ -42,26 +39,11 @@ def _actor() -> CurrentUser:
 	return CurrentUser(id=uuid4(), username="admin", role="admin", is_active=True, email_verified_at=None)
 
 
-def _task(project_id: object, status: str) -> TaskWithProjectStatus:
-	task = Task(
-		id=uuid4(),
-		project_id=project_id,
-		title="task",
-		status=status,
-		position=1,
-		version=1,
-		created_by=uuid4(),
-	)
-	return TaskWithProjectStatus(task=task, project_is_active=True)
-
-
 @pytest.mark.asyncio
 async def test_list_admin_projects_returns_all_owners_projects(monkeypatch: pytest.MonkeyPatch) -> None:
 	owner = _owner()
 	rows = [AdminProjectListItem(_project(owner), 3) for _ in range(3)]
 	monkeypatch.setattr(admin_repository, "list_projects", AsyncMock(return_value=rows))
-	monkeypatch.setattr(project_member_repository, "list_by_project", AsyncMock(return_value=[]))
-	monkeypatch.setattr(task_repository, "list_board", AsyncMock(return_value=[]))
 
 	response = await admin_project_service.list_projects(AdminProjectListQuery(), AsyncMock())
 
@@ -76,8 +58,6 @@ async def test_list_admin_projects_pagination_uses_total_count_from_window_funct
 	owner = _owner()
 	rows = [AdminProjectListItem(_project(owner), 25) for _ in range(20)]
 	monkeypatch.setattr(admin_repository, "list_projects", AsyncMock(return_value=rows))
-	monkeypatch.setattr(project_member_repository, "list_by_project", AsyncMock(return_value=[]))
-	monkeypatch.setattr(task_repository, "list_board", AsyncMock(return_value=[]))
 	count_projects = AsyncMock()
 	monkeypatch.setattr(admin_repository, "count_projects", count_projects)
 
@@ -109,14 +89,22 @@ async def test_list_admin_projects_response_has_no_is_owner_field() -> None:
 async def test_list_admin_projects_aggregates_member_and_task_counts(monkeypatch: pytest.MonkeyPatch) -> None:
 	owner = _owner()
 	project = _project(owner)
-	member = ProjectMember(project_id=project.id, user_id=owner.id)
-	monkeypatch.setattr(admin_repository, "list_projects", AsyncMock(return_value=[AdminProjectListItem(project, 1)]))
-	monkeypatch.setattr(project_member_repository, "list_by_project", AsyncMock(return_value=[member]))
-	monkeypatch.setattr(
-		task_repository,
-		"list_board",
-		AsyncMock(return_value=[_task(project.id, "todo"), _task(project.id, "done"), _task(project.id, "done")]),
+	list_projects = AsyncMock(
+		return_value=[
+			AdminProjectListItem(
+				project,
+				1,
+				member_count=1,
+				task_count_todo=1,
+				task_count_done=2,
+			)
+		]
 	)
+	monkeypatch.setattr(admin_repository, "list_projects", list_projects)
+	list_members = AsyncMock()
+	list_tasks = AsyncMock()
+	monkeypatch.setattr(project_member_repository, "list_by_project", list_members)
+	monkeypatch.setattr(task_repository, "list_board", list_tasks)
 
 	response = await admin_project_service.list_projects(AdminProjectListQuery(), AsyncMock())
 
@@ -125,6 +113,30 @@ async def test_list_admin_projects_aggregates_member_and_task_counts(monkeypatch
 	assert item.task_counts.todo == 1
 	assert item.task_counts.in_progress == 0
 	assert item.task_counts.done == 2
+	list_projects.assert_awaited_once()
+	list_members.assert_not_awaited()
+	list_tasks.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_list_admin_projects_query_count_does_not_depend_on_project_count(
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	owner = _owner()
+	rows = [AdminProjectListItem(_project(owner), 10) for _ in range(10)]
+	list_projects = AsyncMock(return_value=rows)
+	monkeypatch.setattr(admin_repository, "list_projects", list_projects)
+	list_members = AsyncMock()
+	list_tasks = AsyncMock()
+	monkeypatch.setattr(project_member_repository, "list_by_project", list_members)
+	monkeypatch.setattr(task_repository, "list_board", list_tasks)
+
+	response = await admin_project_service.list_projects(AdminProjectListQuery(per_page=10), AsyncMock())
+
+	assert len(response.items) == 10
+	list_projects.assert_awaited_once()
+	list_members.assert_not_awaited()
+	list_tasks.assert_not_awaited()
 
 
 @pytest.mark.asyncio

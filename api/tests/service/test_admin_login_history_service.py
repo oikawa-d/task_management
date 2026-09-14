@@ -6,7 +6,7 @@ import pytest
 from app.core.exceptions import ServiceUnavailableError
 from app.models.login_history import LoginHistory
 from app.models.user import User
-from app.repository import admin_repository, user_repository
+from app.repository import admin_repository
 from app.repository.admin_repository import AdminLoginHistoryListItem
 from app.schemas.admin import AdminLoginHistoryQuery
 from app.service import admin_login_history_service
@@ -49,13 +49,10 @@ async def test_list_admin_login_history_null_user_for_unregistered_identifier(
 	monkeypatch.setattr(
 		admin_repository, "list_login_history", AsyncMock(return_value=[AdminLoginHistoryListItem(history, 1)])
 	)
-	get_by_id = AsyncMock()
-	monkeypatch.setattr(user_repository, "get_by_id", get_by_id)
 
 	response = await admin_login_history_service.search(AdminLoginHistoryQuery(), AsyncMock())
 
 	assert response.items[0].user is None
-	get_by_id.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -67,9 +64,13 @@ async def test_list_admin_login_history_returns_all_users(monkeypatch: pytest.Mo
 	monkeypatch.setattr(
 		admin_repository,
 		"list_login_history",
-		AsyncMock(return_value=[AdminLoginHistoryListItem(history_a, 2), AdminLoginHistoryListItem(history_b, 2)]),
+		AsyncMock(
+			return_value=[
+				AdminLoginHistoryListItem(history_a, 2, user_a),
+				AdminLoginHistoryListItem(history_b, 2, user_b),
+			]
+		),
 	)
-	monkeypatch.setattr(user_repository, "get_by_id", AsyncMock(side_effect=[user_a, user_b]))
 
 	response = await admin_login_history_service.search(AdminLoginHistoryQuery(), AsyncMock())
 
@@ -82,16 +83,13 @@ async def test_list_admin_login_history_returns_all_users(monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
-async def test_list_admin_login_history_batches_user_lookup_deduplicated(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_list_admin_login_history_uses_user_info_from_list_query(monkeypatch: pytest.MonkeyPatch) -> None:
 	user = _user()
-	rows = [AdminLoginHistoryListItem(_history(user_id=user.id), 3) for _ in range(3)]
+	rows = [AdminLoginHistoryListItem(_history(user_id=user.id), 3, user) for _ in range(3)]
 	monkeypatch.setattr(admin_repository, "list_login_history", AsyncMock(return_value=rows))
-	get_by_id = AsyncMock(return_value=user)
-	monkeypatch.setattr(user_repository, "get_by_id", get_by_id)
 
 	response = await admin_login_history_service.search(AdminLoginHistoryQuery(), AsyncMock())
 
-	assert get_by_id.await_count == 1
 	assert all(item.user is not None and item.user.username == "taro" for item in response.items)
 
 
@@ -133,19 +131,6 @@ async def test_list_admin_login_history_invalid_date_range_rejected_by_schema() 
 
 
 @pytest.mark.asyncio
-async def test_list_admin_login_history_service_unavailable_on_user_lookup_error(
-	monkeypatch: pytest.MonkeyPatch,
-) -> None:
-	history = _history(user_id=uuid4())
-	monkeypatch.setattr(
-		admin_repository, "list_login_history", AsyncMock(return_value=[AdminLoginHistoryListItem(history, 1)])
-	)
-	monkeypatch.setattr(user_repository, "get_by_id", AsyncMock(side_effect=OperationalError("x", {}, Exception())))
-
-	with pytest.raises(ServiceUnavailableError):
-		await admin_login_history_service.search(AdminLoginHistoryQuery(), AsyncMock())
-
-
 @pytest.mark.asyncio
 async def test_list_admin_login_history_service_unavailable_on_db_error(monkeypatch: pytest.MonkeyPatch) -> None:
 	monkeypatch.setattr(

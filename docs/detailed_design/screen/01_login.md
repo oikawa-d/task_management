@@ -23,7 +23,7 @@
 | ガード | 未認証のみ（`authStore.status === 'authenticated'` の場合は `/dashboard` へリダイレクト）。`/` からのリダイレクト先でもあるため、認証済みユーザーが `/` にアクセスした場合はこのガードが `/dashboard` へ送る |
 | 対応要件 | 要件書§2-1 |
 | 主なユースケース | メール/ユーザー名 + パスワードでのログイン、Googleログイン開始、メール未認証時の再送、登録直後の案内表示 |
-| 実装ファイル | `src/features/auth/pages/LoginPage.tsx`、`src/features/auth/components/LoginForm.tsx`、`src/features/auth/components/GoogleLoginButton.tsx` |
+| 実装ファイル | `frontend/src/features/auth/pages/LoginPage.tsx`、`frontend/src/features/auth/components/LoginForm.tsx`、`frontend/src/features/auth/components/GoogleLoginButton.tsx` |
 
 ## 2. 画面レイアウト
 

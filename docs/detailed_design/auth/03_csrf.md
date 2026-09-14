@@ -13,7 +13,7 @@
 
 | 項目 | 内容 |
 |------|------|
-| 対象 | `core/deps.py :: verify_origin` / `verify_csrf`（DI関数）、Cookie発行箇所（`SessionAuthStrategy`・`JwtAuthStrategy`） |
+| 対象 | `core/deps.py :: verify_origin` / `verify_origin_if_session` / `verify_csrf` / `verify_csrf_if_session`（DI関数）、Cookie発行箇所（`SessionAuthStrategy`・`JwtAuthStrategy`） |
 | 責務 | Cookieを自動送信するリクエストに対し、Double Submit Cookie方式のトークン一致検証とOrigin検証を行い、CSRF攻撃を防ぐ |
 | 適用条件 | Cookieを発行・利用する更新系（POST/PUT/PATCH/DELETE）エンドポイント全て。適用範囲はモードにより異なる（§6参照） |
 | 依存先 | Redis（sessionモードの`csrf:{sid}`）、リクエストの`Origin`/`Referer`ヘッダ |
@@ -24,6 +24,7 @@
 | 要素 | 種別 | 責務 | 備考 |
 |------|------|------|------|
 | `verify_origin` | DI関数 | `Origin`ヘッダが`CORS_ALLOW_ORIGINS`に含まれるか検証 | Originが無い場合、HTTPS環境に限り`Referer`を代替検証 |
+| `verify_origin_if_session` | DI関数 | tasks/projects/comments等、通常APIの更新系エンドポイント向けのOrigin検証 | `strategy.mode == "session"`の場合のみ`verify_origin`へ委譲し、jwtモードでは検証を行わず即returnする。`/auth/refresh`・`/auth/logout`等のCookie利用APIは本関数ではなく`verify_origin`を直接使用する |
 | `verify_csrf` | DI関数 | Cookie値と`X-CSRF-Token`ヘッダの一致を`secrets.compare_digest`で検証 | session：Redis`csrf:{sid}`とヘッダを比較。jwt：Cookie`cerberus_csrf`とヘッダを比較（Redis参照なし） |
 | `verify_csrf_if_session` | DI関数 | tasks/projects/comments等、通常APIの更新系エンドポイント向けのCSRF検証 | `strategy.mode == "session"`の場合のみ`verify_csrf`へ委譲し、jwtモードでは検証を行わず即returnする（jwtの通常APIはAuthorizationヘッダで認証されるため）。`/auth/refresh`・`/auth/logout`はjwtモードでもCookie+CSRFの検証が必要なため、本関数ではなく`verify_csrf`を直接使用する |
 | `cerberus_csrf` Cookie | Cookie | Double Submit Cookieのトークン保持 | `HttpOnly=No`（JSが読み取り`X-CSRF-Token`へ転記するため） |
@@ -125,7 +126,7 @@ sequenceDiagram
 ```mermaid
 flowchart TB
     A["更新系リクエスト受信"] --> B{"Cookie利用APIか?<br/>login/logout/session更新系/jwt refresh"}
-    B -->|"No（jwtの通常API、Authorizationヘッダのみ）"| SKIP["CSRF検証不要<br/>（09_auth.md §8）"]
+    B -->|"No（jwtの通常API、Authorizationヘッダのみ）"| SKIP["Origin/CSRF検証不要<br/>（09_auth.md §8）"]
     B -->|"Yes"| C["verify_origin"]
     C --> D{"Originが許可リストに一致?"}
     D -->|No| E1["Originなし & HTTPS環境?"]
@@ -174,7 +175,18 @@ stateDiagram-v2
 | 処理内容 | 1. `Origin`ヘッダを取得<br/>2. 存在すれば`cors_allow_origins`との完全一致を確認<br/>3. 存在しない場合、HTTPS環境かつ`CSRF_TRUST_REFERER_ON_HTTPS=true`のときに限り`Referer`のオリジン部分を同様に検証<br/>4. いずれも満たさなければ例外を送出 |
 | 副作用 | なし |
 
-### 8.2 `core/deps.py :: verify_csrf`
+### 8.2 `core/deps.py :: verify_origin_if_session`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ / 定義 | `async def verify_origin_if_session(request: Request, strategy: AuthStrategy = Depends(get_auth_strategy), settings: BackendSettings = Depends(get_backend_settings)) -> None` |
+| 引数 / 入力 | `strategy.mode`、`request`、`settings` |
+| 戻り値 / 出力 | `None`（jwtモードは即時return、sessionモードは`verify_origin`通過時） |
+| 送出例外 / 失敗条件 | sessionモードで`verify_origin`の検証に失敗した場合`CsrfInvalidError`。jwtモードでは送出しない |
+| 処理内容 | 通常APIの更新系エンドポイントで使用し、sessionモードのみ許可Originを検証する。jwtモードのAuthorizationヘッダ認証APIにはOrigin検証を要求しない。refresh/logoutなどCookieを利用するAPIは常に`verify_origin`を使用する |
+| 副作用 | なし |
+
+### 8.3 `core/deps.py :: verify_csrf`
 
 | 項目 | 内容 |
 |------|------|
@@ -185,11 +197,11 @@ stateDiagram-v2
 | 処理内容 | 1. `AUTH_MODE`分岐（`strategy.mode`で判定）<br/>2. sessionモード：`redis_store.get_csrf_token(session_id)`をRedisから取得し正とする<br/>3. jwtモード：Cookie値そのものを正とする（Redis参照なし）<br/>4. いずれも`X-CSRF-Token`ヘッダと`secrets.compare_digest`で比較<br/>5. 不一致・いずれかが空文字/欠落なら例外送出 |
 | 副作用 | sessionモードのみRedis参照（読み取りのみ、書き込みなし） |
 
-### 8.3 `core/deps.py :: require_csrf_protected`（更新系ルーターへの適用単位、参考実装名）
+### 8.4 `core/deps.py :: require_csrf_protected`（更新系ルーターへの適用単位、参考実装名）
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ / 定義 | ルーター側で`dependencies=[Depends(verify_origin), Depends(verify_csrf)]`として宣言する組み合わせ。単一のラッパー関数を設けるかは実装判断（不明点として12章に記載） |
+| シグネチャ / 定義 | 通常APIはルーター側で`dependencies=[Depends(verify_origin_if_session), Depends(verify_csrf_if_session)]`として宣言する組み合わせ。Cookie利用APIは`verify_origin` / `verify_csrf`を直接宣言する |
 | 引数 / 入力 | - |
 | 戻り値 / 出力 | - |
 | 送出例外 / 失敗条件 | 上記2関数の送出条件を継承 |
@@ -205,8 +217,8 @@ flowchart LR
     ROUTER_LOGOUT --> VC["verify_csrf"]
     ROUTER_REFRESH["POST /auth/refresh"] --> VO
     ROUTER_REFRESH --> VC
-    ROUTER_SESSION_WRITE["session更新系API<br/>projects/tasks/comments 等"] --> VO
-    ROUTER_SESSION_WRITE --> VC
+    ROUTER_SESSION_WRITE["通常API更新系<br/>projects/tasks/comments 等"] --> VO_SESSION["verify_origin_if_session"]
+    ROUTER_SESSION_WRITE --> VC_SESSION["verify_csrf_if_session"]
 
     VC --> STRATEGY{"strategy.mode"}
     STRATEGY -->|"session"| STORE["redis_store.get_csrf_token"]
@@ -260,4 +272,4 @@ flowchart LR
 | 区分 | 内容 | 影響 |
 |------|------|------|
 | 要検討 | `Origin`ヘッダが存在しない場合の`Referer`フォールバック可否（`CSRF_TRUST_REFERER_ON_HTTPS`相当の設定）は基本設計に明記が無く、本ファイルで既定`false`（フォールバックしない＝より厳格側）として仮置きした。学習用途としてはOriginを必須とする方が単純で説明しやすいため、有効化する場合は要合意 | 中。旧式クライアント・一部プロキシ経由アクセスを拒否する可能性がある |
-| 不明 | `verify_origin`/`verify_csrf`を単一の依存関数（例：`require_csrf_protected`）にまとめるか、ルーターごとに2つ列挙するかは基本設計・実装ファイル一覧に明記が無い | 低。実装方針の違いのみで機能上の差はない |
+| 不明 | `verify_origin_if_session`/`verify_csrf_if_session`を単一の依存関数（例：`require_csrf_protected`）にまとめるか、ルーターごとに2つ列挙するかは基本設計・実装ファイル一覧に明記が無い | 低。実装方針の違いのみで機能上の差はない |

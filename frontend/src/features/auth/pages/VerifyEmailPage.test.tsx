@@ -1,51 +1,105 @@
 import "@testing-library/jest-dom/vitest";
 
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
+import { MemoryRouter } from "react-router-dom";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { clearAuthAdapter, setAuthAdapterMode } from "../../../api/authAdapter/client";
 import { VerifyEmailPage } from "./VerifyEmailPage";
 
-function renderPage(hash: string, props: Parameters<typeof VerifyEmailPage>[0] = {}) {
+function response(body: unknown, init: { ok: boolean; status: number }) {
+	return { ok: init.ok, status: init.status, headers: new Headers(), json: vi.fn().mockResolvedValue(body) };
+}
+
+function renderPage(hash: string, strictMode = false) {
 	window.history.replaceState(null, "", `/verify-email${hash}`);
-	return render(<VerifyEmailPage {...props} />);
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+	const page = (
+		<MemoryRouter>
+			<QueryClientProvider client={queryClient}>
+				<VerifyEmailPage />
+			</QueryClientProvider>
+		</MemoryRouter>
+	);
+	return render(
+		strictMode ? <StrictMode>{page}</StrictMode> : page,
+	);
 }
 
 describe("VerifyEmailPage", () => {
-	it("hash中のtokenを結果表示スロットへpropsとして渡す", async () => {
-		let receivedToken: string | null | undefined;
-		renderPage("#token=verify-token-123", {
-			result: ({ token }) => {
-				receivedToken = token;
-				return <p>token: {token}</p>;
-			},
-		});
-
-		expect(await screen.findByText("token: verify-token-123")).toBeInTheDocument();
-		expect(receivedToken).toBe("verify-token-123");
+	beforeEach(() => {
+		setAuthAdapterMode("session");
 	});
 
-	it("token抽出後はURL・履歴からfragmentが除去される", async () => {
-		renderPage("#token=should-not-leak");
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		clearAuthAdapter();
+	});
 
-		await screen.findByRole("status");
+	it("有効なtokenを一度だけ検証し、成功表示へ切り替える", async () => {
+		const fetchMock = vi.fn().mockResolvedValue(response(undefined, { ok: true, status: 204 }));
+		vi.stubGlobal("fetch", fetchMock);
 
+		renderPage("#token=verify-token-123");
+
+		expect(await screen.findByText("メール認証が完了しました")).toBeInTheDocument();
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 		expect(window.location.hash).toBe("");
-		expect(window.location.href).not.toContain("should-not-leak");
 	});
 
-	it("token欠落時はnullを結果表示スロットへ渡し、既定表示では再送formを出す", async () => {
-		const result = vi.fn(() => <p>stub</p>);
-		renderPage("", { result });
+	it("無効・期限切れ・使用済みtokenでは失敗表示へ切り替える", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(
+				response({ error: { code: "INVALID_VERIFY_TOKEN", message: "認証リンクが無効です" } }, { ok: false, status: 400 }),
+			),
+		);
 
-		await screen.findByText("stub");
+		renderPage("#token=expired-token");
 
-		expect(result).toHaveBeenCalledWith({ token: null });
+		expect(await screen.findByRole("alert")).toHaveTextContent("リンクの有効期限が切れているか、既に使用済みです");
 	});
 
-	it("token欠落時の既定表示では再送formを表示する", async () => {
+	it("token欠落時はAPIを呼ばず再送フォームを表示する", async () => {
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+
 		renderPage("");
 
-		expect(await screen.findByRole("alert")).toHaveTextContent("リンクが不正です");
-		expect(screen.getByRole("form", { name: "認証メール再送フォーム" })).toBeInTheDocument();
+		expect(await screen.findByText("リンクが不正です")).toBeInTheDocument();
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("StrictModeの二重マウントでも検証APIを一度だけ呼び成功表示にする", async () => {
+		const fetchMock = vi.fn().mockResolvedValue(response(undefined, { ok: true, status: 204 }));
+		vi.stubGlobal("fetch", fetchMock);
+		renderPage("#token=verify-token-123", true);
+
+		await waitFor(() => expect(screen.getByText("メール認証が完了しました")).toBeInTheDocument());
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("ネットワークエラーは無効なリンクと誤表示しない", async () => {
+		vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+
+		renderPage("#token=network-error");
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("エラーが発生しました。しばらくしてから再度お試しください");
+		expect(screen.getByRole("alert")).not.toHaveTextContent("リンクの有効期限が切れているか、既に使用済みです");
+	});
+
+	it("503は無効なリンクと誤表示しない", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(
+				response({ error: { code: "SERVICE_UNAVAILABLE", message: "停止中" } }, { ok: false, status: 503 }),
+			),
+		);
+
+		renderPage("#token=service-error");
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("エラーが発生しました。しばらくしてから再度お試しください");
 	});
 });

@@ -1,17 +1,4 @@
-"""管理者によるプロジェクト操作の業務ロジック。
-
-参照設計書:
-- docs/detailed_design/api/admin/05_get_admin_projects.md
-- docs/detailed_design/api/admin/06_delete_admin_project.md
-
-`fn_admin_list_projects`はmember_count/task_countsを集計しないため、
-（非admin向けの）`fn_list_projects`のような単一FNでの集計は利用できない。
-本サービスは既存のFNベースrepository関数（`project_member_repository.list_by_project` /
-`task_repository.list_board`）をプロジェクトごとに呼び出して集計する。
-DBへ直接SQLを発行する新規repository関数は追加していない（repositoryはSP/FN契約のみを
-呼び出す方針のため）。結果としてプロジェクト件数に比例したクエリが発生する
-（N+1はissue #348で対応予定。本PRでは対象外）。
-"""
+"""管理者によるプロジェクト操作の業務ロジック。"""
 
 import logging
 from uuid import UUID
@@ -20,9 +7,9 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError, ServiceUnavailableError
-from app.models.project import Project
 from app.models.user import User
 from app.repository import admin_repository, project_member_repository, project_repository, task_repository
+from app.repository.admin_repository import AdminProjectListItem
 from app.schemas.admin import (
 	AdminProjectListMeta,
 	AdminProjectListQuery,
@@ -54,8 +41,8 @@ async def _task_counts(db: AsyncSession, project_id: UUID) -> AdminProjectTaskCo
 	)
 
 
-async def _to_summary(db: AsyncSession, project: Project) -> AdminProjectSummary:
-	member_count, task_counts = await _member_count(db, project.id), await _task_counts(db, project.id)
+def _to_summary(row: AdminProjectListItem) -> AdminProjectSummary:
+	project = row.project
 	return AdminProjectSummary(
 		id=project.id,
 		name=project.name,
@@ -63,8 +50,12 @@ async def _to_summary(db: AsyncSession, project: Project) -> AdminProjectSummary
 		owner=AdminProjectOwner(
 			id=project.owner.id, username=project.owner.username, display_name=_display_name(project.owner)
 		),
-		member_count=member_count,
-		task_counts=task_counts,
+		member_count=row.member_count,
+		task_counts=AdminProjectTaskCounts(
+			todo=row.task_count_todo,
+			in_progress=row.task_count_in_progress,
+			done=row.task_count_done,
+		),
 		is_active=project.is_active,
 		start_at=project.start_at,
 		end_at=project.end_at,
@@ -85,7 +76,7 @@ async def list_projects(query: AdminProjectListQuery, db: AsyncSession) -> Admin
 		total = rows[0].total_count if rows else await admin_repository.count_projects(db, query.q, None)
 	except DBAPIError as exc:
 		raise ServiceUnavailableError() from exc
-	items = [await _to_summary(db, row.project) for row in rows]
+	items = [_to_summary(row) for row in rows]
 	total_pages = (total + query.per_page - 1) // query.per_page if total else 0
 	return AdminProjectListResponse(
 		items=items,

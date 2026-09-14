@@ -16,7 +16,11 @@ _SAFE_AUDIT_FIELDS = (
 	"ip_source",
 	"request_id",
 	"user_id",
+	"identifier",
 	"login_method",
+	"auth_mode",
+	"success",
+	"failure_reason",
 	"deleted_session_count",
 	"deleted_refresh_count",
 )
@@ -34,7 +38,7 @@ class JsonFormatter(logging.Formatter):
 			payload["exc_info"] = self.formatException(record.exc_info)
 		for field in _SAFE_AUDIT_FIELDS:
 			value = getattr(record, field, None)
-			if isinstance(value, str) or (isinstance(value, int) and not isinstance(value, bool)):
+			if isinstance(value, (str, bool)) or (isinstance(value, int) and not isinstance(value, bool)):
 				payload[field] = value
 		return json.dumps(payload, ensure_ascii=False)
 

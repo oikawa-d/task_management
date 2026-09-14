@@ -1,3 +1,5 @@
+from typing import Protocol, cast
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
@@ -9,10 +11,20 @@ from app.schemas.comment import CommentAuthor, CommentCreateRequest, CommentList
 from app.service.authorization_service import require_comment_editor, require_task_access
 
 
-def _display_name(user: object) -> str:
-	last_name = getattr(user, "last_name", None)
-	first_name = getattr(user, "first_name", None)
-	return " ".join(part for part in (last_name, first_name) if part) or getattr(user, "username")
+class _DisplayNameUser(Protocol):
+	username: str
+
+
+class _NamedDisplayNameUser(_DisplayNameUser, Protocol):
+	last_name: str | None
+	first_name: str | None
+
+
+def _display_name(user: _DisplayNameUser) -> str:
+	if hasattr(user, "last_name") and hasattr(user, "first_name"):
+		named_user = cast(_NamedDisplayNameUser, user)
+		return " ".join(part for part in (named_user.last_name, named_user.first_name) if part) or user.username
+	return user.username
 
 
 def _comment_response(comment: TaskComment, fallback_user: CurrentUser | None = None) -> CommentResponse:
@@ -44,8 +56,7 @@ async def add_comment(
 ) -> CommentResponse:
 	await require_task_access(task, user, db)
 	comment_id = await task_comment_repository.create(db, task.id, user.id, payload.body)
-	comments = await task_comment_repository.list_by_task(db, task.id)
-	comment = next((item for item in comments if item.id == comment_id), None)
+	comment = await task_comment_repository.get_by_id(db, comment_id)
 	if comment is None:
 		raise NotFoundError()
 	return _comment_response(comment, user)

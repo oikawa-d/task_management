@@ -41,6 +41,20 @@ async def test_list_comments_returns_author_and_count(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_comments_checks_project_membership_once(monkeypatch) -> None:
+	user = _user()
+	task = _task(uuid4(), project_id=uuid4())
+	exists = AsyncMock(return_value=True)
+	monkeypatch.setattr(authorization_service.project_member_repository, "exists", exists)
+	monkeypatch.setattr(task_comment_service.task_comment_repository, "list_by_task", AsyncMock(return_value=[]))
+	db = AsyncMock()
+
+	await task_comment_service.list_comments(task, user, db)
+
+	exists.assert_awaited_once_with(db, task.project_id, user.id)
+
+
+@pytest.mark.asyncio
 async def test_update_comment_rejects_other_member(monkeypatch) -> None:
 	owner = _user()
 	other = _user()
@@ -99,6 +113,28 @@ async def test_add_comment_rejects_inactive_task(monkeypatch) -> None:
 
 	with pytest.raises(NotFoundError):
 		await task_comment_service.add_comment(task, CommentCreateRequest(body="本文"), user, AsyncMock())
+
+
+@pytest.mark.asyncio
+async def test_add_comment_fetches_created_comment_by_id(monkeypatch) -> None:
+	user = _user()
+	task = _task(user.id)
+	db = AsyncMock()
+	comment = _comment(user.id, task.id)
+	comment_id = comment.id
+	create = AsyncMock(return_value=comment_id)
+	get_by_id = AsyncMock(return_value=comment)
+	list_by_task = AsyncMock()
+	monkeypatch.setattr(task_comment_service.task_comment_repository, "create", create)
+	monkeypatch.setattr(task_comment_service.task_comment_repository, "get_by_id", get_by_id)
+	monkeypatch.setattr(task_comment_service.task_comment_repository, "list_by_task", list_by_task)
+
+	response = await task_comment_service.add_comment(task, CommentCreateRequest(body="本文"), user, db)
+
+	assert response.id == comment_id
+	create.assert_awaited_once_with(db, task.id, user.id, "本文")
+	get_by_id.assert_awaited_once_with(db, comment_id)
+	list_by_task.assert_not_awaited()
 
 
 @pytest.mark.asyncio

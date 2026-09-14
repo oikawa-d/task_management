@@ -20,7 +20,7 @@
 | 認証 | 必要（session：`cerberus_sid` Cookie／jwt：`Authorization: Bearer`） |
 | 認可 | 認証済みであれば誰でも（自分自身のみ更新可。他ユーザーのプロフィールは更新不可） |
 | CSRF検証 | 必要（sessionモードの更新系。`X-CSRF-Token`） |
-| Origin検証 | 必要（Cookieを利用する更新系リクエストのため`03_auth.md`§8の共通方針に従う） |
+| Origin検証 | 必要（sessionモードのみ。jwtモードはAuthorizationヘッダのみのため不要） |
 | AUTH_MODE差異 | 認証経路（Cookie/Bearer）のみ異なる。CSRF検証はsessionモードのみ、jwtモードはAuthorizationヘッダのため不要（`03_auth.md`§4.4） |
 | 冪等性 | あり（同一ボディでの複数回実行は同じ結果になる。部分更新のPATCHだが本APIは値の`null`化を許可しないため副作用が蓄積しない） |
 | レート制限 | 対象外 |

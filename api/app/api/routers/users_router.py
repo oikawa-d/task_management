@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import BackendSettings, get_backend_settings
-from app.core.deps import get_current_user, verify_csrf_if_session, verify_origin
+from app.core.deps import get_current_user, verify_csrf_if_session, verify_origin_if_session
 from app.db import get_db_session
 from app.schemas.auth import CurrentUser
 from app.schemas.user import (
@@ -32,7 +32,7 @@ async def patch_my_profile(
 	response: Response,
 	current_user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
-	_: None = Depends(verify_origin),
+	_: None = Depends(verify_origin_if_session),
 	__csrf: None = Depends(verify_csrf_if_session),
 ) -> UserProfileResponse:
 	response.headers["Cache-Control"] = "no-store"
@@ -44,7 +44,7 @@ async def change_my_password(
 	payload: PasswordChangeRequest,
 	current_user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
-	_: None = Depends(verify_origin),
+	_: None = Depends(verify_origin_if_session),
 	__csrf: None = Depends(verify_csrf_if_session),
 ) -> Response:
 	await user_service.change_password(current_user, payload, db)

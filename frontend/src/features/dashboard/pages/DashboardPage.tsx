@@ -1,10 +1,18 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { ProjectCreateForm } from "../components/ProjectCreateForm";
 import { ProjectList } from "../components/ProjectList";
+import { Calendar } from "../components/Calendar";
 import { useCreateProject } from "../hooks/useCreateProject";
 import { useProjects } from "../hooks/useProjects";
+import { useCalendarTasks } from "../hooks/useCalendarTasks";
+
+function formatLocalDate(value: Date): string {
+	return [value.getFullYear(), value.getMonth() + 1, value.getDate()]
+		.map((part) => String(part).padStart(2, "0"))
+		.join("-");
+}
 
 /**
  * docs/detailed_design/screen/06_dashboard.md
@@ -14,8 +22,18 @@ import { useProjects } from "../hooks/useProjects";
 export function DashboardPage() {
 	const navigate = useNavigate();
 	const [isCreateOpen, setCreateOpen] = useState(false);
+	const [calendarMonth, setCalendarMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
 	const { data, isLoading, isError, refetch } = useProjects();
 	const createProjectMutation = useCreateProject();
+	const calendarRange = useMemo(() => {
+		const first = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1);
+		const from = new Date(first);
+		from.setDate(first.getDate() - first.getDay());
+		const to = new Date(from);
+		to.setDate(from.getDate() + 41);
+		return { from: formatLocalDate(from), to: formatLocalDate(to) };
+	}, [calendarMonth]);
+	const calendarQuery = useCalendarTasks({ ...calendarRange, scope: "me" });
 
 	const handleCreate = async (payload: Parameters<typeof createProjectMutation.mutateAsync>[0]) => {
 		await createProjectMutation.mutateAsync(payload);
@@ -44,7 +62,15 @@ export function DashboardPage() {
 			</section>
 			<section aria-labelledby="calendar-heading">
 				<h2 id="calendar-heading">期限カレンダー</h2>
-				<p>期限のあるタスクをここに表示します。</p>
+				<Calendar
+					month={calendarMonth}
+					tasks={calendarQuery.data ?? []}
+					isLoading={calendarQuery.isLoading}
+					isError={calendarQuery.isError}
+					onRetry={() => void calendarQuery.refetch()}
+					onPreviousMonth={() => setCalendarMonth((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))}
+					onNextMonth={() => setCalendarMonth((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))}
+				/>
 			</section>
 		</section>
 	);

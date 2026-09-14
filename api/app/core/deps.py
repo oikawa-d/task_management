@@ -11,6 +11,7 @@ from app.core.exceptions import (
 	CsrfInvalidError,
 	ForbiddenError,
 	NotFoundError,
+	ServiceUnavailableError,
 	TooManyAttemptsError,
 	UnauthenticatedError,
 	UserInactiveError,
@@ -21,7 +22,6 @@ from app.models.project import Project
 from app.models.task import Task
 from app.models.task_comment import TaskComment
 from app.repository import (
-	project_member_repository,
 	project_repository,
 	redis_store,
 	task_comment_repository,
@@ -101,6 +101,17 @@ async def verify_origin(request: Request, settings: BackendSettings = Depends(ge
 		raise CsrfInvalidError()
 
 
+async def verify_origin_if_session(
+	request: Request,
+	strategy: AuthStrategy = Depends(get_auth_strategy),
+	settings: BackendSettings = Depends(get_backend_settings),
+) -> None:
+	"""通常APIの更新系エンドポイント向けOrigin検証。JWT方式では認証ヘッダのみのため検証しない。"""
+	if strategy.mode != "session":
+		return
+	await verify_origin(request, settings)
+
+
 def _origin_from_referer(referer: str | None) -> str | None:
 	if not referer:
 		return None
@@ -146,22 +157,16 @@ async def verify_csrf_if_session(
 
 async def get_task_for_member(
 	task_id: UUID,
-	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
 ) -> Task:
 	task_with_status = await task_repository.get_by_id(db, task_id)
 	if task_with_status is None:
 		raise NotFoundError()
-	task = task_with_status.task
-	if user.role != "admin" and task.project_id is not None:
-		if not await project_member_repository.exists(db, task.project_id, user.id):
-			raise NotFoundError()
-	return task
+	return task_with_status.task
 
 
 async def get_comment_for_member(
 	comment_id: UUID,
-	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
 ) -> TaskComment:
 	comment = await task_comment_repository.get_by_id(db, comment_id)
@@ -171,9 +176,6 @@ async def get_comment_for_member(
 	if task_with_status is None:
 		raise NotFoundError()
 	task = task_with_status.task
-	if user.role != "admin" and task.project_id is not None:
-		if not await project_member_repository.exists(db, task.project_id, user.id):
-			raise NotFoundError()
 	comment.task = task
 	return comment
 
@@ -190,9 +192,15 @@ async def _enforce_rate_limit(
 	window: int,
 ) -> None:
 	value = f"{user.id}:{_resolved_client_ip(request)}"
-	count = await redis_store.check_rate_limit(scope, value, max_requests, window)
+	try:
+		count = await redis_store.check_rate_limit(scope, value, max_requests, window)
+		if count <= max_requests:
+			return
+		retry_after = await redis_store.get_rate_limit_ttl(scope, value)
+	except Exception as exc:
+		raise ServiceUnavailableError() from exc
 	if count > max_requests:
-		raise TooManyAttemptsError()
+		raise TooManyAttemptsError(retry_after=retry_after if retry_after > 0 else window)
 
 
 async def enforce_notification_read_rate_limit(

@@ -19,7 +19,7 @@
 | 認証 | 必要（session Cookie または `Authorization: Bearer`） |
 | 認可 | member（ログイン済みの全ユーザーが作成可能。admin可） |
 | CSRF検証 | 必要（session モードの更新系）。jwtモードは `Authorization` ヘッダのため通常不要 |
-| Origin検証 | 必要（Cookieを利用する更新系リクエストのため） |
+| Origin検証 | 必要（sessionモードのみ。jwtモードはAuthorizationヘッダのみのため不要） |
 | AUTH_MODE差異 | session: `X-CSRF-Token` 検証あり／jwt: ヘッダ方式のためCSRF検証なし。作成処理自体に差異なし |
 | 冪等性 | なし（同名でも複数作成可能。冪等キーは提供しない） |
 | レート制限 | 対象外 |
@@ -84,7 +84,7 @@
 |------|------|----------|------------|------|
 | 401 | `UNAUTHENTICATED` / `SESSION_EXPIRED` / `TOKEN_EXPIRED` / `TOKEN_INVALID` | 認証情報なし・無効 | 認証が必要です | `deps.get_current_user` |
 | 403 | `USER_INACTIVE` | `is_active=false` | アカウントが無効化されています | |
-| 403 | `CSRF_INVALID` | sessionモードでCSRFヘッダ／Origin不一致 | CSRFトークンが不正です | `deps.verify_origin` / `verify_csrf` |
+| 403 | `CSRF_INVALID` | sessionモードでCSRFヘッダ／Origin不一致 | CSRFトークンが不正です | `deps.verify_origin_if_session` / `verify_csrf_if_session` |
 | 422 | `VALIDATION_ERROR` | `name` 未指定・101文字以上、または `start_at`/`end_at` 両方指定時に `end_at < start_at` | 入力内容に誤りがあります | `details` にフィールド情報 |
 | 503 | `SERVICE_UNAVAILABLE` | PostgreSQL 接続不能 | しばらくしてから再度お試しください | fail-close |
 
@@ -103,7 +103,7 @@ sequenceDiagram
     participant PG as "PostgreSQL"
 
     FE->>R: POST /api/projects {name, description, start_at?, end_at?}
-    R->>D: verify_origin / verify_csrf（sessionモードのみ実質検証）
+    R->>D: verify_origin_if_session / verify_csrf_if_session
     D-->>R: OK
     R->>D: get_current_user
     D-->>R: CurrentUser
@@ -132,7 +132,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart TB
-    A["リクエスト受信"] --> B["verify_origin"]
+    A["リクエスト受信"] --> B["verify_origin_if_session"]
     B -->|"Origin不一致"| B1["403 CSRF_INVALID"]
     B -->|"OK"| C["session時のみ verify_csrf"]
     C -->|"CSRFヘッダ不一致"| C1["403 CSRF_INVALID"]
@@ -159,7 +159,7 @@ flowchart TB
 | 引数 | `payload`: リクエストボディ（pydantic検証済み） / `user`: 認証済みユーザー / `db`: DBセッション |
 | 戻り値 | `ProjectSummaryResponse`（201） |
 | 送出例外 | `CsrfInvalidError`（403）を `verify_csrf` 依存関係が送出 |
-| 処理内容 | 1. `verify_origin` / `verify_csrf`（session時のみ実質検証）を依存関係として実行 2. `project_service.create_project` を呼び出す 3. 戻り値をそのまま201で返す |
+| 処理内容 | 1. `verify_origin_if_session` / `verify_csrf_if_session`を依存関係として実行 2. `project_service.create_project` を呼び出す 3. 戻り値をそのまま201で返す |
 | 副作用 | なし（副作用はservice層に委譲） |
 
 ### 6.2 `service/project_service.py :: create_project`
@@ -199,7 +199,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    R["projects_router.create_project"] --> D1["deps.verify_origin"]
+    R["projects_router.create_project"] --> D1["deps.verify_origin_if_session"]
     R --> D2["deps.verify_csrf"]
     R --> S["project_service.create_project"]
     S --> RP1["repository.sp_create_project"]
@@ -266,7 +266,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | ユーザー列挙対策 | 該当なし |
 | タイミング攻撃対策 | 該当なし |
 | レート制限 | なし |
-| CSRF/Origin | sessionモード：`verify_origin` + `verify_csrf` を必須依存関係とする。jwtモードはヘッダ認証のためCSRF検証対象外だが `verify_origin` は全モード共通で通す |
+| CSRF/Origin | sessionモード：`verify_origin_if_session` + `verify_csrf_if_session`で検証する。jwtモードはAuthorizationヘッダ認証のため両方の検証対象外とする |
 | fail-close方針 | INSERT失敗時は必ずロールバックし、部分的な作成（projectsのみ存在しproject_membersが無い状態）を発生させない |
 
 ## 12. テスト設計

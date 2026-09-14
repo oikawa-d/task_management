@@ -3,15 +3,17 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_current_user, require_project_member, verify_csrf_if_session, verify_origin
+from app.core.deps import get_current_user, require_project_member, verify_csrf_if_session, verify_origin_if_session
 from app.db import get_db_session
 from app.models.project import Project
 from app.schemas.auth import CurrentUser
 from app.schemas.task import (
 	BoardResponse,
+	CalendarTaskQuery,
 	TaskCreateFlatRequest,
 	TaskCreateRequest,
 	TaskDetailResponse,
+	TaskListItem,
 	TaskListQuery,
 	TaskListResponse,
 	TaskResponse,
@@ -37,7 +39,7 @@ async def create_project_task(
 	project: Project = Depends(require_project_member),
 	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
-	_: None = Depends(verify_origin),
+	_: None = Depends(verify_origin_if_session),
 	__csrf: None = Depends(verify_csrf_if_session),
 ) -> TaskResponse:
 	return await task_service.create_task(project.id, payload, user, db)
@@ -60,12 +62,21 @@ async def list_tasks(
 	)
 
 
+@router.get("/api/tasks/calendar", response_model=list[TaskListItem])
+async def list_calendar_tasks(
+	query: CalendarTaskQuery = Depends(),
+	user: CurrentUser = Depends(get_current_user),
+	db: AsyncSession = Depends(get_db_session),
+) -> list[TaskListItem]:
+	return await task_service.list_calendar_tasks(user, query, db)
+
+
 @router.post("/api/tasks", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
 async def create_flat_task(
 	payload: TaskCreateFlatRequest,
 	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
-	_: None = Depends(verify_origin),
+	_: None = Depends(verify_origin_if_session),
 	__csrf: None = Depends(verify_csrf_if_session),
 ) -> TaskResponse:
 	return await task_service.create_task_flat(payload, user, db)
@@ -86,7 +97,7 @@ async def update_task(
 	payload: TaskUpdateRequest,
 	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
-	_: None = Depends(verify_origin),
+	_: None = Depends(verify_origin_if_session),
 	__csrf: None = Depends(verify_csrf_if_session),
 ) -> TaskResponse:
 	return await task_service.update_task(task_id, payload, user, db)
@@ -97,7 +108,7 @@ async def delete_task(
 	task_id: UUID,
 	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
-	_: None = Depends(verify_origin),
+	_: None = Depends(verify_origin_if_session),
 	__csrf: None = Depends(verify_csrf_if_session),
 ) -> Response:
 	await task_service.delete_task(task_id, user, db)

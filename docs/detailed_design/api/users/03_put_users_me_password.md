@@ -22,7 +22,7 @@
 | 認証 | 必要（session：`cerberus_sid` Cookie／jwt：`Authorization: Bearer`） |
 | 認可 | 認証済みであれば誰でも（自分自身のパスワードのみ変更可） |
 | CSRF検証 | 必要（sessionモードの更新系。`X-CSRF-Token`） |
-| Origin検証 | 必要（Cookieを利用する更新系リクエスト） |
+| Origin検証 | 必要（sessionモードのみ。jwtモードはAuthorizationヘッダのみのため不要） |
 | AUTH_MODE差異 | 成功時の失効対象がsessionは`session:{sid}`系、jwtは`refresh:{hash}`系という保存先の違いのみ。判定ロジック・レスポンスに差異なし |
 | 冪等性 | なし（同一`current_password`/`new_password`で2回目を実行すると1回目成功後は`current_password`が新パスワードと一致しなくなるため2回目は`401 INVALID_CREDENTIALS`となる） |
 | レート制限 | 対象外（ログイン試行のレート制限とは別事象。ログイン済みユーザーの操作のため`login_fail`は使用しない） |

@@ -23,7 +23,7 @@
 | 認証 | session モード：`cerberus_sid` Cookie ／ jwt モード：`Authorization: Bearer {access_token}` |
 | 認可 | プロジェクトメンバー（`task_id` からプロジェクトを特定し所属確認。admin は無条件許可。基本設計 §2.4 では担当者・作成者に限定する記載はなく、所属メンバー全員が削除可）。`project_id` が `NULL`（未所属タスク）の場合は作成者本人のみ削除可 |
 | CSRF検証 | 必要（session モードの更新系） |
-| Origin検証 | 不要 |
+| Origin検証 | 必要（sessionモードのみ。jwtモードはAuthorizationヘッダのみのため不要） |
 | AUTH_MODE差異 | CSRF検証の要否のみ異なる |
 | 冪等性 | あり（`is_active=false` へのUPDATEは同一結果を繰り返し得るため、2回目以降も204。物理削除と異なり「既に無効化済み」を404にする必要がない） |
 | レート制限 | 対象外 |

@@ -15,6 +15,7 @@ import pytest
 from app.api.routers import notifications_router as router_module
 from app.auth.factory import get_auth_strategy
 from app.core import deps
+from app.core.config import get_backend_settings
 from app.core.deps import get_current_user
 from app.core.exceptions import NotFoundError, UnauthenticatedError, register_error_handling
 from app.db import get_db_session
@@ -133,6 +134,7 @@ def test_list_notifications_unauthenticated_returns_401(app_and_mocks: FastAPI) 
 
 def test_list_notifications_rate_limited_returns_429(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
 	monkeypatch.setattr(deps.redis_store, "check_rate_limit", AsyncMock(return_value=121))
+	monkeypatch.setattr(deps.redis_store, "get_rate_limit_ttl", AsyncMock(return_value=42))
 	mock_list = AsyncMock()
 	monkeypatch.setattr(router_module.notification_service, "list_notifications", mock_list)
 
@@ -140,7 +142,49 @@ def test_list_notifications_rate_limited_returns_429(client: TestClient, monkeyp
 
 	assert res.status_code == 429
 	assert res.json()["error"]["code"] == "TOO_MANY_ATTEMPTS"
+	assert res.headers["Retry-After"] == "42"
 	mock_list.assert_not_called()
+
+
+@pytest.mark.parametrize(
+	("method", "path", "headers", "ttl"),
+	[
+		("get", "/api/notifications", {}, 0),
+		("get", "/api/notifications/unread-count", {}, -1),
+		("patch", f"/api/notifications/{uuid4()}/read", {"Origin": ALLOWED_ORIGIN}, -2),
+		("post", "/api/notifications/read-all", {"Origin": ALLOWED_ORIGIN}, 0),
+	],
+)
+def test_all_notification_rate_limited_endpoints_return_positive_retry_after_when_ttl_unavailable(
+	client: TestClient,
+	monkeypatch: pytest.MonkeyPatch,
+	method: str,
+	path: str,
+	headers: dict[str, str],
+	ttl: int,
+) -> None:
+	monkeypatch.setattr(deps.redis_store, "check_rate_limit", AsyncMock(return_value=121))
+	monkeypatch.setattr(deps.redis_store, "get_rate_limit_ttl", AsyncMock(return_value=ttl))
+
+	response = getattr(client, method)(path, headers=headers)
+
+	assert response.status_code == 429
+	assert response.headers["Retry-After"] == str(get_backend_settings().rate_limit_notification_window_seconds)
+	assert int(response.headers["Retry-After"]) > 0
+
+
+def test_notification_rate_limit_ttl_failure_returns_503(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setattr(deps.redis_store, "check_rate_limit", AsyncMock(return_value=121))
+	monkeypatch.setattr(
+		deps.redis_store,
+		"get_rate_limit_ttl",
+		AsyncMock(side_effect=RuntimeError("redis unavailable")),
+	)
+
+	response = client.get("/api/notifications")
+
+	assert response.status_code == 503
+	assert response.json()["error"]["code"] == "SERVICE_UNAVAILABLE"
 
 
 def test_get_unread_count_returns_service_result(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -161,7 +205,6 @@ def test_mark_notification_read_returns_service_result(client: TestClient, monke
 
 	res = client.patch(
 		f"/api/notifications/{notification_id}/read",
-		headers={"Origin": ALLOWED_ORIGIN},
 	)
 
 	assert res.status_code == 200
@@ -185,18 +228,23 @@ def test_mark_notification_read_other_users_notification_returns_404(
 	assert res.json()["error"]["code"] == "NOT_FOUND"
 
 
-def test_mark_notification_read_rejects_disallowed_origin(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_mark_notification_read_rejects_disallowed_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+	app = _build_app()
+	app.dependency_overrides[get_auth_strategy] = lambda: SimpleNamespace(mode="session")
+	monkeypatch.setattr(deps.redis_store, "check_rate_limit", AsyncMock(return_value=1))
 	mock_mark = AsyncMock()
 	monkeypatch.setattr(router_module.notification_service, "mark_notification_read", mock_mark)
 
-	res = client.patch(
-		f"/api/notifications/{uuid4()}/read",
-		headers={"Origin": "http://evil.example"},
-	)
+	with TestClient(app) as client:
+		res = client.patch(
+			f"/api/notifications/{uuid4()}/read",
+			headers={"Origin": "http://evil.example"},
+		)
 
 	assert res.status_code == 403
 	assert res.json()["error"]["code"] == "CSRF_INVALID"
 	mock_mark.assert_not_called()
+	app.dependency_overrides.clear()
 
 
 def test_mark_notification_read_session_mode_requires_csrf_header(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -275,6 +323,7 @@ def test_mark_all_notifications_read_write_rate_limited_returns_429(
 	client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
 	monkeypatch.setattr(deps.redis_store, "check_rate_limit", AsyncMock(return_value=61))
+	monkeypatch.setattr(deps.redis_store, "get_rate_limit_ttl", AsyncMock(return_value=42))
 	mock_mark_all = AsyncMock()
 	monkeypatch.setattr(router_module.notification_service, "mark_all_notifications_read", mock_mark_all)
 
@@ -282,4 +331,5 @@ def test_mark_all_notifications_read_write_rate_limited_returns_429(
 
 	assert res.status_code == 429
 	assert res.json()["error"]["code"] == "TOO_MANY_ATTEMPTS"
+	assert res.headers["Retry-After"] == "42"
 	mock_mark_all.assert_not_called()

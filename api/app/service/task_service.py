@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, time, timedelta
 from typing import Literal
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_backend_settings
 from app.core.exceptions import NotFoundError
 from app.models.task import Task
-from app.repository import task_repository
+from app.repository import project_repository, task_repository
 from app.schemas.auth import CurrentUser
 from app.schemas.task import (
 	BoardColumns,
 	BoardResponse,
+	CalendarTaskQuery,
 	TaskAssignee,
 	TaskCreateFlatRequest,
 	TaskCreateRequest,
@@ -113,6 +117,17 @@ async def list_tasks(
 		items=responses,
 		meta=TaskListMeta(page=page, per_page=per_page, total=len(responses), total_pages=1 if responses else 0),
 	)
+
+
+async def list_calendar_tasks(user: CurrentUser, query: CalendarTaskQuery, db: AsyncSession) -> list[TaskListItem]:
+	if query.scope == "project" and user.role != "admin":
+		if query.project_id is None or not await project_repository.is_member(db, query.project_id, user.id):
+			raise NotFoundError()
+	zone = ZoneInfo(get_backend_settings().app_timezone)
+	from_utc = datetime.combine(query.from_date, time.min, tzinfo=zone).astimezone(UTC)
+	to_utc = datetime.combine(query.to_date + timedelta(days=1), time.min, tzinfo=zone).astimezone(UTC)
+	items = await task_repository.list_calendar(db, user.id, from_utc, to_utc, query.scope, query.project_id)
+	return [TaskListItem(**_response(item, user).model_dump()) for item in items]
 
 
 async def create_task(
