@@ -110,13 +110,13 @@ sequenceDiagram
             R-->>FE: 422 VALIDATION_ERROR
         else 検証通過
             S->>S: argon2でnew_passwordをハッシュ化
-            S->>URP: update_password(db, user_id, new_hash)
-            URP->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
-            PG-->>URP: 更新後のuser行
             S->>RS: delete_all_sessions(user_id)
             RS->>RD: SMEMBERS user_sessions:{uid} → 各session/csrf DEL → DEL user_sessions:{uid}
             S->>RS: revoke_all_refresh_tokens(user_id)
             RS->>RD: SMEMBERS user_refresh:{uid} → 各refresh DEL → DEL user_refresh:{uid}
+            S->>URP: update_password(db, user_id, new_hash)
+            URP->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
+            PG-->>URP: 更新後のuser行
             S-->>R: None
             R-->>FE: 204
         end
@@ -141,12 +141,12 @@ flowchart TB
     H -->|"true"| I{"current_password<br/>送信あり かつ 一致?"}
     I -->|"未送信"| E4["422 VALIDATION_ERROR<br/>（current_password必須）"]
     I -->|"送信ありだが不一致"| E5["401 INVALID_CREDENTIALS"]
-    I -->|"一致"| J["password_hash更新"]
+    I -->|"一致"| J["全セッション失効<br/>delete_all_sessions"]
     H -->|"false"| K{"current_password<br/>を送信している?"}
     K -->|"送信あり"| E6["422 VALIDATION_ERROR<br/>（未設定ユーザーは送信不可）"]
     K -->|"未送信"| J
-    J --> L["全セッション失効<br/>delete_all_sessions"]
-    L --> M["全リフレッシュトークン失効<br/>revoke_all_refresh_tokens"]
+    J --> L["全リフレッシュトークン失効<br/>revoke_all_refresh_tokens"]
+    L --> M["password_hash更新<br/>DBトランザクションでcommit"]
     M --> N["204"]
 ```
 
@@ -221,14 +221,14 @@ flowchart LR
 ```mermaid
 flowchart LR
     subgraph PG["PostgreSQL"]
-        U1["users.password_hash（旧ハッシュ）"] --> U2["users.password_hash（新ハッシュ）"]
+        U1["users.password_hash（旧ハッシュ）"] -.-> U2["users.password_hash（新ハッシュ）"]
     end
     subgraph RD["Redis"]
         S1["session:{sid1..N}<br/>csrf:{sid1..N}<br/>user_sessions:{uid}"] --> S2["全DEL（当該ユーザーの<br/>全セッション失効）"]
         F1["refresh:{hash1..N}<br/>user_refresh:{uid}"] --> F2["全DEL（当該ユーザーの<br/>全リフレッシュトークン失効）"]
     end
-    U2 -.->|"同一サービス処理内で連続実行"| S2
-    S2 -.-> F2
+    S2 -.->|"全セッション失効後"| F2
+    F2 -.->|"全Redis失効後にDBトランザクションでUPDATE/commit"| U2
 ```
 
 パスワード変更を行った端末自身のCookie/アクセストークンも同時に失効するため、フロントは`204`受信後に自発的にログイン画面へ遷移させる（サーバーからのCookie破棄指示はない点に注意）。jwtモードのアクセストークンは署名検証のみのため、失効済みリフレッシュトークンとは独立して最大`ACCESS_TOKEN_TTL_SECONDS`（既定15分）有効なまま残り得る（`03_auth.md`§4.5の即時失効の限界と同様）。

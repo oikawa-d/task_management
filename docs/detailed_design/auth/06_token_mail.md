@@ -156,8 +156,8 @@ sequenceDiagram
     alt トークンが無効・期限切れ
         API-->>FE: "400 INVALID_RESET_TOKEN"
     else 有効
-        API->>PG: "UPDATE users SET password_hash = argon2(new_password)"
         API->>RD: "全セッション/全リフレッシュトークンを失効（08_redis_store.md参照）"
+        API->>PG: "UPDATE users SET password_hash = argon2(new_password)（Redis失効後にcommit）"
         API-->>FE: "204"
     end
 ```
