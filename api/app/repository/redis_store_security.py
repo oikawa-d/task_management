@@ -52,4 +52,9 @@ async def check_rate_limit(client: Redis, prefix: str, scope: str, value: str, m
 
 
 async def get_rate_limit_ttl(client: Redis, prefix: str, scope: str, value: str) -> int:
-	return int(await client.ttl(rate_limit_key(scope, value, prefix)))
+	"""残TTL（秒、切り上げ）を返す。キー不明・失効済み（PTTL<=0）の場合は`0`を返し、
+	呼び出し側（`deps.py`のRetry-Afterフォールバック）に判定を委ねる。"""
+	milliseconds = int(await client.pttl(rate_limit_key(scope, value, prefix)))
+	if milliseconds <= 0:
+		return 0
+	return max(1, (milliseconds + 999) // 1000)

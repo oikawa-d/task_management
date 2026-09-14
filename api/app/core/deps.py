@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from urllib.parse import urlparse
 from uuid import UUID
 
@@ -6,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.base import AuthStrategy
 from app.auth.factory import get_auth_strategy
+from app.core.client_ip import resolve_client_ip
 from app.core.config import BackendSettings, get_backend_settings
 from app.core.exceptions import (
 	CsrfInvalidError,
@@ -184,14 +186,13 @@ def _resolved_client_ip(request: Request) -> str:
 	return request.client.host if request.client else "unknown"
 
 
-async def _enforce_rate_limit(
-	request: Request,
-	user: CurrentUser,
+async def _enforce_rate_limit_by_key(
 	scope: str,
+	value: str,
 	max_requests: int,
 	window: int,
 ) -> None:
-	value = f"{user.id}:{_resolved_client_ip(request)}"
+	"""Redisベースのレート制限を判定する共通処理。Redis障害時はfail-closeで503を返す。"""
 	try:
 		count = await redis_store.check_rate_limit(scope, value, max_requests, window)
 		if count <= max_requests:
@@ -201,6 +202,17 @@ async def _enforce_rate_limit(
 		raise ServiceUnavailableError() from exc
 	if count > max_requests:
 		raise TooManyAttemptsError(retry_after=retry_after if retry_after > 0 else window)
+
+
+async def _enforce_rate_limit(
+	request: Request,
+	user: CurrentUser,
+	scope: str,
+	max_requests: int,
+	window: int,
+) -> None:
+	value = f"{user.id}:{_resolved_client_ip(request)}"
+	await _enforce_rate_limit_by_key(scope, value, max_requests, window)
 
 
 async def enforce_notification_read_rate_limit(
@@ -231,3 +243,40 @@ async def enforce_notification_write_rate_limit(
 		settings.rate_limit_notification_write_max_requests,
 		settings.rate_limit_notification_window_seconds,
 	)
+
+
+async def verify_csrf_for_logout(
+	request: Request,
+	strategy: AuthStrategy = Depends(get_auth_strategy),
+	settings: BackendSettings = Depends(get_backend_settings),
+) -> None:
+	"""ログアウト専用のCSRF検証。
+
+	ログアウトは冪等APIであり、認証Cookieが無い場合はCookie破棄だけを行って204を返す。
+	そのため検証対象のCookie（session:`cookie_name_session` / jwt:`cookie_name_refresh`）が
+	存在する場合に限りCSRFトークンを検証する（03_post_auth_logout.md §1）。
+	"""
+	cookie_name = settings.cookie_name_session if strategy.mode == "session" else settings.cookie_name_refresh
+	if not request.cookies.get(cookie_name):
+		return
+	await verify_csrf(request, strategy, settings)
+
+
+def enforce_rate_limit(scope: str, max_requests_field: str, window_field: str) -> Callable[..., Awaitable[None]]:
+	"""公開APIのIP単位レート制限を行う依存性を生成する。
+
+	`scope`はRedisキー`rate_limit:{scope}:{key_hash}`の名前空間、
+	`max_requests_field`/`window_field`は`BackendSettings`の属性名を指す
+	（上限・時間窓はすべて環境変数で外部化する）。Redis障害時はfail-closeで503を返す。
+	"""
+
+	async def _enforce(
+		request: Request,
+		settings: BackendSettings = Depends(get_backend_settings),
+	) -> None:
+		max_requests: int = getattr(settings, max_requests_field)
+		window: int = getattr(settings, window_field)
+		client_ip = resolve_client_ip(request, settings.trusted_proxy_cidrs).client_ip
+		await _enforce_rate_limit_by_key(scope, client_ip, max_requests, window)
+
+	return _enforce
