@@ -204,10 +204,11 @@ async def test_change_password_with_current_password_success(monkeypatch):
 	payload = PasswordChangeRequest(
 		current_password="OldPass1!", new_password="NewPass1!", password_confirm="NewPass1!"
 	)
+	db = AsyncMock()
 	await user_service.change_password(
 		_current_user(user_id),
 		payload,
-		db=object(),
+		db=db,
 	)
 
 	update_password_mock.assert_awaited_once()
@@ -216,6 +217,7 @@ async def test_change_password_with_current_password_success(monkeypatch):
 	assert args[2] == "hashed:NewPass1!"
 	delete_sessions_mock.assert_awaited_once_with(user_id)
 	revoke_refresh_mock.assert_awaited_once_with(user_id)
+	db.commit.assert_not_awaited()
 
 
 async def test_change_password_wrong_current_password(monkeypatch):

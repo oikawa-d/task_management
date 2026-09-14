@@ -116,7 +116,7 @@ sequenceDiagram
             RS->>RD: SMEMBERS user_refresh:{uid} → 各refresh DEL → DEL user_refresh:{uid}
             S->>URP: update_password(db, user_id, new_hash)
             URP->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
-            PG-->>URP: 更新後のuser行
+            PG-->>URP: 更新完了
             S-->>R: None
             R-->>FE: 204
         end
