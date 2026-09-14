@@ -4,15 +4,17 @@ import styles from "./NotificationCenter.module.css";
 import { NotificationBell } from "./NotificationBell";
 import { NotificationPanel } from "./NotificationPanel";
 import type { NotificationItemData } from "./types";
+import { useMarkAllNotificationsRead, useMarkNotificationRead, useNotifications } from "./hooks/useNotifications";
 
 export interface NotificationCenterProps {
 	unreadCount: number;
-	notifications: NotificationItemData[];
-	page: number;
-	totalPages: number;
-	onPageChange: (page: number) => void;
-	onItemClick: (notification: NotificationItemData) => void;
-	onMarkAllRead: () => void;
+	notifications?: NotificationItemData[];
+	page?: number;
+	totalPages?: number;
+	onPageChange?: (page: number) => void;
+	onItemClick?: (notification: NotificationItemData) => void;
+	onMarkAllRead?: () => void;
+	enableDataApi?: boolean;
 }
 
 /**
@@ -23,15 +25,24 @@ export interface NotificationCenterProps {
 export function NotificationCenter({
 	unreadCount,
 	notifications,
-	page,
-	totalPages,
+	page = 1,
+	totalPages = 1,
 	onPageChange,
 	onItemClick,
 	onMarkAllRead,
+	enableDataApi = false,
 }: NotificationCenterProps) {
 	const [isOpen, setIsOpen] = useState(false);
+	const [internalPage, setInternalPage] = useState(page);
+	const [mutationError, setMutationError] = useState<string | null>(null);
+	const [retryAction, setRetryAction] = useState<(() => Promise<void>) | null>(null);
 	const bellRef = useRef<HTMLButtonElement>(null);
 	const panelRef = useRef<HTMLDivElement>(null);
+	const currentPage = onPageChange ? page : internalPage;
+	const useDataApi = enableDataApi && notifications === undefined;
+	const notificationQuery = useNotifications(currentPage, useDataApi && isOpen);
+	const markReadMutation = useMarkNotificationRead();
+	const markAllMutation = useMarkAllNotificationsRead();
 
 	const close = () => {
 		setIsOpen(false);
@@ -65,10 +76,45 @@ export function NotificationCenter({
 		};
 	}, [isOpen]);
 
-	const handleItemClick = (notification: NotificationItemData) => {
-		onItemClick(notification);
+	const completeItemClick = (notification: NotificationItemData) => {
+		onItemClick?.(notification);
 		close();
 	};
+	const handleItemClick = (notification: NotificationItemData) => {
+		if (!useDataApi || notification.readAt !== null) {
+			completeItemClick(notification);
+			return;
+		}
+		const action = async () => {
+			await markReadMutation.mutateAsync(notification.id);
+			setMutationError(null);
+			setRetryAction(null);
+			completeItemClick(notification);
+		};
+		setRetryAction(() => action);
+		void action().catch(() => setMutationError("通知を既読にできませんでした。再試行してください。"));
+	};
+	const handlePageChange = (nextPage: number) => {
+		setInternalPage(nextPage);
+		onPageChange?.(nextPage);
+	};
+	const handleMarkAllRead = () => {
+		if (!useDataApi) {
+			onMarkAllRead?.();
+			return;
+		}
+		const action = async () => {
+			await markAllMutation.mutateAsync();
+			setMutationError(null);
+			setRetryAction(null);
+			onMarkAllRead?.();
+			close();
+		};
+		setRetryAction(() => action);
+		void action().catch(() => setMutationError("通知をすべて既読にできませんでした。再試行してください。"));
+	};
+	const displayNotifications = notifications ?? notificationQuery.data?.items ?? [];
+	const displayTotalPages = notifications ? totalPages : notificationQuery.data?.totalPages ?? 1;
 
 	return (
 		<div className={styles.wrapper}>
@@ -81,13 +127,18 @@ export function NotificationCenter({
 			{isOpen && (
 				<NotificationPanel
 					ref={panelRef}
-					notifications={notifications}
+					notifications={displayNotifications}
 					unreadCount={unreadCount}
-					page={page}
-					totalPages={totalPages}
-					onPageChange={onPageChange}
+					page={currentPage}
+					totalPages={displayTotalPages}
+					onPageChange={handlePageChange}
 					onItemClick={handleItemClick}
-					onMarkAllRead={onMarkAllRead}
+					onMarkAllRead={handleMarkAllRead}
+					isLoading={useDataApi && notificationQuery.isLoading}
+					errorMessage={
+						mutationError ?? (useDataApi && notificationQuery.isError ? "通知を読み込めませんでした。" : null)
+					}
+					onRetry={retryAction ?? (() => void notificationQuery.refetch())}
 				/>
 			)}
 		</div>

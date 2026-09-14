@@ -20,7 +20,7 @@
 | ガード | 公開（認証不要）。ただし認証済みユーザーがアクセスした場合もガードでは弾かず、通常どおりリセットフォームを表示する（要検討：認証済みユーザーの扱いは基本設計に明記がないため「不明」とし、実装時は既存セッションを維持したまま処理する前提とする） |
 | 対応要件 | 要件書§2記載なし（`basic_design/05_frontend.md` §2 No.4） |
 | 主なユースケース | メール内リンクからの到達→ 新パスワード入力→再設定→ログイン画面へ |
-| 実装ファイル | `frontend/src/features/auth/PasswordResetPage.tsx`、`frontend/src/features/auth/PasswordResetForm.tsx` |
+| 実装ファイル | `frontend/src/features/auth/pages/PasswordResetPage.tsx`、`frontend/src/features/auth/components/PasswordResetForm.tsx` |
 
 `basic_design/03_auth.md` §7.2 のメール本文URLは `{FRONTEND_BASE_URL}/password/reset#token=...` である。fragment（`#`以降）はブラウザからサーバーへ送信されず、アクセスログやReferer・プロキシログにも残らないため、トークンの露出経路を減らす目的でquery stringではなくfragmentを採用している。本画面はこの設計をクライアント側で正しく扱う責務を持つ。
 

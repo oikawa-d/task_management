@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -51,7 +52,8 @@ describe("BoardPage and TaskDetailModal", () => {
 			],
 			{ initialEntries: ["/projects/project-1"] },
 		);
-		render(<RouterProvider router={router} />);
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
 
 		fireEvent.click(await screen.findByRole("listitem", { name: /カンバンから開くタスク/ }));
 		await waitFor(() => expect(router.state.location.pathname).toBe("/projects/project-1/tasks/task-1"));

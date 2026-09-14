@@ -62,8 +62,8 @@ async def ensure_login_not_rate_limited(identifier: str, client_ip: str, setting
 	"""現在の失敗回数が上限に達している場合は`TooManyAttemptsError`を送出する。"""
 	failure_count = await redis_store.get_login_failure_count(identifier, client_ip)
 	if failure_count >= settings.login_max_attempts:
-		retry_after = max(await redis_store.get_login_failure_ttl(identifier, client_ip), 0)
-		raise TooManyAttemptsError(retry_after=retry_after)
+		ttl = await redis_store.get_login_failure_ttl(identifier, client_ip)
+		raise TooManyAttemptsError(retry_after=ttl if ttl > 0 else settings.login_lock_window_seconds)
 
 
 async def record_login_failure(identifier: str, client_ip: str, settings: BackendSettings) -> int:
@@ -574,7 +574,33 @@ async def _rollback_oauth_login(
 			_delete_oauth_state_cookie(response, settings)
 
 
-async def oauth_callback(
+async def oauth_callback_denied(
+	state: str | None,
+	state_cookie: str | None,
+	request: Request,
+	response: Response,
+	*,
+	settings: BackendSettings | None = None,
+) -> None:
+	"""Googleの同意拒否時にもcallback stateを消費し、認証開始状態を破棄する。"""
+	config = settings or get_backend_settings()
+	try:
+		await _check_oauth_rate_limit(
+			request, _OAUTH_RATE_LIMIT_SCOPE["callback"], "/api/auth/oauth/google/callback", config
+		)
+		if not state or not state_cookie or not secrets.compare_digest(state, state_cookie):
+			raise InvalidStateError()
+		try:
+			state_data = await redis_store.consume_oauth_state(state)
+		except Exception as exc:
+			raise ServiceUnavailableError() from exc
+		if state_data is None:
+			raise InvalidStateError()
+	finally:
+		_delete_oauth_state_cookie(response, config)
+
+
+async def _oauth_callback_impl(
 	code: str | None,
 	state: str | None,
 	state_cookie: str | None,
@@ -643,6 +669,36 @@ async def oauth_callback(
 		raise ServiceUnavailableError() from exc
 	_delete_oauth_state_cookie(response, config)
 	return OAuthCallbackResult(auth_mode="jwt", redirect_to=state_data.redirect_to, handoff_code=handoff_code)
+
+
+async def oauth_callback(
+	code: str | None,
+	state: str | None,
+	state_cookie: str | None,
+	request: Request,
+	response: Response,
+	db: AsyncSession | None = None,
+	*,
+	settings: BackendSettings | None = None,
+	provider: GoogleOAuthProvider | None = None,
+	strategy: Any | None = None,
+) -> OAuthCallbackResult:
+	"""OAuth callbackの実行後にstate cookieを必ず破棄する。"""
+	config = settings or get_backend_settings()
+	try:
+		return await _oauth_callback_impl(
+			code,
+			state,
+			state_cookie,
+			request,
+			response,
+			db,
+			settings=config,
+			provider=provider,
+			strategy=strategy,
+		)
+	finally:
+		_delete_oauth_state_cookie(response, config)
 
 
 async def oauth_exchange(

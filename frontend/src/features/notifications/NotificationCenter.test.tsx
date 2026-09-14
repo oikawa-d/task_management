@@ -1,10 +1,19 @@
 import "@testing-library/jest-dom/vitest";
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { NotificationCenter } from "./NotificationCenter";
 import { buildNotification } from "./testFixtures";
+
+const apiMocks = vi.hoisted(() => ({
+	getNotifications: vi.fn(),
+	markNotificationRead: vi.fn(),
+	markAllNotificationsRead: vi.fn(),
+}));
+
+vi.mock("./api/notificationsApi", () => apiMocks);
 
 function renderCenter(overrides: Partial<Parameters<typeof NotificationCenter>[0]> = {}) {
 	const props = {
@@ -17,7 +26,8 @@ function renderCenter(overrides: Partial<Parameters<typeof NotificationCenter>[0
 		onMarkAllRead: vi.fn(),
 		...overrides,
 	};
-	const utils = render(<NotificationCenter {...props} />);
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+	const utils = render(<QueryClientProvider client={queryClient}><NotificationCenter {...props} /></QueryClientProvider>);
 	return { ...utils, props };
 }
 
@@ -36,7 +46,8 @@ describe("NotificationCenter", () => {
 		fireEvent.click(screen.getByRole("button", { name: "すべて既読" }));
 		expect(props.onMarkAllRead).toHaveBeenCalledTimes(1);
 
-		rerender(<NotificationCenter {...props} unreadCount={0} />);
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		rerender(<QueryClientProvider client={queryClient}><NotificationCenter {...props} unreadCount={0} /></QueryClientProvider>);
 
 		expect(screen.queryByText(/未読/)).not.toBeInTheDocument();
 	});
@@ -95,6 +106,42 @@ describe("NotificationCenter", () => {
 		fireEvent.click(screen.getByText(notification.title));
 
 		expect(props.onItemClick).toHaveBeenCalledWith(notification);
+		expect(screen.queryByRole("dialog", { name: "通知" })).not.toBeInTheDocument();
+	});
+
+	it("既読API失敗時はパネルを維持して再試行できる", async () => {
+		const notification = buildNotification({ readAt: null });
+		apiMocks.getNotifications.mockResolvedValue({ items: [notification], totalPages: 1 });
+		apiMocks.markNotificationRead.mockRejectedValueOnce(new Error("network"));
+		apiMocks.markNotificationRead.mockResolvedValueOnce({ unreadCount: 0 });
+		const { props } = renderCenter({ unreadCount: 1, notifications: undefined, enableDataApi: true });
+
+		fireEvent.click(screen.getByRole("button", { name: "通知" }));
+		fireEvent.click(await screen.findByText(notification.title));
+
+		await screen.findByRole("alert");
+		expect(props.onItemClick).not.toHaveBeenCalled();
+		expect(screen.getByRole("dialog", { name: "通知" })).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "再試行" }));
+
+		await waitFor(() => expect(props.onItemClick).toHaveBeenCalledWith(notification));
+		expect(apiMocks.markNotificationRead).toHaveBeenCalledTimes(2);
+		expect(screen.queryByRole("dialog", { name: "通知" })).not.toBeInTheDocument();
+	});
+
+	it("全件既読API失敗時は親の件数を更新せず再試行できる", async () => {
+		apiMocks.markAllNotificationsRead.mockRejectedValueOnce(new Error("network"));
+		apiMocks.markAllNotificationsRead.mockResolvedValueOnce({ unreadCount: 0 });
+		const { props } = renderCenter({ unreadCount: 2, notifications: undefined, enableDataApi: true });
+
+		fireEvent.click(screen.getByRole("button", { name: "通知" }));
+		fireEvent.click(screen.getByRole("button", { name: "すべて既読" }));
+
+		await screen.findByRole("alert");
+		expect(props.onMarkAllRead).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByRole("button", { name: "再試行" }));
+
+		await waitFor(() => expect(props.onMarkAllRead).toHaveBeenCalledTimes(1));
 		expect(screen.queryByRole("dialog", { name: "通知" })).not.toBeInTheDocument();
 	});
 });

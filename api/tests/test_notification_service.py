@@ -181,9 +181,8 @@ async def test_list_notifications_skips_count_unread_when_unread_only(monkeypatc
 @pytest.mark.asyncio
 async def test_mark_all_notifications_returns_changed_count(monkeypatch: pytest.MonkeyPatch) -> None:
 	user = _user()
-	count_unread = AsyncMock(side_effect=[3, 0])
-	mark_all_read = AsyncMock()
-	monkeypatch.setattr(notification_service.notification_repository, "count_unread", count_unread)
+	mark_all_read = AsyncMock(return_value=3)
+	monkeypatch.setattr(notification_service.notification_repository, "count_unread", AsyncMock(return_value=0))
 	monkeypatch.setattr(notification_service.notification_repository, "mark_all_read", mark_all_read)
 	db = object()
 

@@ -114,6 +114,7 @@ describe("DashboardPage", () => {
 		const client = createMockClient();
 		(client.get as ReturnType<typeof vi.fn>)
 			.mockRejectedValueOnce(new ApiError({ code: "INTERNAL_ERROR", message: "サーバーエラー", status: 500 }))
+			.mockResolvedValueOnce({ data: [] })
 			.mockResolvedValueOnce({
 				data: { items: [buildProject()], meta: { page: 1, per_page: 20, total: 1, total_pages: 1 } },
 			});
@@ -126,13 +127,14 @@ describe("DashboardPage", () => {
 		fireEvent.click(screen.getByRole("button", { name: "再試行" }));
 
 		expect(await screen.findByRole("button", { name: "Cerberus開発" })).toBeInTheDocument();
-		expect(client.get).toHaveBeenCalledTimes(2);
+		expect(client.get).toHaveBeenCalledTimes(3);
 	});
 
 	it("作成成功時はモーダルを閉じ、一覧を再取得する", async () => {
 		const client = createMockClient();
 		(client.get as ReturnType<typeof vi.fn>)
 			.mockResolvedValueOnce({ data: { items: [], meta: { page: 1, per_page: 20, total: 0, total_pages: 0 } } })
+			.mockResolvedValueOnce({ data: [] })
 			.mockResolvedValueOnce({
 				data: { items: [buildProject({ name: "新プロジェクト" })], meta: { page: 1, per_page: 20, total: 1, total_pages: 1 } },
 			});
@@ -149,7 +151,7 @@ describe("DashboardPage", () => {
 		await waitFor(() => expect(client.post).toHaveBeenCalledWith("/projects", { name: "新プロジェクト", description: null }));
 		await waitFor(() => expect(screen.queryByLabelText("プロジェクト名")).not.toBeInTheDocument());
 		expect(await screen.findByRole("button", { name: "新プロジェクト" })).toBeInTheDocument();
-		expect(client.get).toHaveBeenCalledTimes(2);
+		expect(client.get).toHaveBeenCalledTimes(3);
 	});
 
 	it("作成422時はフィールドエラーを表示し、モーダルは開いたままにする", async () => {

@@ -60,8 +60,8 @@ sequenceDiagram
     FE->>R: POST /api/notifications/read-all
     R->>D: 認証 + session方式のみCSRF検証
     D-->>R: CurrentUser
-    R->>S: sp_mark_all_notifications_read(user.id)
-    S->>NR: sp_mark_all_notifications_read(db, user.id)
+    R->>S: mark_all_notifications_read(user.id)
+    S->>NR: mark_all_read(db, user.id)
     NR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>NR: rowcount
     NR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
@@ -82,17 +82,17 @@ sequenceDiagram
 | 送出例外 | 認証・CSRF・DB接続系の共通例外 |
 | 副作用 | 本人の未読通知の`read_at`更新 |
 
-### 5.2 `service/notification_service.py :: sp_mark_all_notifications_read`
+### 5.2 `service/notification_service.py :: mark_all_notifications_read`
 
-`notification_repository.sp_mark_all_notifications_read(db, user_id)`を呼び出す。ユーザーIDをリクエストから受け取らず、認証済みユーザーからのみ解決する。
+`notification_repository.mark_all_read(db, user_id)`を呼び出す。ユーザーIDをリクエストから受け取らず、認証済みユーザーからのみ解決する。
 
-### 5.3 `repository/notification_repository.py :: sp_mark_all_notifications_read`
+### 5.3 `repository/notification_repository.py :: mark_all_read`
 
 ```sql
-CALL sp_mark_all_notifications_read(:user_id);
+CALL sp_mark_all_notifications_read(:user_id, NULL);
 ```
 
-`user_id` 一致かつ未読の行を一括で既読化する条件・更新件数の算出はSP内部の責務であり、repositoryは `CALL` のみを発行する。更新後は `SELECT fn_count_unread_notifications(:user_id)` を呼び、部分インデックス `ix_notifications_user_unread` を利用してレスポンスの `unread_count` を算出する。
+`user_id` 一致かつ未読の行を一括で既読化する条件・更新件数の算出はSP内部の責務であり、repositoryは `CALL` のみを発行する。OUTの`p_updated_count`を`updated_count`へ写像する。更新後は `SELECT fn_count_unread_notifications(:user_id)` を呼び、部分インデックス `ix_notifications_user_unread` を利用してレスポンスの `unread_count` を算出する。
 
 ## 6. 並行制御
 
@@ -102,8 +102,8 @@ CALL sp_mark_all_notifications_read(:user_id);
 
 ```mermaid
 flowchart LR
-    R["notifications_router.mark_all_notifications_read"] --> S["notification_service.sp_mark_all_notifications_read"]
-    S --> NR["notification_repository.sp_mark_all_notifications_read"]
+    R["notifications_router.mark_all_notifications_read"] --> S["notification_service.mark_all_notifications_read"]
+    S --> NR["notification_repository.mark_all_read"]
     NR --> N[("notifications（SP内部）")]
     NR -->|"SELECT fn_count_unread_notifications"| N
 ```
@@ -127,7 +127,7 @@ flowchart LR
 
 | 種別 | 契約 | 説明 |
 |------|------|------|
-| sp_mark_all_notifications_read | `sp_mark_all_notifications_read(p_user_id)` | sp_mark_all_notifications_readを呼び出し、結果をレスポンスへ写像する |
+| sp_mark_all_notifications_read | `sp_mark_all_notifications_read(p_user_id, OUT p_updated_count)` | OUTの更新件数を`updated_count`へ写像する |
 
 repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。既読更新の条件と冪等性はSP層の責務であり、他人の通知・不存在の判定結果はAPI層で404へ変換する。
 

@@ -252,6 +252,7 @@ repositoryは下表のSP/FN呼び出しとDTO写像だけを行う。advisory lo
 | `deactivate` / `reactivate` | `CALL sp_deactivate_task(:task_id, :is_active)` | `is_active`だけ変更、position詰めなし |
 | `list_by_project_grouped` | `SELECT fn_get_project_board(:project_id, :include_inactive)` | status/position順のFN結果を3列へ写像 |
 | 横断一覧 | `SELECT fn_list_tasks(:user_id, :project_id, :status, :include_inactive, :limit, :offset)` | 権限スコープはFN内で判定 |
+| カレンダー一覧 | `SELECT (task).*, project_is_active FROM fn_list_calendar_tasks(:user_id, :from_utc, :to_utc, :scope, :project_id)` | 日付範囲・scopeごとの権限・有効タスク判定はFN内で行う |
 
 repositoryは上表のSP/FN呼び出しと戻り値のDTO写像のみを実装し、`tasks` テーブルへの直接SELECT/INSERT/UPDATE/DELETEは行わない。`sp_create_task` / `sp_update_task` の内部処理契約は[08_db_functions.md](./08_db_functions.md) §3.8を正とし、以下は advisory lock・position再採番・楽観ロックの具体的なアルゴリズムをSP内部実装の要点として補足するものである（repositoryから直接発行しない）。
 

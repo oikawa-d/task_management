@@ -352,16 +352,16 @@ async def test_oauth_rate_limit_rejects_excess_requests(operation: str, monkeypa
 	monkeypatch.setattr(
 		auth_service.redis_store, "check_rate_limit", AsyncMock(return_value=settings.rate_limit_oauth_max_requests + 1)
 	)
-	monkeypatch.setattr(auth_service.redis_store, "get_rate_limit_ttl", AsyncMock(return_value=321))
+	monkeypatch.setattr(auth_service.redis_store, "get_rate_limit_ttl", AsyncMock(return_value=42))
 
-	with pytest.raises(TooManyAttemptsError) as raised:
+	with pytest.raises(TooManyAttemptsError) as exc_info:
 		if operation == "start":
 			await auth_service.oauth_start("/dashboard", request=_request(), response=Response(), settings=settings)
 		elif operation == "callback":
 			await auth_service.oauth_callback("code", "state", "state", _request(), Response(), settings=settings)
 		else:
 			await auth_service.oauth_exchange("code", _request(), Response(), settings=settings)
-	assert raised.value.retry_after == 321
+	assert exc_info.value.retry_after == 42
 
 
 @pytest.mark.asyncio
@@ -372,30 +372,6 @@ async def test_oauth_rate_limit_redis_failure_returns_service_unavailable(
 	settings = _settings(auth_mode="jwt")
 	monkeypatch.setattr(
 		auth_service.redis_store, "check_rate_limit", AsyncMock(side_effect=RuntimeError("redis unavailable"))
-	)
-
-	with pytest.raises(ServiceUnavailableError):
-		if operation == "start":
-			await auth_service.oauth_start("/dashboard", request=_request(), response=Response(), settings=settings)
-		elif operation == "callback":
-			await auth_service.oauth_callback("code", "state", "state", _request(), Response(), settings=settings)
-		else:
-			await auth_service.oauth_exchange("code", _request(), Response(), settings=settings)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["start", "callback", "exchange"])
-async def test_oauth_rate_limit_ttl_failure_returns_service_unavailable(
-	operation: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-	settings = _settings(auth_mode="jwt")
-	monkeypatch.setattr(
-		auth_service.redis_store,
-		"check_rate_limit",
-		AsyncMock(return_value=settings.rate_limit_oauth_max_requests + 1),
-	)
-	monkeypatch.setattr(
-		auth_service.redis_store, "get_rate_limit_ttl", AsyncMock(side_effect=RuntimeError("redis unavailable"))
 	)
 
 	with pytest.raises(ServiceUnavailableError):
@@ -419,7 +395,7 @@ async def test_oauth_rate_limit_log_contains_audit_fields(
 		"check_rate_limit",
 		AsyncMock(return_value=settings.rate_limit_oauth_max_requests + 1),
 	)
-	monkeypatch.setattr(auth_service.redis_store, "get_rate_limit_ttl", AsyncMock(return_value=321))
+	monkeypatch.setattr(auth_service.redis_store, "get_rate_limit_ttl", AsyncMock(return_value=42))
 
 	with caplog.at_level("WARNING", logger="app.oauth"), pytest.raises(TooManyAttemptsError):
 		await auth_service.oauth_callback("code", "state", "state", request, Response(), settings=settings)
@@ -433,6 +409,50 @@ async def test_oauth_rate_limit_log_contains_audit_fields(
 	assert record.proxy_peer_ip == "10.0.0.1"
 	assert record.ip_source == "trusted_xff"
 	assert record.request_id == "request-123"
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_denied_consumes_state_and_deletes_cookie(monkeypatch: pytest.MonkeyPatch) -> None:
+	settings = _settings()
+	check_rate_limit = AsyncMock(return_value=1)
+	consume_state = AsyncMock(return_value=OAuthStateData("/dashboard", "verifier", "nonce", None))
+	monkeypatch.setattr(auth_service.redis_store, "check_rate_limit", check_rate_limit)
+	monkeypatch.setattr(auth_service.redis_store, "consume_oauth_state", consume_state)
+	request = _request()
+	response = Response()
+
+	await auth_service.oauth_callback_denied("state", "state", request, response, settings=settings)
+
+	check_rate_limit.assert_awaited_once_with(
+		"oauth_callback", "127.0.0.1", settings.rate_limit_oauth_max_requests, settings.rate_limit_oauth_window_seconds
+	)
+	consume_state.assert_awaited_once_with("state")
+	assert any(
+		settings.cookie_name_oauth_state.encode() in value and b"Max-Age=0" in value
+		for key, value in response.raw_headers
+		if key == b"set-cookie"
+	)
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_denied_deletes_cookie_when_rate_limited(monkeypatch: pytest.MonkeyPatch) -> None:
+	settings = _settings()
+	monkeypatch.setattr(
+		auth_service.redis_store,
+		"check_rate_limit",
+		AsyncMock(return_value=settings.rate_limit_oauth_max_requests + 1),
+	)
+	monkeypatch.setattr(auth_service.redis_store, "get_rate_limit_ttl", AsyncMock(return_value=42))
+	response = Response()
+
+	with pytest.raises(TooManyAttemptsError):
+		await auth_service.oauth_callback_denied("state", "state", _request(), response, settings=settings)
+
+	assert any(
+		settings.cookie_name_oauth_state.encode() in value and b"Max-Age=0" in value
+		for key, value in response.raw_headers
+		if key == b"set-cookie"
+	)
 
 
 @pytest.mark.asyncio
@@ -515,6 +535,7 @@ async def test_oauth_callback_rejects_inactive_resolved_user(monkeypatch: pytest
 	)
 	monkeypatch.setattr(auth_service, "_resolve_or_create_user", AsyncMock(return_value=user))
 	login = AsyncMock()
+	response = Response()
 
 	with pytest.raises(UserInactiveError):
 		await auth_service.oauth_callback(
@@ -522,13 +543,14 @@ async def test_oauth_callback_rejects_inactive_resolved_user(monkeypatch: pytest
 			"state",
 			"state",
 			_request(),
-			Response(),
+			response,
 			db=SimpleNamespace(commit=AsyncMock()),
 			settings=_settings(),
 			provider=provider,
 			strategy=SimpleNamespace(mode="session", login=login),
 		)
 	login.assert_not_awaited()
+	assert any(b"cerberus_oauth_state=" in value and b"Max-Age=0" in value for key, value in response.raw_headers)
 
 
 @pytest.mark.asyncio

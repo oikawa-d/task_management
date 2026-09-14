@@ -100,7 +100,6 @@ async def mark_notification_read(
 
 
 async def mark_all_notifications_read(db: AsyncSession, user: CurrentUser) -> NotificationReadAllResponse:
-	before = await notification_repository.count_unread(db, user.id)
-	await notification_repository.mark_all_read(db, user.id)
+	updated_count = await notification_repository.mark_all_read(db, user.id)
 	after = await notification_repository.count_unread(db, user.id)
-	return NotificationReadAllResponse(updated_count=max(before - after, 0), unread_count=after)
+	return NotificationReadAllResponse(updated_count=updated_count, unread_count=after)

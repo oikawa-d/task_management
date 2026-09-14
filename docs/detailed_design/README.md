@@ -67,7 +67,7 @@ flowchart LR
 | [08_get_project_member_candidates.md](./api/projects/08_get_project_member_candidates.md) | GET /api/projects/{project_id}/members/candidates |
 | [09_delete_project_member.md](./api/projects/09_delete_project_member.md) | DELETE /api/projects/{project_id}/members/{user_id} |
 
-### 1.4 タスク・コメント `api/tasks/`（全11エンドポイント）
+### 1.4 タスク・コメント `api/tasks/`（全12エンドポイント）
 | ファイル | エンドポイント |
 |----------|----------------|
 | [01_get_project_tasks.md](./api/tasks/01_get_project_tasks.md) | GET /api/projects/{project_id}/tasks |
@@ -81,6 +81,7 @@ flowchart LR
 | [09_delete_comment.md](./api/tasks/09_delete_comment.md) | DELETE /api/comments/{comment_id} |
 | [10_get_tasks.md](./api/tasks/10_get_tasks.md) | GET /api/tasks（横断的タスク一覧、`project_id`未所属分を含む） |
 | [11_post_tasks.md](./api/tasks/11_post_tasks.md) | POST /api/tasks（`project_id`任意指定のフラット作成） |
+| [12_get_calendar_tasks.md](./api/tasks/12_get_calendar_tasks.md) | GET /api/tasks/calendar（カレンダー用タスク一覧） |
 
 ### 1.5 管理者 `api/admin/`
 | ファイル | エンドポイント |

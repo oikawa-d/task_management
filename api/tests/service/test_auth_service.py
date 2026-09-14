@@ -34,6 +34,9 @@ class _FakeDb:
 	async def commit(self) -> None:
 		self.calls.append("db.commit")
 
+	async def rollback(self) -> None:
+		self.calls.append("db.rollback")
+
 
 def _user(*, verified: bool = False, email: str = "taro@example.com"):
 	return SimpleNamespace(id=uuid4(), email=email, email_verified_at="2026-01-01T00:00:00+09:00" if verified else None)

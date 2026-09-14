@@ -21,18 +21,23 @@ class AdminUserListItem:
 
 @dataclass(frozen=True)
 class AdminProjectListItem:
-	"""fn_admin_list_projects の1行分（プロジェクト本体＋ページング前の全体件数）。"""
+	"""fn_admin_list_projects の1行分（プロジェクト本体＋集計値＋全体件数）。"""
 
 	project: Project
 	total_count: int
+	member_count: int = 0
+	task_count_todo: int = 0
+	task_count_in_progress: int = 0
+	task_count_done: int = 0
 
 
 @dataclass(frozen=True)
 class AdminLoginHistoryListItem:
-	"""fn_admin_list_login_history の1行分（ログイン履歴本体＋ページング前の全体件数）。"""
+	"""fn_admin_list_login_history の1行分（履歴本体＋ユーザー＋全体件数）。"""
 
 	history: LoginHistory
 	total_count: int
+	user: User | None = None
 
 
 def _build_user(row: RowMapping) -> User:
@@ -66,6 +71,31 @@ def _build_project(row: RowMapping) -> Project:
 		created_at=row["created_at"],
 		updated_at=row["updated_at"],
 	)
+
+
+def _build_project_owner(row: RowMapping) -> User:
+	return User(
+		id=row["owner_user_id"],
+		username=row["owner_username"],
+		email=row["owner_email"],
+		password_hash=row["owner_password_hash"],
+		last_name=row["owner_last_name"],
+		first_name=row["owner_first_name"],
+		last_name_kana=row["owner_last_name_kana"],
+		first_name_kana=row["owner_first_name_kana"],
+		birth_date=row["owner_birth_date"],
+		role=row["owner_role"],
+		is_active=row["owner_is_active"],
+		email_verified_at=row["owner_email_verified_at"],
+		created_at=row["owner_created_at"],
+		updated_at=row["owner_updated_at"],
+	)
+
+
+def _build_admin_project(row: RowMapping) -> Project:
+	project = _build_project(row)
+	project.owner = _build_project_owner(row)
+	return project
 
 
 def _build_login_history(row: RowMapping) -> LoginHistory:
@@ -110,11 +140,30 @@ async def list_projects(
 	db: AsyncSession, query: str | None, is_active: bool | None, limit: int, offset: int
 ) -> list[AdminProjectListItem]:
 	result = await db.execute(
-		text("SELECT (project).*, total_count FROM fn_admin_list_projects(:query, :is_active, :limit, :offset)"),
+		text(
+			"SELECT (project).*, (owner).id AS owner_user_id, (owner).username AS owner_username, "
+			"(owner).email AS owner_email, (owner).password_hash AS owner_password_hash, "
+			"(owner).last_name AS owner_last_name, (owner).first_name AS owner_first_name, "
+			"(owner).last_name_kana AS owner_last_name_kana, (owner).first_name_kana AS owner_first_name_kana, "
+			"(owner).birth_date AS owner_birth_date, (owner).role AS owner_role, "
+			"(owner).is_active AS owner_is_active, (owner).email_verified_at AS owner_email_verified_at, "
+			"(owner).created_at AS owner_created_at, (owner).updated_at AS owner_updated_at, "
+			"member_count, task_count_todo, task_count_in_progress, "
+			"task_count_done, total_count "
+			"FROM fn_admin_list_projects(:query, :is_active, :limit, :offset)"
+		),
 		{"query": query, "is_active": is_active, "limit": limit, "offset": offset},
 	)
 	return [
-		AdminProjectListItem(project=_build_project(row), total_count=row["total_count"]) for row in result.mappings()
+		AdminProjectListItem(
+			project=_build_admin_project(row),
+			total_count=row["total_count"],
+			member_count=row["member_count"],
+			task_count_todo=row["task_count_todo"],
+			task_count_in_progress=row["task_count_in_progress"],
+			task_count_done=row["task_count_done"],
+		)
+		for row in result.mappings()
 	]
 
 
@@ -140,7 +189,9 @@ async def list_login_history(
 ) -> list[AdminLoginHistoryListItem]:
 	result = await db.execute(
 		text(
-			"SELECT (history).*, total_count FROM fn_admin_list_login_history("
+			'SELECT (history).*, ("user").id AS user_info_id, ("user").username AS user_info_username, '
+			'("user").last_name AS user_info_last_name, ("user").first_name AS user_info_first_name, '
+			"total_count FROM fn_admin_list_login_history("
 			":user_id, :query, :login_method, :success, :created_from, :created_to, :limit, :offset)"
 		),
 		{
@@ -155,7 +206,20 @@ async def list_login_history(
 		},
 	)
 	return [
-		AdminLoginHistoryListItem(history=_build_login_history(row), total_count=row["total_count"])
+		AdminLoginHistoryListItem(
+			history=_build_login_history(row),
+			total_count=row["total_count"],
+			user=(
+				User(
+					id=row["user_info_id"],
+					username=row["user_info_username"],
+					last_name=row["user_info_last_name"],
+					first_name=row["user_info_first_name"],
+				)
+				if row["user_info_id"] is not None
+				else None
+			),
+		)
 		for row in result.mappings()
 	]
 
