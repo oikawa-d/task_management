@@ -129,7 +129,7 @@ sequenceDiagram
         RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>RP: 更新後の行
         RP-->>S: User
-        S->>S: 監査ログ出力（actor.id, target_id, old_role, new_role, result=success）
+        S->>S: 監査ログ出力（actor_user_id, target_user_id, old_role, new_role, result=success）
         S-->>R: UserDetail
         R-->>FE: 200 {user}
     end
@@ -173,11 +173,11 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def change_role(actor: CurrentUser, target_id: UUID, new_role: str, db: AsyncSession) -> AdminUserDetailResponse` |
+| シグネチャ | `async def change_role(actor: CurrentUser, target_id: UUID, new_role: str, db: AsyncSession, request_id: str | None = None) -> AdminUserDetailResponse` |
 | 引数 | `actor`: 実行者（admin） / `target_id`: 対象ユーザーID / `new_role`: 変更後ロール / `db`: DBセッション |
 | 戻り値 | 更新後の `AdminUserDetailResponse` |
 | 送出例外 | `NotFoundError`（404）/ `SelfModificationError`（409）/ `LastAdminRequiredError`（409） |
-| 処理内容 | `admin_repository.update_user_role(actor.id, target_id, new_role)` を1回呼ぶ。対象不存在（P0010）・自己変更禁止（P0007）・最後のadmin保護（P0008）・advisory lock・role更新はSP内部で一体実行され、更新前role（`old_role`）がOUTパラメータで返る。成功後は `user_repository.get_by_id(target_id)` で応答を取得し、`actor.id`/`target_id`/`old_role`/`new_role`/`result`を監査ログへINFO出力する（#347レビューで事前存在確認SELECTを廃止） |
+| 処理内容 | `admin_repository.update_user_role(actor.id, target_id, new_role)` を1回呼ぶ。対象不存在（P0010）・自己変更禁止（P0007）・最後のadmin保護（P0008）・advisory lock・role更新はSP内部で一体実行され、更新前role（`old_role`）がOUTパラメータで返る。成功後は `user_repository.get_by_id(target_id)` で応答を取得し、`actor_user_id`/`target_user_id`/`old_role`/`new_role`/`result`を監査ログへINFO出力する（#347レビューで事前存在確認SELECTを廃止） |
 | 副作用 | SP内で `users.role` を更新。Redisは変更せず、次回リクエストのDB再取得で認可へ反映 |
 
 ### 6.3 `repository/admin_repository.py :: update_user_role`
@@ -255,7 +255,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 
 | 観点 | 内容 |
 |------|------|
-| ログ出力 | 監査ログ対象。`actor.id`, `target_id`, `old_role`, `new_role`, 結果（成功/409種別）, `X-Request-ID` をINFO出力 |
+| ログ出力 | 監査ログ対象。`actor_user_id`, `target_user_id`, `old_role`, `new_role`, 結果（成功/409種別）, `X-Request-ID` をINFO出力 |
 | ユーザー列挙対策 | admin専用APIのため対象外 |
 | タイミング攻撃対策 | 該当なし |
 | レート制限 | なし |

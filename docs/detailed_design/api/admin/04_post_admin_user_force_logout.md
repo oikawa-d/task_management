@@ -130,7 +130,7 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def force_logout(actor: CurrentUser, target_id: UUID, db: AsyncSession) -> None` |
+| シグネチャ | `async def force_logout(actor: CurrentUser, target_id: UUID, db: AsyncSession, request_id: str | None = None) -> None` |
 | 引数 | `actor`: 実行者（admin） / `target_id`: 対象ユーザーID / `db`: DBセッション |
 | 戻り値 | なし |
 | 送出例外 | `NotFoundError`（404） |
@@ -208,7 +208,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 
 | 観点 | 内容 |
 |------|------|
-| ログ出力 | 監査ログ対象。`actor.id`, `target_id`, 失効件数（session/refreshそれぞれ）, `X-Request-ID` をINFO出力 |
+| ログ出力 | 監査ログ対象。`actor_user_id`, `target_user_id`, `mode`, `access_token_revocation_delay_seconds`, 失効件数（session/refreshそれぞれ）, `X-Request-ID` をINFO出力 |
 | ユーザー列挙対策 | admin専用APIのため対象外 |
 | タイミング攻撃対策 | 該当なし |
 | レート制限 | なし |
