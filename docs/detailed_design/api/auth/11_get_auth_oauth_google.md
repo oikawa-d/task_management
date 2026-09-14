@@ -22,7 +22,7 @@
 | 目的 | Google OAuth2（Authorization Code Flow + PKCE）の認可を開始し、Googleの認可画面へリダイレクトする |
 | ルーター責務 | OAuthの3 endpointを `oauth_router.py` に分離する。通常の認証endpointは `api/app/api/routers/auth_router.py` が担当する |
 | 認証 | 不要 |
-| 認可 | 未認証可（誰でも呼び出し可能） |
+| 認可 | 未認証可（ただしGoogleログイン有効時のみ） |
 | CSRF検証 | 不要（GET・状態変更なし。ただし後続のcallback/exchangeを保護するためstate/PKCE/nonceを本APIで発行する） |
 | Origin検証 | 不要（ブラウザの直接ナビゲーションであり、Originヘッダが付与されない場合がある） |
 | AUTH_MODE差異 | 差異なし。`AUTH_MODE` に関わらず本APIの処理は同一（分岐はcallback/exchange側で発生する） |
@@ -56,7 +56,7 @@ Cookie：なし（本APIはCookieを読まず、発行のみ行う）
 
 ### 2.2 レスポンス
 
-**`302 Found`（正常系のみ。本APIはエラー時も原則302で `/login` へ誘導し、JSONエラーは返さない）**
+**`302 Found`（正常系。本APIはブラウザの直接遷移で利用する）**
 
 | ヘッダ | 内容 |
 |--------|------|
@@ -86,11 +86,12 @@ Set-Cookie 一覧
 
 Cookie値は `state` そのもの。callback側でクエリの `state` とCookie値の一致を確認するために用いる（Redis保存のみでは、CookieなしのCSRF的なstate強制送信を防げないため二重に保持する）。
 
-**異常系（Redis接続不能時のみ）**
+**異常系**
 
 | HTTP | code | ボディ |
 |------|------|--------|
 | 503 | `SERVICE_UNAVAILABLE` | `basic_design/04_api.md` §4.1 形式のJSON |
+| 404 | `OAUTH_DISABLED` | `basic_design/04_api.md` §4.1 形式のJSON |
 
 ## 3. エラー仕様
 
@@ -98,9 +99,10 @@ Cookie値は `state` そのもの。callback側でクエリの `state` とCookie
 |------|------|----------|------------|------|
 | 302 | - | `redirect_to` が不正（絶対URL・`//`始まり・外部ドメイン等） | - | エラーにはせず、正規化して既定値 `/dashboard` を用いた上で処理を継続する（オープンリダイレクト対策。§10参照） |
 | 503 | `SERVICE_UNAVAILABLE` | Redis接続不能で `save_oauth_state` が失敗 | 現在サービスをご利用いただけません | fail-close。`basic_design/02_redis.md` §6 に準拠 |
+| 404 | `OAUTH_DISABLED` | `GOOGLE_LOGIN_ENABLED=false`、またはGoogleクライアント設定が不足 | Googleログインは現在無効です | stateを発行せず、OAuth開始を拒否 |
 | 500 | `INTERNAL_ERROR` | 上記以外の未捕捉例外 | - | ログにのみ詳細を出力 |
 
-`GOOGLE_CLIENT_ID` 等の設定不備（未設定）は起動時のconfig検証で検出し、本APIレベルのエラーコードは持たない（起動失敗として扱う。要検討：起動時検証の詳細は `infra/04_env_config.md` 側で規定）。
+`GOOGLE_CLIENT_ID` 等の設定項目自体が欠落して起動時のconfig検証に失敗する場合は、アプリケーション自体が起動しない。起動後に設定値が空文字等で不十分な場合は、`OAUTH_DISABLED`として扱う（§3）。
 
 ## 4. 処理シーケンス
 
@@ -145,20 +147,22 @@ sequenceDiagram
 
 ```mermaid
 flowchart TB
-    A["GET /api/auth/oauth/google"] --> B["redirect_to クエリを取得<br/>未指定なら既定値'/dashboard'"]
-    B --> C{"'/'で始まり<br/>'//'で始まらない<br/>相対パスか?"}
-    C -->|No| D["redirect_to = 既定値'/dashboard'に置換"]
-    C -->|Yes| E["正規化済みredirect_toとして採用"]
-    D --> F["state/code_verifier/nonce生成"]
-    E --> F
-    F --> G["redis_store.save_oauth_state"]
-    G --> H{"Redis接続成功?"}
-    H -->|No| I["503 SERVICE_UNAVAILABLE"]
-    H -->|Yes| J["GoogleOAuthProvider.build_authorize_url"]
-    J --> K["302 Location=認可URL<br/>Set-Cookie(cerberus_oauth_state)"]
+    A["GET /api/auth/oauth/google"] --> B{"Googleログイン有効?"}
+    B -->|No| C["404 OAUTH_DISABLED"]
+    B -->|Yes| D["redirect_to クエリを取得<br/>未指定なら既定値'/dashboard'"]
+    D --> E{"'/'で始まり<br/>'//'で始まらない<br/>相対パスか?"}
+    E -->|No| F["redirect_to = 既定値'/dashboard'に置換"]
+    E -->|Yes| G["正規化済みredirect_toとして採用"]
+    F --> H["state/code_verifier/nonce生成"]
+    G --> H
+    H --> I["redis_store.save_oauth_state"]
+    I --> J{"Redis接続成功?"}
+    J -->|No| K["503 SERVICE_UNAVAILABLE"]
+    J -->|Yes| L["GoogleOAuthProvider.build_authorize_url"]
+    L --> M["302 Location=認可URL<br/>Set-Cookie(cerberus_oauth_state)"]
 ```
 
-バリデーション層・認証層・認可層は本APIでは実質スキップされる（未認証利用が前提のため）。唯一の入力検証は `redirect_to` の正規化であり、これはルーター層で行い業務エラーにはしない。
+認証層・認可層は本APIでは未認証利用が前提のため適用しない。ルーター層でGoogleログインの有効性を確認し、無効時はstateを発行せず`OAUTH_DISABLED`を返す。有効時の入力検証は`redirect_to`の正規化であり、業務エラーにはしない。
 
 ## 6. 関数詳細
 
@@ -169,8 +173,8 @@ flowchart TB
 | シグネチャ | `async def oauth_google_start(response: Response, request: Request, redirect_to: str | None = Query(default=None)) -> RedirectResponse` |
 | 引数 | `redirect_to`: クエリパラメータ、任意のフロントパス文字列（未検証のまま渡ってくる） |
 | 戻り値 | `RedirectResponse`（302、`Set-Cookie` 付き） |
-| 送出例外 | `TooManyAttemptsError` → 429、`ServiceUnavailableError` → 503（例外ハンドラで変換） |
-| 処理内容 | 1. `redirect_to`、`request`、`response`を`auth_service.oauth_start`に渡す 2. 戻り値の`authorize_url`を`Location`に設定 3. serviceが設定した`cerberus_oauth_state` Cookieをレスポンスへ引き継ぐ 4. `RedirectResponse(status_code=302)`を返す |
+| 送出例外 | `OAuthDisabledError` → 404 `OAUTH_DISABLED`、`ServiceUnavailableError` → 503（例外ハンドラで変換） |
+| 処理内容 | 1. `google_login_enabled`を確認し、無効ならstateを発行せず404 2. 有効時は`redirect_to`、`request`、`response`を`auth_service.oauth_start`に渡す 3. 戻り値の`authorize_url`を`Location`に設定 4. serviceが設定したCookieをレスポンスへ引き継ぎ、`RedirectResponse(status_code=302)`を返す |
 | 副作用 | Cookie発行のみ（Redis更新はservice層で発生） |
 
 ### 6.2 `service/auth_service.py :: oauth_start`

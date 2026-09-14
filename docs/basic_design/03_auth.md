@@ -231,6 +231,8 @@ sessionモードはsession Cookieを必要とし、`DEL session:{sid}` 等を実
 
 `redirect_to` は state に保存する前に、`/` で始まり `//` で始まらない同一オリジンの相対パスへ正規化する。絶対URL・プロトコル相対URL・外部ドメインは受け付けず、違反時は既定値 `OAUTH_DEFAULT_REDIRECT_TO`（既定 `/dashboard`）を使う。これによりOAuth完了後のopen redirectを防ぐ。`/` は `/login` へのリダイレクト専用パスであり画面を持たないため、既定値には使わない（[05_frontend.md 2.1](./05_frontend.md#21-ルートパス--の扱い) 参照）。
 
+Googleログインの有効状態は、`GOOGLE_LOGIN_ENABLED=true`かつ`GOOGLE_CLIENT_ID`・`GOOGLE_CLIENT_SECRET`が設定されている場合のみ成立する。無効時は`GET /api/auth/config`が`google_login_enabled=false`を返し、OAuth開始・callback・exchangeを拒否する。開始・exchangeは404 `OAUTH_DISABLED`、callbackは302 `/login?error=oauth_disabled`とし、開始済みのstateやhandoffを消費せず、Google APIも呼び出さない。
+
 ### 5.2 シーケンス
 
 ```mermaid
