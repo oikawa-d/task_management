@@ -2,11 +2,12 @@ import "@testing-library/jest-dom/vitest";
 
 import axios, { type AxiosInstance } from "axios";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resetApiClient } from "../../../api/client";
+import { useProjectStore } from "../../../stores/projectStore";
 import { ApiError } from "../../../api/errors";
 import type { ProjectSummary } from "../api/types";
 import { DashboardPage } from "./DashboardPage";
@@ -56,6 +57,10 @@ function renderDashboard() {
 }
 
 describe("DashboardPage", () => {
+	beforeEach(() => {
+		useProjectStore.getState().clearSelectedProject();
+	});
+
 	afterEach(() => {
 		vi.restoreAllMocks();
 		resetApiClient();
@@ -196,5 +201,76 @@ describe("DashboardPage", () => {
 
 		expect(await screen.findByText("プロジェクト名を1〜100文字で入力してください")).toBeInTheDocument();
 		expect(client.post).not.toHaveBeenCalled();
+	});
+	it("プロジェクト選択時にprojectStoreへ選択を反映する", async () => {
+		const client = createMockClient();
+		(client.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+			data: { items: [buildProject()], meta: { page: 1, per_page: 20, total: 1, total_pages: 1 } },
+		});
+		vi.spyOn(axios, "create").mockReturnValue(client);
+
+		renderDashboard();
+		fireEvent.click(await screen.findByRole("button", { name: "Cerberus開発" }));
+
+		expect(useProjectStore.getState().selectedProjectId).toBe("project-1");
+	});
+
+	it("作成成功時は作成したプロジェクトを選択stateへ反映する", async () => {
+		const created = buildProject({ id: "project-9", name: "新プロジェクト" });
+		const client = createMockClient();
+		(client.get as ReturnType<typeof vi.fn>)
+			.mockResolvedValueOnce({ data: { items: [], meta: { page: 1, per_page: 20, total: 0, total_pages: 0 } } })
+			.mockResolvedValueOnce({ data: [] })
+			.mockResolvedValueOnce({ data: { items: [created], meta: { page: 1, per_page: 20, total: 1, total_pages: 1 } } });
+		(client.post as ReturnType<typeof vi.fn>).mockResolvedValue({ data: created });
+		vi.spyOn(axios, "create").mockReturnValue(client);
+
+		renderDashboard();
+		await screen.findByText("まだプロジェクトがありません。");
+
+		fireEvent.click(screen.getByRole("button", { name: "プロジェクトを作成" }));
+		fireEvent.change(screen.getByLabelText("プロジェクト名"), { target: { value: "新プロジェクト" } });
+		fireEvent.click(screen.getByRole("button", { name: "作成" }));
+
+		await waitFor(() => expect(useProjectStore.getState().selectedProjectId).toBe("project-9"));
+		expect(await screen.findByRole("button", { name: "新プロジェクト" })).toHaveAttribute("aria-current", "true");
+	});
+
+	it("一覧取得403 USER_INACTIVEは個別メッセージを表示し、再試行導線を出さない", async () => {
+		const client = createMockClient();
+		(client.get as ReturnType<typeof vi.fn>).mockImplementation((url: string) =>
+			url === "/projects"
+				? Promise.reject(new ApiError({ code: "USER_INACTIVE", message: "アカウントが無効化されています", status: 403 }))
+				: Promise.resolve({ data: [] }),
+		);
+		vi.spyOn(axios, "create").mockReturnValue(client);
+
+		renderDashboard();
+
+		const listSection = within(screen.getByRole("region", { name: "プロジェクト一覧" }));
+		expect(await listSection.findByText("アカウントが無効化されています。管理者にお問い合わせください")).toBeInTheDocument();
+		expect(listSection.queryByRole("button", { name: "再試行" })).not.toBeInTheDocument();
+	});
+
+	it("作成403 CSRF_INVALIDはフォーム内へメッセージを表示し、フォームを開いたままにする", async () => {
+		const client = createMockClient();
+		(client.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+			data: { items: [], meta: { page: 1, per_page: 20, total: 0, total_pages: 0 } },
+		});
+		(client.post as ReturnType<typeof vi.fn>).mockRejectedValue(
+			new ApiError({ code: "CSRF_INVALID", message: "CSRFトークンが不正です", status: 403 }),
+		);
+		vi.spyOn(axios, "create").mockReturnValue(client);
+
+		renderDashboard();
+		await screen.findByText("まだプロジェクトがありません。");
+
+		fireEvent.click(screen.getByRole("button", { name: "プロジェクトを作成" }));
+		fireEvent.change(screen.getByLabelText("プロジェクト名"), { target: { value: "新プロジェクト" } });
+		fireEvent.click(screen.getByRole("button", { name: "作成" }));
+
+		expect(await screen.findByText("セッションの検証に失敗しました。再度ログインしてからお試しください")).toBeInTheDocument();
+		expect(screen.getByLabelText("プロジェクト名")).toBeInTheDocument();
+		expect(useProjectStore.getState().selectedProjectId).toBeNull();
 	});
 });
