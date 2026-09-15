@@ -13,7 +13,7 @@
 | 責務 | 認可URLの組み立て、state/PKCE/nonceの発行と検証、token/userinfoエンドポイント呼び出し、id_token検証（JWKS）、ユーザー解決・新規作成、jwtモード向けhandoffコード発行 |
 | 適用条件 | `AUTH_MODE` に関わらず、`GOOGLE_LOGIN_ENABLED=true`かつGoogleクライアント設定がある場合のみ有効。無効時は`GET /auth/config`を`false`とし、開始・callback・exchangeを拒否する |
 | 依存先 | Redis（`oauth_state` / `oauth_handoff`）、PostgreSQL（`users` / `oauth_accounts`）、Google 認可サーバー・token/userinfo/JWKSエンドポイント |
-| 実装ファイル | `api/app/auth/oauth.py`（Provider本体）、`api/app/service/auth_service.py`（`oauth_start` / `oauth_callback` / `oauth_exchange`） |
+| 実装ファイル | `api/app/auth/oauth.py`（Provider本体）、`api/app/service/oauth_service.py`（`oauth_start` / `oauth_callback` / `oauth_exchange`） |
 
 ## 2. 構成要素
 
@@ -25,7 +25,7 @@
 | `fetch_userinfo` | メソッド | access_tokenでuserinfoエンドポイントを呼ぶ | id_token.sub との一致確認に使用 |
 | `verify_id_token` | メソッド | 署名（JWKS）・aud・iss・exp・nonceを検証 | `python-jose` 等のJWTライブラリを想定 |
 | `_jwks_cache` | モジュール内キャッシュ | GoogleのJWKSをプロセス内メモリでキャッシュ | TTLは`GOOGLE_JWKS_CACHE_TTL_SECONDS` |
-| `resolve_or_create_user` | 関数（`auth_service`内） | `oauth_accounts`/`users`の検索・作成・紐付け | 5.3節のアカウント紐付けルールを実装 |
+| `resolve_or_create_user` | 関数（`oauth_service.py`内） | `oauth_accounts`/`users`の検索・作成・紐付け | 5.3節のアカウント紐付けルールを実装 |
 | `normalize_redirect_to` | 関数 | `redirect_to` を同一オリジン相対パスへ正規化 | open redirect対策 |
 
 ## 3. 設定項目（環境変数）
@@ -180,7 +180,7 @@ stateDiagram-v2
 | 処理内容 | 1. `GOOGLE_AUTHORIZE_ENDPOINT` を基点に `client_id`/`redirect_uri`/`response_type=code`/`scope=openid email profile`/`state`/`code_challenge`/`code_challenge_method=S256`/`nonce` をクエリに付与 2. URLを返す |
 | 副作用 | なし |
 
-### 8.2 `service/auth_service.py :: oauth_start`
+### 8.2 `api/app/service/oauth_service.py :: oauth_start`
 
 | 項目 | 内容 |
 |------|------|
@@ -191,7 +191,7 @@ stateDiagram-v2
 | 処理内容 | 1. `normalize_redirect_to(redirect_to)` 2. `state`/`code_verifier`/`code_challenge`/`nonce` を `secrets.token_urlsafe` 等で生成 3. `redis_store.save_oauth_state(state, redirect_to, code_verifier, nonce, ttl=OAUTH_STATE_TTL_SECONDS)` 4. `response.set_cookie(COOKIE_NAME_OAUTH_STATE, state, httponly=True, ...)` 5. `GoogleOAuthProvider.build_authorize_url(...)` を返す |
 | 副作用 | Redis書き込み、Cookie設定 |
 
-### 8.3 `service/auth_service.py :: oauth_callback`
+### 8.3 `api/app/service/oauth_service.py :: oauth_callback`
 
 | 項目 | 内容 |
 |------|------|
@@ -202,7 +202,7 @@ stateDiagram-v2
 | 処理内容 | 1. callbackレート制限を確認 2. Cookieのstateとクエリのstateを比較 3. `redis_store.consume_oauth_state(state)`（GETDEL） 4. 値がNoneなら`InvalidStateError` 5. `GoogleOAuthProvider.exchange_code(code, code_verifier)` 6. `verify_id_token(id_token, nonce)` 7. `fetch_userinfo(access_token)` とsub一致確認 8. `_resolve_or_create_user(db, userinfo)` 9. `AUTH_MODE` に応じてsession確立 or handoff発行 10. sessionモードでは`login_history`へ`login_identifier=user.email`を設定してINSERT |
 | 副作用 | Redis削除・書き込み、PostgreSQL INSERT/UPDATE、Cookie設定（sessionモード） |
 
-### 8.4 `service/auth_service.py :: _resolve_or_create_user`
+### 8.4 `api/app/service/oauth_service.py :: _resolve_or_create_user`
 
 | 項目 | 内容 |
 |------|------|
@@ -235,7 +235,7 @@ stateDiagram-v2
 | 処理内容 | 1. プロセス内メモリキャッシュの有効期限（`GOOGLE_JWKS_CACHE_TTL_SECONDS`）を確認 2. 期限内ならキャッシュを返す 3. 期限切れなら `GOOGLE_JWKS_URI` から再取得しキャッシュを更新 |
 | 副作用 | プロセスメモリの更新（Redisは使用しない。複数ワーカー間では共有されず個別にキャッシュされる） |
 
-### 8.7 `service/auth_service.py :: oauth_exchange`
+### 8.7 `api/app/service/oauth_service.py :: oauth_exchange`
 
 | 項目 | 内容 |
 |------|------|
@@ -252,9 +252,9 @@ OAuthの `login_identifier` は監査・検索用に保存する検証済みGoog
 
 ```mermaid
 flowchart LR
-    R11["api/app/api/routers/oauth_router.py<br/>GET /api/auth/oauth/google"] --> ASV["auth_service.oauth_start"]
-    R12["api/app/api/routers/oauth_router.py<br/>GET /api/auth/oauth/google/callback"] --> ACB["auth_service.oauth_callback / oauth_callback_denied"]
-    R13["api/app/api/routers/oauth_router.py<br/>POST /api/auth/oauth/exchange"] --> AEX["auth_service.oauth_exchange"]
+    R11["api/app/api/routers/oauth_router.py<br/>GET /api/auth/oauth/google"] --> ASV["oauth_service.oauth_start"]
+    R12["api/app/api/routers/oauth_router.py<br/>GET /api/auth/oauth/google/callback"] --> ACB["oauth_service.oauth_callback / oauth_callback_denied"]
+    R13["api/app/api/routers/oauth_router.py<br/>POST /api/auth/oauth/exchange"] --> AEX["oauth_service.oauth_exchange"]
 
     ASV --> OAUTH["GoogleOAuthProvider.build_authorize_url"]
     ASV --> RS1["redis_store.save_oauth_state"]
