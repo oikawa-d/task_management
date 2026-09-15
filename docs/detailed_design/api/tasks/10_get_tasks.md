@@ -290,21 +290,21 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 結合（実DB・実SP） | project_id省略時のデフォルト範囲 | user=member、リポジトリをモック | `project_id_filter=None`でリポジトリ呼び出し | `test_list_tasks_default_scope` |
-| 2 | 結合（実DB・実SP） | project_id指定・非所属 | `is_member=False`、非admin | `NotFoundError`送出 | `test_list_tasks_project_filter_forbidden` |
-| 3 | 結合（実DB・実SP） | project_id="null"の正規化 | クエリ文字列`"null"` | `project_id_filter="unassigned"`としてサービス層へ渡る | `test_list_tasks_null_literal_normalized` |
+| 1 | 結合（実DB） | project_id省略時のデフォルト範囲 | 実DB、`scenario`フィクスチャでmemberの所属プロジェクト1件・共有プロジェクト1件・自分の未所属タスク1件・他人の未所属タスク1件を用意 | 200、`project_id`省略時に所属プロジェクト分＋自分の未所属タスクが返り、他人の未所属タスクは含まれない | `test_list_tasks_member_scope_includes_shared_and_own_unassigned_only` |
+| 2 | 結合（実DB） | project_id指定・非所属 | 実DB、`scenario.private_project_id`（非所属・非admin）を`project_id`に指定 | 404 `NOT_FOUND` | `test_list_tasks_unassigned_filter_and_project_membership_boundary` |
+| 3 | 結合（実DB） | project_id="null"の正規化 | 実DB、クエリ文字列`project_id=null` | 200、自分の未所属タスクのみに絞り込まれる（正規化後の絞込結果で検証） | `test_list_tasks_unassigned_filter_and_project_membership_boundary` |
 | 4 | 結合（実DB・実SP） | 不正なproject_id文字列 | `"not-a-uuid"` / `"unassigned"` | `ValidationError`（422） | `test_list_tasks_rejects_invalid_project_filter` |
 | 5 | 結合 | memberは所属プロジェクトの全タスクを横断取得 | 実DB、所属プロジェクト2件・各2タスク | 200、所属範囲のタスクが返る | `test_list_tasks_member_scope_includes_shared_and_own_unassigned_only` |
 | 6 | 結合 | memberは自分の未所属タスクも含む | 実DB、`project_id=NULL`の自作タスク1件 | 200、所属プロジェクト分＋1件 | `test_list_tasks_member_scope_includes_shared_and_own_unassigned_only` |
 | 7 | 結合 | memberは他人の未所属タスクを見えない | 実DB、他ユーザー作成の`project_id=NULL`タスク | 200、含まれない | `test_list_tasks_member_scope_includes_shared_and_own_unassigned_only` |
 | 8 | 結合 | project_id="null"指定で未所属のみ絞込 | 実DB、所属プロジェクトのタスクと自作未所属タスク | 200、未所属タスクのみ返る | `test_list_tasks_unassigned_filter_and_project_membership_boundary` |
 | 9 | 結合 | project_id=UUID指定で単一プロジェクトに絞込 | 実DB、非所属のprivate projectを指定 | 404 `NOT_FOUND` | `test_list_tasks_unassigned_filter_and_project_membership_boundary` |
-| 10 | 結合 | adminは全ユーザーの未所属タスクを含め全件 | 実DB、複数ユーザーの未所属タスク | 200、全件に含まれる | `test_list_tasks_admin_sees_all_including_unassigned` |
+| 10 | 結合 | adminは全ユーザーの未所属タスクを含め全件 | 実DB、複数ユーザーの未所属タスク | 200、全件に含まれる | 未実装（issue #458）。DB関数レベルでは`api/tests/test_db_functions_project_task.py::test_fn_list_tasks_admin_sees_all_unassigned_tasks`がカバー済み |
 | 11 | 結合 | 既定はis_active=falseを除外 | 実DB、`is_active=false`のタスクを含む | 200、含まれない | `test_list_tasks_excludes_inactive_by_default_and_can_include_it` |
 | 12 | 結合 | include_inactive指定 | 実DB、`?include_inactive=true` | 200、`is_active=false`のタスクも含まれる | `test_list_tasks_excludes_inactive_by_default_and_can_include_it` |
-| 13 | 結合 | statusフィルタ | 実DB、`?status=done` | 200、`status=done`のみ | `test_list_tasks_filter_by_status` |
-| 14 | 結合 | ページング | 実DB、認可範囲に25件 | `per_page=20`で1ページ目20件、2ページ目5件 | `test_list_tasks_pagination` |
-| 15 | パラメータ化 | AUTH_MODE両対応 | `AUTH_MODE=session` / `jwt` | 5・9・10を両モードで実行 | フィクスチャ `auth_mode` |
+| 13 | 結合 | statusフィルタ | 実DB、`?status=done` | 200、`status=done`のみ | 未実装（issue #458） |
+| 14 | 結合 | ページング | 実DB、認可範囲に25件 | `per_page=20`で1ページ目20件、2ページ目5件 | 未実装（issue #458） |
+| 15 | パラメータ化 | AUTH_MODE両対応 | `AUTH_MODE=session` / `jwt` | 5・9・10を両モードで実行 | 未実装。現状の結合テストは実行時の`AUTH_MODE`設定値に追随するのみで、両モードを1テストでパラメータ化して実行する仕組みはない |
 
 実装済みの結合テストでは、上表の一覧境界に加えて、同一シナリオで作成・詳細取得・position更新・version競合（409）・論理削除・ボード再取得まで確認する（`test_task_crud_updates_position_and_rejects_stale_version`）。未確認の同時PATCH競合とページングの実DB検証は要検討とする。
 
