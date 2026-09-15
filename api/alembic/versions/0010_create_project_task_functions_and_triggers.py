@@ -18,8 +18,12 @@ depends_on: Union[str, Sequence[str], None] = None
 
 DB_DIR = Path(__file__).resolve().parents[3] / "db"
 FUNCTIONS_DIR = DB_DIR / "functions"
+LEGACY_FUNCTIONS_DIR = FUNCTIONS_DIR / "legacy"
 PROCEDURES_DIR = DB_DIR / "procedures"
 LEGACY_PROCEDURES_DIR = PROCEDURES_DIR / "legacy"
+LEGACY_FUNCTION_FILES = {
+	"fn_list_tasks.sql": "0010_fn_list_tasks.sql",
+}
 LEGACY_PROCEDURE_FILES = {
 	"sp_create_task.sql": "0010_sp_create_task.sql",
 	"sp_update_task.sql": "0010_sp_update_task.sql",
@@ -63,7 +67,9 @@ def upgrade() -> None:
 			f"EXECUTE FUNCTION trg_set_updated_at();"
 		)
 	for filename in _FUNCTION_FILES:
-		op.execute((FUNCTIONS_DIR / filename).read_text())
+		function_dir = LEGACY_FUNCTIONS_DIR if filename in LEGACY_FUNCTION_FILES else FUNCTIONS_DIR
+		function_filename = LEGACY_FUNCTION_FILES.get(filename, filename)
+		op.execute((function_dir / function_filename).read_text())
 	for filename in _PROCEDURE_FILES:
 		procedure_dir = (
 			LEGACY_PROCEDURES_DIR

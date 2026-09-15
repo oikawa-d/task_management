@@ -42,6 +42,8 @@ _SAFE_AUDIT_FIELDS = (
 	"access_token_revocation_delay_seconds",
 )
 
+_JSON_HANDLER_MARKER = "_cerberus_json_handler"
+
 
 class JsonFormatter(logging.Formatter):
 	def format(self, record: logging.LogRecord) -> str:
@@ -63,8 +65,11 @@ class JsonFormatter(logging.Formatter):
 def configure_logging(log_level: str) -> None:
 	root_logger = logging.getLogger()
 	root_logger.setLevel(log_level.upper())
-	root_logger.handlers.clear()
+	for handler in root_logger.handlers[:]:
+		if getattr(handler, _JSON_HANDLER_MARKER, False):
+			root_logger.removeHandler(handler)
 
 	handler = logging.StreamHandler(sys.stdout)
 	handler.setFormatter(JsonFormatter())
+	setattr(handler, _JSON_HANDLER_MARKER, True)
 	root_logger.addHandler(handler)

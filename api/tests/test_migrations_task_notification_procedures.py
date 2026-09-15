@@ -44,6 +44,18 @@ def test_task_procedures_keep_legacy_signature_until_notification_tables_exist()
 			)
 
 		with engine.connect() as connection:
+			assert (
+				connection.execute(
+					text("SELECT count(*) FROM pg_proc WHERE proname = 'fn_list_tasks' AND pronargs = 6")
+				).scalar_one()
+				== 1
+			)
+			assert (
+				connection.execute(
+					text("SELECT count(*) FROM pg_proc WHERE proname = 'fn_list_tasks' AND pronargs = 7")
+				).scalar_one()
+				== 0
+			)
 			assert connection.execute(text("SELECT count(*) FROM tasks WHERE title = 'legacy'")).scalar_one() == 1
 			assert connection.execute(text("SELECT to_regclass('public.notifications')")).scalar_one() is None
 	finally:
