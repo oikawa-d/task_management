@@ -119,10 +119,7 @@ def _login_history_failure_reasons() -> list[str | None]:
 	engine = create_engine(_sync_database_url())
 	try:
 		with engine.connect() as connection:
-			return [
-				row[0]
-				for row in connection.execute(text("SELECT failure_reason FROM login_history")).fetchall()
-			]
+			return [row[0] for row in connection.execute(text("SELECT failure_reason FROM login_history")).fetchall()]
 	finally:
 		engine.dispose()
 
