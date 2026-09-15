@@ -309,7 +309,7 @@ Redis の失効状況とは独立して、設定した保持期間（既定90日
 | ip_address | INET | YES | `X-Forwarded-For` を考慮して取得 |
 | user_agent | TEXT | YES | |
 | success | BOOLEAN | NO | |
-| failure_reason | VARCHAR(50) | YES | `invalid_credentials` / `user_inactive` / `oauth_denied` 等 |
+| failure_reason | VARCHAR(50) | YES | `invalid_credentials` / `user_inactive` 等 |
 | created_at | TIMESTAMPTZ | NO | |
 
 **インデックス**：`ix_login_history_user_created` (user_id, created_at DESC)、`ix_login_history_created` (created_at DESC)
