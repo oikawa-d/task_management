@@ -23,7 +23,7 @@
 | AUTH_MODE差異 | CSRF検証の要否のみ差異あり |
 | 冪等性 | あり（同一bodyでの再送信は同じ結果になる。ただし`updated_at`は都度更新される） |
 | レート制限 | 対象外 |
-| トランザクション境界 | `task_comments` の1行UPDATEのみ。Last Write Winsを採用し、`version` 列や楽観ロックは追加しない |
+| トランザクション境界 | `task_comments` の1行UPDATE、更新行再取得、`db.commit()`をサービス層で一体実行。例外時は`db.rollback()`で部分更新を残さない。Last Write Winsを採用し、`version`列は追加しない |
 
 ## 2. 入出力仕様
 
@@ -98,11 +98,11 @@
 sequenceDiagram
     autonumber
     participant FE as "React SPA"
-    participant R as "comments_router"
+    participant R as "comment_router"
     participant V as "verify_origin_if_session/verify_csrf_if_session"
     participant D as "deps.get_comment_for_member"
-    participant S as "task_service"
-    participant TR as "task_repository"
+    participant S as "task_comment_service"
+    participant TR as "task_comment_repository"
     participant PG as "PostgreSQL"
 
     FE->>R: "PATCH /api/comments/{comment_id} {body}"
@@ -113,29 +113,42 @@ sequenceDiagram
     else "検証OK"
         R->>R: "pydanticでbody長を検証"
         R->>D: "get_comment_for_member(comment_id)"
-        D->>TR: "get_comment_with_task(comment_id)"
+        D->>TR: "get_by_id(comment_id)"
         TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         alt "コメント不存在"
             D-->>R: "NotFoundError"
             R-->>FE: "404 NOT_FOUND"
-        else "プロジェクト非所属（admin以外）"
-            D->>D: "require_project_member(comment.task.project_id, user)"
-            D-->>R: "NotFoundError"
-            R-->>FE: "404 NOT_FOUND"
-        else "所属確認OK"
-            D-->>R: "Comment"
-            R->>S: "update_comment(comment, payload, current_user)"
-            S->>S: "user.id == comment.user_id または user.role == 'admin' を判定"
-            alt "本人でもadminでもない"
-                S-->>R: "ForbiddenError"
-                R-->>FE: "403 FORBIDDEN"
-            else "権限あり"
-                S->>TR: "sp_update_task_comment(comment_id, body)"
-                TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-                PG-->>TR: "更新後の行"
-                TR-->>S: "Comment"
-                S-->>R: "CommentResponse"
-                R-->>FE: "200 {comment}"
+        else "コメント・taskが存在する"
+            D-->>R: "TaskComment"
+            R->>S: "update_comment(task, comment, payload, current_user, db)"
+            S->>S: "require_task_access(task, current_user, db)"
+            alt "論理削除・非所属・未所属taskの非作成者"
+                S-->>R: "NotFoundError"
+                R-->>FE: "404 NOT_FOUND"
+            else "taskアクセス許可"
+                S->>S: "require_comment_editor(comment.user_id, current_user)"
+                alt "本人でもadminでもない"
+                    S-->>R: "ForbiddenError"
+                    R-->>FE: "403 FORBIDDEN"
+                else "権限あり"
+                    S->>TR: "update(comment_id, body)"
+                    TR->>PG: "CALL sp_update_task_comment(...)"
+                    PG-->>TR: "更新完了"
+                    TR-->>S: "None"
+                    S->>TR: "get_by_id(comment_id)"
+                    TR->>PG: "SELECT fn_get_comment_with_task(comment_id)"
+                    PG-->>TR: "更新済みcomment行"
+                    TR-->>S: "Comment"
+                    S->>PG: "db.commit()"
+                    alt "DB/transaction failure"
+                        S->>PG: "db.rollback()"
+                        S-->>R: "DB exception"
+                        R-->>FE: "503 SERVICE_UNAVAILABLE"
+                    else "commit success"
+                        S-->>R: "CommentResponse"
+                        R-->>FE: "200 {comment}"
+                    end
+                end
             end
         end
     end
@@ -153,82 +166,85 @@ flowchart TB
     D -->|"No"| D1["401 / 403 USER_INACTIVE"]
     D -->|"Yes"| E{"comment_idが存在する?"}
     E -->|"No"| E1["404 NOT_FOUND"]
-    E -->|"Yes"| F{"adminまたは<br/>対象タスクのプロジェクトメンバー?"}
+    E -->|"Yes"| F{"taskアクセスが許可されている?"}
     F -->|"No"| F1["404 NOT_FOUND"]
     F -->|"Yes"| G{"投稿者本人またはadmin?"}
     G -->|"No"| G1["403 FORBIDDEN"]
     G -->|"Yes"| H["task_comments を UPDATE<br/>（body, updated_at=now()）"]
-    H --> I["200 応答"]
+    H --> I{"db.commit()"}
+    I -->|"成功"| J["200 応答"]
+    I -->|"例外"| K["db.rollback() / 503 SERVICE_UNAVAILABLE"]
 ```
 
 ## 6. 関数詳細
 
-### 6.1 `api/routers/comments.py :: update_comment`
+### 6.1 `api/app/api/routers/comment_router.py :: update_task_comment`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def update_comment(payload: CommentUpdateRequest, comment: Comment = Depends(get_comment_for_member), user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> CommentResponse` |
-| 引数 | `payload`：更新内容／`comment`：プロジェクト所属確認済みのコメント／`user`：現在ユーザー／`db`：DBセッション |
+| シグネチャ | `async def update_task_comment(payload: CommentUpdateRequest, comment: TaskComment = Depends(get_comment_for_member), user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db_session), _: None = Depends(verify_origin_if_session), __csrf: None = Depends(verify_csrf_if_session)) -> CommentResponse` |
+| 引数 | `payload`：更新内容／`comment`：コメント・task取得済みの`TaskComment`／`user`：現在ユーザー／`db`：DBセッション |
 | 戻り値 | `CommentResponse`（200） |
 | 送出例外 | なし（下位の `ForbiddenError` はハンドラで403に変換） |
-| 処理内容 | 1. `task_service.update_comment(comment, payload, user, db)` を呼ぶ 2. 結果を返す |
+| 処理内容 | 1. `task_comment_service.update_comment(comment.task, comment, payload, user, db)`を呼ぶ 2. 結果を返す |
 | 副作用 | `task_comments` の1行UPDATE（サービス層経由） |
 
-### 6.2 `core/deps.py :: get_comment_for_member`
+### 6.2 `api/app/core/deps.py :: get_comment_for_member`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def get_comment_for_member(comment_id: UUID, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> Comment` |
-| 引数 | `comment_id`：パスパラメータ／`user`：現在ユーザー／`db`：DBセッション |
-| 戻り値 | `task.project_id` を判定済みの `Comment`（投稿者本人/admin判定はまだ行わない） |
-| 送出例外 | `NotFoundError`（コメント不存在・プロジェクト非所属いずれも404） |
-| 処理内容 | 1. `task_repository.fn_get_comment_with_task(comment_id)` でコメント＋所属タスクを取得 2. 存在しなければ `NotFoundError` 3. `user.role == 'admin'` なら通過 4. それ以外は `project_repository.fn_is_project_member(comment.task.project_id, user.id)` を確認し、Falseなら `NotFoundError` |
+| シグネチャ | `async def get_comment_for_member(comment_id: UUID, db: AsyncSession = Depends(get_db_session)) -> TaskComment` |
+| 引数 | `comment_id`：パスパラメータ／`db`：DBセッション |
+| 戻り値 | `task`を設定済みの`TaskComment`（所属・投稿者権限の判定はサービス層で行う） |
+| 送出例外 | `NotFoundError`（コメント不存在・紐づくtask不存在） |
+| 処理内容 | `task_comment_repository.get_by_id`でコメントと関連taskを取得する。task関係は既取得値として設定し、flushによる再永続化を発生させない |
 | 副作用 | なし |
 
-### 6.3 `service/task_service.py :: update_comment`
+### 6.3 `api/app/service/task_comment_service.py :: update_comment`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def update_comment(comment: Comment, payload: CommentUpdateRequest, user: CurrentUser, db: AsyncSession) -> Comment` |
-| 引数 | `comment`：所属確認済みコメント／`payload`：更新内容／`user`：操作者／`db`：DBセッション |
-| 戻り値 | 更新後の `Comment` |
-| 送出例外 | `ForbiddenError`（投稿者本人でもadminでもない場合、403） |
-| 処理内容 | 1. `user.id == comment.user_id or user.role == 'admin'` を判定し、Falseなら `ForbiddenError` 2. `task_repository.sp_update_task_comment(comment.id, user.id, payload.body, db)`（`CALL sp_update_task_comment(...)`）を呼ぶ 3. 結果に `author` をセットして返す |
+| シグネチャ | `async def update_comment(task: Task, comment: TaskComment, payload: CommentCreateRequest, user: CurrentUser, db: AsyncSession) -> CommentResponse` |
+| 引数 | `task`：対象task／`comment`：対象コメント／`payload`：更新内容／`user`：操作者／`db`：DBセッション |
+| 戻り値 | 更新後の `CommentResponse` |
+| 送出例外 | `NotFoundError`、`ForbiddenError`（投稿者本人でもadminでもない場合、403）、DB例外（rollback後に503へ変換） |
+| 処理内容 | `require_task_access`と`require_comment_editor`で認可後、`task_comment_repository.update`、`get_by_id`、`db.commit()`を順に実行する。途中で例外が発生した場合は`db.rollback()`後に再送出する |
 | 副作用 | `task_comments` の1行UPDATE |
 
-### 6.4 `repository/task_repository.py :: fn_get_comment_with_task`
+### 6.4 `api/app/repository/task_comment_repository.py :: get_by_id`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def get_comment_with_task(comment_id: UUID, db: AsyncSession) -> Comment \| None` |
+| シグネチャ | `async def get_by_id(db: AsyncSession, comment_id: UUID) -> TaskComment \| None` |
 | 引数 | `comment_id`：対象コメントID／`db`：DBセッション |
-| 戻り値 | `task`（`project_id` を含む）と `author` をロード済みの `Comment`、存在しなければ `None` |
+| 戻り値 | `task`（`project_id` を含む）と `author` をロード済みの `TaskComment`、存在しなければ `None` |
 | 送出例外 | なし |
-| 処理内容 | 1. `task_comments`を主クエリで1回取得 2. `FN結果の一括マッピング(Comment.task)` と `FN結果の一括マッピング(Comment.author)` の追加SELECTを各1回実行（最大3クエリ） |
+| 処理内容 | `SELECT * FROM fn_get_comment_with_task(:comment_id)`を`from_statement`で実行し、`task`と`author`を`selectinload`でロードする |
 | 副作用 | なし |
 
-### 6.5 `repository/task_repository.py :: sp_update_task_comment`
+### 6.5 `api/app/repository/task_comment_repository.py :: update`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def sp_update_task_comment(comment_id: UUID, user_id: UUID, body: str, db: AsyncSession) -> Comment` |
+| シグネチャ | `async def update(db: AsyncSession, comment_id: UUID, user_id: UUID, body: str) -> None` |
 | 引数 | `comment_id` / `user_id` / `body`：更新後の本文／`db`：DBセッション |
-| 戻り値 | 更新後の `Comment` |
+| 戻り値 | なし |
 | 送出例外 | なし（呼び出し時点で存在確認済み） |
-| 処理内容 | `CALL sp_update_task_comment(:comment_id, :user_id, :body)` を発行する。対象行の `body` UPDATEと`updated_at`のトリガ（`trg_set_updated_at`）による自動更新はSP内部で実行される。成功後に`SELECT fn_get_comment_with_task(:comment_id)`等で更新後の行を取得する |
+| 処理内容 | `CALL sp_update_task_comment(:comment_id, :user_id, :body)`を発行する。対象行の`body` UPDATEと`updated_at`のトリガによる更新はSP内部で実行される |
 | 副作用 | `task_comments` の1行UPDATE（SP内部） |
 
 ## 7. 関数相関図
 
 ```mermaid
 flowchart LR
-    R["comments_router.update_comment"] --> Sch["schemas.CommentUpdateRequest"]
+    R["comment_router.update_task_comment"] --> Sch["schemas.CommentUpdateRequest"]
     R --> D["deps.get_comment_for_member"]
-    R --> S["task_service.update_comment"]
-    D --> TR1["task_repository.fn_get_comment_with_task"]
-    D --> PR["project_repository.fn_is_project_member"]
-    S --> TR2["sp_update_task_comment"]
-    TR1 --> M["models.Comment"]
+    R --> S["task_comment_service.update_comment"]
+    D --> TR1["task_comment_repository.get_by_id"]
+    S --> A["authorization_service.require_task_access"]
+    A --> PR["project_member_repository.exists"]
+    S --> TR2["task_comment_repository.update<br/>（sp_update_task_comment）"]
+    TR1 --> M["models.TaskComment"]
     TR2 --> M
     R --> V["deps.verify_origin_if_session / verify_csrf_if_session"]
 ```
@@ -244,7 +260,10 @@ stateDiagram-v2
     所属確認 --> 権限確認: "所属あり または admin"
     権限確認 --> 権限不足403: "投稿者本人でもadminでもない"
     権限確認 --> 更新: "投稿者本人 または admin"
-    更新 --> [*]: "body更新, updated_at=now()"
+    更新 --> commit{"db.commit()"}
+    commit --> [*]: "body更新を確定"
+    commit --> rollback["db.rollback() / 503"]
+    rollback --> [*]
 ```
 
 ## 9. SP/FNデータアクセス一覧
@@ -301,6 +320,11 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 7 | 結合 | 投稿者本人が編集 | 実DB | `200`、`body`と`updated_at`が更新される | `test_patch_comment_author_updates_successfully` |
 | 8 | 結合 | adminが他人のコメントを編集 | 実DB、adminユーザー | `200` | `test_patch_comment_admin_can_edit_others` |
 | 9 | パラメータ化 | `AUTH_MODE=session` / `jwt` の両方で正常系を確認 | 両モードのfixture | いずれも `200` | `test_patch_comment_both_auth_modes` |
+| 10 | 結合 | API境界で本人が編集し、レスポンスと一覧の本文が更新される | 実DB、本人認証 | `200`、trim後の本文が返り、一覧にも反映 | `test_comment_crud_round_trip_at_api_boundary` |
+| 11 | 結合 | adminが他人を編集し、peer/第三者を拒否 | 実DB、同一プロジェクトpeer・第三者・admin | peerは`403`、第三者は`404`、adminは`200` | `test_comment_authorization_boundary_for_peer_outsider_and_admin` |
+| 12 | 結合 | commit失敗時に編集前本文を維持 | 実DB、commitを失敗させるfixture | `503 SERVICE_UNAVAILABLE`、一覧の本文は元のまま | `test_comment_update_and_delete_transaction_failure_leave_original_state` |
+| 13 | 結合 | 未認証ユーザーが編集 | 実HTTP、認証情報なし | `401 UNAUTHENTICATED` | `test_comment_endpoints_require_authentication` |
+| 14 | 結合 | session方式でCSRFトークンなしで編集 | 実HTTP、認証済みsession、`X-CSRF-Token` 未送信 | `403 CSRF_INVALID` | `test_comment_mutations_require_csrf_in_session_mode` |
 
 ## 13. Issue #8で確定した事項
 
