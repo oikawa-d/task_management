@@ -110,7 +110,7 @@ sequenceDiagram
     participant FE as React SPA
     participant R as "api/app/api/routers/oauth_router.py"
     participant D as deps.verify_origin
-    participant S as auth_service.oauth_exchange
+    participant S as oauth_service.oauth_exchange
     participant RS as redis_store
     participant RD as Redis
     participant UR as user_repository
@@ -209,10 +209,10 @@ flowchart TB
 | 引数 | `payload`：`code`を含むリクエストボディ。`request`/`response`：Cookie操作用 |
 | 戻り値 | `OAuthExchangeResponse`（200） |
 | 送出例外 | `OAuthDisabledError`（404）、`NotSupportedInModeError`（405）、`OAuthHandoffInvalidError`（400）、`UserInactiveError`（403）、`OAuthFailedError`（`oauth_failed`）、`TooManyAttemptsError`（429）、`ServiceUnavailableError`（503）、`CsrfInvalidError`（403、`verify_origin`内） |
-| 処理内容 | 1. Googleログインの有効性を確認し、無効ならhandoffを消費せず`OAuthDisabledError` 2. `settings.auth_mode != 'jwt'`なら`NotSupportedInModeError` 3. `auth_service.oauth_exchange(payload.code, request, response, db)`を呼ぶ 4. `Cache-Control: no-store`を付与して戻り値を返す |
+| 処理内容 | 1. Googleログインの有効性を確認し、無効ならhandoffを消費せず`OAuthDisabledError` 2. `settings.auth_mode != 'jwt'`なら`NotSupportedInModeError` 3. `oauth_service.oauth_exchange(payload.code, request, response, db)`を呼ぶ 4. `Cache-Control: no-store`を付与して戻り値を返す |
 | 副作用 | Cookie発行（`cerberus_rt`/`cerberus_csrf`。`service`内の`JwtAuthStrategy.login`が実施） |
 
-### 6.2 `service/auth_service.py :: oauth_exchange`
+### 6.2 `api/app/service/oauth_service.py :: oauth_exchange`
 
 | 項目 | 内容 |
 |------|------|
@@ -261,7 +261,7 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["api/app/api/routers/oauth_router.py<br/>oauth_exchange"] --> D["deps.verify_origin"]
-    R --> S["auth_service.oauth_exchange"]
+    R --> S["oauth_service.oauth_exchange"]
     S --> RS1["redis_store.consume_oauth_handoff"]
     S --> URP["user_repository.get_by_id"]
     S --> JWTS["JwtAuthStrategy.login"]

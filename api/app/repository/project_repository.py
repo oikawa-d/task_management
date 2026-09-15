@@ -6,6 +6,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.project import Project
+from app.models.user import User
 from app.repository import project_member_repository
 
 
@@ -70,7 +71,7 @@ async def list_for_user(
 		{"user_id": user_id, "include_inactive": include_inactive, "limit": limit, "offset": offset},
 	)
 	rows = result.mappings().all()
-	return [
+	items = [
 		ProjectListItem(
 			project=Project(
 				id=row["id"],
@@ -91,6 +92,14 @@ async def list_for_user(
 		)
 		for row in rows
 	]
+	if not items:
+		return items
+	owner_ids = {item.project.owner_id for item in items}
+	owner_result = await db.execute(select(User).where(User.id.in_(owner_ids)))
+	owners = {owner.id: owner for owner in owner_result.scalars().all()}
+	for item in items:
+		item.project.owner = owners[item.project.owner_id]
+	return items
 
 
 async def update(

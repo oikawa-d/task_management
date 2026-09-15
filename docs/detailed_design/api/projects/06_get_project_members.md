@@ -114,11 +114,11 @@ sequenceDiagram
         D-->>R: NotFoundError
         R-->>FE: "404 NOT_FOUND"
     end
-    R->>S: fn_list_project_members(project)
-    S->>RP: fn_list_project_members(project_id)
+    R->>S: member_service.list_members(project, db)
+    S->>RP: project_member_repository.list_by_project(project_id)
     RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>RP: project_members行
-    RP->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
+    RP->>PG: "usersをuser_idで一括取得（selectinload）"
     PG-->>RP: users行
     RP-->>S: list[Member]
     S-->>R: MemberListResponse
@@ -136,15 +136,15 @@ flowchart TB
     C -->|is_active=false| E3["403 USER_INACTIVE"]
     C -->|Yes| D{"require_project_member<br/>admin または所属あり"}
     D -->|No（非所属 or 不存在）| E4["404 NOT_FOUND"]
-    D -->|Yes| F["project_service.fn_list_project_members呼び出し"]
-    F --> G["fn_list_project_membersを1回呼び出し<br/>（project_membersとusersのJOINはFN内部で完結、N+1なし）"]
+    D -->|Yes| F["member_service.list_members呼び出し"]
+    F --> G["fn_list_project_membersを呼び出し<br/>usersはselectinloadで一括取得（N+1なし）"]
     G --> H["MemberListResponseへ変換"]
     H --> I["200 レスポンス返却"]
 ```
 
 ## 6. 関数詳細
 
-### 6.1 `api/routers/projects.py :: list_project_members`
+### 6.1 `api/routers/projects_router.py :: list_project_members`
 
 | 項目 | 内容 |
 |------|------|
@@ -152,33 +152,33 @@ flowchart TB
 | 引数 | project：`require_project_member` が解決したプロジェクト（表の説明は下記） |
 | 戻り値 | `MemberListResponse`（`items`, `meta`） |
 | 送出例外 | なし（例外は `deps` / `service` 側で送出され `AppError` ハンドラが処理） |
-| 処理内容 | 1. `require_project_member` の解決結果を受け取る 2. `project_service.fn_list_project_members(project)` を呼び出す 3. 結果をそのままレスポンスとして返す |
+| 処理内容 | 1. `require_project_member` の解決結果を受け取る 2. `member_service.list_members(project, db)` を呼び出す 3. 結果をそのままレスポンスとして返す |
 | 副作用 | なし |
 
 | 引数名 | 型 | 説明 |
 |--------|----|------|
 | project | `Project` | `require_project_member` が検証済みの対象プロジェクト（ORMモデル） |
 
-### 6.2 `service/project_service.py :: fn_list_project_members`
+### 6.2 `service/member_service.py :: list_members`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def fn_list_project_members(project: Project) -> MemberListResponse` |
-| 引数 | project：`Project`（検証済み） |
+| シグネチャ | `async def list_members(project: Project, db: AsyncSession) -> MemberListResponse` |
+| 引数 | project：`Project`（検証済み） / db：`AsyncSession` |
 | 戻り値 | `MemberListResponse` |
 | 送出例外 | なし |
-| 処理内容 | 1. `fn_list_project_members(project.id)` を呼び出す 2. 各行を `MemberSummary` スキーマへ変換（`display_name` は `last_name`/`first_name` のいずれかが `null` の場合は `None`） 3. `is_owner` を `project.owner_id` との比較で算出 |
+| 処理内容 | 1. `project_member_repository.list_by_project(db, project.id)` を呼び出す 2. 各行を `MemberSummary` スキーマへ変換（`display_name` は `last_name`/`first_name` のいずれかが `null` の場合は `None`） 3. `is_owner` を `project.owner_id` との比較で算出 |
 | 副作用 | なし（参照のみ） |
 
-### 6.3 `repository/project_repository.py :: fn_list_project_members`
+### 6.3 `repository/project_member_repository.py :: list_by_project`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def fn_list_project_members(db: AsyncSession, project_id: UUID) -> list[ProjectMemberRow]` |
+| シグネチャ | `async def list_by_project(db: AsyncSession, project_id: UUID) -> list[ProjectMember]` |
 | 引数 | db：`AsyncSession`、project_id：対象プロジェクトID |
-| 戻り値 | `project_members` と `users` を JOIN した行のリスト（`joined_at` 昇順） |
+| 戻り値 | `project_members` の行に `users` を一括ロードしたリスト（`joined_at` 昇順） |
 | 送出例外 | なし（DB例外は `db_error_handler` / `infra_error_handler` に委譲） |
-| 処理内容 | `SELECT fn_list_project_members(:project_id)` を1回発行する。`project_members`と`users`のJOIN、`ORDER BY joined_at ASC`はFN内部で処理するため、repository側で別途usersへ追加SELECTを発行せずN+1を回避する |
+| 処理内容 | `SELECT * FROM fn_list_project_members(:project_id)` を1回発行し、`selectinload(ProjectMember.user)` で取得したユーザーを各行へ関連付ける。ユーザー取得はIN句の一括取得であり、行ごとのN+1クエリを発行しない |
 | 副作用 | なし |
 
 ## 7. 関数相関図
@@ -186,11 +186,11 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["projects_router.list_project_members"] --> D["deps.require_project_member"]
-    R --> S["project_service.fn_list_project_members"]
+    R --> S["member_service.list_members"]
     D --> RP1["project_repository.fn_is_project_member"]
     D --> URP["user_repository.get"]
-    S --> RP2["fn_list_project_members"]
-    RP2 --> PG[("PostgreSQL<br/>fn_list_project_members内部でproject_members + usersをJOIN")]
+    S --> RP2["project_member_repository.list_by_project"]
+    RP2 --> PG[("PostgreSQL<br/>fn_list_project_members + users一括取得")]
     RP1 --> PG
 ```
 
@@ -200,13 +200,13 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    subgraph PG["PostgreSQL（fn_list_project_members内部で参照）"]
+    subgraph PG["PostgreSQL（repositoryの一括取得で参照）"]
         PM["project_members<br/>WHERE project_id=:pid"]
-        U["users<br/>FN内部でJOIN（追加SELECTなし）"]
+        U["users<br/>selectinloadのIN句で一括取得"]
         P["projects<br/>所属チェック用に1行参照"]
     end
     API["GET /members"] -->|"fn_list_project_members呼び出し"| PM
-    PM -.->|"FN内部JOIN"| U
+    PM -.->|"user_idを一括解決"| U
     API -->|"SELECT（require_project_member）"| P
 ```
 
@@ -225,7 +225,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | ストア | テーブル／キー | 操作 | 条件・TTL | 備考 |
 |--------|----------------|------|-----------|------|
 | PostgreSQL | `project_members` | SELECT（`fn_list_project_members`内部） | `WHERE project_id = :pid ORDER BY joined_at` | `ix_project_members_user_id` は使用しない（本クエリは project_id 主軸のため `PK` を使用） |
-| PostgreSQL | `users` | SELECT（`fn_list_project_members`内部でJOIN） | `project_members.user_id = users.id` | `display_name` / `role` / `is_active` 取得用。FN内部のJOINのため repository からの追加SELECTは発生しない |
+| PostgreSQL | `users` | SELECT（`selectinload`による一括取得） | `project_members.user_id IN (...)` | `display_name` / `role` / `is_active` 取得用。行ごとの追加SELECTは発生しない |
 | PostgreSQL | `projects` | SELECT（`fn_is_project_member`等、`require_project_member`内部） | `require_project_member` 内での存在・所属確認用に1行 | |
 | Redis | ー | ー | ー | 本APIはRedisを使用しない |
 
