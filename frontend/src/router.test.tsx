@@ -1,24 +1,47 @@
 import "@testing-library/jest-dom/vitest";
 
+import axios, { type AxiosInstance } from "axios";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { render, screen } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { resetApiClient } from "./api/client";
 import { useAuthStore } from "./auth/authStore";
 import { appRoutes } from "./router";
 import styles from "./layouts/AuthLayout.module.css";
 import { ROUTES } from "./routes";
 
 describe("アプリケーションルート", () => {
+	beforeEach(() => {
+		vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+			const body = String(input).endsWith("/auth/config") ? { auth_mode: "session" } : { unread_count: 0 };
+			return { ok: true, status: 200, json: async () => body };
+		}));
+	});
+
 	afterEach(() => {
+		vi.restoreAllMocks();
+		vi.unstubAllGlobals();
+		resetApiClient();
 		act(() => {
 			useAuthStore.getState().reset();
 		});
 	});
 
 	it("認証済みユーザーが/settingsへアクセスするとAppLayout内に設定画面を表示する", async () => {
+		const client = {
+			get: vi.fn().mockResolvedValue({
+				data: {
+					id: "user-1", username: "taro", email: "taro@example.com",
+					last_name: "山田", first_name: "太郎", last_name_kana: "ヤマダ", first_name_kana: "タロウ",
+					birth_date: "1990-01-01", profile_completed: true, role: "member", has_password: true, oauth_providers: [],
+				},
+			}),
+			interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } },
+		} as unknown as AxiosInstance;
+		vi.spyOn(axios, "create").mockReturnValue(client);
 		act(() => {
 			useAuthStore.setState({ status: "authenticated", user: { id: "user-1", role: "member" } });
 		});

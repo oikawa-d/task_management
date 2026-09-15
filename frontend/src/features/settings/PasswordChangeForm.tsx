@@ -8,7 +8,7 @@ import { createZodResolver, getFieldErrors, passwordSchema } from "./validation"
 export interface PasswordChangeFormProps {
 	hasPassword: boolean;
 	onSubmit: (values: PasswordChangeInput) => Promise<void>;
-	onSuccess?: () => void;
+	onSuccess?: () => void | Promise<void>;
 }
 
 type PasswordField = keyof PasswordChangeInput;
@@ -42,7 +42,7 @@ export function PasswordChangeForm({ hasPassword, onSubmit, onSuccess }: Passwor
 			await onSubmit(hasPassword ? values : omitCurrentPassword(values));
 			reset(createDefaultValues(hasPassword));
 			setIsSaved(true);
-			onSuccess?.();
+			await onSuccess?.();
 		} catch (error: unknown) {
 			const fieldErrors = getFieldErrors(error);
 			if (fieldErrors.length > 0) {

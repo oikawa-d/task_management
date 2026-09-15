@@ -7,6 +7,7 @@ export type AuthUserRole = "member" | "admin";
 export type AuthUser = {
 	id: string;
 	role: AuthUserRole;
+	display_name?: string;
 };
 
 export type AuthStatus = "loading" | "authenticated" | "unauthenticated";
@@ -33,6 +34,7 @@ export type AuthStore = AuthState & {
 	setAuthenticated: (user: AuthUser) => void;
 	setUnauthenticated: () => void;
 	setAccessToken: (accessToken: string | null) => void;
+	updateUser: (user: Partial<AuthUser>) => void;
 	clear: () => void;
 	setAuthAdapter: (authAdapter: AuthAdapter) => void;
 	setGoogleLoginEnabled: (enabled: boolean) => void;
@@ -45,6 +47,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 	setAuthenticated: (user) => set({ user, status: "authenticated" }),
 	setUnauthenticated: () => set({ user: null, status: "unauthenticated", accessToken: null }),
 	setAccessToken: (accessToken) => set({ accessToken }),
+	updateUser: (user) => set((state) => ({ user: state.user ? { ...state.user, ...user } : state.user })),
 	clear: () => {
 		get().authAdapter?.onLogout();
 		set({ user: null, status: "unauthenticated", accessToken: null });
