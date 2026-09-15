@@ -6,7 +6,9 @@ from uuid import uuid4
 import pytest
 from app.auth.factory import get_auth_strategy
 from app.core.config import get_backend_settings
+from app.db import get_db_engine, get_session_factory
 from app.main import app
+from app.redis_client import get_redis_client
 from app.repository import redis_store, user_repository
 from app.repository.redis_store_common import key, token_hash
 from app.service import email_verification_service
@@ -21,9 +23,15 @@ ORIGIN = "http://localhost:5173"
 @pytest.fixture(scope="module")
 def auth_client(apply_migrations: None) -> TestClient:
 	get_auth_strategy.cache_clear()
+	get_db_engine.cache_clear()
+	get_session_factory.cache_clear()
+	get_redis_client.cache_clear()
 	with TestClient(app, raise_server_exceptions=False, client=("127.0.0.1", 50000)) as client:
 		yield client
 	get_auth_strategy.cache_clear()
+	get_db_engine.cache_clear()
+	get_session_factory.cache_clear()
+	get_redis_client.cache_clear()
 
 
 @pytest.fixture(autouse=True)
