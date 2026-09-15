@@ -136,7 +136,7 @@ flowchart TB
 | 引数 | `project`: 論理削除対象（`require_project_owner` 済み） |
 | 戻り値 | なし |
 | 送出例外 | `ServiceUnavailableError`（DB接続不能）→503 |
-| 処理内容 | 1. `sp_deactivate_project(db, project.id)` を呼び出す 2. `commit` する |
+| 処理内容 | 1. `sp_deactivate_project(db, project.id)` を呼び出す 2. 成功時にcommitし、DBAPIError時はrollbackして接続系障害を503へ変換する |
 | 副作用 | `sp_deactivate_project` による `projects.is_active` 更新のみ。`project_members` / `tasks` / `task_comments` は変更しない（配下タスクは有効なまま維持される） |
 
 ### 6.3 `repository/project_repository.py :: set_active`
