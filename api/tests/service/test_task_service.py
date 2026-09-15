@@ -3,10 +3,11 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from app.core.exceptions import AssigneeInactiveError, TaskConflictError
 from app.models.task import Task
 from app.repository.task_repository import TaskWithProjectStatus
 from app.schemas.auth import CurrentUser
-from app.schemas.task import CalendarTaskQuery
+from app.schemas.task import CalendarTaskQuery, TaskCreateRequest, TaskUpdateRequest
 from app.service import task_service
 
 
@@ -54,8 +55,6 @@ async def test_create_task_calls_repository_and_returns_response(monkeypatch: py
 	monkeypatch.setattr(task_service.task_repository, "create", create)
 	monkeypatch.setattr(task_service.task_repository, "get_by_id", get_by_id)
 
-	from app.schemas.task import TaskCreateRequest
-
 	response = await task_service.create_task(item.task.project_id, TaskCreateRequest(title="Task"), user, AsyncMock())
 
 	assert response.id == item.task.id
@@ -63,6 +62,40 @@ async def test_create_task_calls_repository_and_returns_response(monkeypatch: py
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("error", [AssigneeInactiveError, TaskConflictError])
+async def test_create_task_rolls_back_repository_constraint_error(
+	error: type[Exception], monkeypatch: pytest.MonkeyPatch
+) -> None:
+	user = _user()
+	db = AsyncMock()
+	monkeypatch.setattr(task_service.task_repository, "create", AsyncMock(side_effect=error()))
+
+	with pytest.raises(error):
+		await task_service.create_task(user.id, TaskCreateRequest(title="Task"), user, db)
+
+	db.rollback.assert_awaited_once()
+	db.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [AssigneeInactiveError, TaskConflictError])
+async def test_update_task_rolls_back_repository_constraint_error(
+	error: type[Exception], monkeypatch: pytest.MonkeyPatch
+) -> None:
+	user = _user()
+	item = _item(user)
+	db = AsyncMock()
+	monkeypatch.setattr(task_service.task_repository, "get_by_id", AsyncMock(return_value=item))
+	monkeypatch.setattr(task_service, "require_task_access", AsyncMock())
+	monkeypatch.setattr(task_service.task_repository, "update", AsyncMock(side_effect=error()))
+
+	with pytest.raises(error):
+		await task_service.update_task(item.task.id, TaskUpdateRequest(version=1, title="Updated"), user, db)
+
+	db.rollback.assert_awaited_once()
+	db.commit.assert_not_awaited()
+
+
 async def test_list_tasks_passes_unassigned_filter_to_repository(monkeypatch: pytest.MonkeyPatch) -> None:
 	user = _user()
 	db = AsyncMock()

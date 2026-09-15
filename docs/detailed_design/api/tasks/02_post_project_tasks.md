@@ -31,7 +31,7 @@
 | AUTH_MODE差異 | session時はCSRF検証あり、jwt時はAuthorizationヘッダのためCSRF検証不要。それ以外の業務ロジックに差異なし |
 | 冪等性 | なし（POSTのため同一リクエストの再送で複数タスクが作成され得る。冪等キーは設けない） |
 | レート制限 | 対象外 |
-| トランザクション境界 | `BEGIN` から position 採番・INSERT・`COMMIT` までを1トランザクションとする |
+| トランザクション境界 | `task_service.create_task`の書き込み呼び出しから作成結果の取得までを1単位とする。成功時にserviceが`COMMIT`し、`task_repository.create`がP0005/P0006を`TaskConflictError`/`AssigneeInactiveError`へ変換した場合またはDBAPIErrorが発生した場合はserviceが`ROLLBACK`して再送出する。事前の認可・所属確認で発生する例外はこの境界の対象外とする |
 
 ## 2. 入出力仕様（全体の出入力）
 
@@ -200,7 +200,7 @@ flowchart TB
 | 引数 | project: 認可済みProject／payload: 作成内容／user: 作成者（`created_by` に記録） |
 | 戻り値 | `Task`（ORMモデルまたはDTO） |
 | 送出例外 | `ValidationError`（`assignee_id` が非メンバー）、`ConflictError`（`assignee_id` が `is_active=false`） |
-| 処理内容 | 1. `payload.assignee_id` が `None` でない場合、`project_repository.fn_is_project_member(project.id, assignee_id)` で所属確認。非所属なら `ValidationError` 2. 所属確認と同時に取得した対象ユーザーの `is_active` を確認。`false` なら `ConflictError(ASSIGNEE_INACTIVE)` 3. `task_repository.create(project.id, payload, created_by=user.id)` を呼び出す。`sp_create_task`はDB側で`gen_random_uuid()`により`task_id`を採番しOUTパラメータで返す。position採番・advisory lock・期限判定・notifications INSERT（dedupe）はSP内部で一体実行する 4. 成功後に`SELECT fn_get_task(p_task_id)`で応答を取得 |
+| 処理内容 | 1. `payload.assignee_id` が `None` でない場合、`project_repository.fn_is_project_member(project.id, assignee_id)` で所属確認。非所属なら `ValidationError` 2. 所属確認と同時に取得した対象ユーザーの `is_active` を確認。`false` なら `ConflictError(ASSIGNEE_INACTIVE)` 3. `task_repository.create(project.id, payload, created_by=user.id)` を呼び出す。`sp_create_task`はDB側で`gen_random_uuid()`により`task_id`を採番しOUTパラメータで返す。position採番・advisory lock・期限判定・notifications INSERT（dedupe）はSP内部で一体実行する 4. SQLSTATE `P0005` / `P0006` はrepositoryで`TaskConflictError` / `AssigneeInactiveError`へ変換され、serviceはこの2例外を`ROLLBACK`して再送出する。DBAPIErrorもserviceで`ROLLBACK`して共通変換する 5. 成功後に`SELECT fn_get_task(p_task_id)`で応答を取得し、検証後に`COMMIT`する。取得前の認可・所属確認で発生した例外ではrollbackしない |
 | 副作用 | DB更新（tasks INSERT） |
 
 ### 6.3 `repository/task_repository.py :: create`
@@ -282,7 +282,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | ユーザー列挙対策 | 非所属プロジェクトへの作成試行は404で存在を秘匿 |
 | タイミング攻撃対策 | 対象外（トークン比較を伴わない） |
 | レート制限 | なし |
-| fail-close方針 | advisory lock取得やINSERT失敗時はロールバックし、部分的な採番結果を残さない |
+| fail-close方針 | advisory lock取得やINSERT失敗時、およびP0005/P0006のドメイン例外への変換時はserviceがロールバックし、部分的な採番結果やtasks/notificationsの更新を残さない |
 | 同時作成の直列化 | 同一 `(project_id, status)` への同時POSTはadvisory lockにより順次処理され、`position` の重複（`uq_tasks_project_status_position` 違反）を防ぐ |
 
 ## 12. テスト設計
@@ -299,6 +299,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 8 | 結合 | CSRF欠落（sessionモード） | `X-CSRF-Token` 未送信 | 403 `CSRF_INVALID` | `test_post_project_tasks_csrf_required` |
 | 9 | パラメータ化 | AUTH_MODE両対応 | `AUTH_MODE=session` / `jwt` | 4・7・9を両モードで実行（CSRFはsessionのみ） | フィクスチャ `auth_mode` |
 | 10 | 網羅できない範囲 | advisory lockの厳密な排他タイミング検証 | PostgreSQLの内部ロック挙動に依存 | 統合テストでの並行リクエスト（No.5）で代替し、ロック粒度自体のユニット検証は行わない | 理由：DB内部実装への依存が強く単体では再現困難 |
+| 11 | 単体 | repositoryがP0005/P0006をドメイン例外へ変換した後の作成失敗 | `task_repository.create`が`TaskConflictError`または`AssigneeInactiveError`を送出 | `db.rollback()`後に同じ例外を再送出し、`commit`しない | `test_create_task_rolls_back_repository_constraint_error` |
 
 ## 13. 不明点・要検討事項
 
