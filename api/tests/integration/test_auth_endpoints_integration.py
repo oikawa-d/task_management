@@ -29,6 +29,7 @@ from __future__ import annotations
 import uuid
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from app.core.config import get_backend_settings
@@ -39,6 +40,7 @@ from app.repository import (
 	redis_store_session,
 	user_repository,
 )
+from app.service import email_verification_service, mail_service
 from fastapi.testclient import TestClient
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
@@ -94,6 +96,38 @@ async def test_register_endpoint_returns_201_without_auth_cookie(
 	user = await user_repository.get_by_login_identifier(db_session, username)
 	assert user is not None
 	assert user.email_verified_at is None
+
+
+async def test_register_endpoint_sends_verification_mail(
+	client: TestClient,
+	created_user_ids: list[uuid.UUID],
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	"""結合9: register経由で確認メールの予約・実行とSMTP送信が各1回行われる。"""
+	suffix = unique_suffix()
+	username = f"it{suffix}"
+	email = f"{username}@example.com"
+	send_mail_mock = AsyncMock(wraps=mail_service.send_email_verification_mail)
+	smtp_send_mock = AsyncMock()
+	monkeypatch.setattr(email_verification_service.mail_service, "send_email_verification_mail", send_mail_mock)
+	monkeypatch.setattr(mail_service.aiosmtplib, "send", smtp_send_mock)
+
+	response = client.post(
+		"/api/auth/register", json=register_payload(username, email), headers={"Origin": ALLOWED_ORIGIN}
+	)
+
+	assert response.status_code == 201, response.text
+	created_user_ids.append(uuid.UUID(response.json()["id"]))
+	send_mail_mock.assert_awaited_once()
+	smtp_send_mock.assert_awaited_once()
+	mail_call = send_mail_mock.await_args
+	smtp_call = smtp_send_mock.await_args
+	assert mail_call is not None
+	assert smtp_call is not None
+	assert mail_call.args[0] == email
+	assert mail_call.args[1]
+	assert mail_call.args[2] == get_backend_settings().email_verify_ttl_seconds // 3600
+	assert smtp_call.args[0]["To"] == email
 
 
 async def test_register_endpoint_invalid_origin_creates_no_row(client: TestClient, db_session: AsyncSession) -> None:
