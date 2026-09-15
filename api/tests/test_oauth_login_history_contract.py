@@ -36,3 +36,11 @@ def test_login_history_lifecycle_separates_oauth_recording_triggers() -> None:
 
 	assert "OAuthではsessionモードはOAuthコールバック成功時" in text
 	assert "jwtモードは`/api/auth/oauth/exchange`成功時" in text
+
+
+def test_oauth_callback_failures_are_not_recorded_in_login_history() -> None:
+	text = _read(CALLBACK_DOCUMENT)
+
+	assert (
+		"OAuth callback失敗（`oauth_denied`、`oauth_failed`、`oauth_email_unverified`等）は`login_history`へ記録しない"
+	) in text

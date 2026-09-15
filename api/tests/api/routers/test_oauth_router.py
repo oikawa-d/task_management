@@ -83,6 +83,17 @@ def test_oauth_router_registers_all_endpoints() -> None:
 	assert ("/api/auth/oauth/exchange", "POST") in routes
 
 
+def test_google_login_enabled_uses_auth_service_module(monkeypatch: pytest.MonkeyPatch) -> None:
+	settings = SimpleNamespace()
+	monkeypatch.setattr(
+		oauth_router_module.auth_service,
+		"get_auth_config",
+		lambda _settings: SimpleNamespace(google_login_enabled=True),
+	)
+
+	assert oauth_router_module._is_google_login_enabled(settings) is True
+
+
 def test_start_redirects_to_google_with_state_cookie(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
 	captured: list[str | None] = []
 
@@ -91,7 +102,7 @@ def test_start_redirects_to_google_with_state_cookie(client: TestClient, monkeyp
 		response.set_cookie("cerberus_oauth_state", "state-value")
 		return OAuthStartResult(authorize_url=AUTHORIZE_URL, state="state-value")
 
-	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_start", _oauth_start)
+	monkeypatch.setattr(oauth_router_module.oauth_service, "oauth_start", _oauth_start)
 
 	response = client.get("/api/auth/oauth/google", params={"redirect_to": "/projects"})
 
@@ -105,7 +116,7 @@ def test_start_rate_limited_returns_positive_retry_after(client: TestClient, mon
 	async def _oauth_start(*_args: Any, **_kwargs: Any) -> OAuthStartResult:
 		raise TooManyAttemptsError(retry_after=42)
 
-	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_start", _oauth_start)
+	monkeypatch.setattr(oauth_router_module.oauth_service, "oauth_start", _oauth_start)
 
 	response = client.get("/api/auth/oauth/google")
 
@@ -125,7 +136,7 @@ def test_start_returns_oauth_disabled_when_google_login_is_disabled(monkeypatch:
 		called.append("service")
 		raise AssertionError("無効時はserviceを呼ばない")
 
-	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_start", _oauth_start)
+	monkeypatch.setattr(oauth_router_module.oauth_service, "oauth_start", _oauth_start)
 	app = _build_app()
 	with TestClient(app, follow_redirects=False) as test_client:
 		response = test_client.get("/api/auth/oauth/google")
@@ -144,7 +155,7 @@ def test_callback_session_mode_redirects_with_redirect_to_fragment(
 		_args[4].set_cookie("cerberus_oauth_state", "", max_age=0)
 		return OAuthCallbackResult(auth_mode="session", redirect_to="/dashboard")
 
-	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_callback", _oauth_callback)
+	monkeypatch.setattr(oauth_router_module.oauth_service, "oauth_callback", _oauth_callback)
 
 	response = session_client.get(
 		"/api/auth/oauth/google/callback", params={"code": "auth-code", "state": "state-value"}
@@ -182,15 +193,15 @@ def test_callback_session_route_establishes_authentication(
 			return LoginResult(auth_mode="session", session_id="session-id")
 
 	monkeypatch.setattr(
-		oauth_router_module.auth_service.redis_store, "consume_oauth_state", AsyncMock(return_value=state)
+		oauth_router_module.oauth_service.redis_store, "consume_oauth_state", AsyncMock(return_value=state)
 	)
-	monkeypatch.setattr(oauth_router_module.auth_service.redis_store, "check_rate_limit", AsyncMock(return_value=1))
-	monkeypatch.setattr(oauth_router_module.auth_service, "GoogleOAuthProvider", lambda _settings: _Provider())
-	monkeypatch.setattr(oauth_router_module.auth_service, "_resolve_or_create_user", AsyncMock(return_value=user))
+	monkeypatch.setattr(oauth_router_module.oauth_service.redis_store, "check_rate_limit", AsyncMock(return_value=1))
+	monkeypatch.setattr(oauth_router_module.oauth_service, "GoogleOAuthProvider", lambda _settings: _Provider())
+	monkeypatch.setattr(oauth_router_module.oauth_service, "_resolve_or_create_user", AsyncMock(return_value=user))
 	monkeypatch.setattr(
-		oauth_router_module.auth_service, "_auth_strategy", lambda _settings, _strategy: _SessionStrategy()
+		oauth_router_module.oauth_service, "_auth_strategy", lambda _settings, _strategy: _SessionStrategy()
 	)
-	monkeypatch.setattr(oauth_router_module.auth_service, "_record_oauth_login", AsyncMock())
+	monkeypatch.setattr(oauth_router_module.oauth_service, "_record_oauth_login", AsyncMock())
 
 	session_client.cookies.set("cerberus_oauth_state", "state-value")
 
@@ -224,12 +235,14 @@ def test_exchange_route_establishes_jwt_authentication(client: TestClient, monke
 			)
 
 	monkeypatch.setattr(
-		oauth_router_module.auth_service.redis_store, "consume_oauth_handoff", AsyncMock(return_value=handoff)
+		oauth_router_module.oauth_service.redis_store, "consume_oauth_handoff", AsyncMock(return_value=handoff)
 	)
-	monkeypatch.setattr(oauth_router_module.auth_service.redis_store, "check_rate_limit", AsyncMock(return_value=1))
-	monkeypatch.setattr(oauth_router_module.auth_service.user_repository, "get_by_id", AsyncMock(return_value=user))
-	monkeypatch.setattr(oauth_router_module.auth_service, "_auth_strategy", lambda _settings, _strategy: _JwtStrategy())
-	monkeypatch.setattr(oauth_router_module.auth_service, "_record_oauth_login", AsyncMock())
+	monkeypatch.setattr(oauth_router_module.oauth_service.redis_store, "check_rate_limit", AsyncMock(return_value=1))
+	monkeypatch.setattr(oauth_router_module.oauth_service.user_repository, "get_by_id", AsyncMock(return_value=user))
+	monkeypatch.setattr(
+		oauth_router_module.oauth_service, "_auth_strategy", lambda _settings, _strategy: _JwtStrategy()
+	)
+	monkeypatch.setattr(oauth_router_module.oauth_service, "_record_oauth_login", AsyncMock())
 
 	response = client.post(
 		"/api/auth/oauth/exchange", json={"code": "handoff-code"}, headers={"Origin": ALLOWED_ORIGIN}
@@ -254,7 +267,7 @@ def test_callback_jwt_mode_includes_handoff_code_in_fragment(
 	async def _oauth_callback(*_args: Any, **_kwargs: Any) -> OAuthCallbackResult:
 		return OAuthCallbackResult(auth_mode="jwt", redirect_to="/dashboard", handoff_code="handoff-code")
 
-	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_callback", _oauth_callback)
+	monkeypatch.setattr(oauth_router_module.oauth_service, "oauth_callback", _oauth_callback)
 
 	response = client.get("/api/auth/oauth/google/callback", params={"code": "auth-code", "state": "state-value"})
 
@@ -271,7 +284,7 @@ def test_callback_with_google_error_redirects_to_login(client: TestClient, monke
 		called.append(args)
 		args[3].set_cookie("cerberus_oauth_state", "", max_age=0)
 
-	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_callback_denied", _oauth_callback_denied)
+	monkeypatch.setattr(oauth_router_module.oauth_service, "oauth_callback_denied", _oauth_callback_denied)
 	client.cookies.set("cerberus_oauth_state", "state-value")
 
 	response = client.get("/api/auth/oauth/google/callback", params={"error": "access_denied", "state": "state-value"})
@@ -287,7 +300,7 @@ def test_callback_rejects_inconsistent_auth_mode_result(client: TestClient, monk
 	async def _oauth_callback(*_args: Any, **_kwargs: Any) -> OAuthCallbackResult:
 		return OAuthCallbackResult(auth_mode="session", redirect_to="/dashboard", handoff_code="unexpected")
 
-	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_callback", _oauth_callback)
+	monkeypatch.setattr(oauth_router_module.oauth_service, "oauth_callback", _oauth_callback)
 
 	response = client.get("/api/auth/oauth/google/callback", params={"code": "auth-code", "state": "state-value"})
 
@@ -301,7 +314,7 @@ def test_callback_rejects_result_mode_different_from_settings(
 	async def _oauth_callback(*_args: Any, **_kwargs: Any) -> OAuthCallbackResult:
 		return OAuthCallbackResult(auth_mode="session", redirect_to="/dashboard")
 
-	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_callback", _oauth_callback)
+	monkeypatch.setattr(oauth_router_module.oauth_service, "oauth_callback", _oauth_callback)
 
 	response = client.get("/api/auth/oauth/google/callback", params={"code": "auth-code", "state": "state-value"})
 
@@ -313,7 +326,7 @@ def test_callback_rejects_jwt_result_without_handoff(client: TestClient, monkeyp
 	async def _oauth_callback(*_args: Any, **_kwargs: Any) -> OAuthCallbackResult:
 		return OAuthCallbackResult(auth_mode="jwt", redirect_to="/dashboard")
 
-	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_callback", _oauth_callback)
+	monkeypatch.setattr(oauth_router_module.oauth_service, "oauth_callback", _oauth_callback)
 
 	response = client.get("/api/auth/oauth/google/callback", params={"code": "auth-code", "state": "state-value"})
 
@@ -324,9 +337,9 @@ def test_callback_rejects_jwt_result_without_handoff(client: TestClient, monkeyp
 def test_callback_denied_route_consumes_state_and_deletes_cookie(
 	client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-	monkeypatch.setattr(oauth_router_module.auth_service.redis_store, "check_rate_limit", AsyncMock(return_value=1))
+	monkeypatch.setattr(oauth_router_module.oauth_service.redis_store, "check_rate_limit", AsyncMock(return_value=1))
 	monkeypatch.setattr(
-		oauth_router_module.auth_service.redis_store,
+		oauth_router_module.oauth_service.redis_store,
 		"consume_oauth_state",
 		AsyncMock(return_value=OAuthStateData("/dashboard", "verifier", "nonce", None)),
 	)
@@ -348,13 +361,13 @@ def test_callback_route_deletes_state_cookie_on_service_failure(
 		async def exchange_code(self, _code: str, _verifier: str) -> Any:
 			raise RuntimeError("provider unavailable")
 
-	monkeypatch.setattr(oauth_router_module.auth_service.redis_store, "check_rate_limit", AsyncMock(return_value=1))
+	monkeypatch.setattr(oauth_router_module.oauth_service.redis_store, "check_rate_limit", AsyncMock(return_value=1))
 	monkeypatch.setattr(
-		oauth_router_module.auth_service.redis_store,
+		oauth_router_module.oauth_service.redis_store,
 		"consume_oauth_state",
 		AsyncMock(return_value=OAuthStateData("/dashboard", "verifier", "nonce", None)),
 	)
-	monkeypatch.setattr(oauth_router_module.auth_service, "GoogleOAuthProvider", lambda _settings: _Provider())
+	monkeypatch.setattr(oauth_router_module.oauth_service, "GoogleOAuthProvider", lambda _settings: _Provider())
 	client.cookies.set("cerberus_oauth_state", "state-value")
 
 	response = client.get("/api/auth/oauth/google/callback", params={"code": "auth-code", "state": "state-value"})
@@ -376,7 +389,7 @@ def test_callback_redirects_to_login_when_google_login_is_disabled(monkeypatch: 
 		called.append("service")
 		raise AssertionError("無効時はserviceを呼ばない")
 
-	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_callback", _oauth_callback)
+	monkeypatch.setattr(oauth_router_module.oauth_service, "oauth_callback", _oauth_callback)
 	app = _build_app()
 	with TestClient(app, follow_redirects=False) as test_client:
 		response = test_client.get(
@@ -402,7 +415,7 @@ def test_callback_maps_exception_to_login_error(
 	async def _oauth_callback(*_args: Any, **_kwargs: Any) -> OAuthCallbackResult:
 		raise error
 
-	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_callback", _oauth_callback)
+	monkeypatch.setattr(oauth_router_module.oauth_service, "oauth_callback", _oauth_callback)
 
 	response = client.get("/api/auth/oauth/google/callback", params={"code": "auth-code", "state": "state-value"})
 
@@ -425,7 +438,7 @@ def test_callback_preserves_rate_limit_and_redis_errors(
 	async def _oauth_callback(*_args: Any, **_kwargs: Any) -> OAuthCallbackResult:
 		raise error
 
-	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_callback", _oauth_callback)
+	monkeypatch.setattr(oauth_router_module.oauth_service, "oauth_callback", _oauth_callback)
 
 	response = client.get("/api/auth/oauth/google/callback", params={"code": "auth-code", "state": "state-value"})
 
@@ -439,7 +452,7 @@ def test_denied_callback_preserves_rate_limit_error(client: TestClient, monkeypa
 	async def _oauth_callback_denied(*_args: Any, **_kwargs: Any) -> None:
 		raise TooManyAttemptsError(retry_after=42)
 
-	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_callback_denied", _oauth_callback_denied)
+	monkeypatch.setattr(oauth_router_module.oauth_service, "oauth_callback_denied", _oauth_callback_denied)
 
 	response = client.get("/api/auth/oauth/google/callback", params={"error": "access_denied", "state": "state-value"})
 
@@ -450,11 +463,11 @@ def test_denied_callback_preserves_rate_limit_error(client: TestClient, monkeypa
 
 def test_callback_service_rate_limit_returns_429(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
 	monkeypatch.setattr(
-		oauth_router_module.auth_service.redis_store,
+		oauth_router_module.oauth_service.redis_store,
 		"check_rate_limit",
 		AsyncMock(return_value=11),
 	)
-	monkeypatch.setattr(oauth_router_module.auth_service.redis_store, "get_rate_limit_ttl", AsyncMock(return_value=42))
+	monkeypatch.setattr(oauth_router_module.oauth_service.redis_store, "get_rate_limit_ttl", AsyncMock(return_value=42))
 
 	response = client.get("/api/auth/oauth/google/callback", params={"code": "auth-code", "state": "state-value"})
 
@@ -465,7 +478,7 @@ def test_callback_service_rate_limit_returns_429(client: TestClient, monkeypatch
 
 def test_callback_service_redis_failure_returns_503(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
 	monkeypatch.setattr(
-		oauth_router_module.auth_service.redis_store,
+		oauth_router_module.oauth_service.redis_store,
 		"check_rate_limit",
 		AsyncMock(side_effect=RuntimeError("redis unavailable")),
 	)
@@ -484,7 +497,7 @@ def test_exchange_returns_tokens_in_jwt_mode(client: TestClient, monkeypatch: py
 			access_token="access-token", token_type="bearer", expires_in=900, redirect_to="/dashboard"
 		)
 
-	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_exchange", _oauth_exchange)
+	monkeypatch.setattr(oauth_router_module.oauth_service, "oauth_exchange", _oauth_exchange)
 
 	response = client.post(
 		"/api/auth/oauth/exchange", json={"code": "handoff-code"}, headers={"Origin": ALLOWED_ORIGIN}
@@ -508,7 +521,7 @@ def test_exchange_rate_limited_returns_positive_retry_after(
 	async def _oauth_exchange(*_args: Any, **_kwargs: Any) -> OAuthExchangeResponse:
 		raise TooManyAttemptsError(retry_after=42)
 
-	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_exchange", _oauth_exchange)
+	monkeypatch.setattr(oauth_router_module.oauth_service, "oauth_exchange", _oauth_exchange)
 
 	response = client.post(
 		"/api/auth/oauth/exchange", json={"code": "handoff-code"}, headers={"Origin": ALLOWED_ORIGIN}
@@ -530,7 +543,7 @@ def test_exchange_in_session_mode_returns_405(monkeypatch: pytest.MonkeyPatch) -
 		called.append("service")
 		raise AssertionError("sessionモードではserviceを呼ばない")
 
-	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_exchange", _oauth_exchange)
+	monkeypatch.setattr(oauth_router_module.oauth_service, "oauth_exchange", _oauth_exchange)
 	app = _build_app()
 	with TestClient(app, follow_redirects=False) as test_client:
 		response = test_client.post(
@@ -553,7 +566,7 @@ def test_exchange_returns_oauth_disabled_when_google_login_is_disabled(monkeypat
 		called.append("service")
 		raise AssertionError("無効時はserviceを呼ばない")
 
-	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_exchange", _oauth_exchange)
+	monkeypatch.setattr(oauth_router_module.oauth_service, "oauth_exchange", _oauth_exchange)
 	app = _build_app()
 	with TestClient(app, follow_redirects=False) as test_client:
 		response = test_client.post(
@@ -578,7 +591,7 @@ def test_exchange_invalid_handoff_code_returns_400(client: TestClient, monkeypat
 	async def _oauth_exchange(*_args: Any, **_kwargs: Any) -> OAuthExchangeResponse:
 		raise OAuthHandoffInvalidError()
 
-	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_exchange", _oauth_exchange)
+	monkeypatch.setattr(oauth_router_module.oauth_service, "oauth_exchange", _oauth_exchange)
 
 	response = client.post(
 		"/api/auth/oauth/exchange", json={"code": "expired-code"}, headers={"Origin": ALLOWED_ORIGIN}
@@ -616,7 +629,7 @@ def test_callback_failure_log_keeps_failure_reason_after_formatting(
 	async def _oauth_callback(*_args: Any, **_kwargs: Any) -> OAuthCallbackResult:
 		raise InvalidStateError()
 
-	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_callback", _oauth_callback)
+	monkeypatch.setattr(oauth_router_module.oauth_service, "oauth_callback", _oauth_callback)
 
 	with caplog.at_level(logging.WARNING, logger="app.oauth"):
 		response = client.get("/api/auth/oauth/google/callback", params={"code": "auth-code", "state": "state-value"})
@@ -635,7 +648,7 @@ def test_denied_callback_cleanup_failure_log_keeps_failure_reason_after_formatti
 	async def _oauth_callback_denied(*_args: Any, **_kwargs: Any) -> None:
 		raise InvalidStateError()
 
-	monkeypatch.setattr(oauth_router_module.auth_service, "oauth_callback_denied", _oauth_callback_denied)
+	monkeypatch.setattr(oauth_router_module.oauth_service, "oauth_callback_denied", _oauth_callback_denied)
 
 	with caplog.at_level(logging.WARNING, logger="app.oauth"):
 		response = client.get(

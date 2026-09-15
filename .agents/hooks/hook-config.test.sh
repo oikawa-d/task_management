@@ -12,7 +12,7 @@ repo_root=$(cd "$script_dir/../.." && pwd)
 work_dir=$(mktemp -d)
 trap 'rm -rf "$work_dir"' EXIT
 
-# reviewedラベル無し(=ブロックされる)応答を返すghスタブ。
+# approveラベル無し(=ブロックされる)応答を返すghスタブ。
 stub_dir="$work_dir/bin"
 mkdir -p "$stub_dir"
 cat > "$stub_dir/gh" <<'STUB'
