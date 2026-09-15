@@ -118,7 +118,7 @@ sequenceDiagram
     actor U as ユーザー
     participant FE as React SPA
     participant R as "api/app/api/routers/oauth_router.py"
-    participant S as auth_service.oauth_callback
+    participant S as oauth_service.oauth_callback
     participant OA as GoogleOAuthProvider
     participant RS as redis_store
     participant RD as Redis
@@ -263,10 +263,10 @@ flowchart TB
 | 引数 | `code`/`state`/`error`：クエリパラメータ。`request`：Cookie読み取り用 |
 | 戻り値 | `RedirectResponse`（正常系・通常失敗時は302） |
 | 送出例外 | `TooManyAttemptsError`（429、`Retry-After`付与）、`ServiceUnavailableError`（503）以外は対応する`/login?error=...`への302リダイレクトに変換する |
-| 処理内容 | 1. Googleログインの有効性を確認し、無効なら`oauth_disabled`へ 2. `error`クエリがあれば`auth_service.oauth_callback_denied`へstate・Cookie・request・responseを渡す 3. serviceがstateを検証・消費し、callbackレート制限を適用してstate Cookieを削除する 4. 通常の失敗は例外の種別に応じ`error`クエリ値をマッピングし、レート制限超過・Redis障害は共通429/503ハンドラへ送出する 5. 通常callbackでは`auth_service.oauth_callback`を呼ぶ 6. 成功時は`OAuthCallbackResult`の`auth_mode`とhandoff codeの整合性を確認しfragment付きURLを組み立てる |
+| 処理内容 | 1. Googleログインの有効性を確認し、無効なら`oauth_disabled`へ 2. `error`クエリがあれば`oauth_service.oauth_callback_denied`へstate・Cookie・request・responseを渡す 3. serviceがstateを検証・消費し、callbackレート制限を適用してstate Cookieを削除する 4. 通常の失敗は例外の種別に応じ`error`クエリ値をマッピングし、レート制限超過・Redis障害は共通429/503ハンドラへ送出する 5. 通常callbackでは`oauth_service.oauth_callback`を呼ぶ 6. 成功時は`OAuthCallbackResult`の`auth_mode`とhandoff codeの整合性を確認しfragment付きURLを組み立てる |
 | 副作用 | Cookie発行（sessionモード時）、Cookie削除（`cerberus_oauth_state`。Google拒否時も含む） |
 
-### 6.1.1 `service/auth_service.py :: oauth_callback_denied`
+### 6.1.1 `api/app/service/oauth_service.py :: oauth_callback_denied`
 
 | 項目 | 内容 |
 |------|------|
@@ -274,7 +274,7 @@ flowchart TB
 | 処理内容 | callbackと同じIP単位レート制限を適用し、stateとCookieの一致およびRedisのGETDELを検証する。成功・失敗にかかわらずstate Cookieを削除する |
 | 送出例外 | `InvalidStateError`、`TooManyAttemptsError`、`ServiceUnavailableError` |
 
-### 6.2 `service/auth_service.py :: oauth_callback`
+### 6.2 `api/app/service/oauth_service.py :: oauth_callback`
 
 | 項目 | 内容 |
 |------|------|
@@ -285,7 +285,7 @@ flowchart TB
 | 処理内容 | 1. callbackレート制限を確認 2. `state is None or state_cookie is None or state != state_cookie` なら`InvalidStateError` 3. `redis_store.consume_oauth_state(state)`を呼び`None`なら`InvalidStateError` 4. `oauth_provider.exchange_code(code, data.code_verifier)`を呼ぶ 5. id_tokenをJWKSで検証（署名・`aud==GOOGLE_CLIENT_ID`・`iss`・`exp`・`nonce==data.nonce`） 6. `oauth_provider.fetch_userinfo(access_token)`を呼ぶ 7. `userinfo.sub == id_token.sub`を確認 8. `_resolve_or_create_user(db, userinfo)`を呼ぶ 9. `AUTH_MODE`により分岐し、sessionなら`strategy.login()`＋`login_history(login_identifier=user.email)`記録、jwtなら`handoff_code`発行 |
 | 副作用 | PostgreSQL：`users`/`oauth_accounts`のINSERT/UPDATE、`login_history`INSERT（sessionモードのみ）。Redis：`oauth_state`削除（consume時点）、`oauth_handoff`新規作成（jwtモードのみ）。Cookie：sessionモードは`login()`内で発行 |
 
-### 6.3 `service/auth_service.py :: _resolve_or_create_user`
+### 6.3 `api/app/service/oauth_service.py :: _resolve_or_create_user`
 
 | 項目 | 内容 |
 |------|------|
@@ -322,7 +322,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    R["api/app/api/routers/oauth_router.py<br/>oauth_google_callback"] --> S["auth_service.oauth_callback"]
+    R["api/app/api/routers/oauth_router.py<br/>oauth_google_callback"] --> S["oauth_service.oauth_callback"]
     S --> RS1["redis_store.consume_oauth_state"]
     S --> OA1["GoogleOAuthProvider.exchange_code"]
     S --> OA2["GoogleOAuthProvider.verify_id_token"]

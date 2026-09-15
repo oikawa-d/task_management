@@ -86,8 +86,8 @@ sequenceDiagram
     participant SMTP as "SMTPサーバー(Mailpit)"
 
     FE->>R: "POST /api/auth/password/forgot {email}"
-    R->>S: "request_password_reset(email, background)"
-    S->>UR: "get_by_email(email)"
+    R->>S: "request_password_reset(email, background, db)"
+    S->>UR: "get_by_email(db, email)"
     UR->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
     PG-->>UR: "User or None"
     alt ユーザーが存在する
@@ -127,32 +127,32 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def password_forgot(payload: PasswordForgotRequest, background: BackgroundTasks, service: AuthService = Depends(get_auth_service)) -> PasswordForgotResponse` |
-| 引数 | `payload: PasswordForgotRequest`、`background: BackgroundTasks`、`service: AuthService` |
+| シグネチャ | `async def password_forgot(payload: PasswordForgotRequest, background: BackgroundTasks, db: AsyncSession = Depends(get_db_session)) -> PasswordForgotResponse` |
+| 引数 | `payload: PasswordForgotRequest`、`background: BackgroundTasks`、`db: AsyncSession`（DI） |
 | 戻り値 | `PasswordForgotResponse`（`202`、固定メッセージ） |
-| 送出例外 | なし |
-| 処理内容 | 1. `service.request_password_reset(payload.email, background)` を呼ぶ 2. 常に固定メッセージのレスポンスを返す |
+| 送出例外 | RedisまたはDB接続不能時は共通例外ハンドラで503。ユーザー不存在時は例外を送出しない |
+| 処理内容 | 1. `email_verification_service.request_password_reset(payload.email, background, db)` を呼ぶ 2. 常に固定メッセージのレスポンスを返す |
 | 副作用 | なし（副作用は service 層に委譲） |
 
-### 6.2 `service/auth_service.py :: request_password_reset`
+### 6.2 `api/app/service/email_verification_service.py :: request_password_reset`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def request_password_reset(email: str, background: BackgroundTasks) -> None` |
-| 引数 | `email: str`、`background: BackgroundTasks` |
+| シグネチャ | `async def request_password_reset(email: str, background: BackgroundTasks, db: AsyncSession) -> None` |
+| 引数 | `email: str`、`background: BackgroundTasks`、`db: AsyncSession`（ユーザー検索用DBセッション） |
 | 戻り値 | `None`（常に正常終了、例外を送出しない） |
-| 送出例外 | なし |
-| 処理内容 | 1. `user_repository.fn_find_user_by_email(email)` でユーザー取得。`None` なら終了 2. `token = secrets.token_urlsafe(32)` を生成 3. `redis_store.save_password_reset_token(token, user.id, ttl)` を呼ぶ 4. `background.add_task(mail_service.send_password_reset_mail, user.email, token, expires_minutes)` を登録 |
+| 送出例外 | Redis障害、またはDB接続不能時は共通例外ハンドラで `503 SERVICE_UNAVAILABLE` |
+| 処理内容 | 1. `user_repository.get_by_email(db, email)` でユーザー取得。`None` なら終了 2. `token = secrets.token_urlsafe(32)` を生成 3. `redis_store.save_password_reset_token(token, user.id, ttl)` を呼ぶ 4. `background.add_task(mail_service.send_password_reset_mail, user.email, token, expires_minutes)` を登録 |
 | 副作用 | Redis：`pwreset:{hash}` の新規作成。メール：`BackgroundTasks` 経由で非同期送信 |
 
-### 6.3 `repository/user_repository.py :: fn_find_user_by_email`
+### 6.3 `api/app/repository/user_repository.py :: get_by_email`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def get_by_email(email: str) -> User \| None` |
-| 引数 | `email: str` |
+| シグネチャ | `async def get_by_email(db: AsyncSession, email: str) -> User \| None` |
+| 引数 | `db: AsyncSession`（DBセッション）、`email: str` |
 | 戻り値 | `User` または `None` |
-| 送出例外 | なし |
+| 送出例外 | `OperationalError` は `raise_database_error` で共通DBエラーへ変換 |
 | 処理内容 | `SELECT fn_find_user_by_email(:email)` を実行する。空集合でも同一の正常応答とし、ユーザー列挙を許さない |
 | 副作用 | なし（参照のみ）。`07_post_auth_verify_email.md` / `08_post_auth_verify_email_resend.md` と共通の関数を再利用する |
 
@@ -182,8 +182,8 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    R["auth_router.password_forgot"] --> S["auth_service.request_password_reset"]
-    S --> UR["user_repository.fn_find_user_by_email"]
+    R["auth_router.password_forgot"] --> S["email_verification_service.request_password_reset"]
+    S --> UR["user_repository.get_by_email"]
     S --> RD["redis_store.save_password_reset_token"]
     S -.->|"BackgroundTasks"| MS["mail_service.send_password_reset_mail"]
     UR --> PG[("PostgreSQL<br/>users")]

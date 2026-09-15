@@ -87,8 +87,8 @@ sequenceDiagram
     participant SMTP as "SMTPサーバー(Mailpit)"
 
     FE->>R: "POST /api/auth/verify-email/resend {email}"
-    R->>S: "resend_verification(email, background)"
-    S->>UR: "get_by_email(email)"
+    R->>S: "resend_verification(email, background, db)"
+    S->>UR: "get_by_email(db, email)"
     UR->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
     PG-->>UR: "User or None"
     alt ユーザーが存在しない
@@ -144,32 +144,32 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def resend_verify_email(payload: ResendVerifyEmailRequest, background: BackgroundTasks, service: AuthService = Depends(get_auth_service)) -> ResendVerifyEmailResponse` |
-| 引数 | `payload: ResendVerifyEmailRequest`、`background: BackgroundTasks`（FastAPI標準DI）、`service: AuthService` |
+| シグネチャ | `async def resend_verify_email(payload: ResendVerifyEmailRequest, background: BackgroundTasks, db: AsyncSession = Depends(get_db_session)) -> ResendVerifyEmailResponse` |
+| 引数 | `payload: ResendVerifyEmailRequest`、`background: BackgroundTasks`（FastAPI標準DI）、`db: AsyncSession`（DI） |
 | 戻り値 | `ResendVerifyEmailResponse`（`202`、固定メッセージ） |
-| 送出例外 | なし（service層は例外を送出しない設計） |
-| 処理内容 | 1. `service.resend_verification(payload.email, background)` を呼ぶ 2. 常に固定メッセージを含むレスポンスを返す |
+| 送出例外 | RedisまたはDB接続不能時は共通例外ハンドラで503。その他は固定メッセージの202を返す |
+| 処理内容 | 1. `email_verification_service.resend_verification(payload.email, background, db)` を呼ぶ 2. 常に固定メッセージを含むレスポンスを返す |
 | 副作用 | なし（副作用は service 層に委譲） |
 
-### 6.2 `service/auth_service.py :: resend_verification`
+### 6.2 `api/app/service/email_verification_service.py :: resend_verification`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def resend_verification(email: str, background: BackgroundTasks) -> None` |
-| 引数 | `email: str`、`background: BackgroundTasks` |
+| シグネチャ | `async def resend_verification(email: str, background: BackgroundTasks, db: AsyncSession) -> None` |
+| 引数 | `email: str`、`background: BackgroundTasks`、`db: AsyncSession`（ユーザー検索用DBセッション） |
 | 戻り値 | `None`（例外を送出せず、常に正常終了） |
-| 送出例外 | なし。ユーザー不存在・認証済み・再送間隔内はいずれも早期 `return` で処理を終える |
-| 処理内容 | 1. `user_repository.fn_find_user_by_email(email)` でユーザー取得。`None` なら終了 2. `user.email_verified_at IS NOT NULL` なら終了 3. `redis_store.mark_email_verify_sent(user.id, interval)` が `False`（間隔内）なら終了 4. `token = secrets.token_urlsafe(32)` を生成 5. `redis_store.replace_email_verify_token(token, user.id, ttl)` で旧token失効＋新token登録 6. `background.add_task(mail_service.send_email_verification_mail, user.email, token, expires_hours)` を登録 |
+| 送出例外 | Redis障害、またはDB接続不能時は共通例外ハンドラで `503 SERVICE_UNAVAILABLE`。ユーザー不存在・認証済み・再送間隔内はいずれも早期 `return` で処理を終える |
+| 処理内容 | 1. `user_repository.get_by_email(db, email)` でユーザー取得。`None` なら終了 2. `user.email_verified_at IS NOT NULL` なら終了 3. `redis_store.mark_email_verify_sent(user.id, interval)` が `False`（間隔内）なら終了 4. `token = secrets.token_urlsafe(32)` を生成 5. `redis_store.replace_email_verify_token(token, user.id, ttl)` で旧token失効＋新token登録 6. `background.add_task(mail_service.send_email_verification_mail, user.email, token, expires_hours)` を登録 |
 | 副作用 | Redis：`emailverify_sent:{uid}` 新規作成、`emailverify:{old_hash}` 削除、`emailverify:{new_hash}` 作成、`emailverify_current:{uid}` 更新。メール：`BackgroundTasks` 経由で非同期送信（失敗してもレスポンスには影響しない） |
 
-### 6.3 `repository/user_repository.py :: fn_find_user_by_email`
+### 6.3 `api/app/repository/user_repository.py :: get_by_email`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def get_by_email(email: str) -> User \| None` |
-| 引数 | `email: str` |
+| シグネチャ | `async def get_by_email(db: AsyncSession, email: str) -> User \| None` |
+| 引数 | `db: AsyncSession`（DBセッション）、`email: str` |
 | 戻り値 | `User` または `None` |
-| 送出例外 | なし |
+| 送出例外 | `OperationalError` は `raise_database_error` で共通DBエラーへ変換 |
 | 処理内容 | `SELECT fn_find_user_by_email(:email)` を実行する。結果をメール再送判定へ渡し、空集合でも例外を返さない |
 | 副作用 | なし（参照のみ） |
 
@@ -210,8 +210,8 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    R["auth_router.resend_verify_email"] --> S["auth_service.resend_verification"]
-    S --> UR["user_repository.fn_find_user_by_email"]
+    R["auth_router.resend_verify_email"] --> S["email_verification_service.resend_verification"]
+    S --> UR["user_repository.get_by_email"]
     S --> RD1["redis_store.mark_email_verify_sent"]
     S --> RD2["redis_store.replace_email_verify_token"]
     S -.->|"BackgroundTasks"| MS["mail_service.send_email_verification_mail"]

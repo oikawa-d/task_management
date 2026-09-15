@@ -27,7 +27,7 @@
 | AUTH_MODE差異 | 差異なし（session/jwtいずれのモードでも同一処理） |
 | 冪等性 | **なし**。トークンは `GETDEL` によりワンタイム消費されるため、2回目のリクエストは同一トークンでも `400 INVALID_VERIFY_TOKEN` になる |
 | レート制限 | `verify-email` はIP単位で10回/900秒。超過時は429 `TOO_MANY_ATTEMPTS`（`Retry-After`付き）、Redis障害時は503 `SERVICE_UNAVAILABLE` |
-| トランザクション境界 | `CALL sp_verify_user_email(:user_id)` 1回。Redisのトークン消費はAPI層、users更新はSPの1業務トランザクション |
+| トランザクション境界 | Redisのトークン消費後、`mark_email_verified` のusers更新をDBセッションでcommitする。RedisまたはPostgreSQL接続不能時は503 |
 
 ## 2. 入出力仕様（全体の出入力）
 
@@ -94,7 +94,7 @@ sequenceDiagram
     participant PG as "PostgreSQL"
 
     FE->>R: "POST /api/auth/verify-email {token}"
-    R->>S: "verify_email(token)"
+    R->>S: "verify_email(token, db)"
     S->>RD: "consume_email_verify_token(token)"
     RD->>RD: "GETDEL emailverify:{sha256(token)}"
     alt トークンが存在しない
@@ -103,10 +103,10 @@ sequenceDiagram
         R-->>FE: "400 INVALID_VERIFY_TOKEN"
     else トークンが有効
         RD-->>S: "user_id"
-        S->>UR: "mark_email_verified(user_id)"
+        S->>UR: "mark_email_verified(db, user_id)"
         UR->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
-        PG-->>UR: "更新後の行"
-        UR-->>S: "User"
+        PG-->>UR: "更新完了"
+        S->>S: "db.commit()"
         S-->>R: "None"
         R-->>FE: "204 No Content"
     end
@@ -133,22 +133,22 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def verify_email(payload: VerifyEmailRequest, service: AuthService = Depends(get_auth_service)) -> Response` |
-| 引数 | `payload: VerifyEmailRequest`（リクエストボディ）、`service: AuthService`（DI） |
+| シグネチャ | `async def verify_email(payload: VerifyEmailRequest, db: AsyncSession = Depends(get_db_session)) -> None` |
+| 引数 | `payload: VerifyEmailRequest`（リクエストボディ）、`db: AsyncSession`（DI） |
 | 戻り値 | `Response`（`204 No Content`） |
-| 送出例外 | なし（`service.verify_email` が送出した `InvalidVerifyTokenError` はグローバル例外ハンドラで400に変換） |
-| 処理内容 | 1. `service.verify_email(payload.token)` を呼び出す 2. 成功時は `Response(status_code=204)` を返す |
+| 送出例外 | `InvalidVerifyTokenError` はグローバル例外ハンドラで400に変換。RedisまたはDB接続不能時は503 |
+| 処理内容 | 1. `email_verification_service.verify_email(payload.token, db)` を呼び出す 2. 成功時は `Response(status_code=204)` を返す |
 | 副作用 | なし（副作用は service 層に委譲） |
 
-### 6.2 `service/auth_service.py :: verify_email`
+### 6.2 `api/app/service/email_verification_service.py :: verify_email`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def verify_email(token: str) -> None` |
-| 引数 | `token: str`（メールリンクのトークン） |
+| シグネチャ | `async def verify_email(token: str, db: AsyncSession) -> None` |
+| 引数 | `token: str`（メールリンクのトークン）、`db: AsyncSession`（ユーザー更新用DBセッション） |
 | 戻り値 | `None` |
 | 送出例外 | `InvalidVerifyTokenError`（HTTP 400） |
-| 処理内容 | 1. `redis_store.consume_email_verify_token(token)` を呼び user_id を取得 2. `None` の場合は `InvalidVerifyTokenError` を送出 3. `user_repository.sp_verify_user_email(user_id)` を呼ぶ |
+| 処理内容 | 1. `redis_store.consume_email_verify_token(token)` を呼び user_id を取得 2. `None` の場合は `InvalidVerifyTokenError` を送出 3. `user_repository.mark_email_verified(db, user_id)` を呼ぶ 4. `db.commit()` で更新を確定する |
 | 副作用 | Redis：`emailverify:{hash}` の削除（`GETDEL` の副作用）。PostgreSQL：`users.email_verified_at` 更新 |
 
 ### 6.3 `repository/redis_store.py :: consume_email_verify_token`
@@ -162,14 +162,14 @@ flowchart TB
 | 処理内容 | 1. `hash = sha256(token).hexdigest()` を計算 2. `GETDEL emailverify:{hash}` を実行 3. 値が存在すれば JSON をデコードし `user_id` を返す |
 | 副作用 | Redis：キー `emailverify:{hash}` を削除（ワンタイム消費）。`emailverify_current:{user_id}` はこの関数では削除しない（登録・再送時に上書きされるため、GETDELの成否と無関係に残存し得る＝要検討） |
 
-### 6.4 `repository/user_repository.py :: sp_verify_user_email`
+### 6.4 `api/app/repository/user_repository.py :: mark_email_verified`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def mark_email_verified(user_id: UUID) -> User` |
-| 引数 | `user_id: UUID` |
-| 戻り値 | 更新後の `User` |
-| 送出例外 | `NotFoundError`（対象ユーザーが存在しない場合。通常はトークン発行時に存在確認済みのため理論上発生しないが防御的に扱う） |
+| シグネチャ | `async def mark_email_verified(db: AsyncSession, user_id: UUID) -> None` |
+| 引数 | `db: AsyncSession`（DBセッション）、`user_id: UUID` |
+| 戻り値 | `None` |
+| 送出例外 | `OperationalError` は `raise_database_error` で共通DBエラーへ変換 |
 | 処理内容 | `CALL sp_verify_user_email(:user_id)` を実行する。対象なし・使用済みはAPI層で既定の認証エラーへ変換する |
 | 副作用 | PostgreSQL：`users` テーブル1行の更新 |
 
@@ -177,9 +177,9 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    R["auth_router.verify_email"] --> S["auth_service.verify_email"]
+    R["auth_router.verify_email"] --> S["email_verification_service.verify_email"]
     S --> RD["redis_store.consume_email_verify_token"]
-    S --> UR["user_repository.sp_verify_user_email"]
+    S --> UR["user_repository.mark_email_verified"]
     RD --> REDIS[("Redis<br/>emailverify:*")]
     UR --> PG[("PostgreSQL<br/>users")]
 ```
@@ -228,7 +228,7 @@ stateDiagram-v2
 
 | No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 単体（モック） | 有効なトークンで認証成功 | `redis_store.consume_email_verify_token` が `user_id` を返すようモック | `user_repository.sp_verify_user_email` が呼ばれ204相当が返る | `test_verify_email_service_success` |
+| 1 | 単体（モック） | 有効なトークンで認証成功 | `redis_store.consume_email_verify_token` が `user_id` を返すようモック | `user_repository.mark_email_verified` が呼ばれ204相当が返る | `test_verify_email_service_success` |
 | 2 | 単体（モック） | 無効なトークン | `consume_email_verify_token` が `None` を返す | `InvalidVerifyTokenError` 送出 | `test_verify_email_service_invalid_token` |
 | 3 | 結合（実Redis/PostgreSQL） | 会員登録直後のトークンで認証成功 | `register` 実行済み、`emailverify:*` キー存在 | `204`、`users.email_verified_at` が `NOT NULL` に更新 | `test_email_verification_flow_is_one_time_and_enables_login`（Issue #425） |
 | 4 | 結合（実Redis/PostgreSQL） | 同一トークンを2回送信 | 1回目成功済み | 2回目は `400 INVALID_VERIFY_TOKEN` | `test_email_verification_flow_is_one_time_and_enables_login`（Issue #425） |

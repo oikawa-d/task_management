@@ -9,7 +9,7 @@ from app.core.config import get_backend_settings
 from app.main import app
 from app.repository import redis_store, user_repository
 from app.repository.redis_store_common import key, token_hash
-from app.service import auth_service
+from app.service import email_verification_service
 from fastapi.testclient import TestClient
 from redis import Redis as SyncRedis
 from redis.exceptions import ConnectionError as RedisConnectionError
@@ -47,8 +47,8 @@ def mail_outbox(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, str]]:
 	async def record_password_reset(to: str, token: str, _expires_minutes: int) -> None:
 		outbox.append(("password_reset", to, token))
 
-	monkeypatch.setattr(auth_service.mail_service, "send_email_verification_mail", record_verification)
-	monkeypatch.setattr(auth_service.mail_service, "send_password_reset_mail", record_password_reset)
+	monkeypatch.setattr(email_verification_service.mail_service, "send_email_verification_mail", record_verification)
+	monkeypatch.setattr(email_verification_service.mail_service, "send_password_reset_mail", record_password_reset)
 	return outbox
 
 
