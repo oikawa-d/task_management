@@ -80,7 +80,7 @@ async def test_list_tasks_member_scope_includes_shared_and_own_unassigned_only(
 	assert str(scenario.outsider_unassigned_task_id) not in ids
 
 
-async def test_list_tasks_unassigned_filter_and_project_membership_boundary(
+async def test_list_tasks_project_id_filter_scopes_to_unassigned_member_and_non_member(
 	client: TestClient, scenario: TaskScenario, authenticate
 ) -> None:
 	auth_headers = authenticate()
@@ -88,6 +88,15 @@ async def test_list_tasks_unassigned_filter_and_project_membership_boundary(
 	unassigned = client.get("/api/tasks", params={"project_id": "null", "per_page": 20}, headers=auth_headers)
 	assert unassigned.status_code == 200, unassigned.text
 	assert {item["id"] for item in _items(unassigned)} == {str(scenario.own_unassigned_task_id)}
+
+	member_project = client.get(
+		"/api/tasks", params={"project_id": str(scenario.member_project_id), "per_page": 20}, headers=auth_headers
+	)
+	assert member_project.status_code == 200, member_project.text
+	member_project_ids = {item["id"] for item in _items(member_project)}
+	assert member_project_ids == {str(scenario.member_project_task_id)}
+	assert str(scenario.shared_project_task_id) not in member_project_ids
+	assert str(scenario.own_unassigned_task_id) not in member_project_ids
 
 	private = client.get(
 		"/api/tasks", params={"project_id": str(scenario.private_project_id), "per_page": 20}, headers=auth_headers
