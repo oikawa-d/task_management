@@ -14,6 +14,7 @@ from app.schemas.auth import CurrentUser
 from app.schemas.notification import NotificationReadAllResponse, NotificationReadResponse
 from app.service import notification_service
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
@@ -218,11 +219,12 @@ async def test_mark_all_notifications_returns_changed_count(monkeypatch: pytest.
 	mark_all_read = AsyncMock(return_value=3)
 	monkeypatch.setattr(notification_service.notification_repository, "count_unread", AsyncMock(return_value=0))
 	monkeypatch.setattr(notification_service.notification_repository, "mark_all_read", mark_all_read)
-	db = object()
+	db = AsyncMock()
 
 	response = await notification_service.mark_all_notifications_read(db, user)  # type: ignore[arg-type]
 
 	mark_all_read.assert_awaited_once_with(db, user.id)
+	db.commit.assert_awaited_once()
 	assert response.updated_count == 3
 	assert response.unread_count == 0
 
@@ -235,13 +237,14 @@ async def test_mark_notification_read_returns_app_timezone(monkeypatch: pytest.M
 	monkeypatch.setattr(notification_service.notification_repository, "mark_read", mark_read)
 	monkeypatch.setattr(notification_service.notification_repository, "count_unread", AsyncMock(return_value=0))
 	notification_id = uuid4()
-	db = object()
+	db = AsyncMock()
 
 	response = await notification_service.mark_notification_read(db, notification_id, user)  # type: ignore[arg-type]
 
 	mark_read.assert_awaited_once_with(db, notification_id, user.id)
 	assert response.id == notification_id
 	assert response.read_at == persisted_read_at.astimezone(ZoneInfo("Asia/Tokyo"))
+	db.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -253,12 +256,36 @@ async def test_mark_notification_read_returns_404_when_repository_returns_none(
 	count_unread = AsyncMock(return_value=0)
 	monkeypatch.setattr(notification_service.notification_repository, "mark_read", mark_read)
 	monkeypatch.setattr(notification_service.notification_repository, "count_unread", count_unread)
-	db = object()
+	db = AsyncMock()
 
 	with pytest.raises(NotFoundError):
 		await notification_service.mark_notification_read(db, uuid4(), user)  # type: ignore[arg-type]
 
 	count_unread.assert_not_awaited()
+	db.rollback.assert_not_awaited()
+
+
+@pytest.mark.parametrize("operation", ["mark_read", "mark_all_read"])
+async def test_notification_mutation_rolls_back_on_database_error(
+	monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+	user = _user()
+	db = AsyncMock()
+	db_error = DBAPIError("notification update", {}, Exception("database error"))
+	if operation == "mark_read":
+		monkeypatch.setattr(notification_service.notification_repository, "mark_read", AsyncMock(side_effect=db_error))
+		call = notification_service.mark_notification_read(db, uuid4(), user)
+	else:
+		monkeypatch.setattr(
+			notification_service.notification_repository, "mark_all_read", AsyncMock(side_effect=db_error)
+		)
+		call = notification_service.mark_all_notifications_read(db, user)
+
+	with pytest.raises(DBAPIError):
+		await call  # type: ignore[arg-type]
+
+	db.rollback.assert_awaited_once()
+	db.commit.assert_not_awaited()
 
 
 async def test_notification_lifecycle_uses_database_contract(db_session: AsyncSession) -> None:

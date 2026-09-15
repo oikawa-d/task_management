@@ -84,7 +84,7 @@ sequenceDiagram
 
 ### 5.2 `service/notification_service.py :: mark_all_notifications_read`
 
-`notification_repository.mark_all_read(db, user_id)`を呼び出す。ユーザーIDをリクエストから受け取らず、認証済みユーザーからのみ解決する。
+`notification_repository.mark_all_read(db, user_id)`と未読件数取得を同一トランザクションで実行し、成功時にcommitする。DBAPI障害時はrollbackして再送出する。ユーザーIDをリクエストから受け取らず、認証済みユーザーからのみ解決する。
 
 ### 5.3 `repository/notification_repository.py :: mark_all_read`
 
@@ -151,6 +151,7 @@ SPが返す更新件数を `updated_count` に使用するため、既読済み�
 | 6 | 結合 | レート制限超過時にTTLを取得できない | Redis TTLが0以下を返す | 429 `TOO_MANY_ATTEMPTS`、`Retry-After`が設定窓以上の正の整数 | `test_all_notification_rate_limited_endpoints_return_positive_retry_after_when_ttl_unavailable` |
 | 7 | 結合（router・認証依存性） | 未認証・無効認証 | Cookie/Bearerなし、または無効な認証情報 | 401 `UNAUTHENTICATED` | `test_notifications_router_rejects_missing_and_invalid_jwt_authentication` / `test_notifications_router_rejects_missing_and_invalid_session_authentication` |
 | 8 | 結合（router） | PostgreSQL/Redis接続不能 | 認証成功後の更新処理またはレート制限で障害 | 503 `SERVICE_UNAVAILABLE`、0件成功へ隠蔽しない | `test_notification_router_returns_503_for_postgresql_failure_instead_of_empty_result` / `test_notification_router_returns_503_for_redis_failure_instead_of_zero_result` |
+| 9 | 結合（router・実DB・別セッション） | HTTP応答後の全件既読状態永続化 | 200後、別セッションから`updated_count`分の既読化と未読件数0を確認 | `test_notification_mutations_persist_after_http_response` |
 
 ## 11. 不明点・要検討事項
 

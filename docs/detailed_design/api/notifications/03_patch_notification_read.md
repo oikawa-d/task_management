@@ -109,7 +109,7 @@ sequenceDiagram
 | 項目 | 内容 |
 |------|------|
 | シグネチャ | `async def mark_notification_read(db: AsyncSession, notification_id: UUID, user: CurrentUser) -> NotificationReadResponse` |
-| 処理 | repositoryへ`user.id`を必ず渡し、戻り値の`read_at`が`None`なら404。既読済みはDBが返した値を保持したまま未読件数だけ再計算する |
+| 処理 | repositoryへ`user.id`を必ず渡し、戻り値の`read_at`が`None`なら404。既読済みはDBが返した値を保持したまま未読件数を再計算し、成功時にcommitする。DBAPI障害時はrollbackして再送出する |
 | 副作用 | 既読化と未読件数取得 |
 
 ### 5.3 `repository/notification_repository.py :: mark_read`
@@ -189,6 +189,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 7 | 結合（router・認証依存性） | 未認証・無効認証 | Cookie/Bearerなし、または無効な認証情報 | 401 `UNAUTHENTICATED`、DB更新なし | `test_notifications_router_rejects_missing_and_invalid_jwt_authentication` / `test_notifications_router_rejects_missing_and_invalid_session_authentication` |
 | 8 | 結合（router） | PostgreSQL接続不能 | 認証成功後の既読更新でSQLSTATE `08xxx` | 503 `SERVICE_UNAVAILABLE` | `test_notification_router_returns_503_for_postgresql_failure_instead_of_empty_result` |
 | 9 | 結合（router・認証依存性） | session方式のOrigin不正 | 403 `CSRF_INVALID`、サービス層を呼ばない | `test_session_notification_mutations_reject_disallowed_origin` |
+| 10 | 結合（router・実DB・別セッション） | HTTP応答後の既読状態永続化 | 200後、別セッションから`read_at`設定と未読件数減少を確認 | `test_notification_mutations_persist_after_http_response` |
 
 ## 11. 不明点・要検討事項
 
