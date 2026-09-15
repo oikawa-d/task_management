@@ -157,7 +157,7 @@ async def test_admin_user_role_status_and_redis_revocation_are_integrated(
 			and record.actor_user_id == str(admin.id)
 			and record.target_user_id == str(target.id)
 			and record.new_is_active is False
-			and record.session_revoked_count >= 1
+			and record.session_revoked_count == (1 if get_backend_settings().auth_mode == "session" else 0)
 			and record.refresh_revoked_count >= 1
 			for record in caplog.records
 		)
@@ -198,7 +198,7 @@ async def test_admin_force_logout_revokes_all_auth_state_but_preserves_user(
 			record.getMessage() == "admin forced logout"
 			and record.actor_user_id == str(admin.id)
 			and record.target_user_id == str(target.id)
-			and record.session_revoked_count >= 2
+			and record.session_revoked_count == (2 if get_backend_settings().auth_mode == "session" else 1)
 			and record.refresh_revoked_count >= 1
 			for record in caplog.records
 		), [(record.name, record.getMessage(), vars(record)) for record in caplog.records]
