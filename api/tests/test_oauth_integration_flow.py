@@ -225,7 +225,7 @@ async def test_full_session_flow_creates_user_and_establishes_authenticated_sess
 		token, jwks = _signed_id_token(client_id, nonce, sub=sub, email=email)
 		boundary = _GoogleBoundary({"id_token": token, "access_token": "access-token"}, _userinfo(sub, email), jwks)
 		monkeypatch.setattr(
-			oauth_router_module.auth_service,
+			oauth_router_module.oauth_service,
 			"GoogleOAuthProvider",
 			lambda settings: GoogleOAuthProvider(settings, boundary),
 		)
@@ -269,7 +269,7 @@ async def test_oauth_callback_links_existing_verified_email(
 			token, jwks = _signed_id_token(client_id, nonce, sub=sub, email=email)
 			boundary = _GoogleBoundary({"id_token": token, "access_token": "access-token"}, _userinfo(sub, email), jwks)
 			monkeypatch.setattr(
-				oauth_router_module.auth_service,
+				oauth_router_module.oauth_service,
 				"GoogleOAuthProvider",
 				lambda settings: GoogleOAuthProvider(settings, boundary),
 			)
@@ -314,7 +314,7 @@ async def test_oauth_callback_rejects_unverified_email(
 				jwks,
 			)
 			monkeypatch.setattr(
-				oauth_router_module.auth_service,
+				oauth_router_module.oauth_service,
 				"GoogleOAuthProvider",
 				lambda settings: GoogleOAuthProvider(settings, boundary),
 			)
@@ -345,7 +345,7 @@ async def test_full_jwt_flow_exchanges_handoff_and_establishes_bearer_authentica
 		token, jwks = _signed_id_token(client_id, nonce, sub=sub, email=email)
 		boundary = _GoogleBoundary({"id_token": token, "access_token": "access-token"}, _userinfo(sub, email), jwks)
 		monkeypatch.setattr(
-			oauth_router_module.auth_service,
+			oauth_router_module.oauth_service,
 			"GoogleOAuthProvider",
 			lambda settings: GoogleOAuthProvider(settings, boundary),
 		)
@@ -410,7 +410,7 @@ async def test_callback_rejects_nonce_mismatch_without_creating_user(
 		token, jwks = _signed_id_token(client_id, "unexpected-nonce", sub=sub, email=email)
 		boundary = _GoogleBoundary({"id_token": token, "access_token": "access-token"}, _userinfo(sub, email), jwks)
 		monkeypatch.setattr(
-			oauth_router_module.auth_service,
+			oauth_router_module.oauth_service,
 			"GoogleOAuthProvider",
 			lambda settings: GoogleOAuthProvider(settings, boundary),
 		)
@@ -439,7 +439,7 @@ async def test_callback_rejects_userinfo_sub_mismatch_without_creating_user(
 			{"id_token": token, "access_token": "access-token"}, _userinfo(wrong_sub, email), jwks
 		)
 		monkeypatch.setattr(
-			oauth_router_module.auth_service,
+			oauth_router_module.oauth_service,
 			"GoogleOAuthProvider",
 			lambda settings: GoogleOAuthProvider(settings, boundary),
 		)
@@ -463,7 +463,7 @@ async def test_callback_fails_closed_when_google_token_endpoint_is_unavailable(
 		state, _nonce, _code_challenge = await _start_and_capture_state(client)
 		boundary = _GoogleBoundary(token_status=503)
 		monkeypatch.setattr(
-			oauth_router_module.auth_service,
+			oauth_router_module.oauth_service,
 			"GoogleOAuthProvider",
 			lambda settings: GoogleOAuthProvider(settings, boundary),
 		)
@@ -490,7 +490,7 @@ async def test_callback_fails_closed_when_google_jwks_endpoint_is_unavailable(
 		state, _nonce, _code_challenge = await _start_and_capture_state(client)
 		boundary = _GoogleBoundary({"id_token": "irrelevant", "access_token": "access-token"}, jwks_status=503)
 		monkeypatch.setattr(
-			oauth_router_module.auth_service,
+			oauth_router_module.oauth_service,
 			"GoogleOAuthProvider",
 			lambda settings: GoogleOAuthProvider(settings, boundary),
 		)
@@ -516,7 +516,7 @@ async def test_start_normalizes_disallowed_redirect_to_across_the_full_roundtrip
 		token, jwks = _signed_id_token(client_id, nonce, sub=sub, email=email)
 		boundary = _GoogleBoundary({"id_token": token, "access_token": "access-token"}, _userinfo(sub, email), jwks)
 		monkeypatch.setattr(
-			oauth_router_module.auth_service,
+			oauth_router_module.oauth_service,
 			"GoogleOAuthProvider",
 			lambda settings: GoogleOAuthProvider(settings, boundary),
 		)

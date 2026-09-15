@@ -25,10 +25,7 @@ from app.core.exceptions import (
 )
 from app.db import get_db_session
 from app.schemas.oauth import OAuthExchangeRequest, OAuthExchangeResponse
-from app.service import auth_service as basic_auth_service
-from app.service import oauth_service
-
-auth_service = oauth_service
+from app.service import auth_service, oauth_service
 
 logger = logging.getLogger("app.oauth")
 
@@ -153,7 +150,7 @@ def _callback_error_value(exc: Exception) -> str:
 
 
 def _is_google_login_enabled(settings: BackendSettings) -> bool:
-	return basic_auth_service.get_auth_config(settings).google_login_enabled
+	return auth_service.get_auth_config(settings).google_login_enabled
 
 
 def _ensure_google_login_enabled(settings: BackendSettings) -> None:
