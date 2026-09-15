@@ -86,6 +86,88 @@ async def test_update_project_passes_partial_values(monkeypatch: pytest.MonkeyPa
 	set_active.assert_awaited_once_with(db, project.id, False)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field_name", ["start_at", "end_at"])
+async def test_update_project_clears_specified_period_field(monkeypatch: pytest.MonkeyPatch, field_name: str) -> None:
+	user = _user()
+	project = _project(user)
+	project.start_at = datetime(2026, 9, 10, tzinfo=timezone.utc)
+	project.end_at = datetime(2026, 9, 20, tzinfo=timezone.utc)
+	expected_start_at = project.start_at
+	expected_end_at = project.end_at
+	db = AsyncMock()
+
+	async def apply_update(
+		_db: AsyncSession,
+		_project_id: object,
+		_name: str,
+		description: str | None,
+		start_at: datetime | None,
+		end_at: datetime | None,
+	) -> None:
+		project.description = description
+		project.start_at = start_at
+		project.end_at = end_at
+
+	update = AsyncMock(side_effect=apply_update)
+	monkeypatch.setattr(project_service.project_repository, "update", update)
+	monkeypatch.setattr(project_service.project_repository, "get_by_id", AsyncMock(return_value=project))
+
+	response = await project_service.update_project(
+		db, project, ProjectUpdateRequest(**{field_name: None}), _current_user(user)
+	)
+
+	assert getattr(response, field_name) is None
+	assert update.await_args.args[3:] == (
+		project.description,
+		None if field_name == "start_at" else expected_start_at,
+		None if field_name == "end_at" else expected_end_at,
+	)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("omitted_field", ["start_at", "end_at"])
+async def test_update_project_preserves_unspecified_period_field(
+	monkeypatch: pytest.MonkeyPatch, omitted_field: str
+) -> None:
+	user = _user()
+	project = _project(user)
+	project.start_at = datetime(2026, 9, 10, tzinfo=timezone.utc)
+	project.end_at = datetime(2026, 9, 20, tzinfo=timezone.utc)
+	expected_start_at = project.start_at
+	expected_end_at = project.end_at
+	db = AsyncMock()
+
+	async def apply_update(
+		_db: AsyncSession,
+		_project_id: object,
+		_name: str,
+		description: str | None,
+		start_at: datetime | None,
+		end_at: datetime | None,
+	) -> None:
+		project.description = description
+		project.start_at = start_at
+		project.end_at = end_at
+
+	update = AsyncMock(side_effect=apply_update)
+	monkeypatch.setattr(project_service.project_repository, "update", update)
+	monkeypatch.setattr(project_service.project_repository, "get_by_id", AsyncMock(return_value=project))
+	specified_field = "end_at" if omitted_field == "start_at" else "start_at"
+
+	response = await project_service.update_project(
+		db,
+		project,
+		ProjectUpdateRequest(**{specified_field: getattr(project, specified_field)}),
+		_current_user(user),
+	)
+
+	assert response.start_at == expected_start_at
+	assert response.end_at == expected_end_at
+	assert update.await_args.args[3] == project.description
+	assert update.await_args.args[4:] == (expected_start_at, expected_end_at)
+
+
 async def test_update_project_rejects_period_before_database_update(monkeypatch: pytest.MonkeyPatch) -> None:
 	user = _user()
 	project = _project(user)
