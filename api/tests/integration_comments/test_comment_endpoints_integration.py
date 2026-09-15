@@ -3,17 +3,61 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from app.core.config import get_backend_settings
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tests.integration_comments.conftest import CommentScenario, write_headers
+from tests.integration_comments.conftest import ALLOWED_ORIGIN, CommentScenario, write_headers
 
 
 def _error() -> Exception:
 	from sqlalchemy.exc import OperationalError
 
 	return OperationalError("comment transaction", {}, SimpleNamespace(sqlstate="08006"))
+
+
+@pytest.mark.parametrize(
+	("method", "path", "body"),
+	[
+		("get", "comments", None),
+		("post", "comments", {"body": "unauthenticated"}),
+		("patch", "comment", {"body": "unauthenticated"}),
+		("delete", "comment", None),
+	],
+)
+async def test_comment_endpoints_require_authentication(
+	client: TestClient,
+	scenario: CommentScenario,
+	method: str,
+	path: str,
+	body: dict[str, str] | None,
+) -> None:
+	url = f"/api/tasks/{scenario.task_id}/comments" if path == "comments" else f"/api/comments/{scenario.comment_id}"
+	response = client.request(
+		method.upper(),
+		url,
+		json=body,
+		headers={"Origin": ALLOWED_ORIGIN} if method != "get" else {},
+	)
+	assert response.status_code == 401, response.text
+	assert response.json()["error"]["code"] == "UNAUTHENTICATED"
+
+
+async def test_comment_mutations_require_csrf_in_session_mode(
+	client: TestClient, scenario: CommentScenario, authenticate
+) -> None:
+	if get_backend_settings().auth_mode != "session":
+		pytest.skip("CSRFはsession方式のみで検証する")
+	authenticate()
+	for method, url, body in (
+		("post", f"/api/tasks/{scenario.task_id}/comments", {"body": "missing csrf"}),
+		("patch", f"/api/comments/{scenario.comment_id}", {"body": "missing csrf"}),
+		("delete", f"/api/comments/{scenario.comment_id}", None),
+	):
+		response = client.request(method.upper(), url, json=body, headers={"Origin": ALLOWED_ORIGIN})
+		assert response.status_code == 403, response.text
+		assert response.json()["error"]["code"] == "CSRF_INVALID"
 
 
 async def test_comment_crud_round_trip_at_api_boundary(

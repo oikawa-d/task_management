@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 
 import pytest
@@ -15,7 +15,9 @@ from app.repository import (
 	task_repository,
 	user_repository,
 )
+from app.repository.redis_store_common import key, token_hash
 from fastapi.testclient import TestClient
+from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,6 +37,14 @@ class CommentScenario:
 	unassigned_task_id: uuid.UUID
 	comment_id: uuid.UUID
 	inactive_comment_id: uuid.UUID
+	user_ids: dict[str, uuid.UUID]
+
+
+@dataclass(frozen=True)
+class AuthArtifact:
+	user_id: uuid.UUID
+	session_id: str | None = None
+	refresh_token: str | None = None
 
 
 @pytest.fixture
@@ -101,6 +111,7 @@ async def scenario(db_session: AsyncSession) -> Iterator[CommentScenario]:
 		unassigned_task_id,
 		comment_id,
 		inactive_comment_id,
+		{role: user_id for role, (user_id, _username) in users.items()},
 	)
 	try:
 		yield value
@@ -116,8 +127,36 @@ async def scenario(db_session: AsyncSession) -> Iterator[CommentScenario]:
 		await db_session.commit()
 
 
+@pytest_asyncio.fixture
+async def redis_conn() -> AsyncIterator[Redis]:
+	settings = get_backend_settings()
+	client = Redis.from_url(settings.redis_url, decode_responses=True)
+	try:
+		yield client
+	finally:
+		await client.aclose()
+
+
+@pytest_asyncio.fixture
+async def auth_artifacts(redis_conn: Redis) -> AsyncIterator[list[AuthArtifact]]:
+	artifacts: list[AuthArtifact] = []
+	yield artifacts
+	settings = get_backend_settings()
+	prefix = settings.redis_key_prefix
+	pipe = redis_conn.pipeline(transaction=True)
+	for artifact in artifacts:
+		if artifact.session_id is not None:
+			pipe.delete(key("session", prefix, artifact.session_id), key("csrf", prefix, artifact.session_id))
+			pipe.srem(key("user_sessions", prefix, artifact.user_id), artifact.session_id)
+		if artifact.refresh_token is not None:
+			hash_value = token_hash(artifact.refresh_token)
+			pipe.delete(key("refresh", prefix, hash_value))
+			pipe.srem(key("user_refresh", prefix, artifact.user_id), hash_value)
+	await pipe.execute()
+
+
 @pytest.fixture
-def authenticate(client: TestClient, scenario: CommentScenario):
+def authenticate(client: TestClient, scenario: CommentScenario, auth_artifacts: list[AuthArtifact]):
 	def _authenticate(user: str = "author") -> dict[str, str]:
 		username = getattr(scenario, f"{user}_username")
 		response = client.post(
@@ -130,7 +169,13 @@ def authenticate(client: TestClient, scenario: CommentScenario):
 		else:
 			assert response.status_code == 200, response.text
 		if get_backend_settings().auth_mode == "jwt":
+			refresh_token = response.cookies.get(get_backend_settings().cookie_name_refresh)
+			assert refresh_token
+			auth_artifacts.append(AuthArtifact(scenario.user_ids[user], refresh_token=refresh_token))
 			return {"Authorization": f"Bearer {response.json()['access_token']}"}
+		session_id = response.cookies.get(get_backend_settings().cookie_name_session)
+		assert session_id
+		auth_artifacts.append(AuthArtifact(scenario.user_ids[user], session_id=session_id))
 		return {}
 
 	return _authenticate
