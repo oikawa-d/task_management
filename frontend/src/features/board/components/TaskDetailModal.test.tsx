@@ -4,9 +4,11 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useTaskDetail } from "../../task-detail/hooks/useTaskDetail";
+import { useProjectMembers } from "../hooks/useProjectMembers";
 import { TaskDetailModal } from "./TaskDetailModal";
 
 vi.mock("../../task-detail/hooks/useTaskDetail", () => ({ useTaskDetail: vi.fn() }));
+vi.mock("../hooks/useProjectMembers", () => ({ useProjectMembers: vi.fn() }));
 
 const task = {
 	id: "task-1",
@@ -27,6 +29,7 @@ const task = {
 
 describe("TaskDetailModal", () => {
 	beforeEach(() => {
+		vi.mocked(useProjectMembers).mockReturnValue({ members: [], isLoading: false, error: null });
 		vi.mocked(useTaskDetail).mockReturnValue({
 			task: { ...task, project_is_active: true },
 			taskId: task.id,

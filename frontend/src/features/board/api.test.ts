@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { clearAuthAdapter } from "../../api/authAdapter/client";
-import { BoardApiError, getProjectTasks, updateTask } from "./api";
+import { BoardApiError, getProjectMembers, getProjectTasks, updateTask } from "./api";
 
 describe("board API", () => {
 	afterEach(() => {
@@ -53,5 +53,20 @@ describe("board API", () => {
 		const requestHeaders = fetchMock.mock.calls[1][1].headers as Headers;
 		expect(requestHeaders.get("accept")).toBe("application/json");
 		expect(requestHeaders.get("content-type")).toBe("application/json");
+	});
+
+	it("プロジェクトメンバー一覧を取得し、無効状態を保持する", async () => {
+		const members = {
+			items: [{ user_id: "user-2", username: "hanako", display_name: "佐藤 花子", role: "member", is_owner: false, is_active: false, joined_at: "2026-09-01T00:00:00Z" }],
+			meta: { total: 1 },
+		};
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ auth_mode: "session" }) })
+			.mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve(members) });
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(getProjectMembers("project-1")).resolves.toEqual(members);
+		expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/projects/project-1/members", expect.any(Object));
 	});
 });

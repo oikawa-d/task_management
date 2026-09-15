@@ -160,6 +160,7 @@ class TaskDetailStore {
 				task: { ...this.state.task, comment_count: this.state.task.comment_count + 1 },
 				comments: [...this.state.comments, added],
 				isSaving: false,
+				boardRefreshToken: this.state.boardRefreshToken + 1,
 			});
 		} catch (reason: unknown) {
 			if (this.state.taskId !== taskId) return;
@@ -195,7 +196,12 @@ class TaskDetailStore {
 			const task = this.state.task && wasPresent
 				? { ...this.state.task, comment_count: Math.max(0, this.state.task.comment_count - 1) }
 				: this.state.task;
-			this.setState({ task, comments: this.state.comments.filter((comment) => comment.id !== commentId), isSaving: false });
+			this.setState({
+				task,
+				comments: this.state.comments.filter((comment) => comment.id !== commentId),
+				isSaving: false,
+				boardRefreshToken: this.state.boardRefreshToken + 1,
+			});
 		} catch (reason: unknown) {
 			if (this.state.taskId !== taskId) return;
 			this.setState({ isSaving: false, error: asError(reason) });

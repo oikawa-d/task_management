@@ -40,7 +40,7 @@
 | ガード | 認証必須（ボード画面と共通）。タスクが非所属プロジェクトまたは不存在の場合はAPIが404を返しモーダル内にエラー表示 |
 | 対応要件 | 要件書§2-5 |
 | 主なユースケース | タスクの内容確認・編集（タイトル・説明・担当者・期限・ステータス）、コメントの閲覧・投稿・編集・削除、タスク削除 |
-| 実装ファイル | ボード統合: `frontend/src/features/board/BoardPage.tsx`、`frontend/src/features/board/components/TaskDetailModal.tsx`、`frontend/src/features/board/hooks/useBoard.ts`。詳細UI: `frontend/src/features/task-detail/components/TaskEditForm.tsx`、`frontend/src/features/task-detail/components/CommentList.tsx`、`frontend/src/features/task-detail/components/CommentForm.tsx`。状態/API: `frontend/src/features/task-detail/hooks/useTaskDetail.ts`、`frontend/src/stores/taskDetailStore.ts`、`frontend/src/lib/api/taskDetail.ts` |
+| 実装ファイル | ボード統合: `frontend/src/features/board/BoardPage.tsx`、`frontend/src/features/board/components/TaskDetailModal.tsx`、`frontend/src/features/board/hooks/useBoard.ts`、`frontend/src/features/board/hooks/useProjectMembers.ts`。詳細UI: `frontend/src/features/task-detail/components/TaskEditForm.tsx`、`frontend/src/features/task-detail/components/CommentList.tsx`、`frontend/src/features/task-detail/components/CommentForm.tsx`。状態/API/日時: `frontend/src/features/task-detail/hooks/useTaskDetail.ts`、`frontend/src/stores/taskDetailStore.ts`、`frontend/src/lib/api/taskDetail.ts`、`frontend/src/features/board/api.ts`、`frontend/src/features/board/types.ts`、`frontend/src/features/task-detail/dateTime.ts` |
 
 ## 2. 画面レイアウト
 
@@ -105,7 +105,7 @@
 | 4 | ⑪クリック | POST `/tasks/{taskId}/comments` | `{body}` | 成功したコメントを一覧へ追加し、⑩をクリア | 422は入力エラー、404は`notFound=true`のみ | `CommentForm`から詳細統合層へ委譲（#166/#167結合時） |
 | 5 | ⑧⑨編集/削除確定 | PATCH／DELETE `/comments/{commentId}` | `{body}` または パスパラメータのみ | `comments`の該当要素を更新／除去し、削除時は`comment_count`を減算 | 403はerrorへ保持、404はコメント再取得。自動closeはしない | `taskDetailStore.updateComment` / `removeComment` |
 | 6 | ⑭削除確定 | DELETE `/tasks/{taskId}` | パスパラメータのみ | `boardRefreshToken`を加算し`closeRequested=true` | 404は`notFound=true`のみ。その他はerrorへ保持 | `taskDetailStore.removeTask` |
-| 7 | 表示時（④の選択肢構築） | プロジェクトメンバーAPI | - | #165/#166の統合層がメンバー一覧を④へ渡す | 詳細state/API clientでは取得しない | `TaskEditForm`のprops |
+| 7 | 表示時（④の選択肢構築） | GET `/projects/{projectId}/members` | - | `useProjectMembers`が全メンバーを取得し、`is_active`を保持して④へ渡す | 無効メンバーは表示するが選択不可 | `TaskDetailModal` / `TaskEditForm` |
 
 ## 5. 状態管理
 
@@ -304,7 +304,7 @@ flowchart TB
 |------|------|
 | 公開API | `getSnapshot`、`subscribe`、`reset`、`open`、`updateTask`、`addComment`、`updateComment`、`removeComment`、`removeTask`、`requestClose`、`acknowledgeClose` |
 | state | `TaskDetailState`。task/comments、loading/error、`notFound`、`conflictBannerVisible`、`closeRequested`、`boardRefreshToken`を保持する |
-| 処理内容 | `open`はtask/commentsを`Promise.allSettled`で並行取得する。各非同期処理はrequest世代と`taskId`を確認し、古い結果をstateへ反映しない。`updateTask`はstateのversionを付与し、成功時にtaskと`boardRefreshToken`を更新する |
+| 処理内容 | `open`はtask/commentsを`Promise.allSettled`で並行取得する。各非同期処理はrequest世代と`taskId`を確認し、古い結果をstateへ反映しない。`updateTask`はstateのversionを付与し、成功時にtaskと`boardRefreshToken`を更新する。`addComment`/`removeComment`もコメント件数と`boardRefreshToken`を更新する |
 | 404契約 | task 404とcomments 404はどちらも`notFound=true`、`closeRequested=false`とする。自動navigateはせず、画面層が表示を決定する |
 | 副作用 | `lib/api/taskDetail.ts`を介したAPI通信、購読者への通知 |
 
@@ -398,8 +398,11 @@ flowchart LR
 | 10 | 結合 | URL直接アクセス（リロード相当） | `/projects/:pid/tasks/:tid`へ直接遷移、`GET /tasks/:id`→200 | モーダルが開いた状態で初期表示される | `TaskDetailModal opens directly from URL on mount` |
 | 11 | 結合 | 非所属／不存在タスクへのアクセス | `GET /tasks/:id` → 404 | 「タスクが見つかりません」表示、自動closeなし | `TaskDetailModal shows not-found state without auto close` |
 | 12 | 結合 | ボードからのopen、task編集、comment CRUD、Esc close | BoardPageから遷移し、各APIを実応答相当で返す | URL同期、編集・投稿・編集・削除、ボード再取得、Esc closeが連携する | `taskDetailIntegration opens, edits, manages comments, and closes` |
-| 13 | 結合 | 直接URL、ブラウザ戻る、タスク削除成功 | 履歴にboardとtask URLを設定し、DELETE → 204 | 戻るでboardへ戻り、削除成功でもモーダルを閉じてboardを同期する | `taskDetailIntegration handles history and delete close` |
-| 14 | 結合 | 409競合、task/comments 404、API障害、入力validation | PATCH → 409、GET → 404、PATCH → 503、空／空白入力 | 最新値と競合表示、not found表示、自動closeなし、共通エラーとvalidationを表示する | `taskDetailIntegration keeps modal state for conflict, not-found, and failure` |
+| 13 | 結合 | メンバー一覧・担当者変更・無効メンバー | 全メンバーAPIが有効／無効メンバーを返す | 全員表示、無効メンバー選択不可、有効メンバーへの変更をUTCで送信する | `カードからopenしURLを同期、task編集・comment CRUD・board再取得・closeまで連携する` |
+| 14 | 単体 | UTC/JSTの日付境界 | `APP_TIMEZONE=Asia/Tokyo`、UTC 23:59相当／翌日00:00相当 | `datetime-local`表示はJST、送信値はUTC | `UTCの23:59相当をAPP_TIMEZONEの同日として表示する` ほか |
+| 15 | 結合 | コメント投稿・削除後のTaskCard件数 | POST／DELETE成功 | `boardRefreshToken`でボードを再取得し件数を更新する | `カードからopenしURLを同期、task編集・comment CRUD・board再取得・closeまで連携する` |
+| 16 | 結合 | 直接URL、ブラウザ戻る、タスク削除成功 | 履歴にboardとtask URLを設定し、DELETE → 204 | 戻るでboardへ戻り、削除成功でもモーダルを閉じてboardを同期する | `taskDetailIntegration handles history and delete close` |
+| 17 | 結合 | 409競合、task/comments 404、API障害、入力validation | PATCH → 409、GET → 404、PATCH → 503、空／空白入力 | 最新値と競合表示、not found表示、自動closeなし、共通エラーとvalidationを表示する | `taskDetailIntegration keeps modal state for conflict, not-found, and failure` |
 
 ## 15. 不明点・要検討事項
 

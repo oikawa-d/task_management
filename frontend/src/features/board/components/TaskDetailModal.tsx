@@ -2,10 +2,12 @@ import { useEffect, useRef } from "react";
 
 import { useAuthStore } from "../../../auth/authStore";
 import type { TaskDetailApiError, TaskUpdateFields } from "../../../lib/api/taskDetail";
+import { localDateTimeToUtc, utcToLocalDateTime } from "../../task-detail/dateTime";
 import { CommentForm } from "../../task-detail/components/CommentForm";
 import { CommentList } from "../../task-detail/components/CommentList";
 import { TaskEditForm, type TaskEditFormValues, type TaskMember } from "../../task-detail/components/TaskEditForm";
 import { useTaskDetail } from "../../task-detail/hooks/useTaskDetail";
+import { useProjectMembers } from "../hooks/useProjectMembers";
 import styles from "./TaskDetailModal.module.css";
 
 interface TaskDetailModalProps {
@@ -14,12 +16,13 @@ interface TaskDetailModalProps {
 	onClose: () => void;
 }
 
-export function TaskDetailModal({ taskId, onClose }: TaskDetailModalProps) {
+export function TaskDetailModal({ projectId, taskId, onClose }: TaskDetailModalProps) {
 	const dialogRef = useRef<HTMLDivElement>(null);
 	const titleInputRef = useRef<HTMLInputElement>(null);
 	const previousFocus = useRef<HTMLElement | null>(null);
 	const user = useAuthStore((state) => state.user);
 	const detail = useTaskDetail(taskId, { onClose });
+	const { members } = useProjectMembers(projectId);
 
 	useEffect(() => {
 		previousFocus.current = document.activeElement as HTMLElement | null;
@@ -81,7 +84,7 @@ export function TaskDetailModal({ taskId, onClose }: TaskDetailModalProps) {
 						)}
 						<TaskEditForm
 							task={toFormValues(task)}
-							members={getMembers(task)}
+							members={getMembers(members)}
 							isSaving={detail.isSaving}
 							titleInputRef={titleInputRef}
 							onUpdate={(field, value) => void detail.updateTask(toUpdateFields(field, value))}
@@ -126,20 +129,24 @@ function toFormValues(task: NonNullable<ReturnType<typeof useTaskDetail>["task"]
 		title: task.title,
 		description: task.description,
 		assignee_id: task.assignee?.id ?? null,
-		due_at: task.due_at?.slice(0, 16) ?? null,
+		due_at: utcToLocalDateTime(task.due_at),
 		status: task.status,
 	};
 }
 
-function getMembers(task: NonNullable<ReturnType<typeof useTaskDetail>["task"]>): TaskMember[] {
-	return task.assignee ? [{ ...task.assignee, is_active: true }] : [];
+function getMembers(members: ReturnType<typeof useProjectMembers>["members"]): TaskMember[] {
+	return members.map((member) => ({
+		id: member.user_id,
+		display_name: member.display_name ?? member.username,
+		is_active: member.is_active,
+	}));
 }
 
 function toUpdateFields(field: Parameters<NonNullable<React.ComponentProps<typeof TaskEditForm>["onUpdate"]>>[0], value: string | null): TaskUpdateFields {
 	if (field === "title") return { title: value ?? "" };
 	if (field === "description") return { description: value };
 	if (field === "assignee_id") return { assignee_id: value };
-	if (field === "due_at") return { due_at: value };
+	if (field === "due_at") return { due_at: localDateTimeToUtc(value) };
 	return { status: value as TaskUpdateFields["status"] };
 }
 

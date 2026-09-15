@@ -31,6 +31,21 @@ export interface BoardResponse {
 	columns: BoardColumns;
 }
 
+export interface ProjectMember {
+	user_id: string;
+	username: string;
+	display_name: string | null;
+	role: "member" | "admin";
+	is_owner: boolean;
+	is_active: boolean;
+	joined_at: string;
+}
+
+export interface ProjectMemberListResponse {
+	items: ProjectMember[];
+	meta: { total: number };
+}
+
 export const TASK_STATUSES: TaskStatus[] = ["todo", "in_progress", "done"];
 
 export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {

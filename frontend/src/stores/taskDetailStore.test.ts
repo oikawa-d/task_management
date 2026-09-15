@@ -159,7 +159,7 @@ describe("taskDetailStore", () => {
 		await taskDetailStore.addComment(task.id, added.body);
 
 		expect(addTaskComment).toHaveBeenCalledWith(task.id, added.body);
-		expect(taskDetailStore.getSnapshot()).toMatchObject({ comments: [comment, added], task: { comment_count: 2 }, isSaving: false });
+		expect(taskDetailStore.getSnapshot()).toMatchObject({ comments: [comment, added], task: { comment_count: 2 }, isSaving: false, boardRefreshToken: 1 });
 	});
 
 	it("コメント更新・削除をstateへ反映する", async () => {
@@ -174,6 +174,7 @@ describe("taskDetailStore", () => {
 		await taskDetailStore.removeComment(task.id, comment.id);
 		expect(taskDetailStore.getSnapshot().comments).toEqual([]);
 		expect(taskDetailStore.getSnapshot().task?.comment_count).toBe(0);
+		expect(taskDetailStore.getSnapshot().boardRefreshToken).toBe(1);
 	});
 
 	it("コメント削除の404時はコメント一覧を再取得する", async () => {

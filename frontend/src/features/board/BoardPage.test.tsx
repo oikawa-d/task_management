@@ -40,6 +40,9 @@ describe("BoardPage and TaskDetailModal", () => {
 			if (String(input).endsWith("/api/tasks/task-1/comments")) {
 				return jsonResponse({ task_id: task.id, items: [], count: 0 });
 			}
+			if (String(input).endsWith("/api/projects/project-1/members")) {
+				return jsonResponse({ items: [], meta: { total: 0 } });
+			}
 			return jsonResponse({
 				project_id: "project-1",
 				project_is_active: true,

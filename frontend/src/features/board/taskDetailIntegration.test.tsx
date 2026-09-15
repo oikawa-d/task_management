@@ -23,7 +23,7 @@ const task = {
 	version: 1,
 	is_active: true,
 	project_is_active: true,
-	due_at: null,
+	due_at: "2026-09-09T14:59:00Z",
 	comment_count: 1,
 	created_at: "2026-09-01T00:00:00Z",
 	updated_at: "2026-09-01T00:00:00Z",
@@ -38,6 +38,8 @@ const initialComment = {
 	updated_at: "2026-09-01T10:00:00Z",
 };
 
+type MockTask = Omit<typeof task, "assignee"> & { assignee: typeof task.assignee | null };
+
 function jsonResponse(status: number, body?: unknown) {
 	return Promise.resolve({
 		ok: status < 400,
@@ -48,11 +50,16 @@ function jsonResponse(status: number, body?: unknown) {
 }
 
 function createApiMock(options: { taskStatus?: number; commentsStatus?: number } = {}) {
-	let currentTask = { ...task };
+	let currentTask: MockTask = { ...task };
 	let comments = [initialComment];
 	let conflict = false;
 	let failTaskUpdate = false;
 	let deleted = false;
+	const projectMembers = [
+		{ user_id: "user-1", username: "taro", display_name: "山田 太郎", role: "member", is_owner: true, is_active: true, joined_at: "2026-09-01T00:00:00Z" },
+		{ user_id: "user-2", username: "hanako", display_name: "佐藤 花子", role: "member", is_owner: false, is_active: false, joined_at: "2026-09-01T00:00:00Z" },
+		{ user_id: "user-3", username: "ichiro", display_name: "鈴木 一郎", role: "member", is_owner: false, is_active: true, joined_at: "2026-09-01T00:00:00Z" },
+	];
 	const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
 		const path = new URL(String(input), "http://localhost").pathname;
 		const method = init?.method ?? "GET";
@@ -61,6 +68,12 @@ function createApiMock(options: { taskStatus?: number; commentsStatus?: number }
 				project_id: "project-1",
 				project_is_active: true,
 				columns: { todo: deleted ? [] : [currentTask], in_progress: [], done: [] },
+			});
+		}
+		if (path === "/api/projects/project-1/members") {
+			return jsonResponse(200, {
+				items: projectMembers,
+				meta: { total: 3 },
 			});
 		}
 		if (path.startsWith("/api/tasks/") && method === "GET" && !path.endsWith("/comments")) {
@@ -78,8 +91,10 @@ function createApiMock(options: { taskStatus?: number; commentsStatus?: number }
 				return jsonResponse(409, { code: "TASK_CONFLICT" });
 			}
 			if (failTaskUpdate) return jsonResponse(503, { code: "SERVICE_UNAVAILABLE" });
-			const payload = JSON.parse(String(init?.body)) as Partial<typeof task> & { version: number };
+			const payload = JSON.parse(String(init?.body)) as Partial<typeof task> & { version: number; assignee_id?: string | null };
 			currentTask = { ...currentTask, ...payload, version: currentTask.version + 1 };
+			if (payload.assignee_id === "user-3") currentTask.assignee = { id: "user-3", username: "ichiro", display_name: "鈴木 一郎" };
+			if (payload.assignee_id === null) currentTask.assignee = null;
 			return jsonResponse(200, currentTask);
 		}
 		if (path.endsWith("/task-1") && method === "DELETE") {
@@ -150,6 +165,18 @@ describe("タスク詳細モーダルの結合テスト（Issue #433 / 親phase 
 		const dialog = await screen.findByRole("dialog", { name: "タスク詳細" });
 		await screen.findByRole("textbox", { name: "タイトル" });
 		expect(await screen.findByText("既存コメント")).toBeInTheDocument();
+		expect(screen.getByLabelText("期限")).toHaveValue("2026-09-09T23:59");
+		await waitFor(() => expect(screen.getByRole("option", { name: "佐藤 花子（無効）" })).toBeDisabled());
+		fireEvent.change(screen.getByLabelText("担当者"), { target: { value: "user-3" } });
+		await waitFor(() => expect(screen.getByLabelText("担当者")).toHaveValue("user-3"));
+		fireEvent.change(screen.getByLabelText("期限"), { target: { value: "2026-09-10T00:00" } });
+		await waitFor(() => {
+			const request = api.fetchMock.mock.calls.find(([url, init]) => {
+				if (!String(url).endsWith("/tasks/task-1") || init?.method !== "PATCH") return false;
+				return JSON.parse(String(init.body)).due_at !== undefined;
+			});
+			expect(JSON.parse(String(request?.[1]?.body)).due_at).toBe("2026-09-09T15:00:00.000Z");
+		});
 
 		const title = screen.getByLabelText("タイトル");
 		fireEvent.change(title, { target: { value: "編集後タイトル" } });
@@ -159,6 +186,7 @@ describe("タスク詳細モーダルの結合テスト（Issue #433 / 親phase 
 		fireEvent.change(screen.getByRole("textbox", { name: "コメント" }), { target: { value: "投稿コメント" } });
 		fireEvent.click(screen.getByRole("button", { name: "投稿" }));
 		expect(await screen.findByText("投稿コメント")).toBeInTheDocument();
+		expect(await screen.findByText("コメント: 2件")).toBeInTheDocument();
 		expect(screen.getByRole("textbox", { name: "コメント" })).toHaveValue("");
 
 		fireEvent.click(screen.getAllByRole("button", { name: "編集" })[0]);
@@ -173,11 +201,12 @@ describe("タスク詳細モーダルの結合テスト（Issue #433 / 親phase 
 		fireEvent.click(within(firstComment).getByRole("button", { name: "削除" }));
 		await waitFor(() => expect(api.fetchMock.mock.calls.some(([url, init]) => String(url).endsWith("/comments/comment-1") && init?.method === "DELETE")).toBe(true));
 		expect(screen.queryByText("既存コメント")).not.toBeInTheDocument();
+		expect(await screen.findByText("コメント: 1件")).toBeInTheDocument();
 
 		fireEvent.keyDown(dialog, { key: "Escape" });
 		await waitFor(() => expect(router.state.location.pathname).toBe(ROUTES.PROJECT("project-1")));
 		expect(screen.queryByRole("dialog", { name: "タスク詳細" })).not.toBeInTheDocument();
-		expect(api.fetchMock.mock.calls.filter(([url, init]) => String(url).includes("/projects/project-1/tasks") && (init?.method ?? "GET") === "GET")).toHaveLength(2);
+		expect(api.fetchMock.mock.calls.filter(([url, init]) => String(url).includes("/projects/project-1/tasks") && (init?.method ?? "GET") === "GET")).toHaveLength(6);
 	});
 
 	it("直接URLで開き、ブラウザ戻るでboardへ戻る。タスク削除成功時もcloseしてboardを同期する", async () => {
