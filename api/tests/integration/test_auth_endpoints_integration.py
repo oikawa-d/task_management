@@ -494,17 +494,10 @@ async def test_me_endpoint_inactive_user_returns_403(
 	assert response.json()["error"]["code"] == "USER_INACTIVE"
 
 
-async def test_me_endpoint_session_expired_returns_unauthenticated(
+async def test_me_endpoint_session_expired_returns_session_expired(
 	client: TestClient, created_user_ids: list[uuid.UUID], db_session: AsyncSession, redis_conn: Redis
 ) -> None:
-	"""結合（session固有の異常系）: Redis上のsessionキーが失効済みだと401となる。
-
-	設計書（04_get_auth_me.md §3・§12 No.2/7）は`SESSION_EXPIRED`を期待するが、実装
-	（`SessionAuthStrategy.authenticate`・`core/deps.get_current_user`）はCookie無しの場合と
-	区別せず`UNAUTHENTICATED`に丸めており、`SessionExpiredError`はどこからも送出されない
-	（設計と実装の乖離としてIssue #443を起票済み）。本テストは現状の実装が
-	認証エラーとして安全側に倒れていることを確認する。
-	"""
+	"""結合（session固有の異常系）: CookieありでRedisのsessionが失効済みだとSESSION_EXPIREDとなる。"""
 	settings = get_backend_settings()
 	if settings.auth_mode != "session":
 		pytest.skip("sessionモード固有の検証(jwtはtoken_expiredで別途検証される設計)")
@@ -519,7 +512,7 @@ async def test_me_endpoint_session_expired_returns_unauthenticated(
 	response = client.get("/api/auth/me")
 
 	assert response.status_code == 401
-	assert response.json()["error"]["code"] == "UNAUTHENTICATED"
+	assert response.json()["error"]["code"] == "SESSION_EXPIRED"
 
 
 async def test_me_endpoint_redis_failure_returns_503(
