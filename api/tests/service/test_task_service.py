@@ -96,6 +96,18 @@ async def test_update_task_rolls_back_repository_constraint_error(
 	db.commit.assert_not_awaited()
 
 
+async def test_list_tasks_passes_unassigned_filter_to_repository(monkeypatch: pytest.MonkeyPatch) -> None:
+	user = _user()
+	db = AsyncMock()
+	list_for_user = AsyncMock(return_value=[])
+	monkeypatch.setattr(task_service.task_repository, "list_for_user", list_for_user)
+
+	response = await task_service.list_tasks(user, "unassigned", None, False, 2, 5, db)
+
+	assert response.items == []
+	list_for_user.assert_awaited_once_with(db, user.id, None, None, False, 5, 5, True)
+
+
 @pytest.mark.asyncio
 async def test_list_calendar_tasks_converts_app_dates_to_utc_and_checks_membership(
 	monkeypatch: pytest.MonkeyPatch,
