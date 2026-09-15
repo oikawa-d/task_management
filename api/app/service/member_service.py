@@ -50,12 +50,17 @@ async def add_member(project: Project, user_id: UUID, invited_by: UUID, db: Asyn
 		raise NotFoundError()
 	if await project_member_repository.exists(db, project.id, user_id):
 		raise AlreadyMemberError()
-	await project_member_repository.create(db, project.id, user_id, invited_by)
-	members = await project_member_repository.list_by_project(db, project.id)
-	created = next((member for member in members if member.user_id == user_id), None)
-	if created is None:
-		raise NotFoundError("追加したメンバーを取得できません")
-	return MemberResponse(**_member_summary(created, project.owner_id).model_dump())
+	try:
+		await project_member_repository.create(db, project.id, user_id, invited_by)
+		members = await project_member_repository.list_by_project(db, project.id)
+		created = next((member for member in members if member.user_id == user_id), None)
+		if created is None:
+			raise NotFoundError("追加したメンバーを取得できません")
+		await db.commit()
+		return MemberResponse(**_member_summary(created, project.owner_id).model_dump())
+	except Exception:
+		await db.rollback()
+		raise
 
 
 async def search_candidates(project: Project, query: str, db: AsyncSession) -> CandidateListResponse:
@@ -78,4 +83,9 @@ async def remove_member(project: Project, user_id: UUID, db: AsyncSession) -> No
 		raise OwnerCannotBeRemovedError()
 	if not await project_member_repository.exists(db, project.id, user_id):
 		raise NotFoundError()
-	await project_member_repository.delete(db, project.id, user_id)
+	try:
+		await project_member_repository.delete(db, project.id, user_id)
+		await db.commit()
+	except Exception:
+		await db.rollback()
+		raise
