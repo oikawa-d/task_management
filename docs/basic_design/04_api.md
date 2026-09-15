@@ -153,7 +153,7 @@
 | フィールド | 型 | 必須 | 制約 |
 |-----------|----|------|------|
 | username | string | ○ | 3〜50文字、`^[A-Za-z0-9_-]+$` |
-| email | string | ○ | 50文字以内、メール形式 |
+| email | string | ○ | 254文字以内、メール形式 |
 | password | string | ○ | 8文字以上、大文字英字/小文字英字/数字/記号のうち2種類以上 |
 | password_confirm | string | ○ | `password` と一致 |
 | last_name / first_name | string | ○ | 各30文字以内 |

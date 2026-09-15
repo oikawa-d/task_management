@@ -43,7 +43,7 @@ erDiagram
     users {
         uuid id PK
         varchar_50 username UK "ログインID"
-        varchar_50 email UK
+        varchar_254 email UK
         text password_hash "OAuth専用ユーザーはNULL"
         varchar_30 last_name "NULL可（OAuth新規）"
         varchar_30 first_name "NULL可（OAuth新規）"
@@ -107,7 +107,7 @@ erDiagram
     login_history {
         uuid id PK
         uuid user_id FK "未登録メール時はNULL"
-        varchar_50 login_identifier "認証に使用したusername/emailまたは検証済みGoogle email"
+        varchar_254 login_identifier "認証に使用したusername/emailまたは検証済みGoogle email"
         varchar_20 login_method "session / jwt / oauth_google"
         inet ip_address
         text user_agent
@@ -169,7 +169,7 @@ erDiagram
 |--------|----|------|--------|-----------|
 | id | UUID | NO | `gen_random_uuid()` | PK |
 | username | VARCHAR(50) | NO | - | UNIQUE。ログインID。半角英数字と `_` `-`（`CHECK`） |
-| email | VARCHAR(50) | NO | - | UNIQUE。50文字上限。`CHECK` で簡易形式検証 |
+| email | VARCHAR(254) | NO | - | UNIQUE。RFC 5321の配送経路長を考慮した254文字上限。`CHECK` で簡易形式検証 |
 | password_hash | TEXT | YES | - | argon2id ハッシュ。Google のみで登録したユーザーは NULL |
 | last_name | VARCHAR(30) | YES | - | 姓。通常登録では必須、OAuth新規ユーザーはプロフィール補完まで NULL 可 |
 | first_name | VARCHAR(30) | YES | - | 名。同上 |
@@ -199,7 +199,7 @@ erDiagram
 | 姓・名 | 1〜30文字 |
 | フリガナ | ひらがな・カタカナ・数字のみ、1〜30文字 |
 | 生年月日 | プルダウン選択（年/月/日）。未来日不可 |
-| メールアドレス | 50文字以内、半角英数字と `@ - _ . +` を許容 |
+| メールアドレス | 254文字以内、半角英数字と `@ - _ . +` を許容。RFC 5321のローカル部64オクテット・ドメイン255オクテットと配送経路256オクテットを考慮 |
 | パスワード | 8文字以上、かつ「大文字英字／小文字英字／数字／記号」のうち2種類以上を含む |
 
 **OAuth新規ユーザーの補足**：Googleから `username` は取得しないため、`google_` + `sha256(provider_user_id)` の先頭16文字を候補値として生成し、`users.username` の一意制約に当たった場合は連番を付けて再試行する。プロフィール5項目は NULL のまま作成でき、`GET /auth/me` の `profile_completed=false` でフロントへ通知する。通常の会員登録では5項目を引き続き必須とする。
@@ -304,7 +304,7 @@ Redis の失効状況とは独立して、設定した保持期間（既定90日
 |--------|----|------|------|
 | id | UUID | NO | PK |
 | user_id | UUID | YES | FK → users.id `ON DELETE SET NULL`。存在しないID入力時は NULL |
-| login_identifier | VARCHAR(50) | NO | 認証に使用した識別子。通常ログインはリクエストの username / email 原文、Google OAuth は `email_verified=true` を確認した Google email。パスワード・OAuthの `sub`・トークンは記録しない |
+| login_identifier | VARCHAR(254) | NO | 認証に使用した識別子。通常ログインはリクエストの username / email 原文、Google OAuth は `email_verified=true` を確認した Google email。パスワード・OAuthの `sub`・トークンは記録しない |
 | login_method | VARCHAR(20) | NO | `CHECK (login_method IN ('session','jwt','oauth_google'))` |
 | ip_address | INET | YES | `X-Forwarded-For` を考慮して取得 |
 | user_agent | TEXT | YES | |

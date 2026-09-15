@@ -87,10 +87,11 @@ flowchart LR
     R21 --> R22["0022<br/>admin一覧owner・<br/>集計"]
     R22 --> R23["0023<br/>通知既読結果<br/>一括対応"]
     R23 --> R24["0024<br/>カレンダーFN"]
-    R24 -.-> RN
+    R24 --> R25["0025<br/>メール長拡張"]
+    R25 -.-> RN
 ```
 
-追加リビジョンは、`0020`を起点に `#374（0021）→ #377（0022）→ #379（0023、0024）` の順で統合する。後続PRは先行PRのリビジョンを`down_revision`として参照するため、先行PRの統合後に最新`develop`へrebaseしてからマージする。
+追加リビジョンは、`0020`を起点に `#374（0021）→ #377（0022）→ #379（0023、0024）→ #451（0025）` の順で統合する。後続PRは先行PRのリビジョンを`down_revision`として参照するため、先行PRの統合後に最新`develop`へrebaseしてからマージする。
 
 ### 2.7 SP/FN適用順序
 
@@ -108,6 +109,7 @@ flowchart LR
 | `0022` | `users`, `project_members`, `projects`, `tasks`, `login_history` | `fn_admin_list_projects`のowner情報・member/task集計と`fn_admin_list_login_history`のusers LEFT JOINを追加。downgradeでは`0020`時点のlegacy定義へ戻す |
 | `0023` | `notifications` | 個別既読の`p_read_at`、全既読の`p_updated_count`をOUTで返すSPへ再作成。downgradeでは旧SPへ戻す |
 | `0024` | `projects`, `tasks` | `fn_list_calendar_tasks`を追加し、APP_TIMEZONEから変換したUTC範囲・scope・有効状態で期限タスクを抽出 |
+| `0025` | `users`, `login_history` | `users.email`と`login_history.login_identifier`をVARCHAR(50)からVARCHAR(254)へ拡張 |
 
 関数・プロシージャのDROPは依存するAPIが停止している環境でのみ行う。production CDではdowngradeを実行しない。
 
