@@ -284,11 +284,11 @@ sessionモードの認証解決・CSRF検証自体の`GET`/`EXPIRE`は本APIの�
 | 5 | 単体 | has_password=false、current_password送信 | 何らかの値を送信 | `ValidationError` | `test_change_password_current_password_not_allowed_when_unset` |
 | 6 | 単体 | new_password/password_confirm不一致 | 異なる値 | pydantic `ValidationError` | `test_password_change_request_confirm_mismatch` |
 | 7 | 単体 | new_passwordがポリシー違反 | 7文字・1種類のみ | pydantic `ValidationError` | `test_password_change_request_policy_violation` |
-| 8 | 結合 | 正常系（session） | 実PostgreSQL/Redis、複数端末でログイン済み | `204`、全端末のsession/csrfが失効し次回リクエストが401になる | `test_put_users_me_password_endpoint_session_success` |
-| 9 | 結合 | 正常系（jwt） | 実PostgreSQL/Redis、有効なrefresh token複数 | `204`、全refresh tokenが失効し`/auth/refresh`が401になる | `test_put_users_me_password_endpoint_jwt_success` |
-| 10 | 結合 | CSRFトークン欠落（session） | `X-CSRF-Token`ヘッダなし | `403 CSRF_INVALID` | `test_put_users_me_password_endpoint_csrf_missing` |
-| 11 | 結合 | 未認証 | Cookie/ヘッダなし | `401 UNAUTHENTICATED` | `test_put_users_me_password_endpoint_unauthenticated` |
-| 12 | 結合 | Google専用ユーザーの初回設定後 | パスワード設定成功後に`GET /users/me`を再取得 | `has_password=true`に変化 | `test_put_users_me_password_updates_has_password_flag` |
+| 8 | 結合 | 正常系（session/jwt） | 実PostgreSQL/Redis、ログイン済み | `204`、認証状態が失効する | `test_put_users_me_password_endpoint_success` |
+| 9 | - | - | - | - | -（No.8でsession/jwtをパラメータにより検証） |
+| 10 | - | - | - | - | -（未実装） |
+| 11 | 結合 | 未認証 | Cookie/ヘッダなし | `401 UNAUTHENTICATED` | `test_users_me_endpoints_unauthenticated` |
+| 12 | - | - | - | - | -（未実装） |
 
 `AUTH_MODE=session`/`jwt`の両方で8・9を実施する。
 

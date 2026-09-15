@@ -202,14 +202,22 @@ async def test_users_me_endpoint_db_failure_returns_service_unavailable(
 	user = await _create_user(db_session, created_user_ids, "dbfailure")
 	login_response = _login(client, user)
 
-	async def fail_get_by_id(*_args: Any, **_kwargs: Any) -> Any:
-		raise OperationalError("SELECT * FROM fn_get_user", {}, SimpleNamespace(sqlstate="08006"))
+	original_get_by_id = user_repository.get_by_id
+	call_count = 0
 
-	monkeypatch.setattr(user_repository, "get_by_id", fail_get_by_id)
+	async def fail_on_service_get_by_id(*args: Any, **kwargs: Any) -> Any:
+		nonlocal call_count
+		call_count += 1
+		if call_count == 2:
+			raise OperationalError("SELECT * FROM fn_get_user", {}, SimpleNamespace(sqlstate="08006"))
+		return await original_get_by_id(*args, **kwargs)
+
+	monkeypatch.setattr(user_repository, "get_by_id", fail_on_service_get_by_id)
 	response = client.get("/api/users/me", headers=_auth_headers(client, login_response))
 
 	assert response.status_code == 503
 	assert response.json()["error"]["code"] == "SERVICE_UNAVAILABLE"
+	assert call_count == 2
 
 
 async def test_users_me_endpoint_session_redis_failure_returns_service_unavailable(
@@ -233,16 +241,23 @@ async def test_users_me_endpoint_session_redis_failure_returns_service_unavailab
 	assert response.json()["error"]["code"] == "SERVICE_UNAVAILABLE"
 
 
-def test_get_health_endpoint_no_auth_required(client) -> None:
+def test_get_health_endpoint_success(client) -> None:
 	response = client.get("/api/health")
 
 	assert response.status_code == 200
 	body = response.json()
 	assert body["status"] == "ok"
-	assert body["auth_mode"] == get_backend_settings().auth_mode
 	assert body["components"]["database"]["status"] == "ok"
 	assert body["components"]["redis"]["status"] == "ok"
 	assert "error" not in body
+
+
+def test_get_health_endpoint_no_auth_required(client) -> None:
+	response = client.get("/api/health")
+
+	assert response.status_code == 200
+	assert response.json()["auth_mode"] == get_backend_settings().auth_mode
+	assert "error" not in response.json()
 
 
 def test_get_health_endpoint_redis_down(client) -> None:

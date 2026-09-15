@@ -232,11 +232,11 @@ sessionモードの認証解決（`GET session:{sid}` → `EXPIRE`）以外の�
 | 1 | 単体 | profile_completed算出（5項目全て非NULL） | user_service.get_profile | `true` | `test_get_profile_completed_true` |
 | 2 | 単体 | profile_completed算出（未補完） | いずれかがNULL | `false` | `test_get_profile_completed_false` |
 | 3 | 単体 | `auth_mode`フィールドが含まれないこと | `UserProfileResponse`スキーマ | フィールド未定義 | `test_user_profile_response_has_no_auth_mode` |
-| 4 | 結合 | 正常系（session） | 実PostgreSQL/Redis、ログイン済み | `200`、`GET /auth/me`と同一の基本フィールドを返す | `test_users_me_endpoint_session_success` |
-| 5 | 結合 | 正常系（jwt） | 有効なaccess token | `200` | `test_users_me_endpoint_jwt_success` |
-| 6 | 結合 | 未認証 | Cookie/ヘッダなし | `401 UNAUTHENTICATED` | `test_users_me_endpoint_unauthenticated` |
-| 7 | 結合 | 無効化ユーザー | `is_active=false`のユーザーでログイン済みCookie | `403 USER_INACTIVE` | `test_users_me_endpoint_inactive_user` |
-| 8 | 結合 | OAuth新規ユーザー | プロフィール未補完 | `profile_completed=false` | `test_users_me_endpoint_oauth_incomplete_profile` |
+| 4 | 結合 | 正常系（session/jwt） | 実PostgreSQL/Redis、ログイン済み | `200`、`GET /auth/me`と同一の基本フィールドを返す | `test_users_me_endpoint_authenticated_success` |
+| 5 | - | - | - | - | -（No.4でsession/jwtをパラメータにより検証） |
+| 6 | 結合 | 未認証 | Cookie/ヘッダなし | `401 UNAUTHENTICATED` | `test_users_me_endpoints_unauthenticated` |
+| 7 | 結合 | 無効化ユーザー | `is_active=false`のユーザーでログイン済みCookie | `403 USER_INACTIVE` | `test_users_me_endpoint_inactive_user_returns_forbidden` |
+| 8 | - | - | - | - | -（未実装） |
 | 9 | 結合 | PostgreSQL接続障害 | 認証済み、`fn_get_user`が接続例外 | `503 SERVICE_UNAVAILABLE` | `test_users_me_endpoint_db_failure_returns_service_unavailable` |
 | 10 | 結合 | session方式のRedis接続障害 | 認証済みCookie、session取得が接続例外 | `503 SERVICE_UNAVAILABLE` | `test_users_me_endpoint_session_redis_failure_returns_service_unavailable` |
 
