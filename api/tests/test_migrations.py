@@ -99,6 +99,31 @@ def _procedure_arguments(name: str) -> str | None:
 		engine.dispose()
 
 
+def _insert_login_history_with_failure_reason(failure_reason: str) -> None:
+	engine = create_engine(_sync_database_url())
+	try:
+		with engine.begin() as connection:
+			connection.execute(
+				text(
+					"INSERT INTO login_history "
+					"(login_identifier, login_method, success, failure_reason) "
+					"VALUES (:login_identifier, 'session', false, :failure_reason)"
+				),
+				{"login_identifier": f"migration-{uuid4().hex[:12]}", "failure_reason": failure_reason},
+			)
+	finally:
+		engine.dispose()
+
+
+def _login_history_failure_reasons() -> list[str | None]:
+	engine = create_engine(_sync_database_url())
+	try:
+		with engine.connect() as connection:
+			return [row[0] for row in connection.execute(text("SELECT failure_reason FROM login_history")).fetchall()]
+	finally:
+		engine.dispose()
+
+
 @pytest.fixture(autouse=True)
 def _reset_schema():
 	command.downgrade(_alembic_config(), "base")
@@ -169,3 +194,25 @@ def test_notification_procedure_contract_is_restored_by_0023_downgrade() -> None
 
 	assert unread_count == 0
 	assert read_count == 2
+
+
+def test_migration_0026_backfills_uppercase_failure_reason_to_lowercase() -> None:
+	cfg = _alembic_config()
+	command.upgrade(cfg, "0025")
+	_insert_login_history_with_failure_reason("INVALID_CREDENTIALS")
+	_insert_login_history_with_failure_reason("user_inactive")
+
+	command.upgrade(cfg, "head")
+
+	assert sorted(_login_history_failure_reasons()) == ["invalid_credentials", "user_inactive"]
+
+
+def test_migration_0026_downgrade_is_noop_and_keeps_lowercased_value() -> None:
+	cfg = _alembic_config()
+	command.upgrade(cfg, "0025")
+	_insert_login_history_with_failure_reason("EMAIL_NOT_VERIFIED")
+	command.upgrade(cfg, "head")
+
+	command.downgrade(cfg, "0025")
+
+	assert _login_history_failure_reasons() == ["email_not_verified"]
