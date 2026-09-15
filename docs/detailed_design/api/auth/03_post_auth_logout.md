@@ -163,7 +163,7 @@ flowchart TB
 | 処理内容 | 1. `verify_origin`でOrigin確認 2. `auth_service.logout(request, response, strategy)`を呼び出す |
 | 副作用 | `response`へのCookie破棄 |
 
-### 6.2 `service/auth_service.py :: logout`
+### 6.2 `api/app/service/auth_service.py :: logout`
 
 | 項目 | 内容 |
 |------|------|

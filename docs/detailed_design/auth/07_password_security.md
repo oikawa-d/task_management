@@ -13,7 +13,7 @@
 
 | 項目 | 内容 |
 |------|------|
-| 対象 | `core/security.py`（パスワードハッシュ生成・検証）、`service/auth_service.py :: login`（ログイン失敗レート制限） |
+| 対象 | `api/app/core/security.py`（パスワードハッシュ生成・検証）、`api/app/service/auth_service.py :: login`（ログイン失敗レート制限） |
 | 責務 | argon2idによるパスワードハッシュの生成・検証・コストパラメータ管理、ログイン失敗回数のカウントによるブルートフォース対策、タイミング攻撃対策 |
 | 適用条件 | `AUTH_MODE`に依存しない（session/jwt共通）。パスワードを保有しないOAuth専用ユーザー（`password_hash IS NULL`）はログイン試行自体が別経路（[../../basic_design/03_auth.md](../../basic_design/03_auth.md) §5）となるため、本書の対象外 |
 | 依存先 | `passlib[argon2]`、Redis（`login_fail:*`）、PostgreSQL（`users.password_hash`） |
@@ -27,7 +27,7 @@
 | `verify_password` | 関数（`core/security.py`） | 平文パスワードとハッシュを照合 | 定数時間比較（argon2実装が内包） |
 | `needs_rehash` | 関数（`core/security.py`） | コストパラメータ変更時の再ハッシュ要否判定 | `passlib`の`CryptContext.needs_update`相当 |
 | `_dummy_hash` | モジュール内定数（`core/security.py`） | ユーザー不存在時のダミー検証用ハッシュ | タイミング攻撃対策（§10参照） |
-| `build_login_fail_key` | 関数（`service/auth_service.py`または`core/security.py`） | 識別子と`TRUSTED_PROXY_CIDRS`で確定したIPからRedisキーのハッシュ値を生成 | 平文の識別子・IPをキーに含めない |
+| `identifier_hash` | 関数（`api/app/repository/redis_store_common.py`） | 識別子と`TRUSTED_PROXY_CIDRS`で確定したIPからRedisキーのハッシュ値を生成 | 平文の識別子・IPをキーに含めない |
 | `incr_login_failure` / `reset_login_failure` | `redis_store`関数 | 失敗回数のINCR/DEL | 詳細は[./08_redis_store.md](./08_redis_store.md) §5.3 |
 
 ## 3. 設定項目（環境変数）
@@ -196,42 +196,42 @@ stateDiagram-v2
 | 副作用 | なし |
 | 備考 | 呼び出し元（ログイン成功時等）が`True`の場合に`hash_password`で再計算し`users.password_hash`を更新する運用とする。基本設計に明記された機能ではなく、コストパラメータ変更時の段階的移行を可能にするための実装レベルの補完（§12参照） |
 
-### 8.4 `service/auth_service.py :: build_login_fail_key`
+### 8.4 `api/app/repository/redis_store_common.py :: identifier_hash`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ / 定義 | `def build_login_fail_key(identifier: str, client_ip: str) -> str` |
+| シグネチャ / 定義 | `def identifier_hash(identifier: str, client_ip: str) -> str` |
 | 引数 / 入力 | `identifier`（ログインフォーム入力のemail/username）、`client_ip`（信頼できるプロキシ経由で確定したIP） |
 | 戻り値 / 出力 | `str`（`sha256`ダイジェストの16進文字列。Redisキー`login_fail:{key_hash}`の`{key_hash}`部分） |
 | 送出例外 / 失敗条件 | なし |
-| 処理内容 | 1. `normalized = identifier.strip().lower()` 2. `sha256(f"{normalized}:{client_ip}".encode()).hexdigest()`を返す |
+| 処理内容 | `redis_store_common.identifier_hash(identifier, client_ip)`で、正規化した識別子と確定済みIPのSHA-256ダイジェストを返す |
 | 副作用 | なし |
 | 備考 | メール/ユーザー名を平文でRedisキーへ保存しないための一方向ハッシュ（[../../basic_design/02_redis.md](../../basic_design/02_redis.md) §2の`login_fail`行の注記どおり） |
 
-### 8.5 `service/auth_service.py :: login`（レート制限・ハッシュ検証部分の抜粋）
+### 8.5 `api/app/service/auth_service.py :: login`（レート制限・ハッシュ検証部分の抜粋）
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ / 定義 | `async def login(payload: LoginRequest, request: Request, response: Response) -> LoginResult` |
-| 引数 / 入力 | `payload.identifier` / `payload.password`、`request`（クライアントIP取得元） |
+| シグネチャ / 定義 | `async def login(identifier: str, password: str, request: Request, response: Response, db: AsyncSession, strategy: AuthStrategy) -> LoginResult` |
+| 引数 / 入力 | `identifier` / `password`、`request`（クライアントIP取得元）、`db`、`strategy` |
 | 戻り値 / 出力 | `LoginResult` |
 | 送出例外 / 失敗条件 | `TooManyAttemptsError`（429）、`InvalidCredentialsError`（401）、`UserInactiveError`（403）、`EmailNotVerifiedError`（403） |
-| 処理内容 | 全体シーケンスは[../api/auth/02_post_auth_login.md](../api/auth/02_post_auth_login.md) §4・§6.2を正とし、本書はハッシュ検証・レート制限に関わる部分（1〜6手順）のみを担当範囲とする：1. `key_hash = build_login_fail_key(...)` 2. `redis_store.get_login_failure_count`で現在値を確認し、上限超過時は`redis_store.get_login_failure_ttl`の残り秒数を`Retry-After`へ渡して例外 3. `user_repository.find_by_identifier` 4. 該当なしなら`verify_password(password, _dummy_hash)`後に`incr_login_failure`して例外 5. 該当ありなら`verify_password(password, user.password_hash)`、不一致なら`incr_login_failure`して例外 6. 一致なら`reset_login_failure`し`needs_rehash`を確認して必要なら再ハッシュ |
+| 処理内容 | 全体シーケンスは[../api/auth/02_post_auth_login.md](../api/auth/02_post_auth_login.md) §4・§6.2を正とし、本書はハッシュ検証・レート制限に関わる部分（1〜6手順）のみを担当範囲とする：1. `key_hash = redis_store_common.identifier_hash(...)` 2. `redis_store.get_login_failure_count`で現在値を確認し、上限超過時は`redis_store.get_login_failure_ttl`の残り秒数を`Retry-After`へ渡して例外 3. `user_repository.get_by_login_identifier` 4. 該当なしなら`verify_password(password, _dummy_hash)`後に`incr_login_failure`して例外 5. 該当ありなら`verify_password(password, user.password_hash)`、不一致なら`incr_login_failure`して例外 6. 一致なら`reset_login_failure`し`needs_rehash`を確認して必要なら再ハッシュ |
 | 副作用 | Redis: `login_fail`のGET/INCR/DEL。DB: 再ハッシュ時のみ`users.password_hash`をUPDATE |
 
 ## 9. 関数・要素相関図
 
 ```mermaid
 flowchart LR
-    LOGINSVC["service/auth_service.py::login"] --> BUILDKEY["build_login_fail_key"]
+    LOGINSVC["api/app/service/auth_service.py::login"] --> BUILDKEY["redis_store_common.identifier_hash"]
     LOGINSVC --> SEC1["core/security.py::verify_password"]
     LOGINSVC --> SEC2["core/security.py::needs_rehash"]
     LOGINSVC --> RS1["redis_store.get_login_failure_count / get_login_failure_ttl<br/>incr/reset_login_failure"]
 
-    REGSVC["service/auth_service.py::register"] --> SEC3["core/security.py::hash_password"]
+    REGSVC["api/app/service/auth_service.py::register"] --> SEC3["core/security.py::hash_password"]
     PWCHANGESVC["service/user_service.py::change_password"] --> SEC1
     PWCHANGESVC --> SEC3
-    RESETPWSVC["service/auth_service.py::reset_password<br/>（06_token_mail.md）"] --> SEC3
+    RESETPWSVC["api/app/service/email_verification_service.py::reset_password<br/>（06_token_mail.md）"] --> SEC3
     SEEDSCRIPT["scripts/seed.py（初期管理者投入）"] --> SEC3
 
     RS1 --> RD[("Redis: login_fail:{key_hash}")]
@@ -259,8 +259,8 @@ flowchart LR
 | 1 | 単体 | `hash_password`が生成したハッシュを`verify_password`で検証できる | 任意の平文パスワード | `True`を返す | `test_hash_and_verify_password_roundtrip` |
 | 2 | 単体 | 誤ったパスワードで`verify_password`が`False` | 正しいハッシュ、誤った平文 | `False` | `test_verify_password_rejects_wrong_password` |
 | 3 | 単体 | `needs_rehash`がコストパラメータ変更を検知する | `ARGON2_TIME_COST`を変更した設定で既存ハッシュを検証 | `True` | `test_needs_rehash_detects_cost_change` |
-| 4 | 単体 | `build_login_fail_key`が同一入力で同一キーを生成する | 同じidentifier/IP | 同一ハッシュ値 | `test_build_login_fail_key_deterministic` |
-| 5 | 単体 | `build_login_fail_key`が大文字小文字・前後空白を正規化する | `" User@Example.com "`と`"user@example.com"` | 同一キーになる | `test_build_login_fail_key_normalizes_identifier` |
+| 4 | 単体 | `identifier_hash`が同一入力で同一キーを生成する | 同じidentifier/IP | 同一ハッシュ値 | `test_identifier_hash_deterministic` |
+| 5 | 単体 | `identifier_hash`が大文字小文字・前後空白を正規化する | `" User@Example.com "`と`"user@example.com"` | 同一キーになる | `test_identifier_hash_normalizes_identifier` |
 | 6 | 結合 | 存在しないユーザーでもダミー検証で応答時間が実ユーザーと近似する | ベンチマーク的な結合テスト | 極端な時間差が発生しない（許容範囲の定義は実装時に決定） | `test_login_timing_similar_for_unknown_user`（要検討：厳密な閾値は基本設計に無し） |
 | 7 | 結合 | `LOGIN_MAX_ATTEMPTS`回失敗後に429となる | `fakeredis`でカウントを積み上げ | `429 TOO_MANY_ATTEMPTS` | `test_login_rate_limited_after_max_attempts` |
 | 8 | 結合 | ログイン成功で`login_fail`がDELされる | 失敗を数回重ねた後に成功 | 次回リクエストで`GET login_fail`が空 | `test_login_success_resets_failure_count` |

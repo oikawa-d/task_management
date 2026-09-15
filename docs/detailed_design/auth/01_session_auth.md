@@ -231,13 +231,13 @@ stateDiagram-v2
 
 ```mermaid
 flowchart LR
-    ROUTER["api/routers/auth.py"] --> SVC["service/auth_service.py"]
+    ROUTER["api/app/api/routers/auth_router.py"] --> SVC["api/app/service/auth_service.py"]
     SVC --> ST["SessionAuthStrategy"]
     ST --> STORE["redis_store"]
     STORE --> RD[("Redis")]
 
     ADMIN["api/routers/admin.py<br/>force-logout"] --> US["service/user_service.py<br/>force_logout_user"]
-    PWRESET["service/auth_service.py<br/>reset_password"] --> US
+    PWRESET["api/app/service/email_verification_service.py<br/>reset_password"] --> US
     US --> STORE
 
     DEP["core/deps.py::get_current_user"] --> ST

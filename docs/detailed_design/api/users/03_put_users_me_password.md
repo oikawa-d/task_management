@@ -187,14 +187,14 @@ flowchart TB
 | 処理内容 | 1. `fn_get_user(user_id)` で現在のhashを取得 2. `core/security.py` の `verify_password` で現在パスワードを検証 3. 同モジュールの `hash_password` で `new_password` をargon2idでハッシュ化 4. Redisセッション/refreshを失効 5. Redis成功後に `CALL sp_update_user_password(user_id, new_hash)`を呼び出す 6. `db.commit()`でDB更新を確定する。Redis失敗時はDBを更新せず503 |
 | 副作用 | DB更新（`password_hash`）、Redis全失効（`session:*` / `csrf:*` / `user_sessions:{uid}` / `refresh:*` / `user_refresh:{uid}`） |
 
-### 6.4 `repository/user_repository.py :: update_password`
+### 6.4 `api/app/repository/user_repository.py :: update_password`
 
 | 項目 | 内容 |
 |------|------|
 | シグネチャ | `async def update_password(db: AsyncSession, user_id: UUID, password_hash: str) -> None` |
-| 引数 | `user_id`、`password_hash`（ハッシュ化済み） |
+| 引数 | `db: AsyncSession`（DBセッション）、`user_id`、`password_hash`（ハッシュ化済み） |
 | 戻り値 | `None` |
-| 送出例外 | なし |
+| 送出例外 | `OperationalError` は `raise_database_error` で共通DBエラーへ変換 |
 | 処理内容 | `CALL sp_update_user_password(:user_id, :password_hash)`を実行する。commitはサービス層のトランザクション境界で行い、`updated_at`更新はSP内部のトリガに委譲 |
 | 副作用 | DB更新1件 |
 
