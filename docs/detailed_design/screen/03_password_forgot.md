@@ -55,7 +55,7 @@
 |----|------|------|--------|----------|----------|----------------|
 | ① | ロゴ | 静的テキスト | "Cerberus" | - | 常時 | - |
 | ② | 見出し・案内文 | 静的テキスト | - | - | `formState === 'idle' \| 'submitting' \| 'error'` の間のみ表示 | - |
-| ③ | メールアドレス入力 | text input | `""` | 必須、メール形式、254文字以内 | `formState !== 'sent'` | onChangeでstate更新、Enter送信対象 |
+| ③ | メールアドレス入力 | text input | `""` | 必須、メール形式、50文字以内 | `formState !== 'sent'` | onChangeでstate更新、Enter送信対象 |
 | ④ | バリデーション／エラー表示 | インラインエラー | 非表示 | - | 送信失敗時 | §11参照 |
 | ⑤ | 送信ボタン | submit button | 活性 | - | `formState !== 'submitting' && formState !== 'sent'` かつ③が非空 | クリック／Enterで送信。二重送信防止のため送信中は非活性化 |
 | ⑥ | 送信完了メッセージ | Alert(success) | 非表示 | - | `formState === 'sent'` の場合のみ、③④⑤の代わりに表示 | 固定文言（[09_post_auth_password_forgot.md](../api/auth/09_post_auth_password_forgot.md) §2.2） |
@@ -171,7 +171,7 @@ flowchart TB
 
 | フィールド | zodスキーマ | ルール | エラーメッセージ | バックエンド対応 |
 |-----------|-------------|--------|-------------------|-------------------|
-| `email` | `passwordForgotSchema.email` | `z.string().email().max(254)` | 「メールアドレスの形式が正しくありません」 | pydantic `PasswordForgotRequest.email`（`EmailStr`、254文字以内。[09_post_auth_password_forgot.md](../api/auth/09_post_auth_password_forgot.md) §10） |
+| `email` | `passwordForgotSchema.email` | `z.string().email().max(50)` | 「メールアドレスの形式が正しくありません」 | pydantic `PasswordForgotRequest.email`（`EmailStr`、50文字以内。[09_post_auth_password_forgot.md](../api/auth/09_post_auth_password_forgot.md) §10） |
 
 ## 11. エラーハンドリング
 

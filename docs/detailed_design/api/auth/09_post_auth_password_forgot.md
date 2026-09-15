@@ -38,7 +38,7 @@
 
 | 名前 | 型 | 必須 | 制約 | 説明 |
 |------|----|------|------|------|
-| email | string | ○ | 254文字以内、メール形式 | パスワードリセット対象のメールアドレス |
+| email | string | ○ | 50文字以内、メール形式 | パスワードリセット対象のメールアドレス |
 
 ### 2.2 レスポンス
 
@@ -215,7 +215,7 @@ stateDiagram-v2
 
 | フィールド | pydanticスキーマ | 制約 | フロント（zod）との整合 |
 |-----------|-------------------|------|--------------------------|
-| email | `PasswordForgotRequest.email` | `EmailStr`、254文字以内 | `z.string().email().max(254)`。`basic_design/04_api.md` §3.1 register の email 制約と統一 |
+| email | `PasswordForgotRequest.email` | `EmailStr`、50文字以内 | `z.string().email().max(50)`。`basic_design/04_api.md` §3.1 register の email 制約と統一 |
 
 ## 11. 非機能・セキュリティ考慮
 
@@ -239,7 +239,6 @@ stateDiagram-v2
 | 5 | 結合 | `email` 未指定・不正形式 | ボディ不正 | `422 VALIDATION_ERROR` | `test_password_forgot_endpoint_invalid_email` |
 | 6 | 結合 | Google OAuthのみのユーザー（`password_hash IS NULL`）への要求 | OAuth登録済みユーザー | `202`、メール送信が行われる | `test_password_forgot_endpoint_oauth_only_user` |
 | 7 | 結合 | 無効化ユーザー（`is_active=false`）への要求 | 管理者に無効化されたユーザー | `202`、メール送信が行われる（基本設計に除外規定なしのため） | `test_password_forgot_endpoint_inactive_user` |
-| 8 | 単体 | emailの254/255文字境界 | pydanticスキーマ単体 | 254文字は受け入れ、255文字は`ValidationError` | `test_email_requests_accept_254_characters` / `test_email_requests_reject_255_characters` |
 
 このAPIは `AUTH_MODE` に依存しないため両モードでの重複実施は不要。
 

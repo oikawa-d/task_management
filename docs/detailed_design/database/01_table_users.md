@@ -25,13 +25,11 @@
 
 `basic_design/01_database.md` §3.1 の定義から逸脱しない。
 
-`email` の上限は、[RFC 5321 §4.5.3.1](https://www.rfc-editor.org/rfc/rfc5321.html#section-4.5.3.1)のローカル部64オクテット・ドメイン255オクテット、および配送経路256オクテット（`<` `>`を含む）を考慮し、メールボックス自体を254文字まで受け入れる。ローカル部とドメイン部の単純合計による320文字は配送経路の制限を超えるため採用しない。Google OAuthの検証済みメールを`login_history.login_identifier`へ保存するため、同カラムも254文字へ揃える。
-
 | 論理名 | カラム名 | 型 | NULL | 既定値 | 主キー/一意 | 説明 |
 |--------|----------|----|------|--------|--------------|------|
 | ID | `id` | UUID | NO | `gen_random_uuid()` | PK | |
 | ログインID | `username` | VARCHAR(50) | NO | - | UNIQUE（大文字小文字区別なし） | 半角英数字と `_` `-`。OAuth新規ユーザーはサーバーが自動生成 |
-| メールアドレス | `email` | VARCHAR(254) | NO | - | UNIQUE（大文字小文字区別なし） | RFC 5321の配送経路長を考慮した254文字上限。簡易形式検証はCHECK制約 |
+| メールアドレス | `email` | VARCHAR(50) | NO | - | UNIQUE（大文字小文字区別なし） | 簡易形式検証はCHECK制約 |
 | パスワードハッシュ | `password_hash` | TEXT | YES | - | - | argon2id。Googleのみで登録したユーザーはNULL |
 | 姓 | `last_name` | VARCHAR(30) | YES | - | - | 通常登録では必須（アプリ層必須）、OAuth新規ユーザーはプロフィール補完までNULL可 |
 | 名 | `first_name` | VARCHAR(30) | YES | - | - | 同上 |
@@ -52,7 +50,7 @@
 CREATE TABLE users (
     id                 UUID           NOT NULL DEFAULT gen_random_uuid(),
     username           VARCHAR(50)    NOT NULL,
-    email              VARCHAR(254)   NOT NULL,
+    email              VARCHAR(50)    NOT NULL,
     password_hash      TEXT,
     last_name          VARCHAR(30),
     first_name         VARCHAR(30),
@@ -118,7 +116,7 @@ class User(Base):
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
     username: Mapped[str] = mapped_column(String(50), nullable=False)
-    email: Mapped[str] = mapped_column(String(254), nullable=False)
+    email: Mapped[str] = mapped_column(String(50), nullable=False)
     password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(30), nullable=True)
     first_name: Mapped[str | None] = mapped_column(String(30), nullable=True)
@@ -160,7 +158,7 @@ erDiagram
     users {
         uuid id PK
         varchar_50 username UK
-        varchar_254 email UK
+        varchar_50 email UK
         text password_hash "NULL可"
         varchar_10 role
         boolean is_active
@@ -336,7 +334,6 @@ flowchart LR
 | 9 | リポジトリ | `get_by_login_identifier` にusername/emailそれぞれで取得 | 同一ユーザーが取得できる | `test_get_by_login_identifier_by_username_and_email` |
 | 10 | リポジトリ | `create`が`sp_register_user`のOUT UUIDを返す | `UUID`が返り、`User` ORMモデルや入力DTOを返さない | `test_user_repository_create_returns_uuid` |
 | 11 | リポジトリ | `mark_email_verified` / `update_profile`が更新SPを呼ぶ | 戻り値は`None` | `test_user_repository_update_methods_return_none` |
-| 12 | 制約 | `users.email`と`login_history.login_identifier`の254/255文字境界 | 254文字は登録でき、255文字は拒否される | `test_users_email_accepts_254_characters_and_rejects_255` |
 
 ## 13. 不明点・要検討事項
 

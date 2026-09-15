@@ -41,7 +41,7 @@ Cookie：なし
 
 | 名前 | 型 | 必須 | 制約 | 説明 |
 |------|----|------|------|------|
-| identifier | string | ○ | 1〜254文字 | `username` または `email`。`lower()`比較で照合 |
+| identifier | string | ○ | 1〜50文字 | `username` または `email`。`lower()`比較で照合 |
 | password | string | ○ | 1文字以上（上限はパスワードポリシー上限に準拠しないが極端な長さはDoS対策として要検討） | 平文。ログ出力しない |
 
 ### 2.2 レスポンス
@@ -321,7 +321,7 @@ stateDiagram-v2
 
 | スキーマ | フィールド | 規則 | フロント(zod)対応 |
 |----------|-----------|------|--------------------|
-| `LoginRequest` | identifier | 1〜254文字必須 | `z.string().min(1).max(254)` |
+| `LoginRequest` | identifier | 1〜50文字必須 | `z.string().min(1).max(50)` |
 | `LoginRequest` | password | 1文字以上必須 | `z.string().min(1)` |
 
 ログインAPIでは登録時のような複雑な文字種チェックは行わない（過去に発行された既存パスワードとの整合性を保つため。パスワードポリシーは登録・変更時のみ適用）。
@@ -360,7 +360,6 @@ stateDiagram-v2
 | 16 | 単体 | 失敗後の`login_history` INSERT失敗 | 不正資格情報の履歴INSERTが例外 | `503 SERVICE_UNAVAILABLE`、`user_id` NULLの構造化ログ`event=login_history_write_failed` | `test_login_fails_closed_when_login_history_write_raises_on_failure_path` |
 | 17 | 単体 | ユーザー検索のDB障害 | `get_by_login_identifier`が例外 | `503 SERVICE_UNAVAILABLE`、構造化ログ`event=login_attempt` / `failure_reason='service_unavailable'` | `test_login_fails_closed_when_user_lookup_raises` |
 | 18 | 単体 | rollback失敗 | `rollback_login`が例外 | `503 SERVICE_UNAVAILABLE`、構造化ログ`event=auth_state_revoke_failed`。削除件数はNULL（不明） | `test_login_returns_service_unavailable_when_auth_state_rollback_fails` |
-| 19 | 単体 | email識別子の254/255文字境界 | pydanticスキーマ単体 | 254文字は受け入れ、255文字は`ValidationError` | `test_login_request_accepts_254_character_email` / `test_login_request_rejects_255_character_email` |
 
 `AUTH_MODE`両モードでのパラメータ化テストを7・8で実施。それ以外の異常系はモード非依存のためsessionモードのみで代表させる（jwtモードでの重複確認は工数対効果が低いため実施しない旨を明記）。
 

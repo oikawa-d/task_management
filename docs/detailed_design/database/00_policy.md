@@ -141,7 +141,7 @@ erDiagram
     users {
         uuid id PK
         varchar_50 username UK
-        varchar_254 email UK
+        varchar_50 email UK
         text password_hash "NULL可"
         varchar_10 role
         boolean is_active

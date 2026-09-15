@@ -59,7 +59,7 @@
 | ④ | 成功メッセージ | 静的表示 | 非表示 | - | `success` 状態のみ | - |
 | ⑤ | 即時遷移リンク | link | 非表示 | - | `success` 状態のみ | クリックで即 `/login` へ`navigate` |
 | ⑥ | 失敗メッセージ | 静的表示 | 非表示 | - | `error` 状態のみ | `role="alert"` |
-| ⑦ | メールアドレス入力 | text input | "" | メール形式、254文字以内 | `error` または `noToken` 状態のみ表示 | 入力毎にzod検証 |
+| ⑦ | メールアドレス入力 | text input | "" | メール形式、50文字以内 | `error` または `noToken` 状態のみ表示 | 入力毎にzod検証 |
 | ⑧ | 再送ボタン | button submit | disabled | - | ⑦が有効な形式かつ送信中でない | クリックで再送API呼び出し |
 
 ## 4. 使用API
@@ -216,7 +216,7 @@ flowchart TB
 
 | フィールド | zodスキーマ | 規則 | エラーメッセージ | バックエンド対応 |
 |------------|--------------|------|--------------------|--------------------|
-| `resendEmail` | `resendVerificationSchema.email` | メール形式、254文字以内 | "有効なメールアドレスを入力してください" | pydantic `RegisterRequest.email` と同一規則（`basic_design/04_api.md` §3.1） |
+| `resendEmail` | `resendVerificationSchema.email` | メール形式、50文字以内 | "有効なメールアドレスを入力してください" | pydantic `RegisterRequest.email` と同一規則（`basic_design/04_api.md` §3.1） |
 
 `token` はfragmentから抽出するのみでフォーム入力ではないため、zod検証の対象外とする。
 

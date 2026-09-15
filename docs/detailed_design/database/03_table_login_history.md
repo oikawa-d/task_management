@@ -30,7 +30,7 @@
 |--------|----------|----|------|--------|--------------|------|
 | ID | `id` | UUID | NO | `gen_random_uuid()` | PK | |
 | ユーザーID | `user_id` | UUID | YES | - | FK → `users.id`（`ON DELETE SET NULL`） | 存在しないID/メール入力時はNULL |
-| ログイン識別子 | `login_identifier` | VARCHAR(254) | NO | - | - | 認証に使用した識別子。通常ログインはリクエストの username / email 原文、Google OAuth は `email_verified=true` を確認した Google email（実装上は解決済み `user.email`）。パスワード・OAuthの `sub`・トークンは記録しない |
+| ログイン識別子 | `login_identifier` | VARCHAR(50) | NO | - | - | 認証に使用した識別子。通常ログインはリクエストの username / email 原文、Google OAuth は `email_verified=true` を確認した Google email（実装上は解決済み `user.email`）。パスワード・OAuthの `sub`・トークンは記録しない |
 | ログイン方式 | `login_method` | VARCHAR(20) | NO | - | - | `session` / `jwt` / `oauth_google`（CHECK） |
 | IPアドレス | `ip_address` | INET | YES | - | - | `TRUSTED_PROXY_CIDRS`に含まれる直近ProxyからのXFFだけを解決して取得。未信頼時は接続元IP |
 | ユーザーエージェント | `user_agent` | TEXT | YES | - | - | |
@@ -46,7 +46,7 @@
 CREATE TABLE login_history (
     id                UUID          NOT NULL DEFAULT gen_random_uuid(),
     user_id           UUID,
-    login_identifier  VARCHAR(254)  NOT NULL,
+    login_identifier  VARCHAR(50)   NOT NULL,
     login_method      VARCHAR(20)   NOT NULL,
     ip_address        INET,
     user_agent        TEXT,
@@ -103,7 +103,7 @@ class LoginHistory(Base):
     user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    login_identifier: Mapped[str] = mapped_column(String(254), nullable=False)
+    login_identifier: Mapped[str] = mapped_column(String(50), nullable=False)
     login_method: Mapped[str] = mapped_column(String(20), nullable=False)
     ip_address: Mapped[str | None] = mapped_column(INET, nullable=True)
     user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -139,7 +139,7 @@ erDiagram
     login_history {
         uuid id PK
         uuid user_id FK "NULL可・ON DELETE SET NULL"
-        varchar_254 login_identifier "通常: username/email、OAuth: 検証済みGoogle email"
+        varchar_50 login_identifier "通常: username/email、OAuth: 検証済みGoogle email"
         varchar_20 login_method
         boolean success
         timestamptz created_at

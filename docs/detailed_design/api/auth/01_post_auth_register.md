@@ -42,7 +42,7 @@ Cookie：なし
 | 名前 | 型 | 必須 | 制約 | 説明 |
 |------|----|------|------|------|
 | username | string | ○ | 3〜50文字、`^[A-Za-z0-9_-]+$` | ログインID。大文字小文字は区別しない一意制約（`uq_users_username`） |
-| email | string | ○ | 254文字以内、メール形式（`@ - _ . +` を許容） | 大文字小文字を区別しない一意制約（`uq_users_email`） |
+| email | string | ○ | 50文字以内、メール形式（`@ - _ . +` を許容） | 大文字小文字を区別しない一意制約（`uq_users_email`） |
 | password | string | ○ | 8文字以上、大文字英字/小文字英字/数字/記号のうち2種類以上 | 平文はログ・DBに保存しない |
 | password_confirm | string | ○ | `password` と一致 | |
 | last_name / first_name | string | ○ | 各1〜30文字 | |
@@ -258,7 +258,7 @@ stateDiagram-v2
 | スキーマ | フィールド | 規則 | フロント(zod)対応 |
 |----------|-----------|------|--------------------|
 | `RegisterRequest` | username | `^[A-Za-z0-9_-]{3,50}$` | `z.string().min(3).max(50).regex(...)` |
-| `RegisterRequest` | email | 254文字以内、`EmailStr`相当 | `z.string().email().max(254)` |
+| `RegisterRequest` | email | 50文字以内、`EmailStr`相当 | `z.string().email().max(50)` |
 | `RegisterRequest` | password | 8文字以上、大文字/小文字/数字/記号のうち2種類以上（カスタムバリデータ） | `zod`カスタム`refine`で同一ルールを実装 |
 | `RegisterRequest` | password_confirm | `password`と完全一致（`model_validator`） | `refine`でフィールド間比較 |
 | `RegisterRequest` | last_name / first_name | 1〜30文字 | `z.string().min(1).max(30)` |
@@ -293,7 +293,6 @@ stateDiagram-v2
 | 8 | 結合 | 重複登録 | 事前に同一usernameで登録済み | `409 DUPLICATE_USERNAME` | `test_register_endpoint_duplicate_username` |
 | 9 | 結合 | メール送信予約確認 | `aiosmtplib`をモック | `send_email_verification_mail`が1回呼ばれる | `test_register_endpoint_sends_verification_mail` |
 | 10 | 結合 | Redisキー確認 | 実Redis | `emailverify:{hash}`と`emailverify_current:{uid}`がTTL付きで存在 | `test_register_endpoint_stores_email_verify_token` |
-| 11 | 単体 | emailの254/255文字境界 | pydanticスキーマ単体 | 254文字は受け入れ、255文字は`ValidationError` | `test_email_requests_accept_254_characters` / `test_email_requests_reject_255_characters` |
 
 `AUTH_MODE`による分岐がないため、session/jwt双方でのパラメータ化テストは不要（両モードで同一処理であることのみ1ケース確認する）。
 
