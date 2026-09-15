@@ -293,7 +293,7 @@ async def test_login_unknown_user_records_failure(monkeypatch: pytest.MonkeyPatc
 	assert strategy.login_calls == []
 	assert history_mock.await_args.kwargs["success"] is False
 	assert history_mock.await_args.kwargs["user_id"] is None
-	assert history_mock.await_args.kwargs["failure_reason"] == "INVALID_CREDENTIALS"
+	assert history_mock.await_args.kwargs["failure_reason"] == "invalid_credentials"
 
 
 async def test_login_wrong_password_records_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -309,6 +309,7 @@ async def test_login_wrong_password_records_failure(monkeypatch: pytest.MonkeyPa
 		await auth_service.login("taro", "wrong", _FakeRequest(), SimpleNamespace(), _RegisterDb(), _FakeStrategy())  # type: ignore[arg-type]
 
 	assert history_mock.await_args.kwargs["user_id"] == user.id
+	assert history_mock.await_args.kwargs["failure_reason"] == "invalid_credentials"
 
 
 async def test_login_oauth_only_account_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -346,7 +347,7 @@ async def test_login_inactive_user_raises_after_password_check(monkeypatch: pyte
 		await auth_service.login("taro", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), strategy)  # type: ignore[arg-type]
 
 	assert strategy.login_calls == []
-	assert history_mock.await_args.kwargs["failure_reason"] == "USER_INACTIVE"
+	assert history_mock.await_args.kwargs["failure_reason"] == "user_inactive"
 
 
 async def test_login_unverified_email_raises(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -361,7 +362,7 @@ async def test_login_unverified_email_raises(monkeypatch: pytest.MonkeyPatch) ->
 	with pytest.raises(EmailNotVerifiedError):
 		await auth_service.login("taro", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), _FakeStrategy())  # type: ignore[arg-type]
 
-	assert history_mock.await_args.kwargs["failure_reason"] == "EMAIL_NOT_VERIFIED"
+	assert history_mock.await_args.kwargs["failure_reason"] == "email_not_verified"
 
 
 async def test_login_rate_limited_before_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -638,9 +639,9 @@ async def test_login_attempt_structured_log_emitted_on_success(
 @pytest.mark.parametrize(
 	("setup_name", "expected_failure_reason", "exc_type"),
 	[
-		("invalid_credentials", "INVALID_CREDENTIALS", InvalidCredentialsError),
-		("user_inactive", "USER_INACTIVE", UserInactiveError),
-		("email_not_verified", "EMAIL_NOT_VERIFIED", EmailNotVerifiedError),
+		("invalid_credentials", "invalid_credentials", InvalidCredentialsError),
+		("user_inactive", "user_inactive", UserInactiveError),
+		("email_not_verified", "email_not_verified", EmailNotVerifiedError),
 	],
 )
 async def test_login_attempt_structured_log_emitted_on_failure(

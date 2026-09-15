@@ -51,7 +51,7 @@ repository層は `CALL sp_xxx(...)` または `SELECT fn_xxx(...)` と戻り値�
 | 16 | プロシージャ | `sp_remove_project_member` | `p_project_id UUID`, `p_user_id UUID` | なし | 担当解除後の所属削除 |
 | 17 | 関数 | `fn_get_project_board` | `p_project_id UUID`, `p_include_inactive BOOLEAN` | `SETOF tasks` | カンバン取得 |
 | 18 | 関数 | `fn_get_task` | `p_task_id UUID` | `SETOF tasks` | タスク1件取得 |
-| 19 | 関数 | `fn_list_tasks` | `p_user_id UUID`, `p_project_id UUID`, `p_status VARCHAR`, `p_include_inactive BOOLEAN`, `p_limit INTEGER`, `p_offset INTEGER` | `SETOF tasks` | 権限スコープ付き一覧 |
+| 19 | 関数 | `fn_list_tasks` | `p_user_id UUID`, `p_project_id UUID`, `p_status VARCHAR`, `p_include_inactive BOOLEAN`, `p_limit INTEGER`, `p_offset INTEGER`, `p_unassigned BOOLEAN` | `SETOF tasks` | 権限スコープ付き一覧。`p_unassigned=true`は未所属のみ |
 | 20 | 関数 | `fn_list_task_comments` | `p_task_id UUID` | `SETOF task_comments` | コメント一覧 |
 | 21 | 関数 | `fn_get_comment_with_task` | `p_comment_id UUID` | `SETOF task_comments` | コメント・所属判定用取得 |
 | 22 | プロシージャ | `sp_create_task` | `p_project_id UUID`, `p_created_by UUID`, `p_assignee_id UUID`, `p_title VARCHAR`, `p_body TEXT`, `p_status VARCHAR`, `p_due_at TIMESTAMPTZ`, `p_position INTEGER`, `p_day_start_utc TIMESTAMPTZ`, `p_day_end_utc TIMESTAMPTZ`, `OUT p_task_id UUID` | `p_task_id UUID`（OUT） | task作成・position採番・当日期限通知を一体実行し、DB側で採番したtask_idをOUTで返す |

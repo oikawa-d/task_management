@@ -7,7 +7,7 @@ import pytest
 from app.auth.base import LoginResult
 from app.auth.session_auth import SessionAuthStrategy
 from app.core.config import BackendSettings
-from app.core.exceptions import NotSupportedInModeError
+from app.core.exceptions import NotSupportedInModeError, SessionExpiredError
 from app.repository.redis_store_common import SessionData
 from fastapi import Response
 from starlette.requests import Request
@@ -85,7 +85,14 @@ async def test_login_uses_trusted_xff_client_ip(monkeypatch: pytest.MonkeyPatch)
 
 
 @pytest.mark.asyncio
-async def test_authenticate_touches_valid_session_and_rejects_expired_session(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_authenticate_without_cookie_returns_none() -> None:
+	assert await SessionAuthStrategy(_settings()).authenticate(_request()) is None
+
+
+@pytest.mark.asyncio
+async def test_authenticate_touches_valid_session_and_raises_for_expired_session(
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
 	user_id = uuid4()
 	monkeypatch.setattr(
 		"app.auth.session_auth.redis_store.get_session",
@@ -100,7 +107,16 @@ async def test_authenticate_touches_valid_session_and_rejects_expired_session(mo
 	assert context.session_id == "session-id"
 
 	monkeypatch.setattr("app.auth.session_auth.redis_store.touch_session", lambda *args: _false_touch(*args))
-	assert await strategy.authenticate(_request("cerberus_sid=session-id")) is None
+	with pytest.raises(SessionExpiredError):
+		await strategy.authenticate(_request("cerberus_sid=session-id"))
+
+
+@pytest.mark.asyncio
+async def test_authenticate_raises_for_missing_session(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setattr("app.auth.session_auth.redis_store.get_session", AsyncMock(return_value=None))
+
+	with pytest.raises(SessionExpiredError):
+		await SessionAuthStrategy(_settings()).authenticate(_request("cerberus_sid=expired-session"))
 
 
 async def _get_session(session_id: str, user_id: UUID) -> SessionData:
