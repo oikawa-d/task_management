@@ -1,5 +1,6 @@
 from datetime import date, datetime
 from typing import Literal
+from uuid import UUID
 
 from pydantic import UUID4, BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -135,7 +136,7 @@ class BoardResponse(BaseModel):
 class TaskListQuery(BaseModel):
 	page: int = Field(default=1, ge=1)
 	per_page: int = Field(default_factory=_default_per_page, ge=1)
-	project_id: UUID4 | Literal["unassigned"] | None = None
+	project_id: UUID4 | str | None = None
 	status: TaskStatus | None = None
 	include_inactive: bool = False
 	sort: TaskSort = "created_at"
@@ -146,8 +147,13 @@ class TaskListQuery(BaseModel):
 	def normalize_unassigned_filter(cls, value: object) -> object:
 		if value == "null":
 			return "unassigned"
-		if value == "unassigned":
+		if isinstance(value, str) and value == "unassigned":
 			raise ValueError('project_id must be a UUID or "null"')
+		if isinstance(value, str):
+			try:
+				return UUID(value)
+			except ValueError as exc:
+				raise ValueError('project_id must be a UUID or "null"') from exc
 		return value
 
 	@field_validator("per_page")
