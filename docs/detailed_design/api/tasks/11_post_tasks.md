@@ -26,7 +26,7 @@
 | AUTH_MODE差異 | session時はCSRF検証あり、jwt時は不要。それ以外の業務ロジックに差異なし |
 | 冪等性 | なし（POSTのため同一リクエストの再送で複数タスクが作成され得る） |
 | レート制限 | 対象外 |
-| トランザクション境界 | `BEGIN` から advisory lock取得・position採番・INSERT・`COMMIT`までを1トランザクションとする |
+| トランザクション境界 | `create_task_flat`は`task_service.create_task`へ委譲し、[02_post_project_tasks.md](./02_post_project_tasks.md) §6.2と同じservice境界を使用する。成功時は結果取得後に`COMMIT`し、P0005/P0006を変換したドメイン例外またはDBAPIError時は`ROLLBACK`する。事前の認可・所属確認で発生する例外はrollbackしない |
 
 ## 2. 入出力仕様（全体の出入力）
 
@@ -206,7 +206,7 @@ flowchart TB
 | 引数 | payload：`project_id`を含む作成内容／user：作成者 |
 | 戻り値 | `Task` |
 | 送出例外 | `NotFoundError`（`project_id`指定時の非所属）、`ValidationError`（未所属タスクへの`assignee_id`指定、または`project_id`指定時の非メンバーassignee）、`ConflictError`（`ASSIGNEE_INACTIVE`） |
-| 処理内容 | 1. `payload.project_id` が非NULLの場合：`user.role != 'admin'` なら `fn_is_project_member(project_id, user.id)` で所属確認（非所属は`NotFoundError`）。以降は`create_task`（[02_post_project_tasks.md](./02_post_project_tasks.md) §6.2）と同一のassignee検証・`sp_create_task`呼び出しに委譲し、position採番・advisory lockロジックを完全に共通化する<br/>2. `payload.project_id` が `None` の場合：`payload.assignee_id` が指定されていれば`ValidationError`（未所属タスクは担当者設定不可）。検証OKなら `CALL sp_create_task(NULL, user.id, NULL, ...)` を呼び出す。`task_id`はAPI側で生成せず、SP内部で`gen_random_uuid()`により採番されOUTパラメータで返る<br/>3. いずれの経路でも作成後は`SELECT fn_get_task(p_task_id)`で取得し、`project_id`が非NULLなら`project_is_active`を設定し、`NULL`なら`None`とする |
+| 処理内容 | 1. `payload.project_id` が非NULLの場合：`user.role != 'admin'` なら `fn_is_project_member(project_id, user.id)` で所属確認（非所属は`NotFoundError`）。以降は`create_task`（[02_post_project_tasks.md](./02_post_project_tasks.md) §6.2）と同一のassignee検証・`sp_create_task`呼び出しに委譲し、position採番・advisory lockロジックを完全に共通化する<br/>2. `payload.project_id` が `None` の場合：`payload.assignee_id` が指定されていれば`ValidationError`（未所属タスクは担当者設定不可）。検証OKなら `CALL sp_create_task(NULL, user.id, NULL, ...)` を呼び出す。`task_id`はAPI側で生成せず、SP内部で`gen_random_uuid()`により採番されOUTパラメータで返る<br/>3. いずれの経路でも作成後は`SELECT fn_get_task(p_task_id)`で取得し、`project_id`が非NULLなら`project_is_active`を設定し、`NULL`なら`None`とする。commit/rollbackとP0005/P0006の変換後処理は共通の`create_task`に従う |
 | 副作用 | `sp_create_task`によるDB更新 |
 
 ### 6.3 `repository/task_repository.py :: create`
