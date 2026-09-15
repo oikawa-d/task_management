@@ -12,11 +12,11 @@
 
 | 項目 | 内容 |
 |------|------|
-| 対象 | `service/auth_service.py`（トークン発行・消費のオーケストレーション）、`service/mail_service.py`（SMTP送信）、`api/app/templates/mail/*`（本文テンプレート） |
+| 対象 | `api/app/service/email_verification_service.py`（トークン発行・消費のオーケストレーション）、`api/app/service/mail_service.py`（SMTP送信）、`api/app/templates/mail/*`（本文テンプレート） |
 | 責務 | メール認証トークン・パスワードリセットトークンのワンタイム生成・ハッシュ化・消費、メール本文の組み立てとBackgroundTasksによる非同期送信、再送レート制限 |
 | 適用条件 | `AUTH_MODE` に依存しない（session/jwt共通）。Google OAuth新規登録は本フローを経由しない（[../../basic_design/03_auth.md](../../basic_design/03_auth.md) §5.3・§6） |
 | 依存先 | Redis（`emailverify:*` / `pwreset:*` 系キー）、PostgreSQL（`users.email_verified_at` / `users.password_hash`）、SMTPサーバー（開発：Mailpit、本番：外部SMTP） |
-| 実装ファイル | `api/app/service/auth_service.py`、`api/app/service/mail_service.py`、`api/app/repository/redis_store.py`、`api/app/templates/mail/password_reset.{html,txt}`、`api/app/templates/mail/email_verification.{html,txt}` |
+| 実装ファイル | `api/app/service/email_verification_service.py`、`api/app/service/mail_service.py`、`api/app/repository/redis_store.py`、`api/app/templates/mail/password_reset.{html,txt}`、`api/app/templates/mail/email_verification.{html,txt}` |
 
 ## 2. 構成要素
 
@@ -217,7 +217,7 @@ stateDiagram-v2
 
 ## 8. 関数・処理詳細
 
-### 8.1 `service/auth_service.py :: issue_email_verify_token`
+### 8.1 `api/app/service/email_verification_service.py :: issue_email_verify_token`
 
 | 項目 | 内容 |
 |------|------|
@@ -228,7 +228,7 @@ stateDiagram-v2
 | 処理内容 | 1. `token = secrets.token_urlsafe(32)` 2. `redis_store.replace_email_verify_token(token, user.id, ttl=EMAIL_VERIFY_TTL_SECONDS)`（旧token失効＋新token登録＋current更新を一括実行、[./08_redis_store.md](./08_redis_store.md) §5.3参照） 3. `redis_store.mark_email_verify_sent(user.id, interval=EMAIL_VERIFY_RESEND_INTERVAL_SECONDS)` 4. `background.add_task(mail_service.send_email_verification_mail, user.email, token, expires_hours=EMAIL_VERIFY_TTL_SECONDS // 3600)` |
 | 副作用 | Redis書き込み3種、BackgroundTasksへのSMTP送信登録 |
 
-### 8.2 `service/auth_service.py :: verify_email`
+### 8.2 `api/app/service/email_verification_service.py :: verify_email`
 
 | 項目 | 内容 |
 |------|------|
@@ -239,7 +239,7 @@ stateDiagram-v2
 | 処理内容 | 1. `user_id = await redis_store.consume_email_verify_token(token)`（内部で`sha256`化して`GETDEL`） 2. `None`なら例外 3. `user_repository.mark_email_verified(db, user_id)`で`UPDATE users SET email_verified_at = now()` |
 | 副作用 | Redis削除（ワンタイム消費）、PostgreSQL UPDATE |
 
-### 8.3 `service/auth_service.py :: resend_verification`
+### 8.3 `api/app/service/email_verification_service.py :: resend_verification`
 
 | 項目 | 内容 |
 |------|------|
@@ -250,7 +250,7 @@ stateDiagram-v2
 | 処理内容 | 1. `user_repository.find_by_email(db, email)` 2. `None`または`email_verified_at IS NOT NULL`なら何もせず終了 3. `redis_store.get(f"emailverify_sent:{user.id}")`相当のチェックが可能なキーが存在すれば終了（再送間隔内） 4. 間隔外なら`issue_email_verify_token(user, background)`を呼ぶ |
 | 副作用 | 条件を満たす場合のみ8.1と同じ副作用 |
 
-### 8.4 `service/auth_service.py :: request_password_reset`
+### 8.4 `api/app/service/email_verification_service.py :: request_password_reset`
 
 | 項目 | 内容 |
 |------|------|
@@ -261,7 +261,7 @@ stateDiagram-v2
 | 処理内容 | 1. `user_repository.find_by_email(db, email)` 2. `None`なら何もせず終了 3. 存在すれば`token = secrets.token_urlsafe(32)` 4. `redis_store.save_password_reset_token(token, user.id, ttl=PASSWORD_RESET_TTL_SECONDS)` 5. `background.add_task(mail_service.send_password_reset_mail, user.email, token, expires_minutes=PASSWORD_RESET_TTL_SECONDS // 60)` |
 | 副作用 | 条件付きでRedis書き込み・BackgroundTasks登録 |
 
-### 8.5 `service/auth_service.py :: reset_password`
+### 8.5 `api/app/service/email_verification_service.py :: reset_password`
 
 | 項目 | 内容 |
 |------|------|
@@ -288,14 +288,14 @@ stateDiagram-v2
 ```mermaid
 flowchart LR
     R1["POST /auth/register"] --> ASV1["auth_service.register"]
-    ASV1 --> ISSUE["auth_service.issue_email_verify_token"]
+    ASV1 --> ISSUE["email_verification_service.issue_email_verify_token"]
 
-    R2["POST /auth/verify-email"] --> VER["auth_service.verify_email"]
-    R3["POST /auth/verify-email/resend"] --> RESEND["auth_service.resend_verification"]
+    R2["POST /auth/verify-email"] --> VER["email_verification_service.verify_email"]
+    R3["POST /auth/verify-email/resend"] --> RESEND["email_verification_service.resend_verification"]
     RESEND --> ISSUE
 
-    R4["POST /auth/password/forgot"] --> REQPW["auth_service.request_password_reset"]
-    R5["POST /auth/password/reset"] --> RESETPW["auth_service.reset_password"]
+    R4["POST /auth/password/forgot"] --> REQPW["email_verification_service.request_password_reset"]
+    R5["POST /auth/password/reset"] --> RESETPW["email_verification_service.reset_password"]
 
     ISSUE --> RS1["redis_store.replace_email_verify_token<br/>redis_store.mark_email_verify_sent"]
     VER --> RS2["redis_store.consume_email_verify_token"]
