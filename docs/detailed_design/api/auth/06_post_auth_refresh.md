@@ -310,7 +310,7 @@ stateDiagram-v2
 | 11 | 結合 | CSRFヘッダ欠落 | Cookieはあるがヘッダ無し | `403 CSRF_INVALID` | `test_refresh_endpoint_missing_csrf_header` |
 | 12 | 結合 | Origin不一致 | 許可外Origin | `403 CSRF_INVALID` | `test_refresh_endpoint_invalid_origin` |
 
-Issue #425 の結合テストは `api/tests/integration/test_auth_token_mail_flow.py` で実際の FastAPI アプリ境界を通り、CI の PostgreSQL/Redis services に接続する。Cookie/ヘッダ、`RefreshResponse`、エラーコードは本節の入出力仕様と一致し、SMTPのみテスト内で境界を差し替える。
+Issue #425 の結合テストは `api/tests/integration_token_mail/test_auth_token_mail_flow.py` で実際の FastAPI アプリ境界を通り、CI の PostgreSQL/Redis services に接続する。Cookie/ヘッダ、`RefreshResponse`、エラーコードは本節の入出力仕様と一致し、SMTPのみテスト内で境界を差し替える。
 
 sessionモードは6の405確認のみで足り、それ以外の異常系（CSRF・再利用検知等）はjwtモード固有の機能のためjwtモードのみで実施する（`AUTH_MODE`両モードでの網羅パラメータ化は本APIの性質上不要と判断）。
 
