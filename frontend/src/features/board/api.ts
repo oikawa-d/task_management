@@ -1,5 +1,5 @@
 import { fetchWithAuth } from "../../api/authAdapter/client";
-import type { BoardResponse, BoardTask, TaskStatus } from "./types";
+import type { BoardResponse, BoardTask, ProjectMemberListResponse, TaskStatus } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api";
 
@@ -33,6 +33,10 @@ async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> 
 
 export function getProjectTasks(projectId: string): Promise<BoardResponse> {
 	return requestJson<BoardResponse>(`/projects/${projectId}/tasks`);
+}
+
+export function getProjectMembers(projectId: string): Promise<ProjectMemberListResponse> {
+	return requestJson<ProjectMemberListResponse>(`/projects/${projectId}/members`);
 }
 
 export interface UpdateTaskRequest {
