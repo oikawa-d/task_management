@@ -5,6 +5,7 @@ from typing import Any, NoReturn
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError as PydanticValidationError
 from redis.exceptions import RedisError
 from sqlalchemy.exc import DBAPIError, DisconnectionError, InterfaceError, OperationalError
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
@@ -47,6 +48,16 @@ class CsrfInvalidError(ForbiddenError):
 class ConflictError(AppError):
 	status_code = 409
 	message = "競合が発生しました"
+
+
+class TaskConflictError(ConflictError):
+	code = "TASK_CONFLICT"
+	message = "他のユーザーが先に更新しました。最新の内容を取得し直してください"
+
+
+class AssigneeInactiveError(ConflictError):
+	code = "ASSIGNEE_INACTIVE"
+	message = "無効なユーザーは担当者に指定できません"
 
 
 class DuplicateUsernameError(ConflictError):
@@ -279,6 +290,15 @@ def register_error_handling(app: FastAPI) -> None:
 
 	@app.exception_handler(RequestValidationError)
 	async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+		request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+		details = [{"field": ".".join(str(part) for part in err["loc"]), "message": err["msg"]} for err in exc.errors()]
+		return JSONResponse(
+			status_code=422,
+			content=_build_error_body("VALIDATION_ERROR", "入力内容に誤りがあります", details, request_id),
+		)
+
+	@app.exception_handler(PydanticValidationError)
+	async def pydantic_validation_error_handler(request: Request, exc: PydanticValidationError) -> JSONResponse:
 		request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
 		details = [{"field": ".".join(str(part) for part in err["loc"]), "message": err["msg"]} for err in exc.errors()]
 		return JSONResponse(

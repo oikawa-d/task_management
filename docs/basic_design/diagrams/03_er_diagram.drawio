@@ -19,7 +19,7 @@
         <mxCell id="n4" value="UK  username   ·   VARCHAR(50)  ログインID" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontStyle=1;fontColor=#1565C0;" vertex="1" parent="t_users">
           <mxGeometry x="0" y="52" width="330" height="22" as="geometry" />
         </mxCell>
-        <mxCell id="n5" value="UK  email   ·   VARCHAR(50)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontStyle=1;fontColor=#1565C0;" vertex="1" parent="t_users">
+        <mxCell id="n5" value="UK  email   ·   VARCHAR(254)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontStyle=1;fontColor=#1565C0;" vertex="1" parent="t_users">
           <mxGeometry x="0" y="74" width="330" height="22" as="geometry" />
         </mxCell>
         <mxCell id="n6" value="password_hash   ·   TEXT  NULL可（OAuth専用）" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_users">
@@ -76,7 +76,7 @@
         <mxCell id="n20" value="FK  user_id   ·   UUID → users.id  SET NULL" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;fontColor=#EF6C00;" vertex="1" parent="t_login">
           <mxGeometry x="0" y="52" width="330" height="22" as="geometry" />
         </mxCell>
-        <mxCell id="n21" value="login_identifier   ·   VARCHAR(50)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_login">
+        <mxCell id="n21" value="login_identifier   ·   VARCHAR(254)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_login">
           <mxGeometry x="0" y="74" width="330" height="22" as="geometry" />
         </mxCell>
         <mxCell id="n22" value="login_method   ·   session|jwt|oauth_google" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=8;fontSize=10;" vertex="1" parent="t_login">

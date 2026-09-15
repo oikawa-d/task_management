@@ -5,7 +5,7 @@ from fastapi import Request, Response
 
 from app.auth.base import AuthContext, AuthStrategy, LoginResult
 from app.core.client_ip import resolve_client_ip
-from app.core.exceptions import NotSupportedInModeError
+from app.core.exceptions import NotSupportedInModeError, SessionExpiredError
 from app.models.user import User
 from app.repository import redis_store
 
@@ -75,12 +75,12 @@ class SessionAuthStrategy(AuthStrategy):
 			return None
 		session = await redis_store.get_session(session_id)
 		if session is None:
-			return None
+			raise SessionExpiredError()
 		absolute_expires_at = session.created_at + timedelta(seconds=self.settings.session_absolute_ttl_seconds)
 		if not await redis_store.touch_session(
 			session_id, session.user_id, self.settings.session_ttl_seconds, absolute_expires_at
 		):
-			return None
+			raise SessionExpiredError()
 		return AuthContext(user_id=session.user_id, session_id=session_id)
 
 	async def logout(self, request: Request, response: Response) -> None:

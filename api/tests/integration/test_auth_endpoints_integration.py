@@ -29,6 +29,7 @@ from __future__ import annotations
 import uuid
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from app.core.config import get_backend_settings
@@ -39,6 +40,7 @@ from app.repository import (
 	redis_store_session,
 	user_repository,
 )
+from app.service import email_verification_service, mail_service
 from fastapi.testclient import TestClient
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
@@ -94,6 +96,38 @@ async def test_register_endpoint_returns_201_without_auth_cookie(
 	user = await user_repository.get_by_login_identifier(db_session, username)
 	assert user is not None
 	assert user.email_verified_at is None
+
+
+async def test_register_endpoint_sends_verification_mail(
+	client: TestClient,
+	created_user_ids: list[uuid.UUID],
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	"""結合9: register経由で確認メールの予約・実行とSMTP送信が各1回行われる。"""
+	suffix = unique_suffix()
+	username = f"it{suffix}"
+	email = f"{username}@example.com"
+	send_mail_mock = AsyncMock(wraps=mail_service.send_email_verification_mail)
+	smtp_send_mock = AsyncMock()
+	monkeypatch.setattr(email_verification_service.mail_service, "send_email_verification_mail", send_mail_mock)
+	monkeypatch.setattr(mail_service.aiosmtplib, "send", smtp_send_mock)
+
+	response = client.post(
+		"/api/auth/register", json=register_payload(username, email), headers={"Origin": ALLOWED_ORIGIN}
+	)
+
+	assert response.status_code == 201, response.text
+	created_user_ids.append(uuid.UUID(response.json()["id"]))
+	send_mail_mock.assert_awaited_once()
+	smtp_send_mock.assert_awaited_once()
+	mail_call = send_mail_mock.await_args
+	smtp_call = smtp_send_mock.await_args
+	assert mail_call is not None
+	assert smtp_call is not None
+	assert mail_call.args[0] == email
+	assert mail_call.args[1]
+	assert mail_call.args[2] == get_backend_settings().email_verify_ttl_seconds // 3600
+	assert smtp_call.args[0]["To"] == email
 
 
 async def test_register_endpoint_invalid_origin_creates_no_row(client: TestClient, db_session: AsyncSession) -> None:
@@ -299,11 +333,7 @@ async def test_login_endpoint_email_not_verified_rejected(
 	assert response.json()["error"]["code"] == "EMAIL_NOT_VERIFIED"
 
 	rows = await login_history_repository.list_by_user_id(db_session, user_id, limit=10)
-	# 設計書（02_post_auth_login.md §11）はfailure_reasonを小文字snake_case
-	# （例: email_not_verified）と記載するが、実装（auth_service._LOGIN_FAILURE_EMAIL_NOT_VERIFIED、
-	# 既存の test_auth_service.py も同様）はエラーコードと同じ大文字を格納する。ドキュメント記載の
-	# 乖離としてIssue #444を起票済み。ここでは実装の現状値を検証する。
-	assert any(row.success is False and row.failure_reason == "EMAIL_NOT_VERIFIED" for row in rows)
+	assert any(row.success is False and row.failure_reason == "email_not_verified" for row in rows)
 
 
 async def test_login_endpoint_user_inactive_rejected(
@@ -320,6 +350,9 @@ async def test_login_endpoint_user_inactive_rejected(
 
 	assert response.status_code == 403
 	assert response.json()["error"]["code"] == "USER_INACTIVE"
+
+	rows = await login_history_repository.list_by_user_id(db_session, uuid.UUID(user["id"]), limit=10)
+	assert any(row.success is False and row.failure_reason == "user_inactive" for row in rows)
 
 
 async def test_login_endpoint_invalid_origin_rejected(
@@ -495,17 +528,10 @@ async def test_me_endpoint_inactive_user_returns_403(
 	assert response.json()["error"]["code"] == "USER_INACTIVE"
 
 
-async def test_me_endpoint_session_expired_returns_unauthenticated(
+async def test_me_endpoint_session_expired_returns_session_expired(
 	client: TestClient, created_user_ids: list[uuid.UUID], db_session: AsyncSession, redis_conn: Redis
 ) -> None:
-	"""結合（session固有の異常系）: Redis上のsessionキーが失効済みだと401となる。
-
-	設計書（04_get_auth_me.md §3・§12 No.2/7）は`SESSION_EXPIRED`を期待するが、実装
-	（`SessionAuthStrategy.authenticate`・`core/deps.get_current_user`）はCookie無しの場合と
-	区別せず`UNAUTHENTICATED`に丸めており、`SessionExpiredError`はどこからも送出されない
-	（設計と実装の乖離としてIssue #443を起票済み）。本テストは現状の実装が
-	認証エラーとして安全側に倒れていることを確認する。
-	"""
+	"""結合（session固有の異常系）: CookieありでRedisのsessionが失効済みだとSESSION_EXPIREDとなる。"""
 	settings = get_backend_settings()
 	if settings.auth_mode != "session":
 		pytest.skip("sessionモード固有の検証(jwtはtoken_expiredで別途検証される設計)")
@@ -520,7 +546,7 @@ async def test_me_endpoint_session_expired_returns_unauthenticated(
 	response = client.get("/api/auth/me")
 
 	assert response.status_code == 401
-	assert response.json()["error"]["code"] == "UNAUTHENTICATED"
+	assert response.json()["error"]["code"] == "SESSION_EXPIRED"
 
 
 async def test_me_endpoint_redis_failure_returns_503(

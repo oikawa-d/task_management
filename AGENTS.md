@@ -62,13 +62,15 @@ CIでは、`api/`・`batch/`それぞれに対して`ruff check`、`ruff format 
 
 バックエンドはpytest、フロントエンドはVitestを使用する予定です。テスト名は`test_login_endpoint_email_not_verified`や`KanbanBoard refetches board on 409 TASK_CONFLICT`のように、対象と期待動作が分かる名前にします。エンドポイントの動作やエラー処理を変更した場合は、設計書のテスト表も更新してください。
 
+APIエンドポイントの結合テストは`api/tests/integration/`に配置します。service層の実DB結合テストは`api/tests/service/test_z_*_integration.py`に配置し、router/serviceの単体テストはそれぞれの層別ディレクトリに配置します。`test_z_`接頭辞は、DB状態や実行順に依存するservice結合テストの実行順を制御する必要がある場合に限って使用します。既存テストは現行の責務を維持し、一括移動・分割は行わず、今後の修正・追加時にこの方針へ段階的に合わせます。
+
 ## コミット・プルリクエスト
 
 既存の`<type>: <description>`形式に従います。例：`docs: 要件・基本・詳細設計の整合性を修正`、`fix: ...`、`ci: ...`。コミットは目的ごとに分けてください。プルリクエストには変更対象の文書、関連Issue、他文書への影響を記載し、図やUIを変更した場合は描画結果のスクリーンショットを添付してください。
 
 変更をコミットまたはPRにする前に、[共通レビュー方針](./.agents/review-policy.md)に従ったレビューを必ず実施し、結果を作業報告またはPR本文に記載してください。
 
-PR作成後は作成した時点で作業完了とせず、PR作成もしくはコード修正を行ったエージェント以外が[共通レビュー方針](./.agents/review-policy.md)に沿ったレビューを行い「受入可」のコメントを投稿したうえで`reviewed`ラベルを付与してください。`reviewed`ラベルが付与済みかつCIの全チェックが成功したPRは、PR作成もしくはコード修正を行ったエージェント以外が都度のユーザー承認を得ることなくsquash mergeを実施してよく、Issue closeも同様です。PR作成もしくはコード修正を行ったエージェント本人は、自身が作成または修正したPRへの`reviewed`ラベル付与・merge・Issue closeを行ってはいけません。ここでの判定はGitHubアカウントではなく、PR作成またはコード修正を行ったエージェントかどうかで行います。同一GitHubアカウントを使用する別エージェントがレビューする場合、GitHubの承認レビューではなく`gh pr comment`で「受入可」を記録し、REST APIでラベルを付与してください。`gh pr merge`・`gh issue close`は`.agents/hooks/block-github-destructive-actions.sh`（Claude Codeは`.claude/hooks/`、Codexは`.codex/hooks/`のラッパー経由で呼び出します）によりブロックされます（判定条件は[共通レビュー方針](./.agents/review-policy.md)を参照）。hookを変更した場合は`bash .agents/hooks/block-github-destructive-actions.test.sh`と`bash .agents/hooks/hook-config.test.sh`を実行してください。マージ後はリモート・ローカルの作業ブランチを削除します。CIが失敗した場合はmergeせず、原因を修正してから再度確認してください。
+PR作成後は作成した時点で作業完了とせず、PR作成もしくはコード修正を行ったエージェント以外が[共通レビュー方針](./.agents/review-policy.md)に沿ったレビューを行い「受入可」のコメントを投稿したうえで`approve`ラベルを付与してください。`approve`ラベルが付与済みかつCIの全チェックが成功したPRは、PR作成もしくはコード修正を行ったエージェント以外が都度のユーザー承認を得ることなくsquash mergeを実施してよく、Issue closeも同様です。PR作成もしくはコード修正を行ったエージェント本人は、自身が作成または修正したPRへの`approve`ラベル付与・merge・Issue closeを行ってはいけません。ここでの判定はGitHubアカウントではなく、PR作成またはコード修正を行ったエージェントかどうかで行います。同一GitHubアカウントを使用する別エージェントがレビューする場合、GitHubの承認レビューではなく`gh pr comment`で「受入可」を記録し、REST APIでラベルを付与してください。`gh pr merge`・`gh issue close`は`.agents/hooks/block-github-destructive-actions.sh`（Claude Codeは`.claude/hooks/`、Codexは`.codex/hooks/`のラッパー経由で呼び出します）によりブロックされます（判定条件は[共通レビュー方針](./.agents/review-policy.md)を参照）。hookを変更した場合は`bash .agents/hooks/block-github-destructive-actions.test.sh`と`bash .agents/hooks/hook-config.test.sh`を実行してください。マージ後はリモート・ローカルの作業ブランチを削除します。CIが失敗した場合はmergeせず、原因を修正してから再度確認してください。
 
 ## セキュリティ・設定
 
