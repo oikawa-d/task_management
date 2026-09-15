@@ -310,7 +310,17 @@ async def test_notification_lifecycle_uses_database_contract(db_session: AsyncSe
 	assert page.unread_count == 2
 	assert all(item.id != other_id for item in page.items)
 	first_item = next(item for item in page.items if item.id == first_id)
-	assert first_item.due_at == now.astimezone(ZoneInfo("Asia/Tokyo"))
+	# aware datetime同士の`==`は瞬間比較のためUTC/JST表現の差異を検出できない(常にTrueになる)。
+	# オフセットと壁時計時刻を直接検証し、変換が行われなかった場合(UTCのまま返る場合)に
+	# 確実に失敗するようにする。
+	assert first_item.due_at.utcoffset() == timedelta(hours=9)
+	assert (
+		first_item.due_at.year,
+		first_item.due_at.month,
+		first_item.due_at.day,
+		first_item.due_at.hour,
+		first_item.due_at.minute,
+	) == (2026, 9, 4, 10, 0)
 
 	read_response = await notification_service.mark_notification_read(db_session, first_id, current_user)
 	assert read_response.id == first_id
@@ -326,6 +336,30 @@ async def test_notification_lifecycle_uses_database_contract(db_session: AsyncSe
 	empty_read_all_response = await notification_service.mark_all_notifications_read(db_session, current_user)
 	assert empty_read_all_response.updated_count == 0
 	assert empty_read_all_response.unread_count == 0
+
+
+async def test_notification_due_at_rolls_over_to_next_day_in_app_timezone(db_session: AsyncSession) -> None:
+	user_id = await user_repository.create(
+		db_session, "notification-date-boundary", "notification-date-boundary@example.com", "hash"
+	)
+	# UTC 2026-09-04 15:30 はJST(UTC+9)では日付が繰り上がり 2026-09-05 00:30 になる境界値。
+	due_at = datetime(2026, 9, 4, 15, 30, tzinfo=timezone.utc)
+	notification_id = await _insert_notification(db_session, user_id, "date-boundary", due_at, due_at=due_at)
+	current_user = CurrentUser(
+		id=user_id, username="notification-date-boundary", role="member", is_active=True, email_verified_at=None
+	)
+
+	page = await notification_service.list_notifications(db_session, current_user, 1, 10, False)
+
+	item = next(item for item in page.items if item.id == notification_id)
+	assert item.due_at.utcoffset() == timedelta(hours=9)
+	assert (item.due_at.year, item.due_at.month, item.due_at.day, item.due_at.hour, item.due_at.minute) == (
+		2026,
+		9,
+		5,
+		0,
+		30,
+	)
 
 
 async def test_read_all_is_consistent_with_concurrent_individual_read(db_session: AsyncSession) -> None:
