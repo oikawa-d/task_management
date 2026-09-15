@@ -237,6 +237,8 @@ sessionモードの認証解決（`GET session:{sid}` → `EXPIRE`）以外の�
 | 6 | 結合 | 未認証 | Cookie/ヘッダなし | `401 UNAUTHENTICATED` | `test_users_me_endpoint_unauthenticated` |
 | 7 | 結合 | 無効化ユーザー | `is_active=false`のユーザーでログイン済みCookie | `403 USER_INACTIVE` | `test_users_me_endpoint_inactive_user` |
 | 8 | 結合 | OAuth新規ユーザー | プロフィール未補完 | `profile_completed=false` | `test_users_me_endpoint_oauth_incomplete_profile` |
+| 9 | 結合 | PostgreSQL接続障害 | 認証済み、`fn_get_user`が接続例外 | `503 SERVICE_UNAVAILABLE` | `test_users_me_endpoint_db_failure_returns_service_unavailable` |
+| 10 | 結合 | session方式のRedis接続障害 | 認証済みCookie、session取得が接続例外 | `503 SERVICE_UNAVAILABLE` | `test_users_me_endpoint_session_redis_failure_returns_service_unavailable` |
 
 `AUTH_MODE=session`/`jwt`の両方で4・5を実施する。
 

@@ -236,7 +236,7 @@ sessionモードの認証解決（`GET session:{sid}` → `EXPIRE`）以外の�
 | 6 | 結合 | 正常系（jwt） | 有効なaccess token | `200` | `test_users_me_login_history_endpoint_jwt_success` |
 | 7 | 結合 | 未認証 | Cookie/ヘッダなし | `401 UNAUTHENTICATED` | `test_users_me_login_history_endpoint_unauthenticated` |
 | 8 | 結合 | 無効化ユーザー | `is_active=false` | `403 USER_INACTIVE` | `test_users_me_login_history_endpoint_inactive_user` |
-| 9 | 結合 | 他ユーザーの履歴が混入しないこと | 2ユーザー分の履歴が存在 | 自分の履歴のみ返る | `test_users_me_login_history_does_not_leak_other_users` |
+| 9 | 結合 | 他ユーザーの履歴が混入しないこと | 2ユーザーを作成し、一方だけログイン | 自分の履歴のみ返る | `test_get_users_me_login_history_endpoint_is_scoped` |
 
 `AUTH_MODE=session`/`jwt`の両方で5・6を実施する。
 

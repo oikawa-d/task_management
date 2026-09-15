@@ -109,7 +109,8 @@ async def test_update_profile_partial_update(monkeypatch):
 	monkeypatch.setattr(oauth_account_repository, "list_by_user_id", AsyncMock(return_value=[]))
 
 	payload = UserProfileUpdateRequest(last_name="鈴木")
-	response = await user_service.update_profile(_current_user(user_id), payload, db=object())
+	db = AsyncMock()
+	response = await user_service.update_profile(_current_user(user_id), payload, db=db)
 
 	assert response.last_name == "鈴木"
 	assert response.first_name == existing.first_name
@@ -117,6 +118,7 @@ async def test_update_profile_partial_update(monkeypatch):
 	_, kwargs = update_mock.call_args
 	assert kwargs["last_name"] == "鈴木"
 	assert kwargs["first_name"] == existing.first_name
+	db.commit.assert_awaited_once_with()
 
 
 async def test_update_profile_null_rejected(monkeypatch):
@@ -151,7 +153,7 @@ async def test_update_profile_completes_profile(monkeypatch):
 	monkeypatch.setattr(oauth_account_repository, "list_by_user_id", AsyncMock(return_value=[]))
 
 	payload = UserProfileUpdateRequest(birth_date=date(1995, 4, 1))
-	response = await user_service.update_profile(_current_user(user_id), payload, db=object())
+	response = await user_service.update_profile(_current_user(user_id), payload, db=AsyncMock())
 
 	assert response.profile_completed is True
 
@@ -164,7 +166,7 @@ async def test_update_profile_still_incomplete(monkeypatch):
 	monkeypatch.setattr(oauth_account_repository, "list_by_user_id", AsyncMock(return_value=[]))
 
 	payload = UserProfileUpdateRequest(birth_date=date(1995, 4, 1))
-	response = await user_service.update_profile(_current_user(user_id), payload, db=object())
+	response = await user_service.update_profile(_current_user(user_id), payload, db=AsyncMock())
 
 	assert response.profile_completed is False
 
@@ -176,7 +178,9 @@ async def test_update_profile_updates_only_current_user(monkeypatch):
 	monkeypatch.setattr(user_repository, "update_profile", update_mock)
 	monkeypatch.setattr(oauth_account_repository, "list_by_user_id", AsyncMock(return_value=[]))
 
-	await user_service.update_profile(_current_user(user_id), UserProfileUpdateRequest(last_name="鈴木"), db=object())
+	await user_service.update_profile(
+		_current_user(user_id), UserProfileUpdateRequest(last_name="鈴木"), db=AsyncMock()
+	)
 
 	args, _ = update_mock.call_args
 	assert args[1] == user_id
