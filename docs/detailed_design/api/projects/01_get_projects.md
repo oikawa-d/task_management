@@ -120,11 +120,11 @@ sequenceDiagram
     R->>D: 認証（Cookie or Bearer）
     D-->>R: CurrentUser
     R->>S: list_projects(user, page, per_page, include_inactive)
-    S->>RP: fn_list_projects(user.id, include_inactive, per_page, offset)
+    S->>RP: list_for_user(user.id, include_inactive, per_page, offset)
     RP->>PG: "SELECT * FROM fn_list_projects(:user_id, :include_inactive, :limit, :offset)"
     PG-->>RP: "project行 + member_count + task_count_todo/in_progress/done + total_count（admin/member判定・無効化条件・集計・ページングはFN内部で適用済み）"
     RP-->>S: Project一覧（集計値込み）
-    S-->>R: Page[ProjectSummary]
+    S-->>R: ProjectListResponse
     R-->>FE: 200 {items, meta}
     alt DB/Redis 不通
         RP-->>S: OperationalError / RedisError
@@ -142,7 +142,7 @@ flowchart TB
     B -->|"OK"| C["deps.get_current_user"]
     C -->|"認証情報なし/不正"| C1["401 UNAUTHENTICATED / SESSION_EXPIRED / TOKEN_EXPIRED"]
     C -->|"ユーザーis_active=false"| C2["403 USER_INACTIVE"]
-    C -->|"OK"| D["fn_list_projects(user_id, include_inactive, limit, offset)を1回呼び出し\n（admin/member判定・無効化条件・member_count/task_count_*集計・ページングはFN内部で処理）"]
+    C -->|"OK"| D["list_for_user(user_id, include_inactive, limit, offset)を呼び出し\n（admin/member判定・無効化条件・member_count/task_count_*集計・ページングはFN内部で処理）"]
     D --> H["ProjectSummaryへ写像・is_owner算出\n（member_count/task_countsはFN戻り値をそのまま使用）"]
     H --> I["200 {items, meta}"]
     D -.->|"DB接続不能"| J["503 SERVICE_UNAVAILABLE"]
@@ -154,7 +154,7 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def list_projects(page: int = 1, per_page: int = 20, include_inactive: bool = False, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> ProjectListResponse` |
+| シグネチャ | `async def list_projects(page: int = Query(1, ge=1), per_page: int = Query(20, ge=1, le=100), include_inactive: bool = False, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db_session)) -> ProjectListResponse` |
 | 引数 | `page`: クエリ、1以上 / `per_page`: クエリ、1〜100 / `include_inactive`: クエリ、既定`False` / `user`: 認証済みユーザー / `db`: DBセッション |
 | 戻り値 | `ProjectListResponse`（`items`, `meta`） |
 | 送出例外 | なし（サービス層の例外を `AppError` としてそのまま伝播、例外ハンドラが変換） |
@@ -165,33 +165,33 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def list_projects(user: CurrentUser, page: int, per_page: int, include_inactive: bool, db: AsyncSession) -> Page[ProjectSummary]` |
+| シグネチャ | `async def list_projects(user: CurrentUser, page: int, per_page: int, include_inactive: bool, db: AsyncSession) -> ProjectListResponse` |
 | 引数 | `user`: 現在ユーザー / `page`, `per_page`: ページング指定 / `include_inactive`: 無効化プロジェクトを含めるか / `db`: DBセッション |
-| 戻り値 | `Page[ProjectSummary]`（`items: list[ProjectSummary]`, `total: int`） |
+| 戻り値 | `ProjectListResponse`（`items: list[ProjectSummaryResponse]`, `meta: ProjectListMeta`） |
 | 送出例外 | `ServiceUnavailableError`（PostgreSQL接続不能時）→503 |
-| 処理内容 | `SELECT fn_list_projects(:user_id, :include_inactive, :limit, :offset)` を1回呼び出し、戻り値（`projects`行 + `member_count` + `task_count_todo`/`task_count_in_progress`/`task_count_done` + `total_count`）を`ProjectSummary`へ写像する。権限スコープ、無効化条件、メンバー数・タスク数集計、ページングはすべてFN内部で処理する |
+| 処理内容 | `project_repository.list_for_user` を呼び出し、戻り値（`Project` + `member_count` + `task_count_todo`/`task_count_in_progress`/`task_count_done` + `total_count`）を`ProjectSummaryResponse`へ写像する。権限スコープ、無効化条件、メンバー数・タスク数集計、ページングはFN内部で処理する |
 | 副作用 | なし（読み取りのみ） |
 
-### 6.3 `repository/project_repository.py :: fn_list_projects`
+### 6.3 `repository/project_repository.py :: list_for_user`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def fn_list_projects(db: AsyncSession, user_id: UUID, page: int, per_page: int, include_inactive: bool) -> list[ProjectSummaryRow]` |
-| 引数 | `user_id`: 所属確認対象 / `page`, `per_page`: ページング / `include_inactive`: 自分がオーナーの無効化分を含めるか |
-| 戻り値 | `fn_list_projects` の結果（`project`列 + `member_count`/`task_count_todo`/`task_count_in_progress`/`task_count_done`/`total_count`）を写像した行のリスト |
+| シグネチャ | `async def list_for_user(db: AsyncSession, user_id: UUID, include_inactive: bool, limit: int, offset: int) -> list[ProjectListItem]` |
+| 引数 | `user_id`: 所属確認対象 / `include_inactive`: 無効化プロジェクトを含めるか / `limit`, `offset`: ページング |
+| 戻り値 | `fn_list_projects` の結果（`Project` + `member_count`/`task_count_todo`/`task_count_in_progress`/`task_count_done`/`total_count`）を写像した`ProjectListItem`のリスト |
 | 送出例外 | `OperationalError`（DB不通） |
-| 処理内容 | `SELECT * FROM fn_list_projects(:user_id, :include_inactive, :limit, :offset)` のみを発行する。所属/admin・無効化条件、並び順、メンバー数・タスク数集計、ページングはFN内部で処理する |
+| 処理内容 | `SELECT (project).*, member_count, task_count_todo, task_count_in_progress, task_count_done, total_count FROM fn_list_projects(:user_id, :include_inactive, :limit, :offset)` を発行し、owner_idに対応する`users`を1回の`IN`検索で補完する。所属/admin・無効化条件、並び順、メンバー数・タスク数集計、ページングはFN内部で処理する |
 | 副作用 | なし |
 
 ### 6.4 service層のDTO写像
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `ProjectSummary`へのFN結果写像 |
-| 引数 | `fn_list_projects`が返した行（`project`列 + 集計列） |
-| 戻り値 | `ProjectSummary`（`is_owner`は`owner_id == current_user.id`から算出。`member_count`は`member_count`列をそのまま設定、`task_counts`は`{"todo": task_count_todo, "in_progress": task_count_in_progress, "done": task_count_done}`として組み立てる。集計対象statusにも0件はキーとして必ず含める） |
+| シグネチャ | `ProjectListItem`から`ProjectSummaryResponse`への写像 |
+| 引数 | `list_for_user`が返した`ProjectListItem`（`Project` + 集計列） |
+| 戻り値 | `ProjectSummaryResponse`（`is_owner`は`owner_id == current_user.id`から算出。`member_count`は`member_count`列をそのまま設定、`task_counts`は`{"todo": task_count_todo, "in_progress": task_count_in_progress, "done": task_count_done}`として組み立てる。集計対象statusにも0件はキーとして必ず含める） |
 | 送出例外 | なし |
-| 処理内容 | FNが返した行を`ProjectSummary`へ写像し、`is_owner`を算出する。`member_count`/`task_counts`はFNが返す集計列をそのまま使用し、repository・service層で追加のSELECTは発行しない |
+| 処理内容 | repositoryがownerを一括設定した`ProjectListItem`を`ProjectSummaryResponse`へ写像し、`is_owner`を算出する。`member_count`/`task_counts`はFNが返す集計列をそのまま使用する |
 | 副作用 | なし |
 
 ## 7. 関数相関図
@@ -199,8 +199,8 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["projects_router.list_projects"] --> S["project_service.list_projects"]
-    S --> RP["project_repository.fn_list_projects"]
-    RP --> M["ProjectSummary DTO（member_count/task_countsはFN戻り値をそのまま写像）"]
+    S --> RP["project_repository.list_for_user"]
+    RP --> M["ProjectSummaryResponse DTO（member_count/task_countsはFN戻り値をそのまま写像）"]
 ```
 
 ## 8. データ遷移図
@@ -218,7 +218,7 @@ flowchart LR
     S["project_service.list_projects"] -->|"fn_list_projects呼び出し"| T1
     T1 -.->|"FN内部で所属判定・件数集計に参照"| T2
     T1 -.->|"FN内部でstatus別件数集計に参照"| T3
-    S -->|"SELECT（owner表示名、N+1回避）"| T4
+    S -->|"repositoryがownerをIN検索（N+1回避）"| T4
 ```
 
 ## 9. SP/FNデータアクセス一覧
@@ -287,8 +287,9 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 12 | 結合 | adminがinclude_inactive=trueを指定すると全ユーザーの無効化プロジェクトが見える | 他人がオーナーの`is_active=false`プロジェクトを用意 | `items`に含まれる | `test_list_projects_admin_sees_all_inactive` |
 | 13 | 結合（実DB・実SP） | member_countが所属人数と一致する | プロジェクトにowner含め3名を所属させる | `ProjectSummary.member_count == 3` | `test_list_projects_member_count_matches_membership` |
 | 14 | 結合（実DB・実SP） | 無効化タスク（is_active=false）はtask_countsに含まれない | `todo`のタスクを2件作成し1件を`is_active=false`にする | `task_counts.todo == 1` | `test_list_projects_task_counts_exclude_inactive_tasks` |
+| 15 | 結合（router・認証依存性） | owner/memberは所属プロジェクトを取得し、未所属・未認証は取得できない | 実PostgreSQL、JWTアクセストークンでowner/member/未所属を切り替える | owner/memberは200、未所属は空一覧、未認証・不正Bearerは401 | `test_project_crud_router_enforces_authz_and_hides_non_member` |
 
-`AUTH_MODE=session` / `jwt` の両方で No.6（401判定経路の違い：`SESSION_EXPIRED` と `TOKEN_EXPIRED`）をパラメータ化して実施する。Google連携そのものは対象外（認証確立後の一覧取得のみを検証するため）。
+既存の認証方式別テストに加え、No.15ではJWTの実認証依存性（`get_auth_strategy` → `get_current_user`）を通して認可境界を検証する。sessionのCSRF境界は認証共通テストで確認し、Google連携そのものは対象外とする。
 
 ## 13. 不明点・要検討事項
 

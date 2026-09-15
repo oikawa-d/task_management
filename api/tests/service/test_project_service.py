@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from app.core.exceptions import ValidationError
 from app.models.project import Project
 from app.models.user import User
 from app.repository import project_repository, user_repository
@@ -44,7 +45,7 @@ async def test_list_projects_maps_repository_counts(monkeypatch: pytest.MonkeyPa
 	response = await project_service.list_projects(_current_user(user), 1, 20, False, AsyncMock())
 
 	assert response.items[0].task_counts.model_dump() == {"todo": 3, "in_progress": 4, "done": 5}
-	assert response.meta.total == 1
+	assert response.meta.total == 6
 	list_for_user.assert_awaited_once()
 
 
@@ -83,6 +84,25 @@ async def test_update_project_passes_partial_values(monkeypatch: pytest.MonkeyPa
 
 	assert update.await_args.args == (db, project.id, project.name, "new", project.start_at, project.end_at)
 	set_active.assert_awaited_once_with(db, project.id, False)
+
+
+async def test_update_project_rejects_period_before_database_update(monkeypatch: pytest.MonkeyPatch) -> None:
+	user = _user()
+	project = _project(user)
+	project.start_at = datetime(2026, 9, 10, tzinfo=timezone.utc)
+	project.end_at = datetime(2026, 9, 20, tzinfo=timezone.utc)
+	update = AsyncMock()
+	monkeypatch.setattr(project_service.project_repository, "update", update)
+
+	with pytest.raises(ValidationError):
+		await project_service.update_project(
+			AsyncMock(),
+			project,
+			ProjectUpdateRequest(start_at=datetime(2026, 9, 21, tzinfo=timezone.utc)),
+			_current_user(user),
+		)
+
+	update.assert_not_awaited()
 
 
 async def test_project_crud_lifecycle_uses_database_contract(db_session: AsyncSession) -> None:
