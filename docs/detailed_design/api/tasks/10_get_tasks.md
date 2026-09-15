@@ -143,7 +143,7 @@ sequenceDiagram
             R-->>FE: "404 NOT_FOUND"
         end
     end
-    S->>TR: "count(user, filters) / list(user, filters)"
+    S->>TR: "count(user, filters) / list(user, filters, unassigned)"
     TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>TR: "tasks行 + COUNT(task_comments)相関サブクエリ"
     TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
@@ -193,7 +193,7 @@ flowchart TB
 | 引数 | 6.1と対応 |
 | 戻り値 | `Page[TaskSummary]`（`items`, `total`） |
 | 送出例外 | `NotFoundError`（`project_id_filter`がUUIDで非所属の場合） |
-| 処理内容 | `SELECT fn_list_tasks(:user_id, :project_id, :status, :include_inactive, :limit, :offset)` を1回呼び出し、認可範囲・フィルタ・関連情報を含むFN結果を`TaskSummary`へ写像する |
+| 処理内容 | `SELECT fn_list_tasks(:user_id, :project_id, :status, :include_inactive, :limit, :offset, :unassigned)` を1回呼び出し、認可範囲・フィルタ・関連情報を含むFN結果を`TaskSummary`へ写像する。UUID指定時は事前に所属確認し、非所属memberは404とする |
 | 副作用 | なし |
 
 ### 6.3 `repository/task_repository.py :: list`
@@ -204,7 +204,7 @@ flowchart TB
 | 引数 | 6.2と対応 |
 | 戻り値 | `assignee` / `created_by` / `project` をEager Loadした `Task` のリスト |
 | 送出例外 | `OperationalError`（503へ変換） |
-| 処理内容 | `SELECT fn_list_tasks(:user_id, :project_id, :status, :include_inactive, :limit, :offset)` を1回実行する。admin/所属/未所属作成者のスコープ、フィルタ、ソート、コメント件数・関連情報の集約はFN内部で処理する |
+| 処理内容 | `SELECT fn_list_tasks(:user_id, :project_id, :status, :include_inactive, :limit, :offset, :unassigned)` を1回実行する。admin/所属/未所属作成者のスコープ、未所属絞り込み、フィルタ、ソート、コメント件数・関連情報の集約はFN内部で処理する |
 | 副作用 | なし |
 
 ## 7. 関数相関図
@@ -247,7 +247,7 @@ flowchart LR
 
 | 種別 | 契約 | 説明 |
 |------|------|------|
-| fn_list_tasks | `fn_list_tasks(p_user_id, p_project_id, p_status, p_include_inactive, p_limit, p_offset)` | fn_list_tasksを呼び出し、結果をレスポンスへ写像する |
+| fn_list_tasks | `fn_list_tasks(p_user_id, p_project_id, p_status, p_include_inactive, p_limit, p_offset, p_unassigned)` | fn_list_tasksを呼び出し、結果をレスポンスへ写像する。`p_unassigned=true`は未所属タスクだけに絞り込む |
 
 repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
@@ -292,21 +292,23 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 
 | No | 区分 | ケース | 前提 | 期待結果 | 実在するpytest関数名 / 状態 |
 |----|------|--------|------|----------|-----------------|
-| 1 | APIルーター | project_id省略時のデフォルト範囲 | user=member、`per_page=20` | `project_id_filter=None`でサービス呼び出し | `test_list_tasks_forwards_default_query` |
-| 2 | APIルーター | project_id指定・非所属 | サービスが`NotFoundError`を送出 | 404 `NOT_FOUND` | `test_list_tasks_rejects_non_member_project` |
-| 3 | APIルーター | project_id="null"の正規化 | クエリ文字列`"null"` | `project_id_filter="unassigned"`としてサービス層へ渡る | `test_list_tasks_normalizes_null_project_filter` |
-| 4 | APIルーター | 不正なproject_id文字列 | `"not-a-uuid"` | 422 `VALIDATION_ERROR`、サービス未呼び出し | `test_list_tasks_rejects_invalid_project_id` |
-| 5 | 未実装 | memberは所属プロジェクトの全タスクを横断取得 | API結合テストなし | 未実装 | —（未実装） |
-| 6 | DB関数 | memberは自分の未所属タスクを参照できる | `fn_list_tasks`を実DBで実行 | 作成者の結果に含まれる | `test_fn_list_tasks_unassigned_visible_only_to_creator`（未所属可視範囲） |
-| 7 | DB関数 | memberは他人の未所属タスクを見えない | `fn_list_tasks`を実DBで実行 | 他人の結果に含まれない | `test_fn_list_tasks_unassigned_visible_only_to_creator`（未所属可視範囲） |
-| 8 | APIルーター | project_id="null"指定で未所属のみ絞込 | クエリ解析とサービス委譲を検証 | `project_id_filter="unassigned"`としてサービス層へ渡る | `test_list_tasks_normalizes_null_project_filter`（APIレベル） |
-| 9 | 未実装 | project_id=UUID指定で単一プロジェクトに絞込 | API結合テストなし | 未実装 | —（未実装） |
-| 10 | DB関数（実DB・実FN） | adminは全ユーザーの未所属タスクを含め全件 | `fn_list_tasks`を実DBで実行 | 複数ユーザーの未所属タスクを全件含む | `test_fn_list_tasks_admin_sees_all_unassigned_tasks` |
-| 11 | 未実装 | 既定はis_active=falseを除外 | API結合テストなし | 未実装 | —（未実装） |
-| 12 | 未実装 | include_inactive指定 | API結合テストなし | 未実装 | —（未実装） |
+| 1 | 結合（実DB） | project_id省略時のデフォルト範囲 | 実DB、`scenario`フィクスチャでmemberの所属プロジェクト1件・共有プロジェクト1件・自分の未所属タスク1件・他人の未所属タスク1件を用意 | 200、`project_id`省略時に所属プロジェクト分＋自分の未所属タスクが返り、他人の未所属タスクは含まれない | `test_list_tasks_member_scope_includes_shared_and_own_unassigned_only` |
+| 2 | 結合（実DB） | project_id指定・非所属 | 実DB、`scenario.private_project_id`（非所属・非admin）を`project_id`に指定 | 404 `NOT_FOUND` | `test_list_tasks_project_id_filter_scopes_to_unassigned_member_and_non_member` |
+| 3 | 結合（実DB） | project_id="null"の正規化 | 実DB、クエリ文字列`project_id=null` | 200、自分の未所属タスクのみに絞り込まれる（正規化後の絞込結果で検証） | `test_list_tasks_project_id_filter_scopes_to_unassigned_member_and_non_member` |
+| 4 | 結合（実DB・実SP） | 不正なproject_id文字列 | `"not-a-uuid"` / `"unassigned"` | `ValidationError`（422） | `test_list_tasks_rejects_invalid_project_filter` |
+| 5 | 結合 | memberは所属プロジェクトの全タスクを横断取得 | 実DB、`scenario`フィクスチャで所属プロジェクト2件（`member_project_id`・`shared_project_id`）に各1タスク | 200、所属範囲のタスクが返る | `test_list_tasks_member_scope_includes_shared_and_own_unassigned_only` |
+| 6 | 結合 | memberは自分の未所属タスクも含む | 実DB、`project_id=NULL`の自作タスク1件 | 200、所属プロジェクト分＋1件 | `test_list_tasks_member_scope_includes_shared_and_own_unassigned_only` |
+| 7 | 結合 | memberは他人の未所属タスクを見えない | 実DB、他ユーザー作成の`project_id=NULL`タスク | 200、含まれない | `test_list_tasks_member_scope_includes_shared_and_own_unassigned_only` |
+| 8 | 結合 | project_id="null"指定で未所属のみ絞込 | 実DB、所属プロジェクトのタスクと自作未所属タスク | 200、未所属タスクのみ返る | `test_list_tasks_project_id_filter_scopes_to_unassigned_member_and_non_member` |
+| 9 | 結合 | project_id=UUID指定で単一プロジェクトに絞込 | 実DB、`scenario.member_project_id`（所属先、`shared_project_id`にも所属）を`project_id`に指定 | 200、指定プロジェクトの`member_project_task_id`のみが返り、`shared_project_task_id`・`own_unassigned_task_id`は含まれない | `test_list_tasks_project_id_filter_scopes_to_unassigned_member_and_non_member` |
+| 10 | 結合 | adminは全ユーザーの未所属タスクを含め全件 | 実DB、複数ユーザーの未所属タスク | 200、全件に含まれる | 未実装（issue #458）。DB関数レベルでは`api/tests/test_db_functions_project_task.py::test_fn_list_tasks_admin_sees_all_unassigned_tasks`がカバー済み |
+| 11 | 結合 | 既定はis_active=falseを除外 | 実DB、`is_active=false`のタスクを含む | 200、含まれない | `test_list_tasks_excludes_inactive_by_default_and_can_include_it` |
+| 12 | 結合 | include_inactive指定 | 実DB、`?include_inactive=true` | 200、`is_active=false`のタスクも含まれる | `test_list_tasks_excludes_inactive_by_default_and_can_include_it` |
 | 13 | APIルーター | statusフィルタ | `?status=done&per_page=20`、サービスをモック | `status="done"`でサービス呼び出し | `test_list_tasks_forwards_status_filter` |
 | 14 | APIルーター | ページング | `?page=2&per_page=5`、サービスをモック | `page=2`、`per_page=5`でサービス呼び出し | `test_list_tasks_forwards_pagination` |
-| 15 | 未実装 | AUTH_MODE両対応 | タスクAPI固有のパラメータ化なし | 共通認証依存へ委譲。タスクAPI固有の両モード検証は未実装 | —（未実装） |
+| 15 | パラメータ化 | AUTH_MODE両対応 | `AUTH_MODE=session` / `jwt` | 5・9・10を両モードで実行 | 未実装。現状の結合テストは実行時の`AUTH_MODE`設定値に追随するのみで、両モードを1テストでパラメータ化して実行する仕組みはない |
+
+実装済みの結合テストでは、上表の一覧境界に加えて、同一シナリオで作成・詳細取得・position更新・version競合（409）・論理削除・ボード再取得まで確認する（`test_task_crud_updates_position_and_rejects_stale_version`）。未確認の同時PATCH競合とページングの実DB検証は要検討とする。
 
 ## 13. 不明点・要検討事項
 
