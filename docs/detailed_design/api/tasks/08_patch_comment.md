@@ -113,7 +113,7 @@ sequenceDiagram
     else "検証OK"
         R->>R: "pydanticでbody長を検証"
         R->>D: "get_comment_for_member(comment_id)"
-        D->>TR: "get_comment_with_task(comment_id)"
+        D->>TR: "get_by_id(comment_id)"
         TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         alt "コメント不存在"
             D-->>R: "NotFoundError"
@@ -121,7 +121,7 @@ sequenceDiagram
         else "コメント・taskが存在する"
             D-->>R: "TaskComment"
             R->>S: "update_comment(task, comment, payload, current_user, db)"
-            S->>S: "require_task_access(task, current_user)"
+            S->>S: "require_task_access(task, current_user, db)"
             alt "論理削除・非所属・未所属taskの非作成者"
                 S-->>R: "NotFoundError"
                 R-->>FE: "404 NOT_FOUND"
@@ -131,20 +131,23 @@ sequenceDiagram
                     S-->>R: "ForbiddenError"
                     R-->>FE: "403 FORBIDDEN"
                 else "権限あり"
-                S->>TR: "update(comment_id, body)"
-                TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-                PG-->>TR: "更新完了"
-                TR-->>S: "None"
-                S->>TR: "get_by_id(comment_id)"
-                S->>PG: "db.commit()"
-                alt "DB/transaction failure"
-                    S->>PG: "db.rollback()"
-                    S-->>R: "DB exception"
-                    R-->>FE: "503 SERVICE_UNAVAILABLE"
-                else "commit success"
-                    S-->>R: "CommentResponse"
-                    R-->>FE: "200 {comment}"
-                end
+                    S->>TR: "update(comment_id, body)"
+                    TR->>PG: "CALL sp_update_task_comment(...)"
+                    PG-->>TR: "更新完了"
+                    TR-->>S: "None"
+                    S->>TR: "get_by_id(comment_id)"
+                    TR->>PG: "SELECT fn_get_comment_with_task(comment_id)"
+                    PG-->>TR: "更新済みcomment行"
+                    TR-->>S: "Comment"
+                    S->>PG: "db.commit()"
+                    alt "DB/transaction failure"
+                        S->>PG: "db.rollback()"
+                        S-->>R: "DB exception"
+                        R-->>FE: "503 SERVICE_UNAVAILABLE"
+                    else "commit success"
+                        S-->>R: "CommentResponse"
+                        R-->>FE: "200 {comment}"
+                    end
                 end
             end
         end
@@ -163,12 +166,14 @@ flowchart TB
     D -->|"No"| D1["401 / 403 USER_INACTIVE"]
     D -->|"Yes"| E{"comment_idが存在する?"}
     E -->|"No"| E1["404 NOT_FOUND"]
-    E -->|"Yes"| F{"adminまたは<br/>対象タスクのプロジェクトメンバー?"}
+    E -->|"Yes"| F{"taskアクセスが許可されている?"}
     F -->|"No"| F1["404 NOT_FOUND"]
     F -->|"Yes"| G{"投稿者本人またはadmin?"}
     G -->|"No"| G1["403 FORBIDDEN"]
     G -->|"Yes"| H["task_comments を UPDATE<br/>（body, updated_at=now()）"]
-    H --> I["200 応答"]
+    H --> I{"db.commit()"}
+    I -->|"成功"| J["200 応答"]
+    I -->|"例外"| K["db.rollback() / 503 SERVICE_UNAVAILABLE"]
 ```
 
 ## 6. 関数詳細
@@ -177,8 +182,8 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def update_comment(payload: CommentUpdateRequest, comment: Comment = Depends(get_comment_for_member), user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> CommentResponse` |
-| 引数 | `payload`：更新内容／`comment`：プロジェクト所属確認済みのコメント／`user`：現在ユーザー／`db`：DBセッション |
+| シグネチャ | `async def update_task_comment(payload: CommentUpdateRequest, comment: TaskComment = Depends(get_comment_for_member), user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db_session), _: None = Depends(verify_origin_if_session), __csrf: None = Depends(verify_csrf_if_session)) -> CommentResponse` |
+| 引数 | `payload`：更新内容／`comment`：コメント・task取得済みの`TaskComment`／`user`：現在ユーザー／`db`：DBセッション |
 | 戻り値 | `CommentResponse`（200） |
 | 送出例外 | なし（下位の `ForbiddenError` はハンドラで403に変換） |
 | 処理内容 | 1. `task_comment_service.update_comment(comment.task, comment, payload, user, db)`を呼ぶ 2. 結果を返す |
@@ -192,7 +197,7 @@ flowchart TB
 | 引数 | `comment_id`：パスパラメータ／`db`：DBセッション |
 | 戻り値 | `task`を設定済みの`TaskComment`（所属・投稿者権限の判定はサービス層で行う） |
 | 送出例外 | `NotFoundError`（コメント不存在・紐づくtask不存在） |
-| 処理内容 | `task_comment_repository.get_by_id`と`task_repository.get_by_id`でコメント・taskを取得する。task関係は既取得値として設定し、flushによる再永続化を発生させない |
+| 処理内容 | `task_comment_repository.get_by_id`でコメントと関連taskを取得する。task関係は既取得値として設定し、flushによる再永続化を発生させない |
 | 副作用 | なし |
 
 ### 6.3 `api/app/service/task_comment_service.py :: update_comment`
@@ -210,11 +215,11 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def get_comment_with_task(comment_id: UUID, db: AsyncSession) -> Comment \| None` |
+| シグネチャ | `async def get_by_id(db: AsyncSession, comment_id: UUID) -> TaskComment \| None` |
 | 引数 | `comment_id`：対象コメントID／`db`：DBセッション |
-| 戻り値 | `task`（`project_id` を含む）と `author` をロード済みの `Comment`、存在しなければ `None` |
+| 戻り値 | `task`（`project_id` を含む）と `author` をロード済みの `TaskComment`、存在しなければ `None` |
 | 送出例外 | なし |
-| 処理内容 | 1. `task_comments`を主クエリで1回取得 2. `FN結果の一括マッピング(Comment.task)` と `FN結果の一括マッピング(Comment.author)` の追加SELECTを各1回実行（最大3クエリ） |
+| 処理内容 | `SELECT * FROM fn_get_comment_with_task(:comment_id)`を`from_statement`で実行し、`task`と`author`を`selectinload`でロードする |
 | 副作用 | なし |
 
 ### 6.5 `api/app/repository/task_comment_repository.py :: update`
@@ -236,7 +241,8 @@ flowchart LR
     R --> D["deps.get_comment_for_member"]
     R --> S["task_comment_service.update_comment"]
     D --> TR1["task_comment_repository.get_by_id"]
-    D --> PR["project_repository.fn_is_project_member"]
+    S --> A["authorization_service.require_task_access"]
+    A --> PR["project_member_repository.exists"]
     S --> TR2["task_comment_repository.update<br/>（sp_update_task_comment）"]
     TR1 --> M["models.TaskComment"]
     TR2 --> M
@@ -317,6 +323,8 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 10 | 結合 | API境界で本人が編集し、レスポンスと一覧の本文が更新される | 実DB、本人認証 | `200`、trim後の本文が返り、一覧にも反映 | `test_comment_crud_round_trip_at_api_boundary` |
 | 11 | 結合 | adminが他人を編集し、peer/第三者を拒否 | 実DB、同一プロジェクトpeer・第三者・admin | peerは`403`、第三者は`404`、adminは`200` | `test_comment_authorization_boundary_for_peer_outsider_and_admin` |
 | 12 | 結合 | commit失敗時に編集前本文を維持 | 実DB、commitを失敗させるfixture | `503 SERVICE_UNAVAILABLE`、一覧の本文は元のまま | `test_comment_update_and_delete_transaction_failure_leave_original_state` |
+| 13 | 結合 | 未認証ユーザーが編集 | 実HTTP、認証情報なし | `401 UNAUTHENTICATED` | `test_comment_endpoints_require_authentication` |
+| 14 | 結合 | session方式でCSRFトークンなしで編集 | 実HTTP、認証済みsession、`X-CSRF-Token` 未送信 | `403 CSRF_INVALID` | `test_comment_mutations_require_csrf_in_session_mode` |
 
 ## 13. Issue #8で確定した事項
 

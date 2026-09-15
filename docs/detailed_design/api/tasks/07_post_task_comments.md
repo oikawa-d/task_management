@@ -111,26 +111,33 @@ sequenceDiagram
         R->>R: "pydanticでbody長を検証"
         R->>D: "get_task_for_member(task_id)"
         D->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-        alt "タスク不存在 or 非所属"
+        alt "タスク不存在"
             D-->>R: "NotFoundError"
             R-->>FE: "404 NOT_FOUND"
-        else "所属メンバーまたはadmin"
+        else "Task取得成功"
             D-->>R: "Task"
-            R->>S: "add_comment(task, payload, current_user)"
-            S->>TR: "add(task_id, user_id, body)"
-            TR->>PG: "CALL sp_add_task_comment(...)（comment_idをOUTパラメータで採番・INSERT）"
-            PG-->>TR: "p_comment_id（OUT）"
-            TR->>PG: "SELECT fn_get_comment_with_task(comment_id)"
-            PG-->>TR: "comment行（author含む）"
-            TR-->>S: "Comment"
-            S->>PG: "db.commit()"
-            alt "DB/transaction failure"
-                S->>PG: "db.rollback()"
-                S-->>R: "DB exception"
-                R-->>FE: "503 SERVICE_UNAVAILABLE"
-            else "commit success"
-                S-->>R: "CommentResponse"
-                R-->>FE: "201 {comment}"
+            R->>S: "add_comment(task, payload, current_user, db)"
+            S->>S: "require_task_access(task, current_user, db)"
+            alt "非所属・非作成者の未所属task・非アクティブ"
+                S-->>R: "NotFoundError"
+                R-->>FE: "404 NOT_FOUND"
+            else "taskアクセス許可"
+                S->>TR: "create(task_id, user_id, body)"
+                TR->>PG: "CALL sp_add_task_comment(...)（comment_idをOUTパラメータで採番・INSERT）"
+                PG-->>TR: "p_comment_id（OUT）"
+                S->>TR: "get_by_id(comment_id)"
+                TR->>PG: "SELECT fn_get_comment_with_task(comment_id)"
+                PG-->>TR: "comment行（author含む）"
+                TR-->>S: "Comment"
+                S->>PG: "db.commit()"
+                alt "DB/transaction failure"
+                    S->>PG: "db.rollback()"
+                    S-->>R: "DB exception"
+                    R-->>FE: "503 SERVICE_UNAVAILABLE"
+                else "commit success"
+                    S-->>R: "CommentResponse"
+                    R-->>FE: "201 {comment}"
+                end
             end
         end
     end
@@ -150,10 +157,12 @@ flowchart TB
     D -->|"No"| D1["422 VALIDATION_ERROR"]
     D -->|"Yes"| E{"認証済み・is_active?"}
     E -->|"No"| E1["401 / 403 USER_INACTIVE"]
-    E -->|"Yes"| F{"taskが存在し<br/>所属メンバーまたはadmin?"}
+    E -->|"Yes"| F{"taskアクセスが許可されている?"}
     F -->|"No"| F1["404 NOT_FOUND"]
     F -->|"Yes"| G["task_comments へINSERT<br/>（trim後のbody, user_id=current_user）"]
-    G --> H["201 応答"]
+    G --> H{"db.commit()"}
+    H -->|"成功"| I["201 応答"]
+    H -->|"例外"| J["db.rollback() / 503 SERVICE_UNAVAILABLE"]
 ```
 
 ## 6. 関数詳細
@@ -162,11 +171,11 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def create_task_comment(payload: CommentCreateRequest, task: Task = Depends(get_task_for_member), user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db_session)) -> CommentResponse` |
-| 引数 | `payload`：リクエストボディ／`task`：認可済みタスク／`user`：現在ユーザー／`db`：DBセッション |
+| シグネチャ | `async def create_task_comment(payload: CommentCreateRequest, task: Task = Depends(get_task_for_member), user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db_session), _: None = Depends(verify_origin_if_session), __csrf: None = Depends(verify_csrf_if_session)) -> CommentResponse` |
+| 引数 | `payload`：リクエストボディ／`task`：存在確認済みタスク（所属判定はサービス層）／`user`：現在ユーザー／`db`：DBセッション |
 | 戻り値 | `CommentResponse`（201） |
 | 送出例外 | なし（下位の例外はハンドラで変換） |
-| 処理内容 | 1. `task_service.add_comment(task, payload, user, db)` を呼ぶ 2. 結果を返す |
+| 処理内容 | 1. `task_comment_service.add_comment(task, payload, user, db)` を呼ぶ 2. 結果を返す |
 | 副作用 | `task_comments` への1行追加（サービス層経由） |
 
 ### 6.2 `schemas/comment.py :: CommentCreateRequest`
@@ -209,6 +218,7 @@ flowchart LR
     R["comment_router.create_task_comment"] --> Sch["schemas.CommentCreateRequest"]
     R --> D["deps.get_task_for_member"]
     R --> S["task_comment_service.add_comment"]
+    S --> A["authorization_service.require_task_access"]
     S --> TR["task_comment_repository.create<br/>（sp_add_task_comment）"]
     S --> GET["task_comment_repository.get_by_id<br/>（fn_get_comment_with_task）"]
     TR --> DB[("PostgreSQL<br/>task_comments")]
@@ -221,6 +231,9 @@ flowchart LR
 ```mermaid
 flowchart LR
     A["task_comments<br/>（対象task_idに行なし、または他の行あり）"] -->|"INSERT"| B["task_comments<br/>+1行（id, task_id, user_id, body,<br/>created_at=updated_at=now()）"]
+    B --> C{"db.commit()"}
+    C -->|"成功"| D["投稿を確定"]
+    C -->|"例外"| E["db.rollback() / 503 SERVICE_UNAVAILABLE"]
 ```
 
 Redisの状態遷移はない（本APIはRedisへアクセスしない）。
@@ -278,6 +291,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 9 | 結合 | API境界で投稿後に一覧取得し、編集・削除まで連携 | 実DB、本人認証 | `201`→`200`→`200`→`204`、trim後の本文・投稿者情報・削除結果が整合 | `test_comment_crud_round_trip_at_api_boundary` |
 | 10 | 結合 | DB commit失敗時に投稿の部分更新を残さない | 実DB、commitを失敗させるfixture | `503 SERVICE_UNAVAILABLE`、失敗本文が一覧に残らない | `test_comment_create_transaction_failure_leaves_no_partial_row` |
 | 11 | 結合 | 論理削除task・未所属task・不存在taskの投稿境界 | 実DB、本人/非所属ユーザー | 論理削除・非作成者の未所属・不存在は`404 NOT_FOUND`、作成者の未所属taskは`201` | `test_comment_task_scope_handles_inactive_unassigned_and_missing_resources` |
+| 12 | 結合 | 未認証ユーザーが投稿 | 実HTTP、認証情報なし | `401 UNAUTHENTICATED` | `test_comment_endpoints_require_authentication` |
 
 フロントのReactエスケープ挙動自体はバックエンドのpytestでは検証できないため、フロントエンドのVitestテスト側の責務とする（本ファイルのテスト対象外）。
 
