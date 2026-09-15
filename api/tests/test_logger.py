@@ -179,8 +179,21 @@ def test_configure_logging_sets_level_and_json_handler() -> None:
 	root_logger = logging.getLogger()
 
 	assert root_logger.level == logging.WARNING
-	assert len(root_logger.handlers) == 1
-	assert isinstance(root_logger.handlers[0].formatter, JsonFormatter)
+	json_handlers = [handler for handler in root_logger.handlers if isinstance(handler.formatter, JsonFormatter)]
+	assert len(json_handlers) == 1
+
+
+def test_configure_logging_preserves_existing_handlers() -> None:
+	root_logger = logging.getLogger()
+	existing_handler = logging.NullHandler()
+	root_logger.addHandler(existing_handler)
+
+	try:
+		configure_logging("INFO")
+
+		assert existing_handler in root_logger.handlers
+	finally:
+		root_logger.removeHandler(existing_handler)
 
 
 def test_json_formatter_emits_failure_reason_and_drops_unlisted_keys() -> None:

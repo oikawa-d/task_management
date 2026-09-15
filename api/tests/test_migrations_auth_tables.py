@@ -9,6 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 _LOGIN_HISTORY_DESIGN = Path(__file__).resolve().parents[2] / "docs/detailed_design/database/03_table_login_history.md"
 
 
+def _email_of_length(length: int) -> str:
+	local_part = "a" * 64
+	domain_middle_length = length - 197
+	return f"{local_part}@{'a' * 63}.{'b' * 63}.{'c' * domain_middle_length}.com"
+
+
 def _login_history_design_comments() -> tuple[str, dict[str, str]]:
 	design = _LOGIN_HISTORY_DESIGN.read_text(encoding="utf-8")
 	table_comment = re.search(r"COMMENT ON TABLE login_history IS '([^']*)';", design)
@@ -29,6 +35,42 @@ async def test_users_table_created_with_default_role_and_active(db_session: Asyn
 	assert row["role"] == "member"
 	assert row["is_active"] is True
 	assert row["email_verified_at"] is None
+
+
+async def test_users_email_accepts_254_characters_and_rejects_255(db_session: AsyncSession) -> None:
+	"""RFC 5321の配送経路制約を考慮した254文字境界をDBで検証する。"""
+	user_id = (
+		await db_session.execute(
+			text(
+				"INSERT INTO users (username, email, password_hash) VALUES ('email-limit', :email, 'hash') RETURNING id"
+			),
+			{"email": _email_of_length(254)},
+		)
+	).scalar_one()
+	await db_session.execute(
+		text(
+			"INSERT INTO login_history (user_id, login_identifier, login_method, success) "
+			"VALUES (:user_id, :identifier, 'oauth_google', true)"
+		),
+		{"user_id": user_id, "identifier": _email_of_length(254)},
+	)
+
+	with pytest.raises(DBAPIError):
+		async with db_session.begin_nested():
+			await db_session.execute(
+				text("INSERT INTO users (username, email, password_hash) VALUES ('email-over', :email, 'hash')"),
+				{"email": _email_of_length(255)},
+			)
+	with pytest.raises(DBAPIError):
+		async with db_session.begin_nested():
+			await db_session.execute(
+				text(
+					"INSERT INTO login_history (user_id, login_identifier, login_method, success) "
+					"VALUES (:user_id, :identifier, 'oauth_google', true)"
+				),
+				{"user_id": user_id, "identifier": _email_of_length(255)},
+			)
+	await db_session.rollback()
 
 
 async def test_users_username_uniqueness_is_case_insensitive(db_session: AsyncSession) -> None:

@@ -7,7 +7,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_backend_settings
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import NotFoundError, raise_database_error
 from app.repository import notification_repository
 from app.repository.notification_repository import NotificationListItem
 from app.schemas.auth import CurrentUser
@@ -101,9 +101,9 @@ async def mark_notification_read(
 			read_at=_to_app_timezone(read_at),
 			unread_count=unread_count,
 		)
-	except DBAPIError:
+	except DBAPIError as exc:
 		await db.rollback()
-		raise
+		raise_database_error(exc)
 
 
 async def mark_all_notifications_read(db: AsyncSession, user: CurrentUser) -> NotificationReadAllResponse:
@@ -112,6 +112,6 @@ async def mark_all_notifications_read(db: AsyncSession, user: CurrentUser) -> No
 		after = await notification_repository.count_unread(db, user.id)
 		await db.commit()
 		return NotificationReadAllResponse(updated_count=updated_count, unread_count=after)
-	except DBAPIError:
+	except DBAPIError as exc:
 		await db.rollback()
-		raise
+		raise_database_error(exc)

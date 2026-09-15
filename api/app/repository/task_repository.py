@@ -5,9 +5,11 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 from sqlalchemy.engine import RowMapping
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_backend_settings
+from app.core.exceptions import AssigneeInactiveError, TaskConflictError
 from app.models.task import Task
 
 
@@ -62,24 +64,27 @@ async def create(
 	position: int | None,
 ) -> uuid.UUID:
 	day_start_utc, day_end_utc = _app_day_bounds_utc()
-	result = await db.execute(
-		text(
-			"CALL sp_create_task(:project_id, :created_by, :assignee_id, :title, :body, "
-			":status, :due_at, :position, :day_start_utc, :day_end_utc, NULL)"
-		),
-		{
-			"project_id": project_id,
-			"created_by": created_by,
-			"assignee_id": assignee_id,
-			"title": title,
-			"body": body,
-			"status": status,
-			"due_at": due_at,
-			"position": position,
-			"day_start_utc": day_start_utc,
-			"day_end_utc": day_end_utc,
-		},
-	)
+	try:
+		result = await db.execute(
+			text(
+				"CALL sp_create_task(:project_id, :created_by, :assignee_id, :title, :body, "
+				":status, :due_at, :position, :day_start_utc, :day_end_utc, NULL)"
+			),
+			{
+				"project_id": project_id,
+				"created_by": created_by,
+				"assignee_id": assignee_id,
+				"title": title,
+				"body": body,
+				"status": status,
+				"due_at": due_at,
+				"position": position,
+				"day_start_utc": day_start_utc,
+				"day_end_utc": day_end_utc,
+			},
+		)
+	except DBAPIError as exc:
+		_raise_task_constraint_error(exc)
 	task_id: uuid.UUID = result.mappings().one()["p_task_id"]
 	return task_id
 
@@ -109,11 +114,12 @@ async def list_for_user(
 	include_inactive: bool,
 	limit: int,
 	offset: int,
+	unassigned: bool = False,
 ) -> list[TaskWithProjectStatus]:
 	result = await db.execute(
 		text(
 			"SELECT (task).*, project_is_active FROM "
-			"fn_list_tasks(:user_id, :project_id, :status, :include_inactive, :limit, :offset)"
+			"fn_list_tasks(:user_id, :project_id, :status, :include_inactive, :limit, :offset, :unassigned)"
 		),
 		{
 			"user_id": user_id,
@@ -122,6 +128,7 @@ async def list_for_user(
 			"include_inactive": include_inactive,
 			"limit": limit,
 			"offset": offset,
+			"unassigned": unassigned,
 		},
 	)
 	return [_build_task_with_project_status(row) for row in result.mappings().all()]
@@ -158,25 +165,37 @@ async def update(
 	position: int | None,
 ) -> None:
 	day_start_utc, day_end_utc = _app_day_bounds_utc()
-	await db.execute(
-		text(
-			"CALL sp_update_task(:task_id, :editor_id, :version, :title, :body, "
-			":status, :assignee_id, :due_at, :position, :day_start_utc, :day_end_utc)"
-		),
-		{
-			"task_id": task_id,
-			"editor_id": editor_id,
-			"version": version,
-			"title": title,
-			"body": body,
-			"status": status,
-			"assignee_id": assignee_id,
-			"due_at": due_at,
-			"position": position,
-			"day_start_utc": day_start_utc,
-			"day_end_utc": day_end_utc,
-		},
-	)
+	try:
+		await db.execute(
+			text(
+				"CALL sp_update_task(:task_id, :editor_id, :version, :title, :body, "
+				":status, :assignee_id, :due_at, :position, :day_start_utc, :day_end_utc)"
+			),
+			{
+				"task_id": task_id,
+				"editor_id": editor_id,
+				"version": version,
+				"title": title,
+				"body": body,
+				"status": status,
+				"assignee_id": assignee_id,
+				"due_at": due_at,
+				"position": position,
+				"day_start_utc": day_start_utc,
+				"day_end_utc": day_end_utc,
+			},
+		)
+	except DBAPIError as exc:
+		_raise_task_constraint_error(exc)
+
+
+def _raise_task_constraint_error(exc: DBAPIError) -> None:
+	sqlstate = getattr(exc.orig, "sqlstate", None)
+	if sqlstate == "P0005":
+		raise TaskConflictError() from exc
+	if sqlstate == "P0006":
+		raise AssigneeInactiveError() from exc
+	raise exc
 
 
 async def set_active(db: AsyncSession, task_id: uuid.UUID, is_active: bool) -> None:
