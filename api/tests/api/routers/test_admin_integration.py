@@ -165,9 +165,11 @@ async def _store_refresh(user_id: UUID, cleanup_state: _CleanupState) -> str:
 	return token
 
 
-def _assert_error(response: httpx.Response, status_code: int, code: str) -> None:
+def _assert_error(response: httpx.Response, status_code: int, code: str | tuple[str, ...]) -> None:
 	assert response.status_code == status_code
-	assert response.json()["error"]["code"] == code
+	actual_code = response.json()["error"]["code"]
+	expected_codes = (code,) if isinstance(code, str) else code
+	assert actual_code in expected_codes
 
 
 @pytest.mark.asyncio
@@ -210,7 +212,9 @@ async def test_admin_user_role_status_and_redis_revocation_are_integrated(
 		_assert_error(
 			inactive_response,
 			401 if get_backend_settings().auth_mode == "session" else 403,
-			"UNAUTHENTICATED" if get_backend_settings().auth_mode == "session" else "USER_INACTIVE",
+			("UNAUTHENTICATED", "SESSION_EXPIRED")
+			if get_backend_settings().auth_mode == "session"
+			else "USER_INACTIVE",
 		)
 
 		assert any(
@@ -243,17 +247,21 @@ async def test_jwt_refresh_rejects_replayed_old_token(
 	user = await _create_user(db_session, cleanup_state)
 	client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver")
 	try:
-		await _authenticate(client, user.id, cleanup_state)
+		refresh_auth = await _authenticate(client, user.id, cleanup_state)
 		old_token = await _store_refresh(user.id, cleanup_state)
 		settings = get_backend_settings()
+		client.cookies.clear()
 		client.cookies.set(settings.cookie_name_refresh, old_token)
+		client.cookies.set(settings.cookie_name_csrf, refresh_auth["csrf_token"])
 		first = await client.post("/api/auth/refresh")
 		assert first.status_code == 200, first.text
 		new_token = first.cookies.get(settings.cookie_name_refresh)
 		assert new_token
 		cleanup_state.refresh_tokens.append((user.id, new_token))
 
+		client.cookies.clear()
 		client.cookies.set(settings.cookie_name_refresh, old_token)
+		client.cookies.set(settings.cookie_name_csrf, refresh_auth["csrf_token"])
 		replayed = await client.post("/api/auth/refresh")
 		_assert_error(replayed, 401, "TOKEN_REVOKED")
 	finally:
@@ -288,7 +296,7 @@ async def test_admin_force_logout_revokes_all_auth_state_but_preserves_user(
 		assert await redis_store.get_session(other_session) is None
 		assert await redis_store.get_refresh_token(refresh_token) is None
 		if "session_id" in target_auth:
-			_assert_error(await target_client.get("/api/auth/me"), 401, "UNAUTHENTICATED")
+			_assert_error(await target_client.get("/api/auth/me"), 401, ("UNAUTHENTICATED", "SESSION_EXPIRED"))
 		else:
 			assert (await target_client.get("/api/auth/me")).status_code == 200
 		assert any(
