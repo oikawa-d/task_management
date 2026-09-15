@@ -56,9 +56,13 @@ async def add_member(project: Project, user_id: UUID, invited_by: UUID, db: Asyn
 		members = await project_member_repository.list_by_project(db, project.id)
 		created = next((member for member in members if member.user_id == user_id), None)
 		if created is None:
+			await db.rollback()
 			raise NotFoundError("追加したメンバーを取得できません")
 		await db.commit()
 		return MemberResponse(**_member_summary(created, project.owner_id).model_dump())
+	except (AlreadyMemberError, NotFoundError):
+		await db.rollback()
+		raise
 	except DBAPIError as exc:
 		await db.rollback()
 		raise_database_error(exc)

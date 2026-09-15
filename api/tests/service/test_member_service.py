@@ -56,8 +56,26 @@ async def test_add_member_rejects_existing_member(monkeypatch: pytest.MonkeyPatc
 	monkeypatch.setattr(member_service.user_repository, "get_by_id", AsyncMock(return_value=target))
 	monkeypatch.setattr(member_service.project_member_repository, "exists", AsyncMock(return_value=True))
 
+	db = AsyncMock()
 	with pytest.raises(AlreadyMemberError):
-		await member_service.add_member(project, target.id, owner.id, AsyncMock())
+		await member_service.add_member(project, target.id, owner.id, db)
+
+	db.rollback.assert_not_awaited()
+	db.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_add_member_rejects_missing_user_without_rollback(monkeypatch: pytest.MonkeyPatch) -> None:
+	owner = _user()
+	project = _project(owner)
+	db = AsyncMock()
+	monkeypatch.setattr(member_service.user_repository, "get_by_id", AsyncMock(return_value=None))
+
+	with pytest.raises(NotFoundError):
+		await member_service.add_member(project, uuid4(), owner.id, db)
+
+	db.rollback.assert_not_awaited()
+	db.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -91,7 +109,7 @@ async def test_add_member_rolls_back_database_errors(
 
 
 @pytest.mark.asyncio
-async def test_add_member_does_not_roll_back_domain_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_add_member_rolls_back_not_found_after_create(monkeypatch: pytest.MonkeyPatch) -> None:
 	owner = _user()
 	project = _project(owner)
 	target = _user("bob")
@@ -104,7 +122,28 @@ async def test_add_member_does_not_roll_back_domain_errors(monkeypatch: pytest.M
 	with pytest.raises(NotFoundError):
 		await member_service.add_member(project, target.id, owner.id, db)
 
-	db.rollback.assert_not_awaited()
+	db.rollback.assert_awaited_once()
+	db.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_add_member_rolls_back_already_member_after_create(monkeypatch: pytest.MonkeyPatch) -> None:
+	owner = _user()
+	project = _project(owner)
+	target = _user("bob")
+	db = AsyncMock()
+	monkeypatch.setattr(member_service.user_repository, "get_by_id", AsyncMock(return_value=target))
+	monkeypatch.setattr(member_service.project_member_repository, "exists", AsyncMock(return_value=False))
+	monkeypatch.setattr(
+		member_service.project_member_repository,
+		"create",
+		AsyncMock(side_effect=AlreadyMemberError()),
+	)
+
+	with pytest.raises(AlreadyMemberError):
+		await member_service.add_member(project, target.id, owner.id, db)
+
+	db.rollback.assert_awaited_once()
 	db.commit.assert_not_awaited()
 
 
