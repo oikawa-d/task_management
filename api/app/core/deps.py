@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.auth.base import AuthStrategy
 from app.auth.factory import get_auth_strategy
@@ -178,7 +179,7 @@ async def get_comment_for_member(
 	if task_with_status is None:
 		raise NotFoundError()
 	task = task_with_status.task
-	comment.task = task
+	set_committed_value(comment, "task", task)
 	return comment
 
 

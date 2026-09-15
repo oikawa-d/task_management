@@ -13,6 +13,8 @@
 | [./11_post_tasks.md](./11_post_tasks.md) | 同一リソース群のフラット作成API |
 | [../projects/01_get_projects.md](../projects/01_get_projects.md) | ページング・`include_inactive`の既存パターン（本APIも同様の方式を踏襲） |
 
+| 実装ファイル | `api/app/api/routers/tasks_router.py`、`api/app/schemas/task.py`、`api/app/service/task_service.py`、`api/app/repository/task_repository.py`、`db/functions/fn_list_tasks.sql` |
+
 ## 1. 概要
 
 | 項目 | 内容 |
@@ -288,7 +290,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 
 ## 12. テスト設計
 
-| No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
+| No | 区分 | ケース | 前提 | 期待結果 | 実在するpytest関数名 / 状態 |
 |----|------|--------|------|----------|-----------------|
 | 1 | 結合（実DB） | project_id省略時のデフォルト範囲 | 実DB、`scenario`フィクスチャでmemberの所属プロジェクト1件・共有プロジェクト1件・自分の未所属タスク1件・他人の未所属タスク1件を用意 | 200、`project_id`省略時に所属プロジェクト分＋自分の未所属タスクが返り、他人の未所属タスクは含まれない | `test_list_tasks_member_scope_includes_shared_and_own_unassigned_only` |
 | 2 | 結合（実DB） | project_id指定・非所属 | 実DB、`scenario.private_project_id`（非所属・非admin）を`project_id`に指定 | 404 `NOT_FOUND` | `test_list_tasks_project_id_filter_scopes_to_unassigned_member_and_non_member` |
@@ -302,11 +304,11 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 10 | 結合 | adminは全ユーザーの未所属タスクを含め全件 | 実DB、複数ユーザーの未所属タスク | 200、全件に含まれる | 未実装（issue #458）。DB関数レベルでは`api/tests/test_db_functions_project_task.py::test_fn_list_tasks_admin_sees_all_unassigned_tasks`がカバー済み |
 | 11 | 結合 | 既定はis_active=falseを除外 | 実DB、`is_active=false`のタスクを含む | 200、含まれない | `test_list_tasks_excludes_inactive_by_default_and_can_include_it` |
 | 12 | 結合 | include_inactive指定 | 実DB、`?include_inactive=true` | 200、`is_active=false`のタスクも含まれる | `test_list_tasks_excludes_inactive_by_default_and_can_include_it` |
-| 13 | 結合 | statusフィルタ | 実DB、`?status=done` | 200、`status=done`のみ | 未実装（issue #458） |
-| 14 | 結合 | ページング | 実DB、認可範囲に25件 | `per_page=20`で1ページ目20件、2ページ目5件 | 未実装（issue #458） |
+| 13 | 結合（実DB・実SP） | statusフィルタ | 実DB、`scenario`フィクスチャの認可範囲にtodo / in_progress / doneを用意し、`?status=done`を指定 | 200、doneのタスクだけが返り、`meta.total=1`になる | `test_list_tasks_filters_by_status_using_database`。`test_list_tasks_forwards_status_filter`はクエリ引数転送の単体テストとして別途実施 |
+| 14 | 結合（実DB・実SP） | ページング | 実DB、`scenario`フィクスチャの認可範囲3件に対して`?page=1&per_page=2`と`?page=2&per_page=2`を指定 | 200、1ページ目2件・2ページ目1件、重複なしで全対象行がいずれかのページに含まれる | `test_list_tasks_paginates_using_database`。`test_list_tasks_forwards_pagination`はクエリ引数転送の単体テストとして別途実施 |
 | 15 | パラメータ化 | AUTH_MODE両対応 | `AUTH_MODE=session` / `jwt` | 5・9・10を両モードで実行 | 未実装。現状の結合テストは実行時の`AUTH_MODE`設定値に追随するのみで、両モードを1テストでパラメータ化して実行する仕組みはない |
 
-実装済みの結合テストでは、上表の一覧境界に加えて、同一シナリオで作成・詳細取得・position更新・version競合（409）・論理削除・ボード再取得まで確認する（`test_task_crud_updates_position_and_rejects_stale_version`）。未確認の同時PATCH競合とページングの実DB検証は要検討とする。
+実装済みの結合テストでは、上表の一覧境界に加えて、同一シナリオで作成・詳細取得・position更新・version競合（409）・論理削除・ボード再取得まで確認する（`test_task_crud_updates_position_and_rejects_stale_version`）。同時PATCH競合は未確認であり、要検討とする。
 
 ## 13. 不明点・要検討事項
 
