@@ -136,6 +136,11 @@ class BoardResponse(BaseModel):
 class TaskListQuery(BaseModel):
 	page: int = Field(default=1, ge=1)
 	per_page: int = Field(default_factory=_default_per_page, ge=1)
+	# FastAPIはDepends()でクエリパラメータモデルを解決する際、この型注釈だけから
+	# 生成した別フィールドで先に素の値を検証してから本体のバリデータへ渡すため、
+	# UUID4 | Literal["unassigned"] | Noneのままだと"null"がその時点で拒否され
+	# normalize_unassigned_filterに届かない。strを経由させて素通しし、本バリデータで
+	# "null"→"unassigned"への正規化とUUID変換を行う（router側で正しい型へcastする）。
 	project_id: UUID4 | str | None = None
 	status: TaskStatus | None = None
 	include_inactive: bool = False
