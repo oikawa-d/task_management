@@ -1,17 +1,20 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
+from app.core.config import get_backend_settings
 from app.core.exceptions import NotFoundError
 from app.models.notification import Notification
 from app.repository import notification_repository, user_repository
 from app.repository.notification_repository import NotificationListItem
 from app.schemas.auth import CurrentUser
+from app.schemas.notification import NotificationReadAllResponse, NotificationReadResponse
 from app.service import notification_service
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
 def _user() -> CurrentUser:
@@ -285,8 +288,51 @@ async def test_notification_lifecycle_uses_database_contract(db_session: AsyncSe
 	read_response = await notification_service.mark_notification_read(db_session, first_id, current_user)
 	assert read_response.id == first_id
 	assert read_response.unread_count == 1
+	read_again_response = await notification_service.mark_notification_read(db_session, first_id, current_user)
+	assert read_again_response.read_at == read_response.read_at
+	assert read_again_response.unread_count == read_response.unread_count
 
 	read_all_response = await notification_service.mark_all_notifications_read(db_session, current_user)
 	assert read_all_response.updated_count == 1
 	assert read_all_response.unread_count == 0
 	assert await notification_repository.count_unread(db_session, other_user_id) == 1
+	empty_read_all_response = await notification_service.mark_all_notifications_read(db_session, current_user)
+	assert empty_read_all_response.updated_count == 0
+	assert empty_read_all_response.unread_count == 0
+
+
+async def test_read_all_is_consistent_with_concurrent_individual_read(db_session: AsyncSession) -> None:
+	username = f"notification-concurrent-{uuid4().hex[:8]}"
+	user_id = await user_repository.create(db_session, username, f"{username}@example.com", "hash")
+	notification_id = await _insert_notification(
+		db_session, user_id, f"concurrent-{uuid4().hex}", datetime.now(timezone.utc)
+	)
+	await db_session.commit()
+	current_user = CurrentUser(id=user_id, username=username, role="member", is_active=True, email_verified_at=None)
+
+	engine = create_async_engine(get_backend_settings().database_url)
+	session_factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+
+	async def _mark_individual() -> NotificationReadResponse:
+		async with session_factory() as session:
+			response = await notification_service.mark_notification_read(session, notification_id, current_user)
+			await session.commit()
+			return response
+
+	async def _mark_all() -> NotificationReadAllResponse:
+		async with session_factory() as session:
+			response = await notification_service.mark_all_notifications_read(session, current_user)
+			await session.commit()
+			return response
+
+	try:
+		individual_response, read_all_response = await asyncio.wait_for(
+			asyncio.gather(_mark_individual(), _mark_all()), timeout=5
+		)
+	finally:
+		await engine.dispose()
+
+	assert individual_response.unread_count >= 0
+	assert read_all_response.updated_count in (0, 1)
+	assert read_all_response.unread_count >= 0
+	assert await notification_repository.count_unread(db_session, user_id) == 0

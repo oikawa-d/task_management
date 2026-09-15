@@ -181,11 +181,14 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | No | 区分 | ケース | 期待結果 | テスト名案 |
 |----|------|--------|----------|------------|
 | 1 | 結合 | 未読の本人通知を既読化 | 200、`read_at`設定、未読件数が1減る | `test_sp_mark_notification_read_own_unread_notification` |
-| 2 | 結合 | 既読済み通知を再度指定 | 200、元の`read_at`を保持 | `test_sp_mark_notification_read_is_idempotent` |
+| 2 | 結合（実DB・実SP） | 既読済み通知を再度指定 | 200、元の`read_at`を保持、未読件数不変 | `test_notification_lifecycle_uses_database_contract` |
 | 3 | 結合 | 他人の通知IDを指定 | 404、通知は変更されない | `test_sp_mark_notification_read_other_users_notification_returns_404` |
-| 4 | 結合 | session方式でCSRF不正 | 403 `CSRF_INVALID`、DB更新なし | `test_sp_mark_notification_read_rejects_invalid_csrf` |
+| 4 | 結合（router・認証依存性） | session方式でCSRFトークン欠落・不一致 | 403 `CSRF_INVALID`、DB更新なし | `test_session_notification_mutations_reject_missing_or_invalid_csrf` |
 | 5 | 単体 | notification_idが不正 | 422 `VALIDATION_ERROR` | `test_sp_mark_notification_read_rejects_invalid_id` |
 | 6 | 結合 | レート制限超過時にTTLを取得できない | Redis TTLが0以下を返す | 429 `TOO_MANY_ATTEMPTS`、`Retry-After`が設定窓以上の正の整数 | `test_all_notification_rate_limited_endpoints_return_positive_retry_after_when_ttl_unavailable` |
+| 7 | 結合（router・認証依存性） | 未認証・無効認証 | Cookie/Bearerなし、または無効な認証情報 | 401 `UNAUTHENTICATED`、DB更新なし | `test_notifications_router_rejects_missing_and_invalid_jwt_authentication` / `test_notifications_router_rejects_missing_and_invalid_session_authentication` |
+| 8 | 結合（router） | PostgreSQL接続不能 | 認証成功後の既読更新でSQLSTATE `08xxx` | 503 `SERVICE_UNAVAILABLE` | `test_notification_router_returns_503_for_postgresql_failure_instead_of_empty_result` |
+| 9 | 結合（router・認証依存性） | session方式のOrigin不正 | 403 `CSRF_INVALID`、サービス層を呼ばない | `test_session_notification_mutations_reject_disallowed_origin` |
 
 ## 11. 不明点・要検討事項
 

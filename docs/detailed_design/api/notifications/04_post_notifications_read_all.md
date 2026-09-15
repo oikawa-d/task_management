@@ -144,11 +144,13 @@ SPが返す更新件数を `updated_count` に使用するため、既読済み�
 | No | 区分 | ケース | 期待結果 | テスト名案 |
 |----|------|--------|----------|------------|
 | 1 | 結合 | 本人に未読3件 | 200、`updated_count=3`、`unread_count=0` | `test_sp_mark_all_notifications_read_updates_own_unread_notifications` |
-| 2 | 結合 | 未読0件で実行 | 200、`updated_count=0`、`unread_count=0` | `test_sp_mark_all_notifications_read_empty_is_success` |
+| 2 | 結合（実DB・実SP） | 未読0件で実行 | 200、`updated_count=0`、`unread_count=0` | `test_notification_lifecycle_uses_database_contract` |
 | 3 | 結合 | 他人の未読が存在 | 本人分だけ更新、他人分は未読のまま | `test_sp_mark_all_notifications_read_never_updates_other_users` |
-| 4 | 結合 | session方式でCSRF不正 | 403 `CSRF_INVALID`、DB更新なし | `test_sp_mark_all_notifications_read_rejects_invalid_csrf` |
-| 5 | 結合 | 個別既読と同時実行 | 件数が負にならず、最終的に本人の未読が0 | `test_sp_mark_all_notifications_read_concurrent_sp_mark_notification_read_is_consistent` |
+| 4 | 結合（router・認証依存性） | session方式でCSRF不正 | 403 `CSRF_INVALID`、DB更新なし | `test_session_notification_mutations_reject_missing_or_invalid_csrf` / `test_session_notification_mutations_reject_disallowed_origin` |
+| 5 | 結合（実DB・実SP） | 個別既読と同時実行 | 件数が負にならず、最終的に本人の未読が0 | `test_read_all_is_consistent_with_concurrent_individual_read` |
 | 6 | 結合 | レート制限超過時にTTLを取得できない | Redis TTLが0以下を返す | 429 `TOO_MANY_ATTEMPTS`、`Retry-After`が設定窓以上の正の整数 | `test_all_notification_rate_limited_endpoints_return_positive_retry_after_when_ttl_unavailable` |
+| 7 | 結合（router・認証依存性） | 未認証・無効認証 | Cookie/Bearerなし、または無効な認証情報 | 401 `UNAUTHENTICATED` | `test_notifications_router_rejects_missing_and_invalid_jwt_authentication` / `test_notifications_router_rejects_missing_and_invalid_session_authentication` |
+| 8 | 結合（router） | PostgreSQL/Redis接続不能 | 認証成功後の更新処理またはレート制限で障害 | 503 `SERVICE_UNAVAILABLE`、0件成功へ隠蔽しない | `test_notification_router_returns_503_for_postgresql_failure_instead_of_empty_result` / `test_notification_router_returns_503_for_redis_failure_instead_of_zero_result` |
 
 ## 11. 不明点・要検討事項
 
