@@ -35,10 +35,10 @@
           <mxGeometry x="1100" y="110" width="470" height="150" as="geometry" />
         </mxCell>
         <mxCell id="n9" value="service（ビジネスロジック層）" style="container=1;collapsible=0;rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#9E9E9E;dashed=1;dashPattern=8 4;verticalAlign=top;align=left;spacingLeft=10;spacingTop=4;fontSize=13;fontStyle=1;fontColor=#616161;" vertex="1" parent="1">
-          <mxGeometry x="60" y="370" width="940" height="130" as="geometry" />
+          <mxGeometry x="60" y="370" width="940" height="200" as="geometry" />
         </mxCell>
-        <mxCell id="n10" value="auth_service&lt;br&gt;register / login&lt;br&gt;logout / refresh&lt;br&gt;oauth / reset" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#2E7D32;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="90" y="415" width="135" height="70" as="geometry" />
+        <mxCell id="n10" value="auth_service&lt;br&gt;register / login&lt;br&gt;logout / refresh&lt;br&gt;&lt;br&gt;email_verification_service&lt;br&gt;verify / resend / reset&lt;br&gt;&lt;br&gt;oauth_service / oauth_support" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#2E7D32;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="90" y="415" width="135" height="120" as="geometry" />
         </mxCell>
         <mxCell id="n11" value="user_service&lt;br&gt;profile / password&lt;br&gt;role / force_logout" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#2E7D32;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="239" y="415" width="135" height="70" as="geometry" />
