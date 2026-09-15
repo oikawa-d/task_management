@@ -3,9 +3,9 @@ import uuid
 
 import pytest
 from app.core.config import get_backend_settings
+from app.core.exceptions import AssigneeInactiveError, TaskConflictError
 from app.repository import project_repository, task_repository, user_repository
 from sqlalchemy import text
-from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
@@ -72,9 +72,8 @@ async def test_create_task_with_inactive_assignee_raises_p0006(db_session: Async
 
 	await db_session.execute(text("UPDATE users SET is_active = false WHERE id = :id"), {"id": assignee_id})
 
-	with pytest.raises(DBAPIError) as exc_info:
+	with pytest.raises(AssigneeInactiveError):
 		await task_repository.create(db_session, project_id, owner_id, assignee_id, "t1", None, "todo", None, None)
-	assert getattr(exc_info.value.orig, "sqlstate", None) == "P0006"
 
 
 async def test_update_task_with_inactive_assignee_raises_p0006(db_session: AsyncSession) -> None:
@@ -84,18 +83,16 @@ async def test_update_task_with_inactive_assignee_raises_p0006(db_session: Async
 
 	await db_session.execute(text("UPDATE users SET is_active = false WHERE id = :id"), {"id": assignee_id})
 
-	with pytest.raises(DBAPIError) as exc_info:
+	with pytest.raises(AssigneeInactiveError):
 		await task_repository.update(db_session, task_id, owner_id, 1, "t1", None, "todo", assignee_id, None, None)
-	assert getattr(exc_info.value.orig, "sqlstate", None) == "P0006"
 
 
 async def test_update_task_version_conflict_raises_p0005(db_session: AsyncSession) -> None:
 	owner_id, project_id = await _setup_project(db_session, "dave")
 	task_id = await task_repository.create(db_session, project_id, owner_id, None, "t1", None, "todo", None, None)
 
-	with pytest.raises(DBAPIError) as exc_info:
+	with pytest.raises(TaskConflictError):
 		await task_repository.update(db_session, task_id, owner_id, 999, "renamed", None, "todo", None, None, None)
-	assert getattr(exc_info.value.orig, "sqlstate", None) == "P0005"
 
 
 async def test_update_task_success_increments_version(db_session: AsyncSession) -> None:
