@@ -37,6 +37,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI
 from httpx2 import ASGITransport, AsyncClient
 from jwt.algorithms import RSAAlgorithm
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 ALLOWED_ORIGIN = "http://localhost:5173"
@@ -66,8 +67,8 @@ def _new_identity() -> tuple[str, str]:
 	return f"google-sub-{unique}", f"oauth-{unique}@example.com"
 
 
-def _userinfo(sub: str, email: str) -> dict[str, Any]:
-	return {"sub": sub, "email": email, "email_verified": True}
+def _userinfo(sub: str, email: str, *, email_verified: bool = True) -> dict[str, Any]:
+	return {"sub": sub, "email": email, "email_verified": email_verified}
 
 
 class _HttpResponse:
@@ -116,7 +117,13 @@ class _GoogleBoundary:
 
 
 def _signed_id_token(
-	client_id: str, nonce: str, *, sub: str, email: str, jwks_kid: str = "key-1"
+	client_id: str,
+	nonce: str,
+	*,
+	sub: str,
+	email: str,
+	email_verified: bool = True,
+	jwks_kid: str = "key-1",
 ) -> tuple[str, dict[str, Any]]:
 	private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 	public_jwk = json.loads(RSAAlgorithm.to_jwk(private_key.public_key()))
@@ -124,7 +131,7 @@ def _signed_id_token(
 	claims: dict[str, Any] = {
 		"sub": sub,
 		"email": email,
-		"email_verified": True,
+		"email_verified": email_verified,
 		"iss": "https://accounts.google.com",
 		"aud": client_id,
 		"exp": int(time.time()) + 60,
@@ -186,6 +193,25 @@ def _assert_pkce_verifier_matches_challenge(boundary: _GoogleBoundary, code_chal
 	assert expected_challenge == code_challenge
 
 
+async def _create_existing_user(db_session: AsyncSession, email: str, *, verified: bool) -> uuid.UUID:
+	username = f"oauth-existing-{uuid.uuid4().hex[:10]}"
+	user_id = await user_repository.create(db_session, username, email, None)
+	if verified:
+		await user_repository.mark_email_verified(db_session, user_id)
+	await db_session.commit()
+	return user_id
+
+
+async def _count_users_by_email(db_session: AsyncSession, email: str) -> int:
+	result = await db_session.execute(text("SELECT count(*) FROM users WHERE email = :email"), {"email": email})
+	return int(result.scalar_one())
+
+
+async def _delete_user(db_session: AsyncSession, user_id: uuid.UUID) -> None:
+	await db_session.execute(text("DELETE FROM users WHERE id = :user_id"), {"user_id": user_id})
+	await db_session.commit()
+
+
 async def test_full_session_flow_creates_user_and_establishes_authenticated_session(
 	monkeypatch: pytest.MonkeyPatch, db_session: AsyncSession
 ) -> None:
@@ -224,6 +250,88 @@ async def test_full_session_flow_creates_user_and_establishes_authenticated_sess
 	assert link is not None and link.user_id == user.id
 	history = await login_history_repository.list_by_user_id(db_session, user.id)
 	assert any(record.login_method == "oauth_google" and record.login_identifier == user.email for record in history)
+
+
+async def test_oauth_callback_links_existing_verified_email(
+	monkeypatch: pytest.MonkeyPatch, db_session: AsyncSession
+) -> None:
+	app = _configure(
+		monkeypatch, db_session, auth_mode="session", jwks_uri="https://jwks.example.test/certs/existing-verified"
+	)
+	client_id = get_backend_settings().google_client_id
+	sub, email = _new_identity()
+	existing_user_id = await _create_existing_user(db_session, email, verified=True)
+	user_count_before = await _count_users_by_email(db_session, email)
+
+	try:
+		async with _client(app) as client:
+			state, nonce, code_challenge = await _start_and_capture_state(client)
+			token, jwks = _signed_id_token(client_id, nonce, sub=sub, email=email)
+			boundary = _GoogleBoundary({"id_token": token, "access_token": "access-token"}, _userinfo(sub, email), jwks)
+			monkeypatch.setattr(
+				oauth_router_module.auth_service,
+				"GoogleOAuthProvider",
+				lambda settings: GoogleOAuthProvider(settings, boundary),
+			)
+
+			callback = await client.get("/api/auth/oauth/google/callback", params={"code": "auth-code", "state": state})
+
+			assert callback.status_code == 302
+			assert callback.headers["location"] == f"{FRONTEND_BASE_URL}/oauth/callback#redirect_to=/dashboard"
+			_assert_pkce_verifier_matches_challenge(boundary, code_challenge)
+
+		user = await user_repository.get_by_email(db_session, email)
+		assert user is not None
+		assert user.id == existing_user_id
+		assert user.email_verified_at is not None
+		assert await _count_users_by_email(db_session, email) == user_count_before
+
+		link = await oauth_account_repository.get_by_provider_identity(db_session, "google", sub)
+		assert link is not None
+		assert link.user_id == existing_user_id
+	finally:
+		await _delete_user(db_session, existing_user_id)
+
+
+async def test_oauth_callback_rejects_unverified_email(
+	monkeypatch: pytest.MonkeyPatch, db_session: AsyncSession
+) -> None:
+	app = _configure(
+		monkeypatch, db_session, auth_mode="session", jwks_uri="https://jwks.example.test/certs/existing-unverified"
+	)
+	client_id = get_backend_settings().google_client_id
+	sub, email = _new_identity()
+	existing_user_id = await _create_existing_user(db_session, email, verified=False)
+	user_count_before = await _count_users_by_email(db_session, email)
+
+	try:
+		async with _client(app) as client:
+			state, nonce, _code_challenge = await _start_and_capture_state(client)
+			token, jwks = _signed_id_token(client_id, nonce, sub=sub, email=email, email_verified=False)
+			boundary = _GoogleBoundary(
+				{"id_token": token, "access_token": "access-token"},
+				_userinfo(sub, email, email_verified=False),
+				jwks,
+			)
+			monkeypatch.setattr(
+				oauth_router_module.auth_service,
+				"GoogleOAuthProvider",
+				lambda settings: GoogleOAuthProvider(settings, boundary),
+			)
+
+			callback = await client.get("/api/auth/oauth/google/callback", params={"code": "auth-code", "state": state})
+
+			assert callback.status_code == 302
+			assert callback.headers["location"] == f"{FRONTEND_BASE_URL}/login?error=oauth_email_unverified"
+
+		user = await user_repository.get_by_email(db_session, email)
+		assert user is not None
+		assert user.id == existing_user_id
+		assert user.email_verified_at is None
+		assert await _count_users_by_email(db_session, email) == user_count_before
+		assert await oauth_account_repository.get_by_provider_identity(db_session, "google", sub) is None
+	finally:
+		await _delete_user(db_session, existing_user_id)
 
 
 async def test_full_jwt_flow_exchanges_handoff_and_establishes_bearer_authentication(
