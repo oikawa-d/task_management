@@ -1,6 +1,7 @@
+from typing import Annotated, Literal, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_project_member, verify_csrf_if_session, verify_origin_if_session
@@ -47,13 +48,13 @@ async def create_project_task(
 
 @router.get("/api/tasks", response_model=TaskListResponse)
 async def list_tasks(
-	query: TaskListQuery = Depends(),
+	query: Annotated[TaskListQuery, Query()],
 	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
 ) -> TaskListResponse:
 	return await task_service.list_tasks(
 		user,
-		query.project_id,
+		cast(UUID | Literal["unassigned"] | None, query.project_id),
 		query.status,
 		query.include_inactive,
 		query.page,

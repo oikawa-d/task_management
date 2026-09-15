@@ -97,6 +97,9 @@ class TestGetCommentForMember:
 	async def test_returns_comment_without_membership_check(self, monkeypatch: pytest.MonkeyPatch) -> None:
 		task = _task(project_id=uuid.uuid4())
 		comment = self._comment(task.id)
+		monkeypatch.setattr(
+			"app.core.deps.set_committed_value", lambda instance, key, value: setattr(instance, key, value)
+		)
 		monkeypatch.setattr("app.core.deps.task_comment_repository.get_by_id", AsyncMock(return_value=comment))
 		monkeypatch.setattr(
 			"app.core.deps.task_repository.get_by_id",
@@ -111,6 +114,9 @@ class TestGetCommentForMember:
 		"""project_idなしタスクへのコメントは、depsでは作成者判定をせずserviceへ到達させる。"""
 		task = _task(project_id=None)
 		comment = self._comment(task.id)
+		monkeypatch.setattr(
+			"app.core.deps.set_committed_value", lambda instance, key, value: setattr(instance, key, value)
+		)
 		monkeypatch.setattr("app.core.deps.task_comment_repository.get_by_id", AsyncMock(return_value=comment))
 		monkeypatch.setattr(
 			"app.core.deps.task_repository.get_by_id",

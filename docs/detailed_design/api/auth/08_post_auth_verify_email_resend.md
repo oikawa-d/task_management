@@ -39,7 +39,7 @@
 
 | 名前 | 型 | 必須 | 制約 | 説明 |
 |------|----|------|------|------|
-| email | string | ○ | 50文字以内、メール形式 | 再送先メールアドレス（`basic_design/04_api.md` §3.1 register の email 制約と同一） |
+| email | string | ○ | 254文字以内、メール形式 | 再送先メールアドレス（`basic_design/04_api.md` §3.1 register の email 制約と同一） |
 
 ### 2.2 レスポンス
 
@@ -247,7 +247,7 @@ stateDiagram-v2
 
 | フィールド | pydanticスキーマ | 制約 | フロント（zod）との整合 |
 |-----------|-------------------|------|--------------------------|
-| email | `ResendVerifyEmailRequest.email` | `EmailStr`、50文字以内 | `z.string().email().max(50)`。`basic_design/04_api.md` §3.1 register の email 制約と統一 |
+| email | `ResendVerifyEmailRequest.email` | `EmailStr`、254文字以内 | `z.string().email().max(254)`。`basic_design/04_api.md` §3.1 register の email 制約と統一 |
 
 ## 11. 非機能・セキュリティ考慮
 
@@ -272,6 +272,7 @@ stateDiagram-v2
 | 7 | 結合 | 60秒以内の連続再送 | 1回目送信済み直後に2回目 | 2回目も `202` だがSMTP送信関数は呼ばれない | `test_resend_verify_email_endpoint_interval_limit` |
 | 8 | 結合 | 再送後、新トークンで旧トークンが無効化されること | 1回目のトークンを保持したまま2回目再送 | 旧トークンで `/auth/verify-email` を叩くと `400 INVALID_VERIFY_TOKEN`、新トークンでは成功 | `test_resend_replaces_old_token_and_new_token_verifies`（Issue #425） |
 | 9 | 結合 | `email` 未指定・不正形式 | ボディ不正 | `422 VALIDATION_ERROR` | `test_resend_verify_email_endpoint_invalid_email` |
+| 10 | 単体 | emailの254/255文字境界 | pydanticスキーマ単体 | 254文字は受け入れ、255文字は`ValidationError` | `test_email_requests_accept_254_characters` / `test_email_requests_reject_255_characters` |
 
 Issue #425 の結合テストでは、SMTP送信関数だけをテスト用 outbox に差し替え、再送API・Redisトークン置換・verify-email API の連携を実アプリ境界で確認する。レスポンスは本節の `202` と固定メッセージ、入力は `ResendVerifyEmailRequest` の定義に従う。
 

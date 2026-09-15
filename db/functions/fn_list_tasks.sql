@@ -4,7 +4,8 @@ CREATE OR REPLACE FUNCTION fn_list_tasks(
     p_status VARCHAR,
     p_include_inactive BOOLEAN,
     p_limit INTEGER,
-    p_offset INTEGER
+    p_offset INTEGER,
+    p_unassigned BOOLEAN
 ) RETURNS TABLE (
     task tasks,
     project_is_active BOOLEAN
@@ -20,6 +21,16 @@ AS $$
       AND (
           (
               p_project_id IS NULL
+              AND p_unassigned = true
+              AND t.project_id IS NULL
+              AND (
+                  EXISTS (SELECT 1 FROM users u WHERE u.id = p_user_id AND u.role = 'admin')
+                  OR t.created_by = p_user_id
+              )
+          )
+          OR (
+              p_project_id IS NULL
+              AND p_unassigned = false
               AND (
                   (
                       t.project_id IS NULL

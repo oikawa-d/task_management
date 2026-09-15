@@ -1,12 +1,13 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
 from app.core.config import get_backend_settings
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import NotFoundError, ServiceUnavailableError
 from app.models.notification import Notification
 from app.repository import notification_repository, user_repository
 from app.repository.notification_repository import NotificationListItem
@@ -14,7 +15,7 @@ from app.schemas.auth import CurrentUser
 from app.schemas.notification import NotificationReadAllResponse, NotificationReadResponse
 from app.service import notification_service
 from sqlalchemy import text
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
@@ -282,6 +283,37 @@ async def test_notification_mutation_rolls_back_on_database_error(
 		call = notification_service.mark_all_notifications_read(db, user)
 
 	with pytest.raises(DBAPIError):
+		await call  # type: ignore[arg-type]
+
+	db.rollback.assert_awaited_once()
+	db.commit.assert_not_awaited()
+
+
+@pytest.mark.parametrize("operation", ["mark_read", "mark_all_read"])
+async def test_notification_mutation_converts_connection_failure_via_raise_database_error(
+	monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+	"""project_service.pyと同じ`raise_database_error`経由の変換を検証する。
+
+	接続系のOperationalError（SQLSTATE 08xxx）は`ServiceUnavailableError`へ変換される。
+	素の`except DBAPIError: raise`（旧実装）ではOperationalErrorがそのまま伝播し、
+	このテストは失敗する。
+	"""
+	user = _user()
+	db = AsyncMock()
+	connection_error = OperationalError("notification update", {}, SimpleNamespace(sqlstate="08006"))
+	if operation == "mark_read":
+		monkeypatch.setattr(
+			notification_service.notification_repository, "mark_read", AsyncMock(side_effect=connection_error)
+		)
+		call = notification_service.mark_notification_read(db, uuid4(), user)
+	else:
+		monkeypatch.setattr(
+			notification_service.notification_repository, "mark_all_read", AsyncMock(side_effect=connection_error)
+		)
+		call = notification_service.mark_all_notifications_read(db, user)
+
+	with pytest.raises(ServiceUnavailableError):
 		await call  # type: ignore[arg-type]
 
 	db.rollback.assert_awaited_once()

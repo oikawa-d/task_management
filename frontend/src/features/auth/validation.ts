@@ -7,8 +7,8 @@ import type { ApiFieldError, AuthApiError } from "./types";
 const KANA_PATTERN = /^[ぁ-んァ-ヶー0-9]+$/;
 const USERNAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 /** API契約（docs/detailed_design/api/auth/02_post_auth_login.md §10）に合わせる。 */
-const LOGIN_IDENTIFIER_MAX_LENGTH = 50;
-const EMAIL_MAX_LENGTH = 50;
+const LOGIN_IDENTIFIER_MAX_LENGTH = 254;
+const EMAIL_MAX_LENGTH = 254;
 const USERNAME_MIN_LENGTH = 3;
 const USERNAME_MAX_LENGTH = 50;
 
