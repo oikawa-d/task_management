@@ -605,6 +605,36 @@ assert_blocked "env --split-string='gh issue close 123'"
 assert_blocked "env -S 'gh api -X PUT repos/oikawa-d/task_management/pulls/123/merge'"
 assert_blocked "env -S'gh pr merge 123'"
 assert_blocked 'env -S"gh issue close 123"'
+# 14. sudo/xargs経由での呼び出しも検出すること(#390で拡張)
+# `sudo gh pr merge 123` / `... | xargs gh pr merge` はPR作成者が誤って自分のPRを
+# マージしてしまう典型的な前置形であり、既存のwrapper判定(env/exec等)と同じ枠組みで
+# 安全に拡張できるため対応する。
+export GH_STUB_MATCH="pr view" GH_STUB_EXIT="0" GH_STUB_JSON="$unreviewed_json"
+assert_blocked "sudo gh pr merge 123"
+assert_blocked "sudo gh issue close 123"
+assert_blocked "echo 123 | xargs gh pr merge"
+assert_blocked "echo 123 | xargs gh issue close"
+# reviewedラベルがあれば許可されること(fail-closeへの一律ブロックではないことの確認)
+export GH_STUB_JSON="$reviewed_json"
+assert_allowed "sudo gh pr merge 123"
+# xargsの未知オプション(-Iなど)は実行内容を復元できないためfail-closeする
+export GH_STUB_JSON="$unreviewed_json"
+assert_blocked "echo 123 | xargs -I{} gh pr merge {}"
+unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON
+
+# 14-2. sudo/xargsが文字列中の引数・コメントに現れるだけの場合は誤検知しないこと(#388の再発防止)
+assert_allowed 'echo "sudo gh pr merge 123"'
+assert_allowed "git commit -m 'fix: xargs gh pr merge の例を追記'"
+assert_allowed "# sudo gh pr merge 123 (コメント例)"
+sudo_heredoc_cmd=$(printf '%s\n' \
+	"cat > ./tmp/note.md <<'EOF14'" \
+	"sudo gh pr merge 123 として実行しないこと" \
+	"echo 123 | xargs gh issue close" \
+	"EOF14")
+assert_allowed "$sudo_heredoc_cmd"
+# merge/close以外のsudo/xargs呼び出しはブロック対象外であること
+assert_allowed "sudo gh pr view 123"
+assert_allowed "echo 123 | xargs gh pr comment --body test"
 unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON
 
 # 破壊操作を伴わないシェル展開は許可すること(過剰遮断の防止)

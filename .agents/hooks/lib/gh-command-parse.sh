@@ -13,9 +13,13 @@ gh_token_is_gh_command() {
 }
 
 # 実行可能な前置wrapperは、絶対・相対パスで指定される場合もあるためbasenameで判定する。
+# sudo/xargsは`gh`が実行位置に来る一般的な前置形(`sudo gh pr merge 123` /
+# `echo 123 | xargs gh pr merge`)のみを対象とし、未知オプションは他wrapper同様に
+# fail-closeする(#390)。xargsは本来複数回実行され得るが、位置引数として書かれた
+# PR/Issue番号の検査には支障がないため同じ枠組みで扱う。
 gh_token_is_known_wrapper() {
 	case "${1##*/}" in
-		time|command|builtin|env|exec) return 0 ;;
+		time|command|builtin|env|exec|sudo|xargs) return 0 ;;
 		*) return 1 ;;
 	esac
 }
