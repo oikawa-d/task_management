@@ -299,11 +299,7 @@ async def test_login_endpoint_email_not_verified_rejected(
 	assert response.json()["error"]["code"] == "EMAIL_NOT_VERIFIED"
 
 	rows = await login_history_repository.list_by_user_id(db_session, user_id, limit=10)
-	# 設計書（02_post_auth_login.md §11）はfailure_reasonを小文字snake_case
-	# （例: email_not_verified）と記載するが、実装（auth_service._LOGIN_FAILURE_EMAIL_NOT_VERIFIED、
-	# 既存の test_auth_service.py も同様）はエラーコードと同じ大文字を格納する。ドキュメント記載の
-	# 乖離としてIssue #444を起票済み。ここでは実装の現状値を検証する。
-	assert any(row.success is False and row.failure_reason == "EMAIL_NOT_VERIFIED" for row in rows)
+	assert any(row.success is False and row.failure_reason == "email_not_verified" for row in rows)
 
 
 async def test_login_endpoint_user_inactive_rejected(
@@ -320,6 +316,9 @@ async def test_login_endpoint_user_inactive_rejected(
 
 	assert response.status_code == 403
 	assert response.json()["error"]["code"] == "USER_INACTIVE"
+
+	rows = await login_history_repository.list_by_user_id(db_session, uuid.UUID(user["id"]), limit=10)
+	assert any(row.success is False and row.failure_reason == "user_inactive" for row in rows)
 
 
 async def test_login_endpoint_invalid_origin_rejected(
@@ -495,17 +494,10 @@ async def test_me_endpoint_inactive_user_returns_403(
 	assert response.json()["error"]["code"] == "USER_INACTIVE"
 
 
-async def test_me_endpoint_session_expired_returns_unauthenticated(
+async def test_me_endpoint_session_expired_returns_session_expired(
 	client: TestClient, created_user_ids: list[uuid.UUID], db_session: AsyncSession, redis_conn: Redis
 ) -> None:
-	"""結合（session固有の異常系）: Redis上のsessionキーが失効済みだと401となる。
-
-	設計書（04_get_auth_me.md §3・§12 No.2/7）は`SESSION_EXPIRED`を期待するが、実装
-	（`SessionAuthStrategy.authenticate`・`core/deps.get_current_user`）はCookie無しの場合と
-	区別せず`UNAUTHENTICATED`に丸めており、`SessionExpiredError`はどこからも送出されない
-	（設計と実装の乖離としてIssue #443を起票済み）。本テストは現状の実装が
-	認証エラーとして安全側に倒れていることを確認する。
-	"""
+	"""結合（session固有の異常系）: CookieありでRedisのsessionが失効済みだとSESSION_EXPIREDとなる。"""
 	settings = get_backend_settings()
 	if settings.auth_mode != "session":
 		pytest.skip("sessionモード固有の検証(jwtはtoken_expiredで別途検証される設計)")
@@ -520,7 +512,7 @@ async def test_me_endpoint_session_expired_returns_unauthenticated(
 	response = client.get("/api/auth/me")
 
 	assert response.status_code == 401
-	assert response.json()["error"]["code"] == "UNAUTHENTICATED"
+	assert response.json()["error"]["code"] == "SESSION_EXPIRED"
 
 
 async def test_me_endpoint_redis_failure_returns_503(
