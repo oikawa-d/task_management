@@ -95,10 +95,13 @@ def test_notifications_router_rejects_missing_and_invalid_session_authentication
 	monkeypatch.setattr(deps.redis_store, "get_session", AsyncMock(return_value=None))
 
 	with TestClient(app) as client:
-		for cookies in ({}, {"cerberus_sid": "invalid-session"}):
+		for cookies, expected_code in (
+			({}, "UNAUTHENTICATED"),
+			({"cerberus_sid": "invalid-session"}, "SESSION_EXPIRED"),
+		):
 			response = getattr(client, method)(path, cookies=cookies)
 			assert response.status_code == 401
-			assert response.json()["error"]["code"] == "UNAUTHENTICATED"
+			assert response.json()["error"]["code"] == expected_code
 
 
 @pytest.mark.parametrize(
