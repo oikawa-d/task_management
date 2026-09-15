@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { useAuthStore } from "../../../auth/authStore";
+import { setLoginMessage } from "../../../auth/loginMessage";
 import { clearUserSessionState } from "../../../auth/sessionCleanup";
 import { ApiError } from "../../../api/errors";
 import { ROUTES } from "../../../routes";
@@ -76,9 +77,10 @@ export function ConnectedSettingsPage() {
 		} catch {
 			// 設計書どおりlogout失敗時もクライアントは未認証状態へ遷移する
 		} finally {
+			setLoginMessage("パスワードを変更しました。再度ログインしてください");
+			navigate(ROUTES.LOGIN, { replace: true });
 			useAuthStore.getState().clear();
 			clearUserSessionState(queryClient);
-			navigate(ROUTES.LOGIN, { replace: true });
 		}
 	};
 	const defaultSlots: SettingsFormSlots = {
