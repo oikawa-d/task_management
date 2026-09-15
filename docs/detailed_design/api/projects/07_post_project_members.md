@@ -24,7 +24,7 @@
 | AUTH_MODE差異 | CSRF検証の要否のみ（session: 必要 / jwt: 不要）。それ以外の業務ロジックは差異なし |
 | 冪等性 | なし（同一user_idを2回送ると2回目は409） |
 | レート制限 | 対象外 |
-| トランザクション境界 | `project_members` へのINSERT1件のみのため単一ステートメント（明示的な`BEGIN`は不要、`AsyncSession`のコミット単位で完結） |
+| トランザクション境界 | `member_service.add_member` が追加・追加結果取得・commitを1単位で実行し、例外時は`AsyncSession.rollback()`する |
 
 ## 2. 入出力仕様（全体の出入力）
 
@@ -110,9 +110,9 @@ sequenceDiagram
     participant R as "projects_router"
     participant D as "deps.require_project_owner"
     participant CSRF as "deps.verify_csrf"
-    participant S as "project_service"
+    participant S as "member_service"
     participant UR as "user_repository"
-    participant PR as "project_repository"
+    participant PR as "project_member_repository"
     participant PG as "PostgreSQL"
 
     FE->>R: "POST /api/projects/{pid}/members {user_id}"
@@ -120,29 +120,34 @@ sequenceDiagram
     D-->>R: Project
     R->>CSRF: "verify_csrf（sessionモードのみ）"
     CSRF-->>R: OK
-    R->>S: add_member(project, user_id, invited_by=current_user)
-    S->>UR: fn_get_user
+    R->>S: add_member(project, user_id, invited_by=user.id, db)
+    S->>UR: get_by_id(db, user_id)
     alt ユーザーが存在しない
         UR-->>S: None
         S-->>R: NotFoundError
         R-->>FE: "404 NOT_FOUND"
     else 既にメンバー
-        S->>PR: fn_is_project_member
+        S->>PR: exists(db, project.id, user_id)
         PR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>PR: 行あり
         PR-->>S: true
         S-->>R: ConflictError
         R-->>FE: "409 ALREADY_MEMBER"
     else 追加可能
-        S->>PR: fn_is_project_member
+        S->>PR: exists(db, project.id, user_id)
         PR-->>S: false
-        S->>PR: sp_add_project_member(project.id, user_id, invited_by)
-        PR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-        PG-->>PR: 追加された行
-        PR-->>S: ProjectMemberRow
+        S->>PR: create(db, project.id, user_id, invited_by)
+        PR->>PG: "CALL sp_add_project_member(:project_id, :user_id, :invited_by)"
+        PG-->>PR: OK
+        S->>PR: list_by_project(db, project.id)
+        PR->>PG: "fn_list_project_members + user一括取得"
+        PG-->>PR: 追加されたメンバー
+        PR-->>S: list[ProjectMember]
+        S->>S: db.commit()
         S-->>R: MemberResponse
         R-->>FE: "201 {member}"
     end
+    Note over S,PG: DB例外またはレスポンス生成失敗時はdb.rollback()して追加を反映しない
 ```
 
 ## 5. 処理フロー・分岐
@@ -161,7 +166,7 @@ flowchart TB
     CS -->|Yes| CV{"CSRFトークン一致?"}
     CV -->|No| E6["403 CSRF_INVALID"]
     CV -->|Yes| F
-    CS -->|No jwt| F["fn_get_user(user_id)"]
+    CS -->|No jwt| F["user_repository.get_by_id(user_id)"]
     F --> G{"対象ユーザーが存在するか"}
     G -->|No| E7["404 NOT_FOUND"]
     G -->|Yes| H{"project_membersに既存か"}
@@ -172,29 +177,29 @@ flowchart TB
 
 ## 6. 関数詳細
 
-### 6.1 `api/routers/projects.py :: add_project_member`
+### 6.1 `api/routers/projects_router.py :: add_project_member`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def add_project_member(payload: AddMemberRequest, project: Project = Depends(require_project_owner), current_user: CurrentUser = Depends(get_current_user), _: None = Depends(verify_csrf)) -> MemberResponse` |
-| 引数 | payload：リクエストボディ、project：検証済みプロジェクト、current_user：招待実行者、`_`：CSRF検証結果（値は使用しない） |
+| シグネチャ | `async def add_project_member(payload: AddMemberRequest, project: Project = Depends(require_project_owner), user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db_session), _: None = Depends(verify_origin_if_session), __csrf: None = Depends(verify_csrf_if_session)) -> MemberResponse` |
+| 引数 | payload：リクエストボディ、project：検証済みプロジェクト、user：招待実行者、db：DBセッション、`_`/`__csrf`：sessionモードのOrigin/CSRF検証結果 |
 | 戻り値 | `MemberResponse`（201） |
 | 送出例外 | なし（下位層の例外を透過） |
-| 処理内容 | 1. `project_service.add_member(project, payload.user_id, invited_by=current_user.id)` を呼び出す 2. 結果を201で返す |
+| 処理内容 | 1. `member_service.add_member(project, payload.user_id, user.id, db)` を呼び出す 2. 結果を201で返す |
 | 副作用 | なし（本関数自体はサービス呼び出しのみ） |
 
-### 6.2 `service/project_service.py :: add_member`
+### 6.2 `service/member_service.py :: add_member`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def add_member(project: Project, user_id: UUID, invited_by: UUID) -> MemberResponse` |
-| 引数 | project：対象プロジェクト、user_id：追加対象、invited_by：招待実行者ID |
+| シグネチャ | `async def add_member(project: Project, user_id: UUID, invited_by: UUID, db: AsyncSession) -> MemberResponse` |
+| 引数 | project：対象プロジェクト、user_id：追加対象、invited_by：招待実行者ID、db：DBセッション |
 | 戻り値 | `MemberResponse` |
 | 送出例外 | `NotFoundError`（→404）、`ConflictError("ALREADY_MEMBER")`（→409） |
-| 処理内容 | 1. `fn_get_user(user_id)` で対象ユーザーを取得。存在しなければ `NotFoundError` 2. `fn_is_project_member(project.id, user_id)` で既存所属を確認。存在すれば `ConflictError` 3. `sp_add_project_member(project.id, user_id, invited_by)` を実行 4. 取得したユーザー情報とINSERT結果から `MemberResponse` を組み立て（`is_owner=False` 固定。オーナー自身は既に `project_members` に存在するため本経路には来ない） |
+| 処理内容 | 1. `user_repository.get_by_id` で対象ユーザーを取得 2. `project_member_repository.exists` で既存所属を確認 3. `project_member_repository.create` で追加 4. `list_by_project` から追加行を取得し`MemberResponse`へ写像 5. commitする。途中で例外が発生した場合はrollbackする |
 | 副作用 | DB更新（`project_members` へのINSERT） |
 
-### 6.3 `repository/project_repository.py :: fn_is_project_member` / `sp_add_project_member`
+### 6.3 `repository/project_member_repository.py :: exists` / `create`
 
 | 項目 | 内容 |
 |------|------|
@@ -207,11 +212,11 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def sp_add_project_member(db: AsyncSession, project_id: UUID, user_id: UUID, invited_by: UUID) -> ProjectMemberRow` |
+| シグネチャ | `async def create(db: AsyncSession, project_id: UUID, user_id: UUID, invited_by: UUID | None) -> None` |
 | 引数 | db, project_id, user_id, invited_by |
-| 戻り値 | INSERTされた行（`joined_at` を含む） |
-| 送出例外 | `IntegrityError`（一意制約違反時。`exists` チェック後のため通常発生しないが、競合発生時は `db_error_handler` が409へ変換） |
-| 処理内容 | `CALL sp_add_project_member(:project_id, :user_id, :invited_by)` |
+| 戻り値 | なし（追加行は`list_by_project`で取得する） |
+| 送出例外 | SQLAlchemy/DBAPI例外。SQLSTATE `P0003` は`AlreadyMemberError`へ変換 |
+| 処理内容 | `CALL sp_add_project_member(:project_id, :user_id, :invited_by)`を発行する |
 | 副作用 | DB更新 |
 
 ## 7. 関数相関図
@@ -220,10 +225,11 @@ flowchart TB
 flowchart LR
     R["projects_router.add_project_member"] --> D["deps.require_project_owner"]
     R --> CSRF["deps.verify_csrf"]
-    R --> S["project_service.add_member"]
-    S --> UR["fn_get_user"]
-    S --> RP1["fn_is_project_member"]
-    S --> RP2["sp_add_project_member"]
+    R --> S["member_service.add_member"]
+    S --> UR["user_repository.get_by_id"]
+    S --> RP1["project_member_repository.exists"]
+    S --> RP2["project_member_repository.create"]
+    S --> RP3["project_member_repository.list_by_project"]
     UR --> PG[("PostgreSQL")]
     RP1 --> PG
     RP2 --> PG
@@ -248,7 +254,7 @@ stateDiagram-v2
 
 | 種別 | 契約 | 説明 |
 |------|------|------|
-| add_project_member | `sp_add_project_member(p_project_id, p_user_id, p_invited_by)` | sp_add_project_memberを呼び出し、結果をレスポンスへ写像する |
+| add_project_member | `sp_add_project_member(p_project_id, p_user_id, p_invited_by)` | `project_member_repository.create`から呼び出し、追加行は`list_by_project`で取得する |
 
 repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
@@ -291,11 +297,12 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | T6 | 結合 | 非所属memberが実行 | project_membersに未登録 | 404 NOT_FOUND | `test_add_member_non_member_404` |
 | T7 | 結合 | sessionモードでCSRFトークン欠落 | X-CSRF-Tokenなし | 403 CSRF_INVALID | `test_add_member_csrf_missing_403` |
 | T8 | 結合 | jwtモードでCSRFヘッダなし | Authorizationのみ | 201（CSRF検証対象外） | `test_add_member_jwt_no_csrf_required` |
-| T9 | 結合（実DB・実SP） | サービス層の404/409分岐 | user_repository/project_実DB・実SPで検証 | 各例外が正しく送出される | `test_service_add_member_branches` |
+| T9 | 結合（実DB・実SP） | サービス層の404/409分岐 | user_repository/project_member_repositoryを実DB・実SPで検証 | 各例外が正しく送出される | `test_service_add_member_branches` |
 | T10 | 結合 | user_idがUUID形式でない | `"user_id": "abc"` | 422 VALIDATION_ERROR | `test_add_member_invalid_uuid_422` |
 | T11 | 結合 | 同時に2リクエストで同一user_idを追加（競合） | 並列実行 | 片方201、もう片方409（一意制約による最終防御） | `test_add_member_race_condition_409` |
+| T12 | 結合（実DB） | 追加後のDB障害 | 追加処理後にDB例外を発生させる | 500、rollbackされ`project_members`に行が残らない | `test_project_member_api_rolls_back_real_insert_on_database_failure` |
 
-T11は実運用ではまれなケースだが、`exists`チェックとINSERTの間のTOCTOU競合を一意制約が防ぐことを検証する目的で残す。
+T11は実運用ではまれなケースだが、`exists`チェックとINSERTの間のTOCTOU競合を一意制約が防ぐことを検証する目的で残す。T12は実DBの追加後に例外を発生させ、サービス層のrollbackを検証する。
 
 ## 13. 不明点・要検討事項
 

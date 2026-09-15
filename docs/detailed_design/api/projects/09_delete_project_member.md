@@ -73,8 +73,8 @@ sequenceDiagram
     participant R as "projects_router"
     participant D as "deps.require_project_owner"
     participant CSRF as "deps.verify_csrf"
-    participant S as "project_service"
-    participant PR as "project_repository"
+    participant S as "member_service"
+    participant PR as "project_member_repository"
     participant PG as "PostgreSQL"
 
     FE->>R: "DELETE /api/projects/{pid}/members/{uid}"
@@ -82,27 +82,27 @@ sequenceDiagram
     D-->>R: Project
     R->>CSRF: "verify_csrf（sessionモードのみ）"
     CSRF-->>R: OK
-    R->>S: remove_member(project, user_id)
+    R->>S: remove_member(project, user_id, db)
     alt user_id == project.owner_id
         S-->>R: ConflictError("OWNER_CANNOT_BE_REMOVED")
         R-->>FE: "409 OWNER_CANNOT_BE_REMOVED"
     else 対象がメンバーでない
-        S->>PR: exists(project.id, user_id)
+        S->>PR: exists(db, project.id, user_id)
         PR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>PR: 0件
         PR-->>S: false
         S-->>R: NotFoundError
         R-->>FE: "404 NOT_FOUND"
     else 削除可能
-        S->>PG: BEGIN
-        S->>PR: sp_remove_project_member(project.id, user_id)
+        S->>PR: delete(db, project.id, user_id)
         PR->>PG: "CALL sp_remove_project_member(:project_id, :user_id)"
         Note over PR,PG: SP内部で担当タスクのassignee_id NULL化と\nproject_membersのDELETEを一体実行
         PG-->>PR: OK
-        S->>PG: COMMIT
+        S->>PG: db.commit()
         S-->>R: None
         R-->>FE: "204 No Content"
     end
+    Note over S,PG: DB例外時はdb.rollback()して担当解除・所属削除を反映しない
 ```
 
 ## 5. 処理フロー・分岐
@@ -136,37 +136,37 @@ flowchart TB
 
 ## 6. 関数詳細
 
-### 6.1 `api/routers/projects.py :: remove_project_member`
+### 6.1 `api/routers/projects_router.py :: remove_project_member`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def remove_project_member(user_id: UUID, project: Project = Depends(require_project_owner), _: None = Depends(verify_csrf)) -> Response` |
-| 引数 | user_id：削除対象（パスパラメータ）、project：検証済みプロジェクト、`_`：CSRF検証結果 |
+| シグネチャ | `async def remove_project_member(user_id: UUID, project: Project = Depends(require_project_owner), db: AsyncSession = Depends(get_db_session), _: None = Depends(verify_origin_if_session), __csrf: None = Depends(verify_csrf_if_session)) -> Response` |
+| 引数 | user_id：削除対象（パスパラメータ）、project：検証済みプロジェクト、db：DBセッション、`_`/`__csrf`：sessionモードのOrigin/CSRF検証結果 |
 | 戻り値 | `Response(status_code=204)` |
 | 送出例外 | なし |
-| 処理内容 | 1. `project_service.remove_member(project, user_id)` を呼び出す 2. 204を返す |
+| 処理内容 | 1. `member_service.remove_member(project, user_id, db)`を呼び出す 2. 204を返す |
 | 副作用 | なし |
 
-### 6.2 `service/project_service.py :: remove_member`
+### 6.2 `service/member_service.py :: remove_member`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def remove_member(project: Project, user_id: UUID) -> None` |
-| 引数 | project、user_id |
+| シグネチャ | `async def remove_member(project: Project, user_id: UUID, db: AsyncSession) -> None` |
+| 引数 | project、user_id、db：DBセッション |
 | 戻り値 | なし |
 | 送出例外 | `ConflictError("OWNER_CANNOT_BE_REMOVED")`（→409）、`NotFoundError`（→404） |
-| 処理内容 | 1. `user_id == project.owner_id` なら `ConflictError` 2. `SELECT fn_is_project_member(project.id, user_id)` が `false` なら `NotFoundError` 3. `project_repository.sp_remove_project_member(project.id, user_id)` を1回呼び、担当解除と所属削除を同一トランザクションで完了する（`task_repository`からは呼び出さず、呼び出し元をproject_repository/project_serviceに一本化する） |
+| 処理内容 | 1. `user_id == project.owner_id`なら`OwnerCannotBeRemovedError` 2. `project_member_repository.exists`が`false`なら`NotFoundError` 3. `project_member_repository.delete`を実行し、commitする。DB例外時はrollbackする |
 | 副作用 | DB更新（`tasks.assignee_id` のNULL化、`project_members` のDELETE）。両方ともSP内部で単一トランザクションとして実行される |
 
-### 6.3 `repository/project_repository.py :: sp_remove_project_member`
+### 6.3 `repository/project_member_repository.py :: delete`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def sp_remove_project_member(db: AsyncSession, project_id: UUID, user_id: UUID) -> None` |
+| シグネチャ | `async def delete(db: AsyncSession, project_id: UUID, user_id: UUID) -> None` |
 | 引数 | db、project_id、user_id |
 | 戻り値 | なし |
 | 送出例外 | なし（DB例外は上位のトランザクション制御でロールバック） |
-| 処理内容 | `CALL sp_remove_project_member(:project_id, :user_id)` を1回発行するのみ。担当タスクの`assignee_id`のNULL化と`project_members`のDELETEはSP内部で一体実行される。`task_repository`は本SPを呼び出さない（呼び出し元をproject_repositoryに一本化） |
+| 処理内容 | `CALL sp_remove_project_member(:project_id, :user_id)`を1回発行するのみ。担当タスクの`assignee_id`のNULL化と`project_members`のDELETEはSP内部で一体実行される |
 | 副作用 | DB更新 |
 
 ## 7. 関数相関図
@@ -175,9 +175,9 @@ flowchart TB
 flowchart LR
     R["projects_router.remove_project_member"] --> D["deps.require_project_owner"]
     R --> CSRF["deps.verify_csrf"]
-    R --> S["project_service.remove_member"]
-    S --> RP1["project_repository.fn_is_project_member"]
-    S --> RP2["project_repository.sp_remove_project_member"]
+    R --> S["member_service.remove_member"]
+    S --> RP1["project_member_repository.exists"]
+    S --> RP2["project_member_repository.delete"]
     RP1 --> PG[("PostgreSQL<br/>project_members")]
     RP2 --> PG2[("PostgreSQL<br/>tasks + project_members（SP内で一体実行）")]
 ```
@@ -208,7 +208,7 @@ stateDiagram-v2
 
 | 種別 | 契約 | 説明 |
 |------|------|------|
-| remove_project_member | `sp_remove_project_member(p_project_id, p_user_id)` | sp_remove_project_memberを呼び出し、結果をレスポンスへ写像する |
+| remove_project_member | `sp_remove_project_member(p_project_id, p_user_id)` | `project_member_repository.delete`から呼び出し、担当解除と所属削除を実行する |
 
 repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
 
@@ -251,9 +251,10 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | T6 | 結合 | 所属memberだがオーナーでない | 一般memberが実行 | 403 FORBIDDEN | `test_remove_member_forbidden_403` |
 | T7 | 結合 | 非所属memberが実行 | project_membersに未登録（実行者側） | 404 NOT_FOUND | `test_remove_member_non_member_403_or_404` |
 | T8 | 結合 | sessionモードでCSRFトークン欠落 | X-CSRF-Tokenなし | 403 CSRF_INVALID | `test_remove_member_csrf_missing_403` |
-| T9 | 結合（実DB・実SP） | サービス層の呼び出し検証 | 実DB・実SPで検証 | `project_repository.sp_remove_project_member`が1回だけ呼ばれる（`task_repository`からは呼び出されない） | `test_service_remove_member_calls_repository_once` |
+| T9 | 結合（実DB・実SP） | サービス層の呼び出し検証 | 実DB・実SPで検証 | `project_member_repository.delete`が1回だけ呼ばれる | `test_service_remove_member_calls_repository_once` |
 | T10 | 結合 | 担当解除とメンバー削除の原子性 | `sp_remove_project_member`実行中にエラーを注入 | ロールバックされtasksのassignee_idとproject_membersが元に戻る | `test_remove_member_transaction_rollback` |
 | T11 | 結合 | AUTH_MODE=session/jwt両方 | 各モードでログイン | いずれも204 | `test_remove_member_both_auth_modes` |
+| T12 | 結合（実DB） | 削除後のDB障害 | 担当タスクを持つメンバーの削除処理後にDB例外を発生させる | 500、rollbackされ`project_members`と`tasks.assignee_id`が元に戻る | `test_project_member_api_rolls_back_real_delete_on_database_failure` |
 
 T10は意図的な例外注入によるロールバック検証であり、実DBコンテナを用いた結合テストとして実施する（`basic_design/04_api.md` §8 の方針に準拠）。
 
