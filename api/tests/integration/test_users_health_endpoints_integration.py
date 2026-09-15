@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from datetime import date
 from types import SimpleNamespace
 from typing import Any
@@ -24,21 +24,8 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 ALLOWED_ORIGIN = "http://localhost:5173"
-TEST_CLIENT_IP = "127.0.0.1"
 TEST_PASSWORD = "OldPass1!"
 NEW_PASSWORD = "NewPass2!"
-
-
-@pytest.fixture(scope="module")
-def api_client(apply_migrations: None) -> Iterator[TestClient]:
-	from app.auth.factory import get_auth_strategy
-
-	get_backend_settings.cache_clear()
-	get_auth_strategy.cache_clear()
-	with TestClient(app, client=(TEST_CLIENT_IP, 50000), raise_server_exceptions=False) as client:
-		client.get("/api/health")
-		yield client
-	get_auth_strategy.cache_clear()
 
 
 @pytest_asyncio.fixture
@@ -96,25 +83,12 @@ def _auth_headers(client: TestClient, login_response: Any, *, csrf: bool = False
 	return headers
 
 
-@pytest.fixture(autouse=True)
-def clear_client_cookies(api_client: TestClient) -> Iterator[None]:
-	from app.auth.factory import get_auth_strategy
-
-	get_backend_settings.cache_clear()
-	get_auth_strategy.cache_clear()
-	api_client.cookies.clear()
-	yield
-	api_client.cookies.clear()
-	get_auth_strategy.cache_clear()
-	get_backend_settings.cache_clear()
-
-
 async def test_users_me_endpoint_authenticated_success(
-	api_client: TestClient, db_session: AsyncSession, created_user_ids: list[uuid.UUID]
+	client, db_session: AsyncSession, created_user_ids: list[uuid.UUID]
 ) -> None:
 	user = await _create_user(db_session, created_user_ids, "profile")
-	login_response = _login(api_client, user)
-	response = api_client.get("/api/users/me", headers=_auth_headers(api_client, login_response))
+	login_response = _login(client, user)
+	response = client.get("/api/users/me", headers=_auth_headers(client, login_response))
 
 	assert response.status_code == 200, response.text
 	body = response.json()
@@ -138,36 +112,34 @@ async def test_users_me_endpoint_authenticated_success(
 		("/api/users/me/login-history", "GET", None),
 	],
 )
-def test_users_me_endpoints_unauthenticated(
-	api_client: TestClient, path: str, method: str, payload: dict[str, str] | None
-) -> None:
-	response = api_client.request(method, path, json=payload, headers={"Origin": ALLOWED_ORIGIN})
+def test_users_me_endpoints_unauthenticated(client, path: str, method: str, payload: dict[str, str] | None) -> None:
+	response = client.request(method, path, json=payload, headers={"Origin": ALLOWED_ORIGIN})
 
 	assert response.status_code == 401, response.text
 	assert response.json()["error"]["code"] == "UNAUTHENTICATED"
 
 
 async def test_users_me_endpoint_inactive_user_returns_forbidden(
-	api_client: TestClient, db_session: AsyncSession, created_user_ids: list[uuid.UUID]
+	client, db_session: AsyncSession, created_user_ids: list[uuid.UUID]
 ) -> None:
 	user = await _create_user(db_session, created_user_ids, "inactive")
-	login_response = _login(api_client, user)
+	login_response = _login(client, user)
 	await db_session.execute(text("UPDATE users SET is_active = false WHERE id = :user_id"), {"user_id": user["id"]})
 	await db_session.commit()
 
-	response = api_client.get("/api/users/me", headers=_auth_headers(api_client, login_response))
+	response = client.get("/api/users/me", headers=_auth_headers(client, login_response))
 
 	assert response.status_code == 403
 	assert response.json()["error"]["code"] == "USER_INACTIVE"
 
 
 async def test_patch_users_me_endpoint_success(
-	api_client: TestClient, db_session: AsyncSession, created_user_ids: list[uuid.UUID]
+	client, db_session: AsyncSession, created_user_ids: list[uuid.UUID]
 ) -> None:
 	user = await _create_user(db_session, created_user_ids, "patch")
-	login_response = _login(api_client, user)
-	response = api_client.patch(
-		"/api/users/me", json={"last_name": "鈴木"}, headers=_auth_headers(api_client, login_response, csrf=True)
+	login_response = _login(client, user)
+	response = client.patch(
+		"/api/users/me", json={"last_name": "鈴木"}, headers=_auth_headers(client, login_response, csrf=True)
 	)
 
 	assert response.status_code == 200, response.text
@@ -177,23 +149,23 @@ async def test_patch_users_me_endpoint_success(
 
 
 async def test_put_users_me_password_endpoint_success(
-	api_client: TestClient, db_session: AsyncSession, created_user_ids: list[uuid.UUID]
+	client, db_session: AsyncSession, created_user_ids: list[uuid.UUID]
 ) -> None:
 	user = await _create_user(db_session, created_user_ids, "password")
-	login_response = _login(api_client, user)
-	response = api_client.put(
+	login_response = _login(client, user)
+	response = client.put(
 		"/api/users/me/password",
 		json={"current_password": TEST_PASSWORD, "new_password": NEW_PASSWORD, "password_confirm": NEW_PASSWORD},
-		headers=_auth_headers(api_client, login_response, csrf=True),
+		headers=_auth_headers(client, login_response, csrf=True),
 	)
 
 	assert response.status_code == 204
 	if get_backend_settings().auth_mode == "session":
-		assert api_client.get("/api/users/me").status_code == 401
+		assert client.get("/api/users/me").status_code == 401
 	else:
-		refresh = api_client.post("/api/auth/refresh", headers=_auth_headers(api_client, login_response, csrf=True))
+		refresh = client.post("/api/auth/refresh", headers=_auth_headers(client, login_response, csrf=True))
 		assert refresh.status_code == 401
-	new_login = api_client.post(
+	new_login = client.post(
 		"/api/auth/login",
 		json={"identifier": user["username"], "password": NEW_PASSWORD},
 		headers={"Origin": ALLOWED_ORIGIN},
@@ -203,15 +175,15 @@ async def test_put_users_me_password_endpoint_success(
 
 
 async def test_get_users_me_login_history_endpoint_is_scoped(
-	api_client: TestClient,
+	client,
 	db_session: AsyncSession,
 	created_user_ids: list[uuid.UUID],
 ) -> None:
 	user = await _create_user(db_session, created_user_ids, "history")
 	other = await _create_user(db_session, created_user_ids, "other")
-	login_response = _login(api_client, user)
+	login_response = _login(client, user)
 
-	response = api_client.get("/api/users/me/login-history", headers=_auth_headers(api_client, login_response))
+	response = client.get("/api/users/me/login-history", headers=_auth_headers(client, login_response))
 	rows = await login_history_repository.list_by_user_id(db_session, user["id"], limit=50)
 	other_rows = await login_history_repository.list_by_user_id(db_session, other["id"], limit=50)
 
@@ -222,26 +194,26 @@ async def test_get_users_me_login_history_endpoint_is_scoped(
 
 
 async def test_users_me_endpoint_db_failure_returns_service_unavailable(
-	api_client: TestClient,
+	client,
 	db_session: AsyncSession,
 	created_user_ids: list[uuid.UUID],
 	monkeypatch: pytest.MonkeyPatch,
 ) -> None:
 	user = await _create_user(db_session, created_user_ids, "dbfailure")
-	login_response = _login(api_client, user)
+	login_response = _login(client, user)
 
 	async def fail_get_by_id(*_args: Any, **_kwargs: Any) -> Any:
 		raise OperationalError("SELECT * FROM fn_get_user", {}, SimpleNamespace(sqlstate="08006"))
 
 	monkeypatch.setattr(user_repository, "get_by_id", fail_get_by_id)
-	response = api_client.get("/api/users/me", headers=_auth_headers(api_client, login_response))
+	response = client.get("/api/users/me", headers=_auth_headers(client, login_response))
 
 	assert response.status_code == 503
 	assert response.json()["error"]["code"] == "SERVICE_UNAVAILABLE"
 
 
 async def test_users_me_endpoint_session_redis_failure_returns_service_unavailable(
-	api_client: TestClient,
+	client,
 	db_session: AsyncSession,
 	created_user_ids: list[uuid.UUID],
 	monkeypatch: pytest.MonkeyPatch,
@@ -249,20 +221,20 @@ async def test_users_me_endpoint_session_redis_failure_returns_service_unavailab
 	if get_backend_settings().auth_mode != "session":
 		pytest.skip("AUTH_MODE=sessionでのみ検証する")
 	user = await _create_user(db_session, created_user_ids, "redisfailure")
-	login_response = _login(api_client, user)
+	login_response = _login(client, user)
 
 	async def fail_get_session(*_args: Any, **_kwargs: Any) -> Any:
 		raise RedisConnectionError("redis down")
 
 	monkeypatch.setattr("app.auth.session_auth.redis_store.get_session", fail_get_session)
-	response = api_client.get("/api/users/me", headers=_auth_headers(api_client, login_response))
+	response = client.get("/api/users/me", headers=_auth_headers(client, login_response))
 
 	assert response.status_code == 503
 	assert response.json()["error"]["code"] == "SERVICE_UNAVAILABLE"
 
 
-def test_get_health_endpoint_no_auth_required(api_client: TestClient) -> None:
-	response = api_client.get("/api/health")
+def test_get_health_endpoint_no_auth_required(client) -> None:
+	response = client.get("/api/health")
 
 	assert response.status_code == 200
 	body = response.json()
@@ -273,14 +245,14 @@ def test_get_health_endpoint_no_auth_required(api_client: TestClient) -> None:
 	assert "error" not in body
 
 
-def test_get_health_endpoint_redis_down(api_client: TestClient) -> None:
+def test_get_health_endpoint_redis_down(client) -> None:
 	class BrokenRedis:
 		async def ping(self) -> bool:
 			raise RedisConnectionError("redis down")
 
 	app.dependency_overrides[get_redis_client] = lambda: BrokenRedis()
 	try:
-		response = api_client.get("/api/health")
+		response = client.get("/api/health")
 	finally:
 		app.dependency_overrides.pop(get_redis_client, None)
 
@@ -291,7 +263,7 @@ def test_get_health_endpoint_redis_down(api_client: TestClient) -> None:
 	assert "error" not in body
 
 
-def test_get_health_endpoint_database_down(api_client: TestClient) -> None:
+def test_get_health_endpoint_database_down(client) -> None:
 	class BrokenConnection:
 		async def __aenter__(self) -> Any:
 			raise OperationalError("SELECT 1", {}, SimpleNamespace(sqlstate="08006"))
@@ -305,7 +277,7 @@ def test_get_health_endpoint_database_down(api_client: TestClient) -> None:
 
 	app.dependency_overrides[get_db_engine] = lambda: BrokenEngine()
 	try:
-		response = api_client.get("/api/health")
+		response = client.get("/api/health")
 	finally:
 		app.dependency_overrides.pop(get_db_engine, None)
 
