@@ -304,11 +304,11 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 10 | 結合 | adminは全ユーザーの未所属タスクを含め全件 | 実DB、複数ユーザーの未所属タスク | 200、全件に含まれる | 未実装（issue #458）。DB関数レベルでは`api/tests/test_db_functions_project_task.py::test_fn_list_tasks_admin_sees_all_unassigned_tasks`がカバー済み |
 | 11 | 結合 | 既定はis_active=falseを除外 | 実DB、`is_active=false`のタスクを含む | 200、含まれない | `test_list_tasks_excludes_inactive_by_default_and_can_include_it` |
 | 12 | 結合 | include_inactive指定 | 実DB、`?include_inactive=true` | 200、`is_active=false`のタスクも含まれる | `test_list_tasks_excludes_inactive_by_default_and_can_include_it` |
-| 13 | APIルーター | statusフィルタ | `?status=done&per_page=20`、サービスをモック | `status="done"`でサービス呼び出し | `test_list_tasks_forwards_status_filter` |
-| 14 | APIルーター | ページング | `?page=2&per_page=5`、サービスをモック | `page=2`、`per_page=5`でサービス呼び出し | `test_list_tasks_forwards_pagination` |
+| 13 | 結合（実DB・実SP） | statusフィルタ | 実DB、`scenario`フィクスチャの認可範囲にtodo / in_progress / doneを用意し、`?status=done`を指定 | 200、doneのタスクだけが返り、`meta.total=1`になる | `test_list_tasks_filters_by_status_using_database`。`test_list_tasks_forwards_status_filter`はクエリ引数転送の単体テストとして別途実施 |
+| 14 | 結合（実DB・実SP） | ページング | 実DB、`scenario`フィクスチャの認可範囲3件に対して`?page=1&per_page=2`と`?page=2&per_page=2`を指定 | 200、1ページ目2件・2ページ目1件、重複なしで全対象行がいずれかのページに含まれる | `test_list_tasks_paginates_using_database`。`test_list_tasks_forwards_pagination`はクエリ引数転送の単体テストとして別途実施 |
 | 15 | パラメータ化 | AUTH_MODE両対応 | `AUTH_MODE=session` / `jwt` | 5・9・10を両モードで実行 | 未実装。現状の結合テストは実行時の`AUTH_MODE`設定値に追随するのみで、両モードを1テストでパラメータ化して実行する仕組みはない |
 
-実装済みの結合テストでは、上表の一覧境界に加えて、同一シナリオで作成・詳細取得・position更新・version競合（409）・論理削除・ボード再取得まで確認する（`test_task_crud_updates_position_and_rejects_stale_version`）。未確認の同時PATCH競合とページングの実DB検証は要検討とする。
+実装済みの結合テストでは、上表の一覧境界に加えて、同一シナリオで作成・詳細取得・position更新・version競合（409）・論理削除・ボード再取得まで確認する（`test_task_crud_updates_position_and_rejects_stale_version`）。同時PATCH競合は未確認であり、要検討とする。
 
 ## 13. 不明点・要検討事項
 
