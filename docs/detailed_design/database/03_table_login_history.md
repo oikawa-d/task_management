@@ -35,7 +35,7 @@
 | IPアドレス | `ip_address` | INET | YES | - | - | `TRUSTED_PROXY_CIDRS`に含まれる直近ProxyからのXFFだけを解決して取得。未信頼時は接続元IP |
 | ユーザーエージェント | `user_agent` | TEXT | YES | - | - | |
 | 成否 | `success` | BOOLEAN | NO | - | - | |
-| 失敗理由 | `failure_reason` | VARCHAR(50) | YES | - | - | `invalid_credentials` / `user_inactive` / `oauth_denied` 等 |
+| 失敗理由 | `failure_reason` | VARCHAR(50) | YES | - | - | `invalid_credentials` / `user_inactive` 等 |
 | 作成日時 | `created_at` | TIMESTAMPTZ | NO | `now()` | - | |
 
 パスワードリセットの実行履歴は本テーブルに含めない（`login_method` のCHECK制約を汚さないため。基本設計スコープでは `security_events` テーブルも追加しない）。
@@ -265,5 +265,6 @@ flowchart LR
 - `login_history` INSERT失敗時は `503 SERVICE_UNAVAILABLE` とし、成功ログインを返さない。構造化ログへ `event=login_history_write_failed`、`request_id`、対象user_idを記録する（パスワード・トークンは記録しない）。
 - `X-Forwarded-For` は `TRUSTED_PROXY_CIDRS` による信頼境界を通過した場合のみ監査IPへ反映する。
 - `purge_expired` の実行中に新規ログイン試行のINSERTと競合した場合の挙動（ロック待ち等）は、PostgreSQLの標準的なMVCCに委ねる前提とし、advisory lockは使用しない方針としたが、運用上問題ないか要検討。
-- `failure_reason` の許容値一覧（`invalid_credentials` / `user_inactive` / `oauth_denied` 等）はCHECK制約化せず基本設計の「等」表記のまま自由記述としたが、値のガバナンスをDB側でも制約すべきか要検討。
+- `failure_reason` の許容値一覧（`invalid_credentials` / `user_inactive` 等）はCHECK制約化せず基本設計の「等」表記のまま自由記述としたが、値のガバナンスをDB側でも制約すべきか要検討。
 - `login_history_repository.list_all`は設けず、本人向け取得と管理者向け絞り込み取得を分離する。将来の共通一覧化はAPI・認可・DB関数の責務を含めて要検討。
+- issue #444（本対応）で `failure_reason` の保存値を大文字から小文字snake_caseへ統一したが、既に大文字値でINSERT済みの既存 `login_history` レコードは本対応では移行しないため、大文字・小文字が混在した状態が残る。既存データのバックフィル方針は未決であり、issue #459 で決定する（要検討）。

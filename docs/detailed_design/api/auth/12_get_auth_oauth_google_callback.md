@@ -31,6 +31,8 @@
 | レート制限 | `oauth callback` はIP単位で10回/900秒。超過時は429 `TOO_MANY_ATTEMPTS` と残り秒数の`Retry-After`を返し、Redis障害時は503 `SERVICE_UNAVAILABLE` として認可を成立させない。その他の検証失敗は302で`/login`へ遷移する |
 | トランザクション境界 | ユーザー解決/作成（`users` INSERT または `oauth_accounts` INSERT）は1トランザクション。session モードでは同トランザクション確定後に `login_history` を別途INSERTする |
 
+OAuth callback失敗（`oauth_denied`、`oauth_failed`、`oauth_email_unverified`等）は`login_history`へ記録しない。`login_history`はOAuthログイン成功時のみ、sessionモードではcallback成功後に記録する。
+
 OAuth routerの配置方針と通常の認証routerとの責務境界は、11番ファイル §1.1の決定に従う。
 
 ## 2. 入出力仕様
