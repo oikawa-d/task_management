@@ -24,7 +24,7 @@
 | AUTH_MODE差異 | CSRF検証の要否のみ差異あり。それ以外は差異なし |
 | 冪等性 | なし（POSTのため。二重送信防止はフロント側でボタン非活性化により行う） |
 | レート制限 | 対象外（§13参照。現時点で基本設計に規定なし） |
-| トランザクション境界 | `task_comments` への1行INSERTのみ。単一ステートメントのため明示的トランザクションは不要 |
+| トランザクション境界 | `task_comments` へのINSERT、作成行再取得、`db.commit()`をサービス層で一体実行。例外時は`db.rollback()`で部分更新を残さない |
 
 ## 2. 入出力仕様
 
@@ -95,11 +95,11 @@
 sequenceDiagram
     autonumber
     participant FE as "React SPA"
-    participant R as "comments_router"
+    participant R as "comment_router"
     participant V as "verify_origin_if_session/verify_csrf_if_session"
     participant D as "deps.get_task_for_member"
-    participant S as "task_service"
-    participant TR as "task_repository"
+    participant S as "task_comment_service"
+    participant TR as "task_comment_repository"
     participant PG as "PostgreSQL"
 
     FE->>R: "POST /api/tasks/{task_id}/comments {body}"
@@ -123,8 +123,15 @@ sequenceDiagram
             TR->>PG: "SELECT fn_get_comment_with_task(comment_id)"
             PG-->>TR: "comment行（author含む）"
             TR-->>S: "Comment"
-            S-->>R: "CommentResponse"
-            R-->>FE: "201 {comment}"
+            S->>PG: "db.commit()"
+            alt "DB/transaction failure"
+                S->>PG: "db.rollback()"
+                S-->>R: "DB exception"
+                R-->>FE: "503 SERVICE_UNAVAILABLE"
+            else "commit success"
+                S-->>R: "CommentResponse"
+                R-->>FE: "201 {comment}"
+            end
         end
     end
 ```
@@ -151,11 +158,11 @@ flowchart TB
 
 ## 6. 関数詳細
 
-### 6.1 `api/routers/comments.py :: create_task_comment`
+### 6.1 `api/app/api/routers/comment_router.py :: create_task_comment`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def create_task_comment(payload: CommentCreateRequest, task: Task = Depends(get_task_for_member), user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> CommentResponse` |
+| シグネチャ | `async def create_task_comment(payload: CommentCreateRequest, task: Task = Depends(get_task_for_member), user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db_session)) -> CommentResponse` |
 | 引数 | `payload`：リクエストボディ／`task`：認可済みタスク／`user`：現在ユーザー／`db`：DBセッション |
 | 戻り値 | `CommentResponse`（201） |
 | 送出例外 | なし（下位の例外はハンドラで変換） |
@@ -173,22 +180,22 @@ flowchart TB
 | 処理内容 | 1. `str_strip_whitespace=True`（pydantic Config）でtrim 2. trim後の空文字を `min_length=1` で拒否 3. `TASK_COMMENT_BODY_MAX_LENGTH`（`core/config.py`、既定値2000。`task_comments.body` のアプリ層検証値と一致させる）で上限を検証 |
 | 副作用 | なし |
 
-### 6.3 `service/task_service.py :: add_comment`
+### 6.3 `api/app/service/task_comment_service.py :: add_comment`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def add_comment(task: Task, payload: CommentCreateRequest, user: CurrentUser, db: AsyncSession) -> Comment` |
+| シグネチャ | `async def add_comment(task: Task, payload: CommentCreateRequest, user: CurrentUser, db: AsyncSession) -> CommentResponse` |
 | 引数 | `task`：対象タスク／`payload`：検証済み入力／`user`：投稿者／`db`：DBセッション |
-| 戻り値 | 作成後に`get_by_id`で再取得した `Comment`（`author`を含む） |
-| 送出例外 | なし（バリデーションはルーター層のpydanticで完了済み） |
-| 処理内容 | 1. `task_comment_repository.create(db, task.id, user.id, payload.body)`（`CALL sp_add_task_comment(...)`）を呼ぶ。SPは`gen_random_uuid()`で採番した`comment_id`をOUTパラメータで返す 2. `task_comment_repository.get_by_id(db, comment_id)`（`SELECT fn_get_comment_with_task(:comment_id)`）で作成行を再取得し、DBから取得した`author`情報付きで写像して返す。再取得結果が存在しない場合は`NotFoundError`とする |
+| 戻り値 | 作成後に`get_by_id`で再取得した `CommentResponse`（`author`を含む） |
+| 送出例外 | `NotFoundError`、DB例外（DB例外時はrollback後にハンドラで503へ変換） |
+| 処理内容 | 1. `task_comment_repository.create(db, task.id, user.id, payload.body)`（`CALL sp_add_task_comment(...)`）を呼ぶ 2. `task_comment_repository.get_by_id(db, comment_id)`で作成行を再取得し写像する 3. `db.commit()`を実行する。途中で例外が発生した場合は`db.rollback()`後に再送出する |
 | 副作用 | `task_comments` への1行INSERT（SP内部） |
 
-### 6.4 `repository/task_repository.py :: add`
+### 6.4 `api/app/repository/task_comment_repository.py :: create`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def add(db: AsyncSession, task_id: UUID, user_id: UUID, body: str) -> UUID` |
+| シグネチャ | `async def create(db: AsyncSession, task_id: UUID, user_id: UUID, body: str) -> UUID` |
 | 引数 | `task_id` / `user_id` / `body`：保存する値／`db`：DBセッション |
 | 戻り値 | DB側で採番された`comment_id`（OUTパラメータ） |
 | 送出例外 | `IntegrityError`（FK違反時。通常は上位で存在確認済みのため発生しない想定） |
@@ -199,9 +206,9 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    R["comments_router.create_task_comment"] --> Sch["schemas.CommentCreateRequest"]
+    R["comment_router.create_task_comment"] --> Sch["schemas.CommentCreateRequest"]
     R --> D["deps.get_task_for_member"]
-    R --> S["task_service.add_comment"]
+    R --> S["task_comment_service.add_comment"]
     S --> TR["task_comment_repository.create<br/>（sp_add_task_comment）"]
     S --> GET["task_comment_repository.get_by_id<br/>（fn_get_comment_with_task）"]
     TR --> DB[("PostgreSQL<br/>task_comments")]
@@ -268,6 +275,9 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 6 | 結合 | CSRFトークン欠落（sessionモード） | 実DB、`X-CSRF-Token` 未送信 | `403 CSRF_INVALID` | `test_post_task_comments_missing_csrf_session_mode` |
 | 7 | パラメータ化 | `AUTH_MODE=session` / `jwt` の両方で正常系を確認 | 両モードのfixture | いずれも `201` | `test_post_task_comments_both_auth_modes` |
 | 8 | 結合 | `<script>alert(1)</script>` を含む本文を投稿し取得 | 実DB | 保存値がエスケープされずそのまま格納される（サーバー側では変換しない方針の確認） | `test_post_task_comments_stores_raw_body_without_serverside_escaping` |
+| 9 | 結合 | API境界で投稿後に一覧取得し、編集・削除まで連携 | 実DB、本人認証 | `201`→`200`→`200`→`204`、trim後の本文・投稿者情報・削除結果が整合 | `test_comment_crud_round_trip_at_api_boundary` |
+| 10 | 結合 | DB commit失敗時に投稿の部分更新を残さない | 実DB、commitを失敗させるfixture | `503 SERVICE_UNAVAILABLE`、失敗本文が一覧に残らない | `test_comment_create_transaction_failure_leaves_no_partial_row` |
+| 11 | 結合 | 論理削除task・未所属task・不存在taskの投稿境界 | 実DB、本人/非所属ユーザー | 論理削除・非作成者の未所属・不存在は`404 NOT_FOUND`、作成者の未所属taskは`201` | `test_comment_task_scope_handles_inactive_unassigned_and_missing_resources` |
 
 フロントのReactエスケープ挙動自体はバックエンドのpytestでは検証できないため、フロントエンドのVitestテスト側の責務とする（本ファイルのテスト対象外）。
 
