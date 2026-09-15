@@ -25,7 +25,10 @@ from app.core.exceptions import (
 )
 from app.db import get_db_session
 from app.schemas.oauth import OAuthExchangeRequest, OAuthExchangeResponse
-from app.service import auth_service
+from app.service import auth_service as basic_auth_service
+from app.service import oauth_service
+
+auth_service = oauth_service
 
 logger = logging.getLogger("app.oauth")
 
@@ -56,7 +59,7 @@ async def oauth_google_start(
 	settings: BackendSettings = Depends(get_backend_settings),
 ) -> RedirectResponse:
 	_ensure_google_login_enabled(settings)
-	result = await auth_service.oauth_start(redirect_to, request, response)
+	result = await oauth_service.oauth_start(redirect_to, request, response)
 	redirect = RedirectResponse(result.authorize_url, status_code=_HTTP_FOUND)
 	redirect.raw_headers.extend(response.raw_headers)
 	return redirect
@@ -77,7 +80,7 @@ async def oauth_google_callback(
 	if error:
 		state_cookie = request.cookies.get(settings.cookie_name_oauth_state)
 		try:
-			await auth_service.oauth_callback_denied(state, state_cookie, request, response, settings=settings)
+			await oauth_service.oauth_callback_denied(state, state_cookie, request, response, settings=settings)
 		except ServiceUnavailableError:
 			raise
 		except TooManyAttemptsError:
@@ -95,7 +98,7 @@ async def oauth_google_callback(
 		return _login_error_redirect(OAUTH_ERROR_DENIED, settings, response)
 	state_cookie = request.cookies.get(settings.cookie_name_oauth_state)
 	try:
-		result = await auth_service.oauth_callback(code, state, state_cookie, request, response, db)
+		result = await oauth_service.oauth_callback(code, state, state_cookie, request, response, db)
 	except ServiceUnavailableError:
 		raise
 	except TooManyAttemptsError:
@@ -137,7 +140,7 @@ async def oauth_exchange(
 	_ensure_google_login_enabled(settings)
 	if settings.auth_mode != "jwt":
 		raise NotSupportedInModeError()
-	result = await auth_service.oauth_exchange(payload.code, request, response, db)
+	result = await oauth_service.oauth_exchange(payload.code, request, response, db)
 	response.headers["Cache-Control"] = "no-store"
 	return result
 
@@ -150,7 +153,7 @@ def _callback_error_value(exc: Exception) -> str:
 
 
 def _is_google_login_enabled(settings: BackendSettings) -> bool:
-	return auth_service.get_auth_config(settings).google_login_enabled
+	return basic_auth_service.get_auth_config(settings).google_login_enabled
 
 
 def _ensure_google_login_enabled(settings: BackendSettings) -> None:

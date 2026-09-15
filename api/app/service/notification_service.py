@@ -3,6 +3,7 @@ from math import ceil
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_backend_settings
@@ -89,17 +90,28 @@ async def get_unread_count(db: AsyncSession, user: CurrentUser) -> UnreadCountRe
 async def mark_notification_read(
 	db: AsyncSession, notification_id: UUID, user: CurrentUser
 ) -> NotificationReadResponse:
-	read_at = await notification_repository.mark_read(db, notification_id, user.id)
-	if read_at is None:
-		raise NotFoundError()
-	return NotificationReadResponse(
-		id=notification_id,
-		read_at=_to_app_timezone(read_at),
-		unread_count=await notification_repository.count_unread(db, user.id),
-	)
+	try:
+		read_at = await notification_repository.mark_read(db, notification_id, user.id)
+		if read_at is None:
+			raise NotFoundError()
+		unread_count = await notification_repository.count_unread(db, user.id)
+		await db.commit()
+		return NotificationReadResponse(
+			id=notification_id,
+			read_at=_to_app_timezone(read_at),
+			unread_count=unread_count,
+		)
+	except DBAPIError:
+		await db.rollback()
+		raise
 
 
 async def mark_all_notifications_read(db: AsyncSession, user: CurrentUser) -> NotificationReadAllResponse:
-	updated_count = await notification_repository.mark_all_read(db, user.id)
-	after = await notification_repository.count_unread(db, user.id)
-	return NotificationReadAllResponse(updated_count=updated_count, unread_count=after)
+	try:
+		updated_count = await notification_repository.mark_all_read(db, user.id)
+		after = await notification_repository.count_unread(db, user.id)
+		await db.commit()
+		return NotificationReadAllResponse(updated_count=updated_count, unread_count=after)
+	except DBAPIError:
+		await db.rollback()
+		raise

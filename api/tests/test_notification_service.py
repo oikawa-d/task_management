@@ -1,14 +1,21 @@
-from datetime import datetime, timezone
+import asyncio
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
+from app.core.config import get_backend_settings
 from app.core.exceptions import NotFoundError
 from app.models.notification import Notification
+from app.repository import notification_repository, user_repository
 from app.repository.notification_repository import NotificationListItem
 from app.schemas.auth import CurrentUser
+from app.schemas.notification import NotificationReadAllResponse, NotificationReadResponse
 from app.service import notification_service
+from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
 def _user() -> CurrentUser:
@@ -57,6 +64,34 @@ def _patch_repository(
 	monkeypatch.setattr(notification_service.notification_repository, "count_notifications", count_notifications)
 	monkeypatch.setattr(notification_service.notification_repository, "count_unread", count_unread)
 	return list_by_user, count_notifications, count_unread
+
+
+async def _insert_notification(
+	db: AsyncSession,
+	user_id,
+	dedupe_key: str,
+	created_at: datetime,
+	read_at: datetime | None = None,
+	due_at: datetime | None = None,
+):
+	result = await db.execute(
+		text(
+			"INSERT INTO notifications "
+			"(user_id, type, title, body, due_at, dedupe_key, read_at, created_at) "
+			"VALUES (:user_id, 'due_today_created', :title, :body, :due_at, :dedupe_key, :read_at, :created_at) "
+			"RETURNING id"
+		),
+		{
+			"user_id": user_id,
+			"title": dedupe_key,
+			"body": "確認してください",
+			"due_at": due_at,
+			"dedupe_key": dedupe_key,
+			"read_at": read_at,
+			"created_at": created_at,
+		},
+	)
+	return result.scalar_one()
 
 
 @pytest.mark.asyncio
@@ -184,11 +219,12 @@ async def test_mark_all_notifications_returns_changed_count(monkeypatch: pytest.
 	mark_all_read = AsyncMock(return_value=3)
 	monkeypatch.setattr(notification_service.notification_repository, "count_unread", AsyncMock(return_value=0))
 	monkeypatch.setattr(notification_service.notification_repository, "mark_all_read", mark_all_read)
-	db = object()
+	db = AsyncMock()
 
 	response = await notification_service.mark_all_notifications_read(db, user)  # type: ignore[arg-type]
 
 	mark_all_read.assert_awaited_once_with(db, user.id)
+	db.commit.assert_awaited_once()
 	assert response.updated_count == 3
 	assert response.unread_count == 0
 
@@ -201,13 +237,14 @@ async def test_mark_notification_read_returns_app_timezone(monkeypatch: pytest.M
 	monkeypatch.setattr(notification_service.notification_repository, "mark_read", mark_read)
 	monkeypatch.setattr(notification_service.notification_repository, "count_unread", AsyncMock(return_value=0))
 	notification_id = uuid4()
-	db = object()
+	db = AsyncMock()
 
 	response = await notification_service.mark_notification_read(db, notification_id, user)  # type: ignore[arg-type]
 
 	mark_read.assert_awaited_once_with(db, notification_id, user.id)
 	assert response.id == notification_id
 	assert response.read_at == persisted_read_at.astimezone(ZoneInfo("Asia/Tokyo"))
+	db.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -219,9 +256,144 @@ async def test_mark_notification_read_returns_404_when_repository_returns_none(
 	count_unread = AsyncMock(return_value=0)
 	monkeypatch.setattr(notification_service.notification_repository, "mark_read", mark_read)
 	monkeypatch.setattr(notification_service.notification_repository, "count_unread", count_unread)
-	db = object()
+	db = AsyncMock()
 
 	with pytest.raises(NotFoundError):
 		await notification_service.mark_notification_read(db, uuid4(), user)  # type: ignore[arg-type]
 
 	count_unread.assert_not_awaited()
+	db.rollback.assert_not_awaited()
+
+
+@pytest.mark.parametrize("operation", ["mark_read", "mark_all_read"])
+async def test_notification_mutation_rolls_back_on_database_error(
+	monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+	user = _user()
+	db = AsyncMock()
+	db_error = DBAPIError("notification update", {}, Exception("database error"))
+	if operation == "mark_read":
+		monkeypatch.setattr(notification_service.notification_repository, "mark_read", AsyncMock(side_effect=db_error))
+		call = notification_service.mark_notification_read(db, uuid4(), user)
+	else:
+		monkeypatch.setattr(
+			notification_service.notification_repository, "mark_all_read", AsyncMock(side_effect=db_error)
+		)
+		call = notification_service.mark_all_notifications_read(db, user)
+
+	with pytest.raises(DBAPIError):
+		await call  # type: ignore[arg-type]
+
+	db.rollback.assert_awaited_once()
+	db.commit.assert_not_awaited()
+
+
+async def test_notification_lifecycle_uses_database_contract(db_session: AsyncSession) -> None:
+	user_id = await user_repository.create(db_session, "notification-lifecycle", "notification@example.com", "hash")
+	other_user_id = await user_repository.create(
+		db_session, "notification-other", "notification-other@example.com", "hash"
+	)
+	now = datetime(2026, 9, 4, 1, tzinfo=timezone.utc)
+	first_id = await _insert_notification(db_session, user_id, "first", now, due_at=now)
+	await _insert_notification(db_session, user_id, "second", now - timedelta(hours=1))
+	await _insert_notification(
+		db_session, user_id, "already-read", now - timedelta(hours=2), read_at=now - timedelta(days=1)
+	)
+	other_id = await _insert_notification(db_session, other_user_id, "other", now)
+	current_user = CurrentUser(
+		id=user_id, username="notification-lifecycle", role="member", is_active=True, email_verified_at=None
+	)
+
+	page = await notification_service.list_notifications(db_session, current_user, 1, 2, False)
+	assert len(page.items) == 2
+	assert page.meta.total == 3
+	assert page.unread_count == 2
+	assert all(item.id != other_id for item in page.items)
+	first_item = next(item for item in page.items if item.id == first_id)
+	# aware datetime同士の`==`は瞬間比較のためUTC/JST表現の差異を検出できない(常にTrueになる)。
+	# オフセットと壁時計時刻を直接検証し、変換が行われなかった場合(UTCのまま返る場合)に
+	# 確実に失敗するようにする。
+	assert first_item.due_at.utcoffset() == timedelta(hours=9)
+	assert (
+		first_item.due_at.year,
+		first_item.due_at.month,
+		first_item.due_at.day,
+		first_item.due_at.hour,
+		first_item.due_at.minute,
+	) == (2026, 9, 4, 10, 0)
+
+	read_response = await notification_service.mark_notification_read(db_session, first_id, current_user)
+	assert read_response.id == first_id
+	assert read_response.unread_count == 1
+	read_again_response = await notification_service.mark_notification_read(db_session, first_id, current_user)
+	assert read_again_response.read_at == read_response.read_at
+	assert read_again_response.unread_count == read_response.unread_count
+
+	read_all_response = await notification_service.mark_all_notifications_read(db_session, current_user)
+	assert read_all_response.updated_count == 1
+	assert read_all_response.unread_count == 0
+	assert await notification_repository.count_unread(db_session, other_user_id) == 1
+	empty_read_all_response = await notification_service.mark_all_notifications_read(db_session, current_user)
+	assert empty_read_all_response.updated_count == 0
+	assert empty_read_all_response.unread_count == 0
+
+
+async def test_notification_due_at_rolls_over_to_next_day_in_app_timezone(db_session: AsyncSession) -> None:
+	user_id = await user_repository.create(
+		db_session, "notification-date-boundary", "notification-date-boundary@example.com", "hash"
+	)
+	# UTC 2026-09-04 15:30 はJST(UTC+9)では日付が繰り上がり 2026-09-05 00:30 になる境界値。
+	due_at = datetime(2026, 9, 4, 15, 30, tzinfo=timezone.utc)
+	notification_id = await _insert_notification(db_session, user_id, "date-boundary", due_at, due_at=due_at)
+	current_user = CurrentUser(
+		id=user_id, username="notification-date-boundary", role="member", is_active=True, email_verified_at=None
+	)
+
+	page = await notification_service.list_notifications(db_session, current_user, 1, 10, False)
+
+	item = next(item for item in page.items if item.id == notification_id)
+	assert item.due_at.utcoffset() == timedelta(hours=9)
+	assert (item.due_at.year, item.due_at.month, item.due_at.day, item.due_at.hour, item.due_at.minute) == (
+		2026,
+		9,
+		5,
+		0,
+		30,
+	)
+
+
+async def test_read_all_is_consistent_with_concurrent_individual_read(db_session: AsyncSession) -> None:
+	username = f"notification-concurrent-{uuid4().hex[:8]}"
+	user_id = await user_repository.create(db_session, username, f"{username}@example.com", "hash")
+	notification_id = await _insert_notification(
+		db_session, user_id, f"concurrent-{uuid4().hex}", datetime.now(timezone.utc)
+	)
+	await db_session.commit()
+	current_user = CurrentUser(id=user_id, username=username, role="member", is_active=True, email_verified_at=None)
+
+	engine = create_async_engine(get_backend_settings().database_url)
+	session_factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+
+	async def _mark_individual() -> NotificationReadResponse:
+		async with session_factory() as session:
+			response = await notification_service.mark_notification_read(session, notification_id, current_user)
+			await session.commit()
+			return response
+
+	async def _mark_all() -> NotificationReadAllResponse:
+		async with session_factory() as session:
+			response = await notification_service.mark_all_notifications_read(session, current_user)
+			await session.commit()
+			return response
+
+	try:
+		individual_response, read_all_response = await asyncio.wait_for(
+			asyncio.gather(_mark_individual(), _mark_all()), timeout=5
+		)
+	finally:
+		await engine.dispose()
+
+	assert individual_response.unread_count >= 0
+	assert read_all_response.updated_count in (0, 1)
+	assert read_all_response.unread_count >= 0
+	assert await notification_repository.count_unread(db_session, user_id) == 0

@@ -23,7 +23,7 @@ from app.core.exceptions import (
 )
 from app.repository.redis_store_common import OAuthHandoffData, OAuthStateData
 from app.schemas.oauth import OAuthExchangeResponse
-from app.service import auth_service
+from app.service import oauth_service as auth_service
 from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt.algorithms import RSAAlgorithm
 from starlette.requests import Request
