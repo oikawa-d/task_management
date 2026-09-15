@@ -626,7 +626,7 @@ assert_blocked "sudo gh issue close 123"
 assert_blocked "echo 123 | xargs gh pr merge"
 assert_blocked "echo 123 | xargs gh issue close"
 # reviewedラベルがあれば許可されること(fail-closeへの一律ブロックではないことの確認)
-export GH_STUB_JSON="$reviewed_json"
+export GH_STUB_JSON="$approve_json"
 assert_allowed "sudo gh pr merge 123"
 # xargsの未知オプション(-Iなど)は実行内容を復元できないためfail-closeする
 export GH_STUB_JSON="$unreviewed_json"
