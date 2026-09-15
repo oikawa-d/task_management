@@ -253,12 +253,12 @@ flowchart LR
 | 4 | 単体 | DBタイムアウト | `SELECT 1`が`HEALTH_CHECK_TIMEOUT_SECONDS`を超過 | `database.status=error`、例外を送出せず処理継続 | `test_check_database_timeout_treated_as_error` |
 | 5 | 単体 | レスポンスに秘密情報が含まれない | 異常系レスポンス全般 | `DATABASE_URL`等の文字列がレスポンスJSONに含まれない | `test_health_response_excludes_secrets` |
 | 6 | 結合 | 正常系 | 実PostgreSQL/Redis起動済み | `200`、`components.database.status=ok`、`components.redis.status=ok` | `test_get_health_endpoint_success` |
-| 7 | 結合 | Redis停止時 | Redisコンテナを停止した状態で呼び出し（結合テスト環境限定） | `503`、`components.redis.status=error` | `test_get_health_endpoint_redis_down` |
-| 8 | 結合 | auth_modeの反映 | `AUTH_MODE=jwt`で起動 | レスポンスの`auth_mode="jwt"` | `test_get_health_endpoint_reflects_auth_mode` |
-| 9 | 結合 | 認証不要であること | Cookie/ヘッダなしで呼び出し | `401`にならず`200`または`503` | `test_get_health_endpoint_no_auth_required` |
+| 7 | 結合 | Redis接続障害 | Redis依存を接続例外へ差し替え | `503`、`components.redis.status=error` | `test_get_health_endpoint_redis_down` |
+| 8 | 結合 | PostgreSQL接続障害 | DB依存を接続例外へ差し替え | `503`、`components.database.status=error` | `test_get_health_endpoint_database_down` |
+| 9 | 結合 | auth_modeの反映・認証不要であること | `AUTH_MODE=jwt`で起動し、Cookie/ヘッダなしで呼び出し | `200`、レスポンスの`auth_mode="jwt"`、認証エラーなし | `test_get_health_endpoint_no_auth_required` |
 | 10 | 網羅対象外 | PostgreSQL/Redisプロセス自体の異常終了直後のタイミング差異 | - | 自動テストでは再現せず、`02_redis.md`§7・DB結合テスト環境の制約上、手動確認とする | - |
 
-`AUTH_MODE=session`/`jwt`の両方で6・8を実施する（本APIの処理自体に差異はないが、matrix構成上の実行対象に含める）。
+`AUTH_MODE=session`/`jwt`の両方で6・9を実施する（本APIの処理自体に差異はないが、matrix構成上の実行対象に含める）。
 
 ## 13. 不明点・要検討事項
 

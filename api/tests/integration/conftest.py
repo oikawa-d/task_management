@@ -67,9 +67,16 @@ def client(apply_migrations: None) -> Iterator[TestClient]:
 	original_handlers = list(root_logger.handlers)
 	original_level = root_logger.level
 
+	from app.auth.factory import get_auth_strategy
+	from app.db import get_db_engine, get_session_factory
 	from app.main import app as main_app
+	from app.redis_client import get_redis_client
 
 	get_backend_settings.cache_clear()
+	get_auth_strategy.cache_clear()
+	get_db_engine.cache_clear()
+	get_session_factory.cache_clear()
+	get_redis_client.cache_clear()
 	try:
 		with TestClient(main_app, client=(TEST_CLIENT_IP, 50000)) as test_client:
 			# TestClientのポータル内で`redis.asyncio.Redis`の接続プールを初めて使う1回目の呼び出しは、
@@ -81,6 +88,10 @@ def client(apply_migrations: None) -> Iterator[TestClient]:
 	finally:
 		root_logger.handlers = original_handlers
 		root_logger.setLevel(original_level)
+		get_auth_strategy.cache_clear()
+		get_db_engine.cache_clear()
+		get_session_factory.cache_clear()
+		get_redis_client.cache_clear()
 
 
 @pytest.fixture(autouse=True)

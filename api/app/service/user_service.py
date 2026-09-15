@@ -113,29 +113,34 @@ async def update_profile(
 		else:
 			merged[field] = getattr(user, field)
 
-	await user_repository.update_profile(
-		db,
-		current_user.id,
-		last_name=merged["last_name"],  # type: ignore[arg-type]
-		first_name=merged["first_name"],  # type: ignore[arg-type]
-		last_name_kana=merged["last_name_kana"],  # type: ignore[arg-type]
-		first_name_kana=merged["first_name_kana"],  # type: ignore[arg-type]
-		birth_date=merged["birth_date"],  # type: ignore[arg-type]
-	)
-	providers = await oauth_account_repository.list_by_user_id(db, current_user.id)
-	return _build_profile_response(
-		user_id=user.id,
-		username=user.username,
-		email=user.email,
-		last_name=merged["last_name"],  # type: ignore[arg-type]
-		first_name=merged["first_name"],  # type: ignore[arg-type]
-		last_name_kana=merged["last_name_kana"],  # type: ignore[arg-type]
-		first_name_kana=merged["first_name_kana"],  # type: ignore[arg-type]
-		birth_date=merged["birth_date"],  # type: ignore[arg-type]
-		role=user.role,
-		has_password=user.password_hash is not None,
-		oauth_providers=[account.provider for account in providers],
-	)
+	try:
+		await user_repository.update_profile(
+			db,
+			current_user.id,
+			last_name=merged["last_name"],  # type: ignore[arg-type]
+			first_name=merged["first_name"],  # type: ignore[arg-type]
+			last_name_kana=merged["last_name_kana"],  # type: ignore[arg-type]
+			first_name_kana=merged["first_name_kana"],  # type: ignore[arg-type]
+			birth_date=merged["birth_date"],  # type: ignore[arg-type]
+		)
+		providers = await oauth_account_repository.list_by_user_id(db, current_user.id)
+		await db.commit()
+		return _build_profile_response(
+			user_id=user.id,
+			username=user.username,
+			email=user.email,
+			last_name=merged["last_name"],  # type: ignore[arg-type]
+			first_name=merged["first_name"],  # type: ignore[arg-type]
+			last_name_kana=merged["last_name_kana"],  # type: ignore[arg-type]
+			first_name_kana=merged["first_name_kana"],  # type: ignore[arg-type]
+			birth_date=merged["birth_date"],  # type: ignore[arg-type]
+			role=user.role,
+			has_password=user.password_hash is not None,
+			oauth_providers=[account.provider for account in providers],
+		)
+	except Exception:
+		await db.rollback()
+		raise
 
 
 async def change_password(
@@ -170,5 +175,16 @@ async def change_password(
 
 async def get_login_history(current_user: CurrentUser, db: AsyncSession, limit: int) -> LoginHistoryListResponse:
 	histories = await login_history_repository.list_by_user_id(db, current_user.id, limit=limit, offset=0)
-	items = [LoginHistoryItem.model_validate(history) for history in histories]
+	items = [
+		LoginHistoryItem(
+			id=history.id,
+			login_method=history.login_method,
+			ip_address=str(history.ip_address) if history.ip_address is not None else None,
+			user_agent=history.user_agent,
+			success=history.success,
+			failure_reason=history.failure_reason,
+			created_at=history.created_at,
+		)
+		for history in histories
+	]
 	return LoginHistoryListResponse(items=items, meta=LoginHistoryMeta(limit=limit, count=len(items)))
