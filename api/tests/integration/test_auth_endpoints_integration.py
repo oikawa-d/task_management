@@ -299,11 +299,7 @@ async def test_login_endpoint_email_not_verified_rejected(
 	assert response.json()["error"]["code"] == "EMAIL_NOT_VERIFIED"
 
 	rows = await login_history_repository.list_by_user_id(db_session, user_id, limit=10)
-	# 設計書（02_post_auth_login.md §11）はfailure_reasonを小文字snake_case
-	# （例: email_not_verified）と記載するが、実装（auth_service._LOGIN_FAILURE_EMAIL_NOT_VERIFIED、
-	# 既存の test_auth_service.py も同様）はエラーコードと同じ大文字を格納する。ドキュメント記載の
-	# 乖離としてIssue #444を起票済み。ここでは実装の現状値を検証する。
-	assert any(row.success is False and row.failure_reason == "EMAIL_NOT_VERIFIED" for row in rows)
+	assert any(row.success is False and row.failure_reason == "email_not_verified" for row in rows)
 
 
 async def test_login_endpoint_user_inactive_rejected(
@@ -320,6 +316,9 @@ async def test_login_endpoint_user_inactive_rejected(
 
 	assert response.status_code == 403
 	assert response.json()["error"]["code"] == "USER_INACTIVE"
+
+	rows = await login_history_repository.list_by_user_id(db_session, uuid.UUID(user["id"]), limit=10)
+	assert any(row.success is False and row.failure_reason == "user_inactive" for row in rows)
 
 
 async def test_login_endpoint_invalid_origin_rejected(
