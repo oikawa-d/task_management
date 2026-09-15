@@ -202,8 +202,8 @@ flowchart TB
 | シグネチャ | `async def authenticate(self, request: Request) -> AuthContext | None` |
 | 引数 | `request` |
 | 戻り値 | `AuthContext(user_id, session_id=sid)` または `None` |
-| 送出例外 | なし（Redis接続不能時は`RedisError`が伝播し503へ変換） |
-| 処理内容 | 1. `_read_session_cookie(request)`でsid取得。無ければ`None` 2. `redis_store.get_session(sid)`で存在確認 3. 存在しなければ`None` 4. `redis_store.touch_session(sid, user_id, ttl=SESSION_TTL_SECONDS, absolute_expires_at)`でスライディングTTL延長（絶対期限`SESSION_ABSOLUTE_TTL_SECONDS`を超えない） 5. `AuthContext`を返す |
+| 送出例外 | `SessionExpiredError`（CookieありでRedisにセッションがない、またはTTL延長不可）、Redis接続不能時は`RedisError`が伝播し503へ変換 |
+| 処理内容 | 1. `_read_session_cookie(request)`でsid取得。無ければ`None` 2. `redis_store.get_session(sid)`で存在確認 3. 存在しなければ`SessionExpiredError` 4. `redis_store.touch_session(sid, user_id, ttl=SESSION_TTL_SECONDS, absolute_expires_at)`でスライディングTTL延長（絶対期限`SESSION_ABSOLUTE_TTL_SECONDS`を超えない） 5. TTL延長不可なら`SessionExpiredError` 6. `AuthContext`を返す |
 | 副作用 | Redis: `EXPIRE session:{sid}` / `csrf:{sid}` / `user_sessions:{uid}` |
 
 ### 6.4 `auth/jwt_auth.py :: JwtAuthStrategy.authenticate`
