@@ -90,7 +90,7 @@ Cookie
 | items[].ip_address | string | 可 | 取得できなかった場合はNULL |
 | items[].user_agent | string | 可 | 同上 |
 | items[].success | boolean | 不可 | |
-| items[].failure_reason | string | 可（`success=true`時は必ずNULL） | `invalid_credentials` / `user_inactive` / `oauth_denied` 等 |
+| items[].failure_reason | string | 可（`success=true`時は必ずNULL） | `invalid_credentials` / `user_inactive` 等 |
 | items[].created_at | string(datetime) | 不可 | ISO 8601 / UTC |
 | meta.limit | integer | 不可 | 適用された上限件数（`LOGIN_HISTORY_LIST_LIMIT`の現在値） |
 | meta.count | integer | 不可 | `items`の実件数（`limit`以下） |
