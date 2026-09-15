@@ -1,12 +1,14 @@
-import { useContext } from "react";
+import { useContext, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { useAuthStore } from "../../../auth/authStore";
+import { consumeLoginMessage } from "../../../auth/loginMessage";
 import { ROUTES } from "../../../routes";
 import { AuthFormsContext, LoginFormPlaceholder } from "./authFormSlots";
 
 type LoginLocationState = {
 	registeredEmail?: string;
+	message?: string;
 };
 
 function RegisteredMessage({ email }: { email?: string }) {
@@ -17,12 +19,26 @@ function RegisteredMessage({ email }: { email?: string }) {
 	return <p role="status">確認メールを送信しました（{email}）</p>;
 }
 
+function LoginMessage({ message }: { message?: string }) {
+	if (!message) {
+		return null;
+	}
+
+	return <p role="status">{message}</p>;
+}
+
 export function LoginPage() {
 	const navigate = useNavigate();
 	const location = useLocation();
 	const formSlots = useContext(AuthFormsContext);
 	const googleLoginEnabled = useAuthStore((state) => state.googleLoginEnabled);
-	const registeredEmail = (location.state as LoginLocationState | null)?.registeredEmail;
+	const loginState = location.state as LoginLocationState | null;
+	const registeredEmail = loginState?.registeredEmail;
+	const [storedMessage, setStoredMessage] = useState<string | null>(null);
+
+	useEffect(() => {
+		setStoredMessage(consumeLoginMessage());
+	}, []);
 
 	const handleLoginSuccess = () => {
 		navigate(ROUTES.DASHBOARD, { replace: true });
@@ -43,6 +59,7 @@ export function LoginPage() {
 	return (
 		<section aria-labelledby="login-heading">
 			<h1 id="login-heading">Cerberus</h1>
+			<LoginMessage message={loginState?.message ?? storedMessage ?? undefined} />
 			<RegisteredMessage email={registeredEmail} />
 			{loginForm}
 			{googleLoginButton ? (

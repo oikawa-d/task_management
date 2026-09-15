@@ -20,7 +20,7 @@
 | ガード | 認証必須（`RequireAuth`） |
 | 対応要件 | 要件書§2-6 |
 | 主なユースケース | プロフィール編集（OAuth新規ユーザーの未完了プロフィール補完を含む）、パスワード変更、文字サイズ変更、ログイン履歴閲覧 |
-| 実装ファイル | `frontend/src/features/settings/pages/SettingsPage.tsx`、`frontend/src/features/settings/ProfileForm.tsx`、`frontend/src/features/settings/PasswordChangeForm.tsx`、`frontend/src/features/settings/components/FontSizeSelector.tsx`、`frontend/src/features/settings/components/LoginHistoryTable.tsx`、`frontend/src/features/settings/hooks/useLoginHistory.ts`、`frontend/src/stores/uiStore.ts` |
+| 実装ファイル | `frontend/src/features/settings/pages/SettingsPage.tsx`、`frontend/src/features/settings/ProfileForm.tsx`、`frontend/src/features/settings/PasswordChangeForm.tsx`、`frontend/src/features/settings/api/profileApi.ts`、`frontend/src/features/settings/components/FontSizeSelector.tsx`、`frontend/src/features/settings/components/LoginHistoryTable.tsx`、`frontend/src/features/settings/hooks/useLoginHistory.ts`、`frontend/src/features/settings/hooks/useUserProfile.ts`、`frontend/src/features/settings/hooks/useUpdateProfile.ts`、`frontend/src/features/settings/hooks/useChangePassword.ts`、`frontend/src/stores/uiStore.ts` |
 
 `?complete_profile=1` クエリ付きで遷移してきた場合（OAuthコールバック後、`profile_completed=false`）は、プロフィール編集タブを初期選択し、案内バナーを表示する。
 
@@ -76,10 +76,10 @@
 
 | No | 呼び出しタイミング | メソッド／パス | 送信内容 | 成功時処理 | 失敗時処理 | queryKey / mutationKey |
 |----|--------------------|-----------------|----------|------------|------------|--------------------------|
-| 1 | マウント時 | GET `/users/me` | - | フォーム初期値に反映、`profile_completed`確認 | トースト表示 | `['users', 'me']` |
-| 2 | プロフィール保存 | PATCH `/users/me` | 変更フィールドのみ | `['users','me']`をinvalidate、バナー非表示、authStoreの`user`更新 | 422はフィールドへ反映、それ以外はトースト | `mutationKey: ['users','me','update']` |
+| 1 | マウント時 | GET `/users/me` | - | フォーム初期値に反映、`profile_completed`確認 | インラインエラー（`role="alert"`）表示 | `['users', 'me']` |
+| 2 | プロフィール保存 | PATCH `/users/me` | 変更フィールドのみ | `['users','me']`をinvalidate、バナー非表示、authStoreの`user`更新 | 422はフィールドへ反映、それ以外はインラインエラー（`role="alert"`）表示 | `mutationKey: ['users','me','update']` |
 | 3 | パスワード変更 | PUT `/users/me/password` | `current_password`（該当時）, `new_password`, `password_confirm` | 成功メッセージ表示 → 「再ログインしてください」誘導 → `POST /auth/logout` 実行 → `/login`へ遷移 | 401（`INVALID_CREDENTIALS`）は3-7へエラー表示、422はフィールド反映 | `mutationKey: ['users','me','password']` |
-| 4 | ログイン履歴タブ選択時 | GET `/users/me/login-history` | - | テーブル描画 | トースト表示、再試行ボタン | `queryKey: ['users','me','login-history']` |
+| 4 | ログイン履歴タブ選択時 | GET `/users/me/login-history` | - | テーブル描画 | インラインエラー（`role="alert"`）と再試行ボタンを表示 | `queryKey: ['users','me','login-history']` |
 | 5 | パスワード変更成功後 | POST `/auth/logout` | - | authStoreクリア、Cookie/トークン破棄はbackend側 | 失敗してもクライアント側は未認証扱いにして遷移 | `mutationKey: ['auth','logout']` |
 
 ## 5. 状態管理
@@ -172,12 +172,13 @@ sequenceDiagram
     alt 成功
         API-->>EP: 204（全セッション・リフレッシュ失効）
         EP-->>PWF: 成功
-        PWF-->>U: 「パスワードを変更しました。再度ログインしてください」
+        PWF-->>U: 成功メッセージを表示
         PWF->>AUTH: POST /auth/logout
         AUTH->>API: POST /api/auth/logout
         API-->>AUTH: 204
         AUTH->>AUTH: authStoreをunauthenticatedへ
-        PWF->>PWF: navigate("/login")
+        PWF->>PWF: 成功メッセージをsessionStorageへ保存してnavigate("/login")
+        AUTH-->>U: ログイン画面に成功メッセージを表示
     else 401 INVALID_CREDENTIALS
         API-->>EP: 401
         EP-->>PWF: 「現在のパスワードが正しくありません」を3-7へ表示
@@ -202,7 +203,7 @@ flowchart TB
 
     PF --> UUM["useUpdateProfile()<br/>PATCH /users/me"]
     PWF --> UPW["useChangePassword()<br/>PUT /users/me/password"]
-    PWF --> ULO["useLogout()<br/>POST /auth/logout"]
+    PWF --> ULO["AuthAdapter.logout()<br/>POST /auth/logout"]
     FSS --> UIS["uiStore.setFontScale()"]
     LHT --> ULH["useLoginHistory()<br/>GET /users/me/login-history"]
 ```
@@ -226,7 +227,7 @@ flowchart TB
 | シグネチャ | `function useChangePassword(): UseMutationResult<void, ApiError, PasswordChangeInput>` |
 | 引数 | なし |
 | 戻り値 | `UseMutationResult` |
-| 処理内容 | 1. `PUT /users/me/password`を呼ぶ<br/>2. 成功時、呼び出し元（`PasswordChangeForm`）が`useLogout()`を連鎖実行する（本フック自体はlogoutを呼ばない） |
+| 処理内容 | 1. `PUT /users/me/password`を呼ぶ<br/>2. 成功時、呼び出し元（`ConnectedSettingsPage`）が`AuthAdapter.logout()`を連鎖実行する（本フック自体はlogoutを呼ばない） |
 | 副作用 | API呼び出しのみ |
 
 ### 9.3 `features/settings/PasswordChangeForm.tsx :: PasswordChangeForm`
@@ -236,10 +237,20 @@ flowchart TB
 | シグネチャ | `function PasswordChangeForm(props: { hasPassword: boolean }): JSX.Element` |
 | 引数 | `hasPassword`：`GET /users/me`の`has_password` |
 | 戻り値 | JSX |
-| 処理内容 | 1. `hasPassword`に応じ`current_password`欄の描画・zodスキーマ分岐を切替<br/>2. 送信成功時、成功メッセージを表示後 `useLogout().mutate()` を呼びログイン画面へ遷移 |
-| 副作用 | `useChangePassword`・`useLogout`の呼び出し、`navigate` |
+| 処理内容 | 1. `hasPassword`に応じ`current_password`欄の描画・zodスキーマ分岐を切替<br/>2. 送信成功時、成功メッセージを表示後 `AuthAdapter.logout()` を呼びログイン画面へ遷移 |
+| 副作用 | `useChangePassword`・`AuthAdapter.logout()`の呼び出し、`navigate` |
 
-### 9.4 `stores/uiStore.ts :: setFontScale`
+### 9.4 `features/settings/api/profileApi.ts`
+
+| 関数 | 入力 | 出力 | 処理 |
+|------|------|------|------|
+| `getMyProfile` | なし | `Promise<UserProfile>` | `GET /users/me`を共通APIクライアントで実行 |
+| `updateMyProfile` | `ProfilePatchInput` | `Promise<UserProfile>` | `PATCH /users/me`を共通APIクライアントで実行 |
+| `changeMyPassword` | `PasswordChangeInput` | `Promise<void>` | `PUT /users/me/password`を共通APIクライアントで実行 |
+
+認証情報の付与、session/JWTの差異、401処理は共通APIクライアントおよびAuthAdapterへ委譲する。
+
+### 9.5 `stores/uiStore.ts :: setFontScale`
 
 | 項目 | 内容 |
 |------|------|
@@ -269,8 +280,8 @@ flowchart TB
 | 422 `VALIDATION_ERROR` | 対象フィールド下にエラーメッセージ | なし | 修正後に再送信 |
 | 401 `INVALID_CREDENTIALS`（パスワード変更） | `has_password=true`は3-7に「現在のパスワードが正しくありません」、`false`はフォーム上部に再ログインを促すエラー | なし | 入力を確認して再送信 |
 | 401 `UNAUTHENTICATED`（全体） | interceptorが処理（[05_frontend §6.1](../../basic_design/05_frontend.md#61-interceptor-の流れ)） | `/login`へ | - |
-| 404（履歴取得失敗など） | トースト「情報を取得できませんでした」 | なし | 「再試行」ボタン |
-| 5xx | トースト「エラーが発生しました。時間をおいて再度お試しください」 | なし | 「再試行」ボタン |
+| 404（履歴取得失敗など） | インラインエラー（`role="alert"`）「情報を取得できませんでした」 | なし | 「再試行」ボタン |
+| 5xx | インラインエラー（`role="alert"`）「エラーが発生しました。時間をおいて再度お試しください」 | なし | 「再試行」ボタン |
 
 ## 12. データ遷移図
 
@@ -300,7 +311,7 @@ flowchart LR
 | 文字サイズ | `--font-scale`（`0.875`/`1`/`1.125`/`1.25`）を全コンポーネントの`rem`基準に反映（[05_frontend §8](../../basic_design/05_frontend.md#8-アクセシビリティ設定文字サイズ)） |
 | キーボード操作 | タブは矢印キーで移動、Enterで選択（`role="tablist"` / `role="tab"`） |
 | aria属性 | フォームエラーは`aria-invalid="true"`＋`aria-describedby`でエラー文言と紐付け。バナーは`role="status"` |
-| フォーカス管理 | クリックまたは矢印キーで選択したタブボタンへフォーカスを置く（ARIA Tabsの標準挙動）。パネル見出しへは移動しない。保存成功トーストはフォーカスを奪わない |
+| フォーカス管理 | クリックまたは矢印キーで選択したタブボタンへフォーカスを置く（ARIA Tabsの標準挙動）。パネル見出しへは移動しない。保存成功メッセージはフォーカスを奪わない |
 | ラベル | パスワード表示切替ボタンに`aria-label="パスワードを表示/非表示"`を付与 |
 
 ## 14. テスト設計
@@ -311,11 +322,17 @@ flowchart LR
 | 2 | 単体（zod） | フリガナに漢字混入 | - | `last_name_kana`にエラー | `profileSchema rejects non-kana` |
 | 3 | 単体（uiStore） | `setFontScale(1.25)`実行 | - | `--font-scale`更新・localStorage保存 | `uiStore persists font scale` |
 | 4 | コンポーネント | `has_password=false`でPasswordChangeForm描画 | `GET /users/me`で`has_password:false` | 現在PW欄が非表示 | `PasswordChangeForm hides current password field for oauth-only user` |
-| 5 | コンポーネント | プロフィール保存成功 | `PATCH /users/me`が200 | バナー非表示・成功トースト | `ProfileForm shows success and clears banner` |
+| 5 | コンポーネント | プロフィール保存成功 | `PATCH /users/me`が200 | バナー非表示・成功メッセージ | `ProfileForm shows success and clears banner` |
 | 6 | コンポーネント | パスワード変更成功 | `PUT .../password`が204、`POST /auth/logout`が204 | `/login`へ遷移 | `PasswordChangeForm redirects to login after success` |
 | 7 | コンポーネント | ログイン履歴取得失敗 | `GET .../login-history`が500 | エラー表示＋再試行ボタン | `LoginHistoryTable shows retry on error` |
 | 8 | 結合 | `?complete_profile=1`付き遷移 | `GET /users/me`で`profile_completed:false` | プロフィールタブ初期選択・バナー表示 | `SettingsPage opens profile tab with banner when complete_profile=1` |
 | 9 | コンポーネント | `has_password=false`で401 `INVALID_CREDENTIALS` | パスワード変更APIが401 | フォーム上部に再ログインを促すエラー | `PasswordChangeForm shows form error for oauth-only invalid credentials` |
+| 10 | 結合 | session/JWT認証済みで設定画面を表示 | `GET /users/me`が200 | プロフィールを表示し、方式ごとの認証経路を維持 | `session/JWT認証でプロフィールを取得して表示する` |
+| 11 | 結合 | 設定情報APIが500 | 初回GETが500、再試行が200 | エラーと再試行を表示し、再試行後に画面を復帰 | `プロフィール取得のAPI障害は再試行で復帰できる` |
+| 12 | 結合 | 設定情報APIが401 | `UNAUTHENTICATED` | authStoreを未認証へ変更し`/login`へ遷移 | `プロフィール取得の認証失敗は未認証状態にしてログインへ遷移する` |
+| 13 | 結合 | 未完了プロフィールを保存 | GETが未完了、PATCHと再取得が200 | PATCH送信、バナー消去、成功表示を保持 | `未完了プロフィールを保存するとバナーが消え、成功表示が残る` |
+| 14 | 結合 | パスワードvalidation・認証失敗 | 不正入力、PUTが401 `INVALID_CREDENTIALS` | validationと現在パスワードエラーを表示しPUTを制御 | `パスワードのvalidationと認証失敗をフォームへ表示する` |
+| 15 | 結合 | パスワード変更成功 | PUT/POST logoutが204 | session/JWT双方でlogout後にauthStoreを未認証へ変更し`/login`へ遷移 | `session/JWT認証でパスワード変更成功後にlogoutしてログインへ遷移する` |
 | 網羅できない範囲 | - | 実際のブラウザでの日本語IME入力挙動 | - | - | RTLのイベントシミュレートで代替し、実操作は手動確認とする |
 
 ## 15. 不明点・要検討事項
