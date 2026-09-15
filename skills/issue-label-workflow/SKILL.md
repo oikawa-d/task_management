@@ -62,6 +62,8 @@ description: このtask_managementリポジトリでGitHub issueに対応する�
   gh issue edit <番号> --repo <owner/repo> --add-label in-progress
   ```
 
+- 状態ラベルを削除する場合は、先に `gh label list --repo <owner/repo>` でリポジトリに存在する正式名称を確認する。存在しないラベル名を `--remove-label` に渡すと、対象Issueの更新全体が失敗するため、実際に定義されている状態ラベルだけを指定する。
+
 - `state` が `CLOSED` の場合、着手前にユーザーに確認する。ただしレビュー指摘対応など、close済みPRに紐づく再オープン前提の作業であることが明確な場合はこの限りではない。
 
 ### 2. PR作成時
