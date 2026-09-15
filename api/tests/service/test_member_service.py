@@ -127,7 +127,7 @@ async def test_add_member_rolls_back_not_found_after_create(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
-async def test_add_member_does_not_roll_back_domain_error_after_create(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_add_member_rolls_back_already_member_after_create(monkeypatch: pytest.MonkeyPatch) -> None:
 	owner = _user()
 	project = _project(owner)
 	target = _user("bob")
@@ -143,7 +143,7 @@ async def test_add_member_does_not_roll_back_domain_error_after_create(monkeypat
 	with pytest.raises(AlreadyMemberError):
 		await member_service.add_member(project, target.id, owner.id, db)
 
-	db.rollback.assert_not_awaited()
+	db.rollback.assert_awaited_once()
 	db.commit.assert_not_awaited()
 
 
