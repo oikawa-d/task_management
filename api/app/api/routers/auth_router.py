@@ -28,7 +28,7 @@ from app.schemas.auth import (
 	ResendVerifyEmailResponse,
 	VerifyEmailRequest,
 )
-from app.service import auth_service, user_service
+from app.service import auth_service, email_verification_service, user_service
 
 # フロントがそのまま表示する固定文言。ユーザー列挙を防ぐため、再送・再設定申請は結果によらず同一文言を返す。
 REGISTER_ACCEPTED_MESSAGE = "確認メールを送信しました。メール内のリンクから認証を完了してください。"
@@ -143,7 +143,7 @@ async def refresh(
 	dependencies=[Depends(_verify_email_rate_limit)],
 )
 async def verify_email(payload: VerifyEmailRequest, db: AsyncSession = Depends(get_db_session)) -> None:
-	await auth_service.verify_email(payload.token, db)
+	await email_verification_service.verify_email(payload.token, db)
 
 
 @router.post(
@@ -157,7 +157,7 @@ async def resend_verify_email(
 	background: BackgroundTasks,
 	db: AsyncSession = Depends(get_db_session),
 ) -> ResendVerifyEmailResponse:
-	await auth_service.resend_verification(payload.email, background, db)
+	await email_verification_service.resend_verification(payload.email, background, db)
 	return ResendVerifyEmailResponse(message=RESEND_ACCEPTED_MESSAGE)
 
 
@@ -172,7 +172,7 @@ async def password_forgot(
 	background: BackgroundTasks,
 	db: AsyncSession = Depends(get_db_session),
 ) -> PasswordForgotResponse:
-	await auth_service.request_password_reset(payload.email, background, db)
+	await email_verification_service.request_password_reset(payload.email, background, db)
 	return PasswordForgotResponse(message=PASSWORD_FORGOT_ACCEPTED_MESSAGE)
 
 
@@ -182,7 +182,7 @@ async def password_forgot(
 	dependencies=[Depends(_password_reset_rate_limit)],
 )
 async def password_reset(payload: PasswordResetRequest, db: AsyncSession = Depends(get_db_session)) -> None:
-	await auth_service.reset_password(payload.token, payload.new_password, db)
+	await email_verification_service.reset_password(payload.token, payload.new_password, db)
 
 
 def _no_content_with_cookies(response: Response) -> Response:

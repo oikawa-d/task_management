@@ -130,7 +130,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    R["auth_router.get_auth_config"] --> S["service/auth_service.get_auth_config"]
+    R["auth_router.get_auth_config"] --> S["api/app/service/auth_service.get_auth_config"]
     S --> SET["core/config.get_backend_settings"]
     SET --> ENV["環境変数 / .env"]
 ```

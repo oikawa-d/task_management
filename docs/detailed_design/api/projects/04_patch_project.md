@@ -23,7 +23,7 @@
 | AUTH_MODE差異 | session: `X-CSRF-Token` 検証あり／jwt: ヘッダ方式のためCSRF検証なし |
 | 冪等性 | あり（同一内容の複数回PATCHは同じ結果になる部分更新） |
 | レート制限 | 対象外 |
-| トランザクション境界 | `projects` の単一UPDATE（`updated_at` はトリガ `trg_set_updated_at` が自動更新） |
+| トランザクション境界 | serviceが更新・再取得を1トランザクションで実行し、成功時にcommit、DB例外または再取得失敗時にrollback（`updated_at` はトリガ `trg_set_updated_at` が自動更新） |
 
 ## 2. 入出力仕様
 
@@ -135,9 +135,14 @@ sequenceDiagram
     RP->>PG: "SELECT fn_get_project(:project_id)"
     PG-->>RP: 更新後の行
     RP-->>S: Project
-    S-->>R: ProjectSummary
+    S->>PG: COMMIT
+    S-->>R: ProjectSummaryResponse
     R-->>FE: 200 {project}
-    alt start_at/end_atの最終値がend_at<start_at
+    alt DB例外または更新後の行を取得できない
+        S->>PG: ROLLBACK
+        S-->>R: ServiceUnavailableError / NotFoundError
+        R-->>FE: 503 / 404
+    else start_at/end_atの最終値がend_at<start_at
         S-->>R: ValidationError
         R-->>FE: 422 VALIDATION_ERROR
     end
@@ -169,7 +174,9 @@ flowchart TB
     H1 -->|"Yes かつ end_at<start_at"| E1
     H1 -->|"No、またはend_at>=start_at"| K["name/description/start_at/end_atのいずれか指定時: CALL sp_update_project"]
     K --> K2["is_active指定時: CALL sp_deactivate_project（別経路）"]
-    K2 --> L["200 {project}"]
+    K2 --> L["COMMIT → 200 {project}"]
+    K -.->|"DB例外"| M["ROLLBACK → 503 SERVICE_UNAVAILABLE"]
+    K2 -.->|"DB例外"| M
 ```
 
 ## 6. 関数詳細
@@ -178,44 +185,44 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def require_project_owner(project_id: UUID, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> Project` |
-| 引数 | `project_id`: パスパラメータ / `user`: 認証済みユーザー / `db`: DBセッション |
+| シグネチャ | `async def require_project_owner(project: Project = Depends(require_project_member), user: CurrentUser = Depends(get_current_user)) -> Project` |
+| 引数 | `project`: `require_project_member`が取得したプロジェクト / `user`: 認証済みユーザー |
 | 戻り値 | `Project`（存在・所属・オーナー確認済み） |
 | 送出例外 | `NotFoundError`（プロジェクト不存在、または非所属member）→404／`ForbiddenError`（所属memberだが非オーナー）→403 |
-| 処理内容 | 1. `project_repository.fn_get_project(db, project_id)` を取得。存在しなければ `NotFoundError` 2. `user.role == 'admin'` なら無条件で `Project` を返す 3. `project_repository.fn_is_project_member(db, project_id, user.id)` が `False` なら `NotFoundError`（非所属は存在有無を問わず404とする §9.2の方針） 4. 所属している場合、`project.owner_id != user.id` なら `ForbiddenError` 5. いずれも満たせば `Project` を返す |
+| 処理内容 | `require_project_member`が`get_current_user`と`get_db_session`を通してプロジェクトの存在・所属を確認する。非所属は`NotFoundError`、adminは`require_project_member`のadmin bypassで通過し、一般ユーザーがownerでなければ`ForbiddenError`を送出する |
 | 副作用 | なし |
 
 ### 6.2 `api/routers/projects_router.py :: update_project`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def update_project(payload: ProjectUpdateRequest, project: Project = Depends(require_project_owner), db: AsyncSession = Depends(get_db), _: None = Depends(verify_csrf)) -> ProjectSummaryResponse` |
+| シグネチャ | `async def update_project(payload: ProjectUpdateRequest, project: Project = Depends(require_project_owner), user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db_session), _: None = Depends(verify_origin_if_session), __csrf: None = Depends(verify_csrf_if_session)) -> ProjectSummaryResponse` |
 | 引数 | `payload`: 部分更新ボディ / `project`: 認可確認済み対象 / `db`: DBセッション |
 | 戻り値 | `ProjectSummaryResponse`（200） |
 | 送出例外 | なし（依存関係が例外を送出） |
-| 処理内容 | 1. `project_service.update_project(db, project, payload)` を呼び出す 2. 結果をそのまま200で返す |
+| 処理内容 | 1. sessionモードではOrigin/CSRFを検証する 2. `project_service.update_project(db, project, payload, user)`を呼び出す 3. 結果をそのまま200で返す |
 | 副作用 | なし |
 
 ### 6.3 `service/project_service.py :: update_project`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def update_project(db: AsyncSession, project: Project, payload: ProjectUpdateRequest) -> ProjectSummary` |
+| シグネチャ | `async def update_project(db: AsyncSession, project: Project, payload: ProjectUpdateRequest, user: CurrentUser) -> ProjectSummaryResponse` |
 | 引数 | `project`: 更新対象（`require_project_owner` 済み） / `payload`: `name`, `description`, `start_at`, `end_at`, `is_active` の部分更新値 |
-| 戻り値 | `ProjectSummary` |
+| 戻り値 | `ProjectSummaryResponse` |
 | 送出例外 | `ValidationError`（`start_at`/`end_at`の最終値が`end_at<start_at`）→422、`ServiceUnavailableError`（DB接続不能）→503 |
-| 処理内容 | 1. `payload.model_dump(exclude_unset=True)` で指定されたフィールドのみ抽出 2. `start_at`/`end_at`それぞれについて「payloadに指定があればその値、なければ`project`の現行値」を最終値として算出し、両方が最終的に値を持つ場合のみ`end_at >= start_at`を検証（違反時`ValidationError`） 3. `name`/`description`/`start_at`/`end_at`のいずれかが指定されていれば `sp_update_project(db, project.id, name?, description?, start_at?, end_at?)` を呼び出す（`08_db_functions.md`の`sp_update_project`シグネチャに`p_is_active`は無いため、名称・通常項目更新はこのSPのみが担当する） 4. `is_active`が指定されていれば、`sp_update_project`とは別経路として `sp_deactivate_project(db, project.id, is_active)` を呼び出す（`require_project_owner`によりオーナー/adminのみ到達） 5. `fn_get_project(db, project.id)` で更新後の行を取得し、`member_count` / `task_counts` / `is_owner` を集計・付与して `ProjectSummary` を返す |
+| 処理内容 | 1. `start_at`/`end_at`を指定値と既存値から組み立て、両方が値を持つ場合は`end_at >= start_at`を検証する 2. 通常項目が指定されていれば`project_repository.update`、`is_active`が指定されていれば`project_repository.set_active`を呼び出す 3. `get_by_id`で更新後の行を取得し、`_summary`で`ProjectSummaryResponse`へ写像する 4. 成功時にcommitし、DBAPIError時はrollbackする |
 | 副作用 | `projects` のUPDATE（`updated_at` はDBトリガが自動更新） |
 
-### 6.4 `repository/project_repository.py :: sp_update_project` / `sp_deactivate_project`
+### 6.4 `repository/project_repository.py :: update` / `set_active`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def sp_update_project(db: AsyncSession, project_id: UUID, name: str \| None, description: str \| None, start_at: datetime \| None, end_at: datetime \| None) -> None` / `async def sp_deactivate_project(db: AsyncSession, project_id: UUID, is_active: bool) -> None` |
-| 引数 | `project_id`: 対象 / `sp_update_project`: `name` / `description` / `start_at` / `end_at`（名称・説明・期間の通常項目更新専用） / `sp_deactivate_project`: `is_active`（有効/無効切替専用の別経路） |
+| シグネチャ | `async def update(db: AsyncSession, project_id: UUID, name: str, description: str \| None, start_at: datetime \| None, end_at: datetime \| None) -> None` / `async def set_active(db: AsyncSession, project_id: UUID, is_active: bool) -> None` |
+| 引数 | `project_id`: 対象 / `update`: `name` / `description` / `start_at` / `end_at`（名称・説明・期間の通常項目更新専用） / `set_active`: `is_active`（有効/無効切替専用の別経路） |
 | 戻り値 | いずれもなし |
 | 送出例外 | `OperationalError`、`sp_update_project`は`IntegrityError`（`ck_projects_period` CHECK制約違反。サービス層で事前検証するため想定上は発生しない） |
-| 処理内容 | `CALL sp_update_project(:project_id, :name, :description, :start_at, :end_at)` と `CALL sp_deactivate_project(:project_id, :is_active)` はそれぞれ独立したSPであり、混同しない。未指定フィールドはSP内部で現状値を保持する |
+| 処理内容 | `update`は`CALL sp_update_project(:project_id, :name, :description, :start_at, :end_at)`、`set_active`は`CALL sp_deactivate_project(:project_id, :is_active)`をそれぞれ発行する。未指定フィールドはサービス層で既存値を補完する |
 | 副作用 | DBのUPDATE |
 
 ## 7. 関数相関図
@@ -223,12 +230,12 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["projects_router.update_project"] --> D["deps.require_project_owner"]
-    D --> RP1["project_repository.fn_get_project"]
-    D --> RP2["project_repository.fn_is_project_member"]
+    D --> RP1["project_repository.get_by_id"]
+    D --> RP2["project_member_repository.exists"]
     R --> S["project_service.update_project"]
-    S --> RP3["project_repository.sp_update_project（name/description/start_at/end_at）"]
-    S --> RP5["project_repository.sp_deactivate_project（is_active、別経路）"]
-    S --> RP4["project_repository.fn_get_project"]
+    S --> RP3["project_repository.update（name/description/start_at/end_at）"]
+    S --> RP5["project_repository.set_active（is_active、別経路）"]
+    S --> RP4["project_repository.get_by_id"]
     RP1 --> M1["models.Project"]
     RP2 --> M2["models.ProjectMember"]
     RP3 --> M1
@@ -317,8 +324,10 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 12 | 結合 | 非オーナーmemberはis_activeを指定しても403 | 一般メンバーでPATCH `{"is_active": false}` | `403 FORBIDDEN` | `test_update_project_is_active_forbidden_as_non_owner_member` |
 | 13 | 結合 | start_atのみ更新時、既存end_atとの順序が検証される | 既存`end_at`より後の`start_at`をPATCH | `422 VALIDATION_ERROR` | `test_update_project_start_at_conflicts_with_existing_end_at` |
 | 14 | 結合 | start_at/end_atを両方指定して正常に更新できる | `end_at >= start_at`を満たす値をPATCH | `200`、レスポンスに反映 | `test_update_project_period_success` |
+| 15 | 結合（router・認証依存性） | memberは更新不可、adminは更新可能、未所属は404、未認証は401 | 実PostgreSQL、JWTアクセストークンでowner/member/admin/未所属を切り替える | memberは403、adminは200、未所属は404、未認証は401 | `test_project_crud_router_enforces_authz_and_hides_non_member` |
+| 16 | 結合（実DB・障害） | 更新途中のDB障害時に変更前状態へrollbackする | 実PostgreSQL、更新後のDB障害を発生させる | `SERVICE_UNAVAILABLE`、変更前のnameが維持される | `test_update_project_rolls_back_real_db_changes_on_db_failure` |
 
-`AUTH_MODE=session` / `jwt` の両方で No.4・No.5・No.6・No.10を実施する。
+既存の認証方式別テストに加え、No.15ではJWTの実認証依存性を通してowner/member/admin/未所属/未認証の境界を検証する。
 
 ## 13. 不明点・要検討事項
 

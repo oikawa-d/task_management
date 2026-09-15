@@ -124,7 +124,7 @@ sequenceDiagram
         S-->>R: AppError（P0009等をエラーコード対応表で変換）
         R-->>FE: 対応するHTTPステータス
     end
-    S-->>R: ProjectSummary（member_count=1, task_counts=全0, is_owner=true）
+    S-->>R: ProjectSummaryResponse（member_count=1, task_counts=全0, is_owner=true）
     R-->>FE: 201 {project}
 ```
 
@@ -155,41 +155,41 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def create_project(payload: ProjectCreateRequest, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db), _: None = Depends(verify_csrf)) -> ProjectSummaryResponse`（`payload` は `name`, `description`, `start_at`, `end_at` を保持） |
+| シグネチャ | `async def create_project(payload: ProjectCreateRequest, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db_session), _: None = Depends(verify_origin_if_session), __csrf: None = Depends(verify_csrf_if_session)) -> ProjectSummaryResponse` |
 | 引数 | `payload`: リクエストボディ（pydantic検証済み） / `user`: 認証済みユーザー / `db`: DBセッション |
 | 戻り値 | `ProjectSummaryResponse`（201） |
-| 送出例外 | `CsrfInvalidError`（403）を `verify_csrf` 依存関係が送出 |
-| 処理内容 | 1. `verify_origin_if_session` / `verify_csrf_if_session`を依存関係として実行 2. `project_service.create_project` を呼び出す 3. 戻り値をそのまま201で返す |
+| 送出例外 | `UnauthenticatedError`（401）、`CsrfInvalidError`（403）を依存関係が送出 / `ServiceUnavailableError`（503）をサービス層が送出 |
+| 処理内容 | 1. `get_current_user`で認証する 2. sessionモードでは`verify_origin_if_session` / `verify_csrf_if_session`を実行する 3. `project_service.create_project`を呼び出す 4. 戻り値をそのまま201で返す |
 | 副作用 | なし（副作用はservice層に委譲） |
 
 ### 6.2 `service/project_service.py :: create_project`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def create_project(user: CurrentUser, payload: ProjectCreateRequest, db: AsyncSession) -> ProjectSummary` |
+| シグネチャ | `async def create_project(user: CurrentUser, payload: ProjectCreateRequest, db: AsyncSession) -> ProjectSummaryResponse` |
 | 引数 | `user`: 作成者 / `payload`: `name`, `description`, `start_at`, `end_at` / `db`: DBセッション |
-| 戻り値 | `ProjectSummary`（`member_count=1`, `task_counts`全0, `is_owner=True`, `is_active=True` を固定値として組み立てる） |
-| 送出例外 | `ValidationError`（`end_at < start_at`）→422、`InternalError`（INSERT失敗）→500、`ServiceUnavailableError`（DB接続不能）→503 |
-| 処理内容 | 1. 入力形式をpydanticで検証する（`project_id`はAPI側で生成しない） 2. repositoryが `CALL sp_create_project(:p_owner_id, :p_name, :p_description, :p_start_at, :p_end_at, OUT :p_project_id)` を1回呼び、SP内部で採番された`project_id`をOUTパラメータで受け取る 3. `SELECT fn_get_project(project_id)` で応答表示用の行を取得 4. SQLSTATE P0009等はAPIのAppErrorへ変換し、SP失敗時は全体をrollback |
+| 戻り値 | `ProjectSummaryResponse`（`member_count=1`, `task_counts`全0, `is_owner=True`を組み立て、DBの`is_active`/日時を反映） |
+| 送出例外 | `NotFoundError`（作成直後の再取得失敗）→404、`ServiceUnavailableError`（接続系DB障害）→503、その他のDBAPIError→共通ハンドラで500 |
+| 処理内容 | 1. repositoryが`CALL sp_create_project(...)`を呼び出し、SP内部で採番された`project_id`を受け取る 2. `get_by_id`で応答表示用の行を取得 3. 成功時にcommitし、DBAPIError時はrollbackして接続系障害を503へ変換する |
 | 副作用 | SP内部で `projects` とownerの `project_members` を更新 |
 
-### 6.3 `repository/project_repository.py :: sp_create_project`
+### 6.3 `repository/project_repository.py :: create`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def sp_create_project(db: AsyncSession, owner_id: UUID, name: str, description: str \| None, start_at: datetime \| None, end_at: datetime \| None) -> UUID` |
+| シグネチャ | `async def create(db: AsyncSession, owner_id: UUID, name: str, description: str \| None, start_at: datetime \| None, end_at: datetime \| None) -> UUID` |
 | 引数 | `owner_id`: 作成者 / `name`, `description`, `start_at`, `end_at`: リクエスト値 |
 | 戻り値 | SP内部で`gen_random_uuid()`により採番され、OUTパラメータとして返された`project_id`（`UUID`） |
 | 送出例外 | SQLSTATE `P0009`（期間不正）等。APIの対応表でAppErrorへ変換 |
 | 処理内容 | `CALL sp_create_project(:p_owner_id, :p_name, :p_description, :p_start_at, :p_end_at, OUT :p_project_id)` のみを発行し、OUTパラメータを戻り値として返す。DB更新本体とowner登録はSP内部で一体実行される |
 | 副作用 | SP内のDB更新。repositoryは直接CRUDを持たない |
 
-### 6.4 `repository/project_repository.py :: fn_get_project`
+### 6.4 `repository/project_repository.py :: get_by_id`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def fn_get_project(db: AsyncSession, project_id: UUID) -> ProjectRow \| None` |
-| 引数 | `project_id`: `sp_create_project`が返した採番済みID |
+| シグネチャ | `async def get_by_id(db: AsyncSession, project_id: UUID) -> Project \| None` |
+| 引数 | `project_id`: `create`が返した採番済みID |
 | 戻り値 | `fn_get_project`の結果を写像した行。存在しない場合は`None`（作成直後のため通常は発生しない） |
 | 送出例外 | `OperationalError`（DB不通） |
 | 処理内容 | `SELECT fn_get_project(:project_id)` のみを発行する |
@@ -200,11 +200,11 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["projects_router.create_project"] --> D1["deps.verify_origin_if_session"]
-    R --> D2["deps.verify_csrf"]
+    R --> D2["deps.verify_csrf_if_session"]
     R --> S["project_service.create_project"]
-    S --> RP1["repository.sp_create_project"]
+    S --> RP1["repository.create"]
     RP1 --> SP["CALL sp_create_project（OUTでproject_idを採番）"]
-    S --> RP2["repository.fn_get_project"]
+    S --> RP2["repository.get_by_id"]
     RP2 --> FN["SELECT fn_get_project(project_id)"]
 ```
 
@@ -283,8 +283,10 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 8 | 結合 | start_at/end_at省略時はnullで作成される | `start_at`/`end_at`を送らない | `201`、レスポンスの`start_at`/`end_at`が`null`、`is_active`が`true` | `test_create_project_without_period` |
 | 9 | 結合 | start_at/end_atを両方指定して作成できる | `end_at >= start_at`を満たす値を送信 | `201`、レスポンスに指定値が反映される | `test_create_project_with_valid_period` |
 | 10 | 結合 | end_at < start_atは422 | `end_at`が`start_at`より前の値 | `422 VALIDATION_ERROR` | `test_create_project_invalid_period_returns_422` |
+| 11 | 結合（router・認証依存性） | ownerの正常作成と未認証境界 | 実PostgreSQL、JWTアクセストークンまたは認証情報なし | ownerは201、未認証は401、作成後にprojectsとowner membershipが永続化 | `test_project_crud_router_enforces_authz_and_hides_non_member` |
+| 12 | 結合（実DB・障害） | 作成後のDB障害時に作成途中の状態を残さない | 実PostgreSQL、作成処理後のDB障害を発生させる | `SERVICE_UNAVAILABLE`、`projects`と`project_members`に部分作成なし | `test_create_project_rolls_back_real_db_changes_on_db_failure` |
 
-`AUTH_MODE=session` / `jwt` の両方で No.3・No.6を実施する。No.5はsessionモード固有のためjwtモードでは対象外（jwtは`Authorization`ヘッダのみでCSRF検証を行わないため）とし、その理由を明記する。
+既存の認証方式別テストに加え、No.11ではJWTの実認証依存性を通して正常系と未認証境界を検証する。No.5はsessionモード固有のためjwtモードでは対象外（jwtは`Authorization`ヘッダのみでCSRF検証を行わないため）とする。
 
 ## 13. 不明点・要検討事項
 
