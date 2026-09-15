@@ -2,7 +2,7 @@
 
 set -eEuo pipefail
 
-REVIEWED_LABEL="reviewed"
+APPROVAL_LABEL="approve"
 # ブロックメッセージが案内するラベル付与コマンドのプレースホルダ。
 # 実行時に `gh repo view` 等でリポジトリ名を解決しない理由は下記コメント参照。
 REPO_PLACEHOLDER="<owner>/<repo>"
@@ -207,10 +207,10 @@ command_for_match=${command_for_match//\\$'\n'/}
 # 本hookは事故防止のガードレール(通常operationでの誤操作・誤検知の防止)であり、
 # 迂回を意図した操作までは防げない。
 
-# 対象PRにreviewedラベルが付与されているか確認する。
+# 対象PRにapproveラベルが付与されているか確認する。
 # gh呼び出しに失敗した場合は必ずブロックする(fail-close)。
 # 0=ラベルあり / 1=ラベルなし / 2=判定不能
-has_reviewed_pr_label() {
+has_approval_pr_label() {
 	local selector="$1" # 空文字ならカレントブランチのPRで判定する(番号・URL・ブランチ名を受け付ける)
 	local repo="$2" # 空文字ならカレントリポジトリ
 	local labels_json
@@ -221,14 +221,14 @@ has_reviewed_pr_label() {
 	fi
 	args+=(--json labels)
 	# `--repo` やURLで別リポジトリが指定された場合、同じリポジトリのPRを照会しなければ
-	# 実対象とは別のPRのreviewed状態で許可・拒否してしまう。
+	# 実対象とは別のPRのapprove状態で許可・拒否してしまう。
 	if [[ -n "$repo" ]]; then
 		args+=(--repo "$repo")
 	fi
 
 	labels_json=$(gh pr view "${args[@]}" 2>/dev/null) || return 2
 
-	if jq -e --arg label "$REVIEWED_LABEL" '.labels // [] | any(.name == $label)' <<<"$labels_json" >/dev/null 2>&1; then
+	if jq -e --arg label "$APPROVAL_LABEL" '.labels // [] | any(.name == $label)' <<<"$labels_json" >/dev/null 2>&1; then
 		return 0
 	fi
 	return 1
@@ -248,11 +248,11 @@ resolve_repo() {
 	gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || return 1
 }
 
-# issueを閉じるPR(本文のClosing keywordsでリンクされたPR)にreviewedラベルがあるか確認する。
-# `reviewed` はレビュー主体がPRへ付与するラベルであり、issue側には付与されない運用のため、
+# issueを閉じるPR(本文のClosing keywordsでリンクされたPR)にapproveラベルがあるか確認する。
+# `approve` はレビュー主体がPRへ付与するラベルであり、issue側には付与されない運用のため、
 # issue closeの可否はissue自身ではなくリンクPRのラベルで判定する(#401)。
-# 0=リンクPRにreviewedあり / 1=リンクPRはあるがreviewedなし / 3=リンクPRなし / 2=判定不能
-linked_pr_has_reviewed_label() {
+# 0=リンクPRにapproveあり / 1=リンクPRはあるがapproveなし / 3=リンクPRなし / 2=判定不能
+linked_pr_has_approval_label() {
 	local issue_number="$1"
 	local parsed_repo="$2" # コマンドで明示されたリポジトリ(空文字ならカレントリポジトリ)
 	local repo owner name host response cursor="" linked_pr_count=0 page_node_count
@@ -296,7 +296,7 @@ linked_pr_has_reviewed_label() {
 			return 2
 		fi
 
-		if jq -e --arg label "$REVIEWED_LABEL" '
+		if jq -e --arg label "$APPROVAL_LABEL" '
 			.data.repository.issue.closedByPullRequestsReferences.nodes
 			| any((.labels.nodes // []) | any(.name == $label))
 		' <<<"$response" >/dev/null 2>&1; then
@@ -332,7 +332,7 @@ check_merge_segment() {
 	fi
 
 	status=0
-	has_reviewed_pr_label "$GH_TARGET_SELECTOR" "$GH_TARGET_REPO" || status=$?
+	has_approval_pr_label "$GH_TARGET_SELECTOR" "$GH_TARGET_REPO" || status=$?
 
 	if [[ "$status" -eq 0 ]]; then
 		return 0
@@ -343,7 +343,7 @@ check_merge_segment() {
 		# `gh pr edit --add-label` はProjects(classic)廃止に伴うGraphQLエラー(projectCards参照)で
 		# 失敗するため案内しない(#386)。REST APIの `gh api` 経由であれば同エンドポイントは
 		# PR・issueの両方に使えて安定して成功するため、こちらを案内する。
-		echo "ブロック: 対象PRに '${REVIEWED_LABEL}' ラベルがありません。.agents/review-policy.md に沿ったレビューで「受入可」のコメントを投稿したうえで、PR作成者以外がラベルを付与してください（例: gh api -X POST repos/${REPO_PLACEHOLDER}/issues/<PR番号>/labels -f \"labels[]=${REVIEWED_LABEL}\"）。" >&2
+		echo "ブロック: 対象PRに '${APPROVAL_LABEL}' ラベルがありません。.agents/review-policy.md に沿ったレビューで「受入可」のコメントを投稿したうえで、PR作成者以外がPRへラベルを付与してください（例: gh api -X POST repos/${REPO_PLACEHOLDER}/issues/<PR番号>/labels -f \"labels[]=${APPROVAL_LABEL}\"）。" >&2
 		return 2
 	fi
 }
@@ -367,7 +367,7 @@ check_close_segment() {
 	fi
 
 	status=0
-	linked_pr_has_reviewed_label "$issue_number" "$issue_repo" || status=$?
+	linked_pr_has_approval_label "$issue_number" "$issue_repo" || status=$?
 
 	if [[ "$status" -eq 0 ]]; then
 		return 0
@@ -380,7 +380,7 @@ check_close_segment() {
 	else
 		# issues/<番号>/labels のREST APIエンドポイントはissueにもPRにも使えるため、
 		# PR用メッセージ(#386)と同じ `gh api` 形式に統一する。
-		echo "ブロック: 対象issueを閉じるPRに '${REVIEWED_LABEL}' ラベルがありません。.agents/review-policy.md に沿ったレビューで「受入可」のコメントを投稿したうえで、PR作成者以外がPRへラベルを付与してください（例: gh api -X POST repos/${REPO_PLACEHOLDER}/issues/<PR番号>/labels -f \"labels[]=${REVIEWED_LABEL}\"）。" >&2
+		echo "ブロック: 対象issueを閉じるPRに '${APPROVAL_LABEL}' ラベルがありません。.agents/review-policy.md に沿ったレビューで「受入可」のコメントを投稿したうえで、PR作成者以外がPRへラベルを付与してください（例: gh api -X POST repos/${REPO_PLACEHOLDER}/issues/<PR番号>/labels -f \"labels[]=${APPROVAL_LABEL}\"）。" >&2
 		return 2
 	fi
 }
@@ -400,19 +400,19 @@ for command_segment in "${GH_COMMAND_SEGMENTS[@]}"; do
 		check_close_segment "$command_segment" || exit 2
 	fi
 	if gh_segment_is_api_merge "$command_segment"; then
-		echo "ブロック: GitHub API経由のPR mergeは禁止されています。レビュー完了後に '${REVIEWED_LABEL}' ラベルを付与し、gh pr merge を使用してください。" >&2
+		echo "ブロック: GitHub API経由のPR mergeは禁止されています。レビュー完了後に '${APPROVAL_LABEL}' ラベルを付与し、gh pr merge を使用してください。" >&2
 		exit 2
 	fi
 	if gh_segment_is_api_issue_close "$command_segment"; then
-		echo "ブロック: GitHub API経由のIssue closeは禁止されています。レビュー完了後に '${REVIEWED_LABEL}' ラベルを付与し、gh issue close を使用してください。" >&2
+		echo "ブロック: GitHub API経由のIssue closeは禁止されています。レビュー完了後に '${APPROVAL_LABEL}' ラベルを付与し、gh issue close を使用してください。" >&2
 		exit 2
 	fi
 	if gh_segment_is_api_graphql_destructive "$command_segment"; then
-		echo "ブロック: GraphQL mutation(mergePullRequest / closeIssue)によるPR merge・Issue closeは禁止されています。クエリ本体をシェル展開やファイルで渡す形も内容を検証できないためブロックします。レビュー完了後に '${REVIEWED_LABEL}' ラベルを付与し、gh pr merge / gh issue close を使用してください。" >&2
+		echo "ブロック: GraphQL mutation(mergePullRequest / closeIssue)によるPR merge・Issue closeは禁止されています。クエリ本体をシェル展開やファイルで渡す形も内容を検証できないためブロックします。レビュー完了後に '${APPROVAL_LABEL}' ラベルを付与し、gh pr merge / gh issue close を使用してください。" >&2
 		exit 2
 	fi
 	if gh_segment_is_issue_state_close "$command_segment"; then
-		echo "ブロック: --state closedによるIssue closeは禁止されています。レビュー完了後に '${REVIEWED_LABEL}' ラベルを付与し、gh issue close を使用してください。" >&2
+		echo "ブロック: --state closedによるIssue closeは禁止されています。レビュー完了後に '${APPROVAL_LABEL}' ラベルを付与し、gh issue close を使用してください。" >&2
 		exit 2
 	fi
 done

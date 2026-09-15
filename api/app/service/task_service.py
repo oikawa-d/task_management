@@ -5,10 +5,11 @@ from typing import Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_backend_settings
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import AssigneeInactiveError, NotFoundError, TaskConflictError, raise_database_error
 from app.models.task import Task
 from app.repository import project_repository, task_repository
 from app.schemas.auth import CurrentUser
@@ -30,6 +31,8 @@ from app.schemas.task import (
 	TaskUpdateRequest,
 )
 from app.service.authorization_service import require_task_access
+
+_TASK_WRITE_CONSTRAINT_ERRORS = (AssigneeInactiveError, TaskConflictError)
 
 
 def _assignee(task: Task) -> TaskAssignee | None:
@@ -151,22 +154,32 @@ async def list_calendar_tasks(user: CurrentUser, query: CalendarTaskQuery, db: A
 async def create_task(
 	project_id: UUID | None, payload: TaskCreateRequest, user: CurrentUser, db: AsyncSession
 ) -> TaskResponse:
-	task_id = await task_repository.create(
-		db,
-		project_id,
-		user.id,
-		payload.assignee_id,
-		payload.title,
-		payload.description,
-		payload.status,
-		payload.due_at,
-		None,
-	)
-	await db.commit()
-	item = await task_repository.get_by_id(db, task_id)
-	if item is None:
-		raise NotFoundError()
-	return _response(item, user)
+	try:
+		try:
+			task_id = await task_repository.create(
+				db,
+				project_id,
+				user.id,
+				payload.assignee_id,
+				payload.title,
+				payload.description,
+				payload.status,
+				payload.due_at,
+				None,
+			)
+		except _TASK_WRITE_CONSTRAINT_ERRORS:
+			await db.rollback()
+			raise
+		item = await task_repository.get_by_id(db, task_id)
+		if item is None:
+			await db.rollback()
+			raise NotFoundError()
+		response = _response(item, user)
+		await db.commit()
+		return response
+	except DBAPIError as exc:
+		await db.rollback()
+		raise_database_error(exc)
 
 
 async def create_task_flat(payload: TaskCreateFlatRequest, user: CurrentUser, db: AsyncSession) -> TaskResponse:
@@ -179,23 +192,33 @@ async def update_task(task_id: UUID, payload: TaskUpdateRequest, user: CurrentUs
 		raise NotFoundError()
 	task = item.task
 	await require_task_access(task, user, db)
-	await task_repository.update(
-		db,
-		task_id,
-		user.id,
-		payload.version,
-		payload.title if payload.title is not None else task.title,
-		payload.description if "description" in payload.model_fields_set else task.description,
-		payload.status if payload.status is not None else task.status,
-		payload.assignee_id if "assignee_id" in payload.model_fields_set else task.assignee_id,
-		payload.due_at if "due_at" in payload.model_fields_set else task.due_at,
-		payload.position if payload.position is not None else task.position,
-	)
-	await db.commit()
-	updated = await task_repository.get_by_id(db, task_id)
-	if updated is None:
-		raise NotFoundError()
-	return _response(updated, user)
+	try:
+		try:
+			await task_repository.update(
+				db,
+				task_id,
+				user.id,
+				payload.version,
+				payload.title if payload.title is not None else task.title,
+				payload.description if "description" in payload.model_fields_set else task.description,
+				payload.status if payload.status is not None else task.status,
+				payload.assignee_id if "assignee_id" in payload.model_fields_set else task.assignee_id,
+				payload.due_at if "due_at" in payload.model_fields_set else task.due_at,
+				payload.position if payload.position is not None else task.position,
+			)
+		except _TASK_WRITE_CONSTRAINT_ERRORS:
+			await db.rollback()
+			raise
+		updated = await task_repository.get_by_id(db, task_id)
+		if updated is None:
+			await db.rollback()
+			raise NotFoundError()
+		response = _response(updated, user)
+		await db.commit()
+		return response
+	except DBAPIError as exc:
+		await db.rollback()
+		raise_database_error(exc)
 
 
 async def deactivate_task(task_id: UUID, user: CurrentUser, db: AsyncSession) -> None:
@@ -203,8 +226,12 @@ async def deactivate_task(task_id: UUID, user: CurrentUser, db: AsyncSession) ->
 	if item is None:
 		raise NotFoundError()
 	await require_task_access(item.task, user, db)
-	await task_repository.set_active(db, task_id, False)
-	await db.commit()
+	try:
+		await task_repository.set_active(db, task_id, False)
+		await db.commit()
+	except DBAPIError as exc:
+		await db.rollback()
+		raise_database_error(exc)
 
 
 async def get_task_detail(task_id: UUID, user: CurrentUser, db: AsyncSession) -> TaskDetailResponse:

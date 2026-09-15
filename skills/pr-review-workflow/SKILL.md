@@ -60,14 +60,14 @@ gh pr comment <番号> --body-file <file>
 自分のPRであっても、レビュー担当と修正担当は分ける。
 
 1. **親エージェント**がレビュー結果を `gh pr comment` で投稿する（指摘ごとに「なぜ問題か」「推奨対応」を書く）。
-2. `issue-label-workflow` に従い、対応するissueを `changes-requested` に更新する。
+2. `issue-label-workflow` に従い、対応するIssueの `review` を維持し、PRはレビュー中の `in-progress` を維持する。
 3. **修正用サブエージェントを起動する。** 複数PRを並行修正する場合は、Agentツールの `isolation: "worktree"` を必ず指定して各エージェントを独立worktreeに分離する（同一チェックアウトを共有すると `git checkout`/`add`/`commit` が競合する）。起動前に「作業前のworktree清掃」（末尾）を済ませておくこと — 過去のworktreeがブランチを掴んでいると分離worktreeを作れない。
    修正エージェントへの指示に必ず含める:
    - 対象ブランチ名と `git fetch && git checkout <branch> && git pull --ff-only`
    - レビュー指摘の全文（どのファイルの何行目を、なぜ、どう直すか）
    - テストを実行し**実測結果を報告**すること
    - コミット・push・`gh pr comment` での修正報告まで行うこと
-   - **PR作成もしくはコード修正を行ったエージェント自身による`gh pr merge`とissueのcloseは禁止**。それ以外のエージェントは、受入可のレビュー・`reviewed`ラベル・CI全pass・mergeableを確認後に実施してよい
+   - **PR作成もしくはコード修正を行ったエージェント自身による`gh pr merge`とissueのcloseは禁止**。それ以外のエージェントは、受入可のレビュー・`approve`ラベル・CI全pass・mergeableを確認後に実施してよい
    - 自分のworktree外のファイルを変更しないこと
    - `.env` の読み取り・変更禁止（`.env.example` への追記は可）
 4. 修正完了後、**別のサブエージェント**に再レビューさせる。修正した本人に合否判定させない。
@@ -75,7 +75,7 @@ gh pr comment <番号> --body-file <file>
 
 ## マージとclose
 
-**PR作成もしくはコード修正を行ったエージェントはmerge・issue closeを実施しない。** それ以外のエージェントは、レビューで「受入可」を記録し、`reviewed`ラベルとCI全pass・mergeableを確認した場合、追加のユーザー承認なしにsquash mergeとIssue closeを実施してよい。同一GitHubアカウントを使用する場合も、PR作成またはコード修正を行ったエージェントでなければこの運用の対象とする。`.agents/hooks/block-github-destructive-actions.sh`（Claude Codeは`.claude/hooks/`、Codexは`.codex/hooks/`のラッパー経由で呼び出される）は`reviewed`ラベルの有無を検証するが、PR作成・コード修正を行ったエージェントの識別は行わない。
+**PR作成もしくはコード修正を行ったエージェントはmerge・issue closeを実施しない。** それ以外のエージェントは、レビューで「受入可」を記録し、`approve`ラベルとCI全pass・mergeableを確認した場合、追加のユーザー承認なしにsquash mergeとIssue closeを実施してよい。同一GitHubアカウントを使用する場合も、PR作成またはコード修正を行ったエージェントでなければこの運用の対象とする。`.agents/hooks/block-github-destructive-actions.sh`（Claude Codeは`.claude/hooks/`、Codexは`.codex/hooks/`のラッパー経由で呼び出される）は`approve`ラベルの有無を検証するが、PR作成・コード修正を行ったエージェントの識別は行わない。
 
 PR作成もしくはコード修正を行ったエージェントはここまでで作業を止め、「CI全pass・mergeable」であることと未解決の指摘の有無をユーザーに報告する。
 
@@ -135,7 +135,7 @@ gh pr reopen <番号>                                        # PRを再オープ
 
 `Closes #<番号>` がPR本文にあってもGitHubが自動closeしない場合があるので、マージ後に `gh issue view` でstateを必ず確認する。逆に自動closeされていた場合は `gh issue close` がエラーになるため、申し送りは `gh issue comment` で別途残す。
 
-close後は `issue-label-workflow` の手順5に従い、issueから状態ラベル（`in-progress` / `review-requested` / `changes-requested`）を外す。
+close後は `issue-label-workflow` の手順5に従い、Issueから状態ラベル（`in-progress` / `review`）を、PRから`in-progress` / `approve`を外す。
 
 ## 作業前のworktree清掃
 

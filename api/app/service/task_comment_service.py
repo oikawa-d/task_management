@@ -54,12 +54,18 @@ async def list_comments(task: Task, user: CurrentUser, db: AsyncSession) -> Comm
 async def add_comment(
 	task: Task, payload: CommentCreateRequest, user: CurrentUser, db: AsyncSession
 ) -> CommentResponse:
-	await require_task_access(task, user, db)
-	comment_id = await task_comment_repository.create(db, task.id, user.id, payload.body)
-	comment = await task_comment_repository.get_by_id(db, comment_id)
-	if comment is None:
-		raise NotFoundError()
-	return _comment_response(comment, user)
+	try:
+		await require_task_access(task, user, db)
+		comment_id = await task_comment_repository.create(db, task.id, user.id, payload.body)
+		comment = await task_comment_repository.get_by_id(db, comment_id)
+		if comment is None:
+			raise NotFoundError()
+		response = _comment_response(comment, user)
+		await db.commit()
+		return response
+	except Exception:
+		await db.rollback()
+		raise
 
 
 async def update_comment(
@@ -69,16 +75,27 @@ async def update_comment(
 	user: CurrentUser,
 	db: AsyncSession,
 ) -> CommentResponse:
-	await require_task_access(task, user, db)
-	require_comment_editor(comment.user_id, user)
-	await task_comment_repository.update(db, comment.id, user.id, payload.body)
-	updated = await task_comment_repository.get_by_id(db, comment.id)
-	if updated is None:
-		raise NotFoundError()
-	return _comment_response(updated, user)
+	try:
+		await require_task_access(task, user, db)
+		require_comment_editor(comment.user_id, user)
+		await task_comment_repository.update(db, comment.id, user.id, payload.body)
+		updated = await task_comment_repository.get_by_id(db, comment.id)
+		if updated is None:
+			raise NotFoundError()
+		response = _comment_response(updated, user)
+		await db.commit()
+		return response
+	except Exception:
+		await db.rollback()
+		raise
 
 
 async def delete_comment(task: Task, comment: TaskComment, user: CurrentUser, db: AsyncSession) -> None:
-	await require_task_access(task, user, db)
-	require_comment_editor(comment.user_id, user)
-	await task_comment_repository.delete(db, comment.id, user.id)
+	try:
+		await require_task_access(task, user, db)
+		require_comment_editor(comment.user_id, user)
+		await task_comment_repository.delete(db, comment.id, user.id)
+		await db.commit()
+	except Exception:
+		await db.rollback()
+		raise

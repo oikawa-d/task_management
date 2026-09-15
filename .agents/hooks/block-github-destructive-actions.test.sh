@@ -205,7 +205,8 @@ assert_gh_not_called_with() {
 	return 0
 }
 
-reviewed_json='{"labels":[{"name":"reviewed"}]}'
+approve_json='{"labels":[{"name":"approve"}]}'
+legacy_reviewed_json='{"labels":[{"name":"reviewed"}]}'
 unreviewed_json='{"labels":[]}'
 
 unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON
@@ -214,14 +215,19 @@ unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON
 assert_allowed "gh pr view 123"
 assert_allowed "git commit -m 'test'"
 
-# 1. reviewedラベル無しのPRへのマージ -> exit 2
+# 1. approveラベル無しのPRへのマージ -> exit 2
 export GH_STUB_MATCH="pr view" GH_STUB_EXIT="0" GH_STUB_JSON="$unreviewed_json"
 assert_blocked "gh pr merge 123 --squash"
 assert_blocked "gh --repo oikawa-d/task_management pr merge 123"
 
-# 2. reviewedラベル有りのPRへのマージ -> exit 0
-export GH_STUB_JSON="$reviewed_json"
+# 2. approveラベル有りのPRへのマージ -> exit 0
+export GH_STUB_JSON="$approve_json"
 assert_allowed "gh pr merge 123 --squash"
+
+# 2-1. 旧reviewedラベルだけではマージを許可しない
+export GH_STUB_JSON="$legacy_reviewed_json"
+assert_blocked "gh pr merge 123 --squash"
+export GH_STUB_JSON="$approve_json"
 
 # 3. PR番号省略時にカレントブランチのPRで判定されること
 assert_allowed "gh pr merge --squash"
@@ -237,7 +243,7 @@ assert_gh_called_with "gh pr merge -A author@example.com 123" 'pr view 123'
 assert_gh_called_with "gh pr merge -Aauthor@example.com 123" 'pr view 123'
 
 # 3-4. `--repo` やURLで指定した別リポジトリのPRを照会すること
-# カレントリポジトリの同番号PRのreviewed状態で許可・拒否してはならない。
+# カレントリポジトリの同番号PRのapprove状態で許可・拒否してはならない。
 assert_gh_called_with "gh pr merge --repo evil/other 123" 'pr view 123 --json labels --repo evil/other'
 assert_gh_called_with "gh pr merge 123 -R evil/other" 'pr view 123 --json labels --repo evil/other'
 assert_gh_called_with "gh pr merge --repo=evil/other 123" 'pr view 123 --json labels --repo evil/other'
@@ -268,23 +274,28 @@ export GH_STUB_EXIT="1"
 assert_blocked "gh pr merge 123"
 export GH_STUB_EXIT="0"
 
-# 5. issue close は「issueを閉じるPR」のreviewedラベルで判定する(#401)
-# issue自身のラベルでは判定しないため、issueにreviewedが付いていても許可してはならない。
-linked_reviewed_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"number":362,"labels":{"nodes":[{"name":"reviewed"}]}}]}}}}}'
-linked_unreviewed_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"number":374,"labels":{"nodes":[{"name":"review-requested"}]}}]}}}}}'
+# 5. issue close は「issueを閉じるPR」のapproveラベルで判定する(#401)
+# issue自身のラベルでは判定しないため、issueにapproveが付いていても許可してはならない。
+linked_approve_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"number":362,"labels":{"nodes":[{"name":"approve"}]}}]}}}}}'
+linked_legacy_reviewed_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"number":363,"labels":{"nodes":[{"name":"reviewed"}]}}]}}}}}'
+linked_unreviewed_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"number":374,"labels":{"nodes":[{"name":"review"}]}}]}}}}}'
 linked_none_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}'
-linked_page_one_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"},"nodes":[{"number":374,"labels":{"nodes":[{"name":"review-requested"}]}}]}}}}}'
-linked_page_two_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"number":375,"labels":{"nodes":[{"name":"reviewed"}]}}]}}}}}'
+linked_page_one_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"},"nodes":[{"number":374,"labels":{"nodes":[{"name":"review"}]}}]}}}}}'
+linked_page_two_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"number":375,"labels":{"nodes":[{"name":"approve"}]}}]}}}}}'
 linked_partial_error_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"number":376,"labels":{"nodes":[{"name":"reviewed"}]}}]}}}},"errors":[{"message":"partial failure"}]}'
 
-# 5-1. リンクPRにreviewedあり -> exit 0
-export GH_STUB_GRAPHQL_JSON="$linked_reviewed_json"
+# 5-1. リンクPRにapproveあり -> exit 0
+export GH_STUB_GRAPHQL_JSON="$linked_approve_json"
 assert_allowed "gh issue close 123"
 assert_allowed "gh --repo oikawa-d/task_management issue close 123"
 assert_allowed "gh issue close 123 --comment '対応完了'"
 assert_allowed "gh issue close 123 --comment 'fix; done | keep & quoted'"
 
-# 5-2. リンクPRはあるがreviewedなし -> exit 2
+# 5-1-1. リンクPRに旧reviewedしかない場合はブロックする
+export GH_STUB_GRAPHQL_JSON="$linked_legacy_reviewed_json"
+assert_blocked "gh issue close 123"
+
+# 5-2. リンクPRはあるがapproveなし -> exit 2
 export GH_STUB_GRAPHQL_JSON="$linked_unreviewed_json"
 assert_blocked "gh issue close 123"
 
@@ -292,20 +303,20 @@ assert_blocked "gh issue close 123"
 export GH_STUB_GRAPHQL_JSON="$linked_none_json"
 assert_blocked_with_message "gh issue close 123" "issueを閉じるPRが見つかりません"
 
-# 5-4. issue自身にreviewedラベルがあってもリンクPRが未reviewedならブロックされること
-export GH_STUB_GRAPHQL_JSON="$linked_unreviewed_json" GH_STUB_MATCH="issue view" GH_STUB_JSON="$reviewed_json"
+# 5-4. issue自身にapproveラベルがあってもリンクPRが未approveならブロックされること
+export GH_STUB_GRAPHQL_JSON="$linked_unreviewed_json" GH_STUB_MATCH="issue view" GH_STUB_JSON="$approve_json"
 assert_blocked "gh issue close 123"
 unset GH_STUB_MATCH GH_STUB_JSON
 
 # 5-5. GraphQL呼び出し失敗 -> exit 2 (fail-close)
-export GH_STUB_GRAPHQL_JSON="$linked_reviewed_json" GH_STUB_GRAPHQL_EXIT="1"
+export GH_STUB_GRAPHQL_JSON="$linked_approve_json" GH_STUB_GRAPHQL_EXIT="1"
 assert_blocked "gh issue close 123"
 unset GH_STUB_GRAPHQL_EXIT
 
 # 5-6. GraphQLの部分成功(data + errors)は成功扱いせず、fail-closeする
 export GH_STUB_GRAPHQL_JSON="$linked_partial_error_json"
 assert_blocked "gh issue close 123"
-export GH_STUB_GRAPHQL_JSON="$linked_reviewed_json"
+export GH_STUB_GRAPHQL_JSON="$linked_approve_json"
 
 # 5-7. リポジトリ解決失敗 -> exit 2 (fail-close)。--repo指定があれば解決不要で許可される。
 export GH_STUB_REPO_EXIT="1"
@@ -319,7 +330,7 @@ unset GH_STUB_REPO_EXIT
 assert_blocked "gh issue close"
 
 # 5-8. オプション値の数値をIssue番号にせず、実際の位置引数を照会する
-export GH_STUB_GRAPHQL_JSON="$linked_reviewed_json" GH_STUB_GRAPHQL_EXPECT_NUMBER="456"
+export GH_STUB_GRAPHQL_JSON="$linked_approve_json" GH_STUB_GRAPHQL_EXPECT_NUMBER="456"
 assert_allowed "gh issue close --comment 123 456"
 assert_allowed "gh issue close --comment=123 456"
 unset GH_STUB_GRAPHQL_EXPECT_NUMBER
@@ -334,7 +345,7 @@ export GH_STUB_GRAPHQL_EXPECT_NUMBER="456" GH_STUB_GRAPHQL_EXPECT_REPO="oikawa-d
 assert_allowed "gh issue close https://github.com/oikawa-d/task_management/issues/456"
 unset GH_STUB_GRAPHQL_EXPECT_NUMBER GH_STUB_GRAPHQL_EXPECT_REPO
 
-# 5-11. リンクPRをページングしてreviewedを検索する
+# 5-11. リンクPRをページングしてapproveを検索する
 export GH_STUB_GRAPHQL_JSON="$linked_page_one_json" GH_STUB_GRAPHQL_NEXT_JSON="$linked_page_two_json"
 assert_allowed "gh issue close 123"
 unset GH_STUB_GRAPHQL_NEXT_JSON
@@ -386,7 +397,7 @@ unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON GH_STUB_GRAPHQL_JSON
 # 6. heredoc本文にコマンド名を含むだけのコマンド -> exit 0 (#388の回帰テスト)
 heredoc_cmd=$(printf '%s\n' \
 	"cat > ./tmp/handover.md <<'XEOF'" \
-	"reviewed付与済み＋CI全チェック成功なら gh pr merge してよい" \
+	"approve付与済み＋CI全チェック成功なら gh pr merge してよい" \
 	"gh issue close 999" \
 	"XEOF")
 assert_allowed "$heredoc_cmd"
@@ -459,7 +470,7 @@ assert_blocked 'echo "$(gh issue close 123)"'
 assert_blocked 'echo "$(gh api -X PUT repos/oikawa-d/task_management/pulls/123/merge)"'
 assert_blocked 'echo "$(echo "$(gh pr merge 123)")"'
 assert_blocked 'echo "`gh pr merge 123`"'
-export GH_STUB_JSON="$reviewed_json"
+export GH_STUB_JSON="$approve_json"
 assert_allowed "if true; then gh pr merge 123; fi"
 assert_allowed 'echo "$(gh pr merge 123)"'
 unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON
@@ -532,7 +543,7 @@ assert_blocked $'gh api graphql -f query=\'mutation{closeIssue(input:{issueId:"x
 assert_allowed $'gh api graphql -f query=\'query{repository(owner:"o",name:"r"){id}}\''
 
 # 10-3. 1回の入力に複数の破壊操作がある場合、全件を検査すること
-export GH_STUB_JSON="$reviewed_json" GH_STUB_UNREVIEWED_PR="456" GH_STUB_GRAPHQL_JSON="$linked_unreviewed_json"
+export GH_STUB_JSON="$approve_json" GH_STUB_UNREVIEWED_PR="456" GH_STUB_GRAPHQL_JSON="$linked_unreviewed_json"
 assert_blocked "gh pr merge 123 && gh pr merge 456"
 assert_blocked "gh pr merge 123 && gh issue close 456"
 unset GH_STUB_JSON GH_STUB_UNREVIEWED_PR GH_STUB_GRAPHQL_JSON
@@ -572,8 +583,8 @@ assert_blocked '$(which gh) pr merge 123'
 assert_blocked '`which gh` pr merge 123'
 assert_blocked '$GH api -X PUT repos/oikawa-d/task_management/pulls/123/merge'
 assert_blocked 'GH=gh; $GH issue edit 123 --state closed'
-# コマンド名が動的でも、対象PRにreviewedラベルがあれば許可すること
-export GH_STUB_JSON="$reviewed_json"
+# コマンド名が動的でも、対象PRにapproveラベルがあれば許可すること
+export GH_STUB_JSON="$approve_json"
 assert_allowed 'GH=gh; $GH pr merge 123 --squash'
 unset GH_STUB_MATCH GH_STUB_EXIT GH_STUB_JSON GH_STUB_GRAPHQL_JSON
 # コマンド置換・バッククォート単体、および置換で渡された引数も検査対象とすること
