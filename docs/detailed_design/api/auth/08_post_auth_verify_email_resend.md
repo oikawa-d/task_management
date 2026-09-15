@@ -270,8 +270,10 @@ stateDiagram-v2
 | 5 | 結合（実Redis/PostgreSQL） | 未認証ユーザーへの再送でSMTPモックが呼ばれる | `register` 実行済み、SMTPは `aiosmtplib` をモック | `202`、SMTP送信関数が1回呼ばれる | `test_resend_verify_email_endpoint_success` |
 | 6 | 結合 | 存在しないメールで再送要求 | ランダムなメールアドレス | `202`、SMTP送信関数が呼ばれない | `test_resend_verify_email_endpoint_unknown_returns_202` |
 | 7 | 結合 | 60秒以内の連続再送 | 1回目送信済み直後に2回目 | 2回目も `202` だがSMTP送信関数は呼ばれない | `test_resend_verify_email_endpoint_interval_limit` |
-| 8 | 結合 | 再送後、新トークンで旧トークンが無効化されること | 1回目のトークンを保持したまま2回目再送 | 旧トークンで `/auth/verify-email` を叩くと `400 INVALID_VERIFY_TOKEN`、新トークンでは成功 | `test_resend_verify_email_endpoint_old_token_invalidated` |
+| 8 | 結合 | 再送後、新トークンで旧トークンが無効化されること | 1回目のトークンを保持したまま2回目再送 | 旧トークンで `/auth/verify-email` を叩くと `400 INVALID_VERIFY_TOKEN`、新トークンでは成功 | `test_resend_replaces_old_token_and_new_token_verifies`（Issue #425） |
 | 9 | 結合 | `email` 未指定・不正形式 | ボディ不正 | `422 VALIDATION_ERROR` | `test_resend_verify_email_endpoint_invalid_email` |
+
+Issue #425 の結合テストでは、SMTP送信関数だけをテスト用 outbox に差し替え、再送API・Redisトークン置換・verify-email API の連携を実アプリ境界で確認する。レスポンスは本節の `202` と固定メッセージ、入力は `ResendVerifyEmailRequest` の定義に従う。
 
 このAPIは `AUTH_MODE` に依存しないため両モードでの重複実施は不要。IP制限とユーザー単位間隔制限の両方をテストする。
 

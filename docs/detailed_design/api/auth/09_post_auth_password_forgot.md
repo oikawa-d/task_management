@@ -234,11 +234,13 @@ stateDiagram-v2
 |----|------|--------|------|----------|-----------------|
 | 1 | 単体（モック） | 存在するユーザーへのリセット要求 | `get_by_email` がユーザーを返す | `save_password_reset_token` とメール送信タスクが呼ばれる | `test_request_password_reset_service_success` |
 | 2 | 単体（モック） | 存在しないメールでの要求 | `get_by_email` が `None` | 以降の処理が呼ばれず正常終了 | `test_request_password_reset_service_unknown_email` |
-| 3 | 結合（実Redis/PostgreSQL） | 登録済みユーザーへのリセット要求でSMTPモックが呼ばれる | ユーザー登録済み、SMTPは `aiosmtplib` をモック | `202`、SMTP送信関数が1回呼ばれる、`pwreset:*` キーが作成される | `test_password_forgot_endpoint_success` |
+| 3 | 結合（実Redis/PostgreSQL） | 登録済みユーザーへのリセット要求でSMTPモックが呼ばれる | ユーザー登録済み、SMTP境界をテスト用 outbox に差し替え | `202`、SMTP送信関数が1回呼ばれる、`pwreset:*` キーが作成される | `test_password_forgot_reset_flow_consumes_token_and_revokes_auth_state`（Issue #425） |
 | 4 | 結合 | 存在しないメールでの要求 | ランダムなメールアドレス | `202`、SMTP送信関数が呼ばれない | `test_password_forgot_endpoint_unknown_returns_202` |
 | 5 | 結合 | `email` 未指定・不正形式 | ボディ不正 | `422 VALIDATION_ERROR` | `test_password_forgot_endpoint_invalid_email` |
 | 6 | 結合 | Google OAuthのみのユーザー（`password_hash IS NULL`）への要求 | OAuth登録済みユーザー | `202`、メール送信が行われる | `test_password_forgot_endpoint_oauth_only_user` |
 | 7 | 結合 | 無効化ユーザー（`is_active=false`）への要求 | 管理者に無効化されたユーザー | `202`、メール送信が行われる（基本設計に除外規定なしのため） | `test_password_forgot_endpoint_inactive_user` |
+
+Issue #425 の結合テストは、`PasswordForgotRequest` をAPIへ渡し、実PostgreSQL検索・実Redis token発行・BackgroundTasksのメール境界までを検証する。SMTP以外の入出力と `202` 固定応答は本節の仕様から変更しない。
 
 このAPIは `AUTH_MODE` に依存しないため両モードでの重複実施は不要。
 

@@ -303,12 +303,14 @@ stateDiagram-v2
 | 4 | 単体 | jwt：CSRF不一致 | ヘッダとCookieが異なる | `CsrfInvalidError` | `test_refresh_jwt_strategy_csrf_mismatch` |
 | 5 | 単体 | jwt：再利用検知 | redis_storeモックが`TokenReused`返却 | `TokenRevokedError` | `test_refresh_jwt_strategy_token_reused` |
 | 6 | 結合 | `AUTH_MODE=session`でのアクセス | 実アプリ（sessionモード起動） | `405 NOT_SUPPORTED_IN_MODE` | `test_refresh_endpoint_session_mode_returns_405` |
-| 7 | 結合 | `AUTH_MODE=jwt`正常系 | 実Redis、ログイン済み | `200`、新`cerberus_rt`/`cerberus_csrf`Cookie、旧refreshキーが失効 | `test_refresh_endpoint_jwt_success_rotates_token` |
-| 8 | 結合 | ローテーション後に旧トークンが401 | 7の後に旧Cookieで再度呼び出し | `401 TOKEN_REVOKED` | `test_refresh_endpoint_old_token_after_rotation_rejected` |
-| 9 | 結合 | 再利用検知でfamily全失効 | 旧トークンを2回使用 | 2回目が`401 TOKEN_REVOKED`、同familyの他トークンも失効 | `test_refresh_endpoint_reuse_revokes_family` |
+| 7 | 結合 | `AUTH_MODE=jwt`正常系 | 実Redis/PostgreSQL、メール認証済みユーザー | `200`、新`cerberus_rt`/`cerberus_csrf`Cookie、旧refreshキーが失効 | `test_jwt_refresh_rotation_rejects_missing_and_reused_tokens`（Issue #425） |
+| 8 | 結合 | ローテーション後に旧トークンが401 | 7の後に旧Cookieで再度呼び出し | `401 TOKEN_REVOKED` | `test_jwt_refresh_rotation_rejects_missing_and_reused_tokens`（Issue #425） |
+| 9 | 結合 | 再利用検知でfamily全失効 | 旧トークンを2回使用 | 2回目が`401 TOKEN_REVOKED`、同familyの新トークンも失効 | `test_jwt_refresh_rotation_rejects_missing_and_reused_tokens`（Issue #425） |
 | 10 | 結合 | 競合：同時2リクエスト | 同一refresh tokenで`asyncio.gather`により同時実行 | 成功が1回だけ、2回目はfamily失効マーカーが設定される | `test_refresh_endpoint_concurrent_rotation_only_one_succeeds` |
 | 11 | 結合 | CSRFヘッダ欠落 | Cookieはあるがヘッダ無し | `403 CSRF_INVALID` | `test_refresh_endpoint_missing_csrf_header` |
 | 12 | 結合 | Origin不一致 | 許可外Origin | `403 CSRF_INVALID` | `test_refresh_endpoint_invalid_origin` |
+
+Issue #425 の結合テストは `api/tests/integration/test_auth_token_mail_flow.py` で実際の FastAPI アプリ境界を通り、CI の PostgreSQL/Redis services に接続する。Cookie/ヘッダ、`RefreshResponse`、エラーコードは本節の入出力仕様と一致し、SMTPのみテスト内で境界を差し替える。
 
 sessionモードは6の405確認のみで足り、それ以外の異常系（CSRF・再利用検知等）はjwtモード固有の機能のためjwtモードのみで実施する（`AUTH_MODE`両モードでの網羅パラメータ化は本APIの性質上不要と判断）。
 
