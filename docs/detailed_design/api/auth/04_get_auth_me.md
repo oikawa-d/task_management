@@ -114,8 +114,8 @@ sequenceDiagram
     alt session
         STR->>RD: GET session:{sid}
         alt 存在しない
-            STR-->>DEP: None
-            DEP-->>R: SessionExpiredError
+            STR--x DEP: raises SessionExpiredError
+            DEP-->>R: (例外伝播)
             R-->>FE: 401 SESSION_EXPIRED
         else 存在する
             STR->>RD: EXPIRE session:{sid}/csrf:{sid}/user_sessions:{uid}（TTL延長）
