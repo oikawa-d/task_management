@@ -13,6 +13,8 @@
 | [./11_post_tasks.md](./11_post_tasks.md) | 同一リソース群のフラット作成API |
 | [../projects/01_get_projects.md](../projects/01_get_projects.md) | ページング・`include_inactive`の既存パターン（本APIも同様の方式を踏襲） |
 
+| 実装ファイル | `api/app/api/routers/tasks_router.py`、`api/app/schemas/task.py`、`api/app/service/task_service.py`、`api/app/repository/task_repository.py`、`db/functions/fn_list_tasks.sql` |
+
 ## 1. 概要
 
 | 項目 | 内容 |
@@ -288,23 +290,23 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 
 ## 12. テスト設計
 
-| No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
+| No | 区分 | ケース | 前提 | 期待結果 | 実在するpytest関数名 / 状態 |
 |----|------|--------|------|----------|-----------------|
-| 1 | 結合（実DB・実SP） | project_id省略時のデフォルト範囲 | user=member、リポジトリをモック | `project_id_filter=None`でリポジトリ呼び出し | `test_list_tasks_default_scope` |
-| 2 | 結合（実DB・実SP） | project_id指定・非所属 | `is_member=False`、非admin | `NotFoundError`送出 | `test_list_tasks_project_filter_forbidden` |
-| 3 | 結合（実DB・実SP） | project_id="null"の正規化 | クエリ文字列`"null"` | `project_id_filter="unassigned"`としてサービス層へ渡る | `test_list_tasks_null_literal_normalized` |
-| 4 | 結合（実DB・実SP） | 不正なproject_id文字列 | `"not-a-uuid"` | `ValidationError`（422） | `test_list_tasks_invalid_project_id_string` |
-| 5 | 結合 | memberは所属プロジェクトの全タスクを横断取得 | 実DB、所属プロジェクト2件・各2タスク | 200、4件返る | `test_list_tasks_member_cross_project` |
-| 6 | 結合 | memberは自分の未所属タスクも含む | 実DB、`project_id=NULL`の自作タスク1件 | 200、所属プロジェクト分＋1件 | `test_list_tasks_includes_own_unassigned` |
-| 7 | 結合 | memberは他人の未所属タスクを見えない | 実DB、他ユーザー作成の`project_id=NULL`タスク | 200、含まれない | `test_list_tasks_excludes_others_unassigned` |
-| 8 | 結合 | project_id="null"指定で未所属のみ絞込 | 実DB、所属プロジェクトのタスクと自作未所属タスク | 200、未所属タスクのみ返る | `test_list_tasks_filter_unassigned_only` |
-| 9 | 結合 | project_id=UUID指定で単一プロジェクトに絞込 | 実DB、複数プロジェクトに所属 | 200、指定プロジェクトのタスクのみ | `test_list_tasks_filter_by_project_id` |
-| 10 | 結合 | adminは全ユーザーの未所属タスクを含め全件 | 実DB、複数ユーザーの未所属タスク | 200、全件に含まれる | `test_list_tasks_admin_sees_all_including_unassigned` |
-| 11 | 結合 | 既定はis_active=falseを除外 | 実DB、`is_active=false`のタスクを含む | 200、含まれない | `test_list_tasks_excludes_inactive_by_default` |
-| 12 | 結合 | include_inactive指定 | 実DB、`?include_inactive=true` | 200、`is_active=false`のタスクも含まれる | `test_list_tasks_include_inactive` |
-| 13 | 結合 | statusフィルタ | 実DB、`?status=done` | 200、`status=done`のみ | `test_list_tasks_filter_by_status` |
-| 14 | 結合 | ページング | 実DB、認可範囲に25件 | `per_page=20`で1ページ目20件、2ページ目5件 | `test_list_tasks_pagination` |
-| 15 | パラメータ化 | AUTH_MODE両対応 | `AUTH_MODE=session` / `jwt` | 5・9・10を両モードで実行 | フィクスチャ `auth_mode` |
+| 1 | APIルーター | project_id省略時のデフォルト範囲 | user=member、`per_page=20` | `project_id_filter=None`でサービス呼び出し | `test_list_tasks_forwards_default_query` |
+| 2 | APIルーター | project_id指定・非所属 | サービスが`NotFoundError`を送出 | 404 `NOT_FOUND` | `test_list_tasks_rejects_non_member_project` |
+| 3 | APIルーター | project_id="null"の正規化 | クエリ文字列`"null"` | `project_id_filter="unassigned"`としてサービス層へ渡る | `test_list_tasks_normalizes_null_project_filter` |
+| 4 | APIルーター | 不正なproject_id文字列 | `"not-a-uuid"` | 422 `VALIDATION_ERROR`、サービス未呼び出し | `test_list_tasks_rejects_invalid_project_id` |
+| 5 | 未実装 | memberは所属プロジェクトの全タスクを横断取得 | API結合テストなし | 未実装 | —（未実装） |
+| 6 | DB関数 | memberは自分の未所属タスクを参照できる | `fn_list_tasks`を実DBで実行 | 作成者の結果に含まれる | `test_fn_list_tasks_unassigned_visible_only_to_creator`（未所属可視範囲） |
+| 7 | DB関数 | memberは他人の未所属タスクを見えない | `fn_list_tasks`を実DBで実行 | 他人の結果に含まれない | `test_fn_list_tasks_unassigned_visible_only_to_creator`（未所属可視範囲） |
+| 8 | APIルーター | project_id="null"指定で未所属のみ絞込 | クエリ解析とサービス委譲を検証 | `project_id_filter="unassigned"`としてサービス層へ渡る | `test_list_tasks_normalizes_null_project_filter`（APIレベル） |
+| 9 | 未実装 | project_id=UUID指定で単一プロジェクトに絞込 | API結合テストなし | 未実装 | —（未実装） |
+| 10 | DB関数（実DB・実FN） | adminは全ユーザーの未所属タスクを含め全件 | `fn_list_tasks`を実DBで実行 | 複数ユーザーの未所属タスクを全件含む | `test_fn_list_tasks_admin_sees_all_unassigned_tasks` |
+| 11 | 未実装 | 既定はis_active=falseを除外 | API結合テストなし | 未実装 | —（未実装） |
+| 12 | 未実装 | include_inactive指定 | API結合テストなし | 未実装 | —（未実装） |
+| 13 | APIルーター | statusフィルタ | `?status=done&per_page=20`、サービスをモック | `status="done"`でサービス呼び出し | `test_list_tasks_forwards_status_filter` |
+| 14 | APIルーター | ページング | `?page=2&per_page=5`、サービスをモック | `page=2`、`per_page=5`でサービス呼び出し | `test_list_tasks_forwards_pagination` |
+| 15 | 未実装 | AUTH_MODE両対応 | タスクAPI固有のパラメータ化なし | 共通認証依存へ委譲。タスクAPI固有の両モード検証は未実装 | —（未実装） |
 
 ## 13. 不明点・要検討事項
 
