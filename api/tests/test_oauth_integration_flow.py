@@ -14,6 +14,8 @@ db_session（実DB）とTestClient（別スレッドのイベントループ）�
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import time
 import uuid
@@ -78,7 +80,12 @@ class _HttpResponse:
 
 
 class _GoogleBoundary:
-	"""Google token/userinfo/JWKSエンドポイントの唯一の差し替え境界（結合テスト用）。"""
+	"""Google token/userinfo/JWKSエンドポイントの唯一の差し替え境界（結合テスト用）。
+
+	tokenエンドポイントへ実際に送信されたPOSTボディ（code_verifier等）を`posted`に
+	記録し、開始時に発行したcode_verifierがRedis経由でcallbackのtoken交換まで
+	正しく引き継がれることを検証できるようにする。
+	"""
 
 	def __init__(
 		self,
@@ -96,8 +103,10 @@ class _GoogleBoundary:
 		self.token_status = token_status
 		self.userinfo_status = userinfo_status
 		self.jwks_status = jwks_status
+		self.posted: list[dict[str, str]] = []
 
 	async def post(self, _url: str, *, data: dict[str, str]) -> _HttpResponse:
+		self.posted.append(data)
 		return _HttpResponse(self.token_status, self.token)
 
 	async def get(self, url: str, *, headers: dict[str, str] | None = None) -> _HttpResponse:
@@ -152,15 +161,29 @@ def _client(app: FastAPI) -> AsyncClient:
 	return AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver", follow_redirects=False)
 
 
-async def _start_and_capture_state(client: AsyncClient, redirect_to: str = "/dashboard") -> tuple[str, str]:
-	"""開始エンドポイントを叩き、実Redisへ発行されたstate/nonceを取得する。"""
+async def _start_and_capture_state(client: AsyncClient, redirect_to: str = "/dashboard") -> tuple[str, str, str]:
+	"""開始エンドポイントを叩き、実Redisへ発行されたstate/nonce/code_challengeを取得する。"""
 	response = await client.get("/api/auth/oauth/google", params={"redirect_to": redirect_to})
 	assert response.status_code == 302
 	query = parse_qs(urlparse(response.headers["location"]).query)
 	state = query["state"][0]
 	nonce = query["nonce"][0]
+	assert query["code_challenge_method"] == ["S256"]
+	code_challenge = query["code_challenge"][0]
 	assert any(cookie.startswith("cerberus_oauth_state=") for cookie in response.headers.get_list("set-cookie"))
-	return state, nonce
+	return state, nonce, code_challenge
+
+
+def _assert_pkce_verifier_matches_challenge(boundary: _GoogleBoundary, code_challenge: str) -> None:
+	"""開始時に発行したcode_challengeと、callbackがtokenエンドポイントへ実際に送信した
+	code_verifierの対応関係（S256）を検証する。開始→Redis（oauth_state）→callbackの
+	token交換までPKCEの値が正しく引き継がれることの結合テストでの唯一の確認経路。
+	"""
+	assert len(boundary.posted) == 1
+	code_verifier = boundary.posted[0].get("code_verifier")
+	assert code_verifier
+	expected_challenge = base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode()).digest()).rstrip(b"=").decode()
+	assert expected_challenge == code_challenge
 
 
 async def test_full_session_flow_creates_user_and_establishes_authenticated_session(
@@ -172,7 +195,7 @@ async def test_full_session_flow_creates_user_and_establishes_authenticated_sess
 	client_id = get_backend_settings().google_client_id
 	sub, email = _new_identity()
 	async with _client(app) as client:
-		state, nonce = await _start_and_capture_state(client, "/projects/1")
+		state, nonce, code_challenge = await _start_and_capture_state(client, "/projects/1")
 		token, jwks = _signed_id_token(client_id, nonce, sub=sub, email=email)
 		boundary = _GoogleBoundary({"id_token": token, "access_token": "access-token"}, _userinfo(sub, email), jwks)
 		monkeypatch.setattr(
@@ -188,6 +211,7 @@ async def test_full_session_flow_creates_user_and_establishes_authenticated_sess
 		set_cookie = callback.headers.get_list("set-cookie")
 		assert any(value.startswith("cerberus_sid=") for value in set_cookie)
 		assert any("cerberus_oauth_state=" in value and "Max-Age=0" in value for value in set_cookie)
+		_assert_pkce_verifier_matches_challenge(boundary, code_challenge)
 
 		me = await client.get("/api/auth/me")
 		assert me.status_code == 200
@@ -209,7 +233,7 @@ async def test_full_jwt_flow_exchanges_handoff_and_establishes_bearer_authentica
 	client_id = get_backend_settings().google_client_id
 	sub, email = _new_identity()
 	async with _client(app) as client:
-		state, nonce = await _start_and_capture_state(client)
+		state, nonce, code_challenge = await _start_and_capture_state(client)
 		token, jwks = _signed_id_token(client_id, nonce, sub=sub, email=email)
 		boundary = _GoogleBoundary({"id_token": token, "access_token": "access-token"}, _userinfo(sub, email), jwks)
 		monkeypatch.setattr(
@@ -220,6 +244,7 @@ async def test_full_jwt_flow_exchanges_handoff_and_establishes_bearer_authentica
 
 		callback = await client.get("/api/auth/oauth/google/callback", params={"code": "auth-code", "state": state})
 		assert callback.status_code == 302
+		_assert_pkce_verifier_matches_challenge(boundary, code_challenge)
 		fragment = callback.headers["location"].split("#", 1)[1]
 		fragment_values = dict(pair.split("=", 1) for pair in fragment.split("&"))
 		handoff_code = fragment_values["code"]
@@ -253,7 +278,7 @@ async def test_callback_rejects_state_cookie_mismatch_without_creating_user(
 	)
 	_sub, email = _new_identity()
 	async with _client(app) as client:
-		state, _nonce = await _start_and_capture_state(client)
+		state, _nonce, _code_challenge = await _start_and_capture_state(client)
 		client.cookies.set("cerberus_oauth_state", "tampered-state")
 
 		callback = await client.get("/api/auth/oauth/google/callback", params={"code": "auth-code", "state": state})
@@ -273,7 +298,7 @@ async def test_callback_rejects_nonce_mismatch_without_creating_user(
 	client_id = get_backend_settings().google_client_id
 	sub, email = _new_identity()
 	async with _client(app) as client:
-		state, _nonce = await _start_and_capture_state(client)
+		state, _nonce, _code_challenge = await _start_and_capture_state(client)
 		token, jwks = _signed_id_token(client_id, "unexpected-nonce", sub=sub, email=email)
 		boundary = _GoogleBoundary({"id_token": token, "access_token": "access-token"}, _userinfo(sub, email), jwks)
 		monkeypatch.setattr(
@@ -300,7 +325,7 @@ async def test_callback_rejects_userinfo_sub_mismatch_without_creating_user(
 	sub, email = _new_identity()
 	wrong_sub, _wrong_email = _new_identity()
 	async with _client(app) as client:
-		state, nonce = await _start_and_capture_state(client)
+		state, nonce, _code_challenge = await _start_and_capture_state(client)
 		token, jwks = _signed_id_token(client_id, nonce, sub=sub, email=email)
 		boundary = _GoogleBoundary(
 			{"id_token": token, "access_token": "access-token"}, _userinfo(wrong_sub, email), jwks
@@ -327,7 +352,7 @@ async def test_callback_fails_closed_when_google_token_endpoint_is_unavailable(
 	)
 	_sub, email = _new_identity()
 	async with _client(app) as client:
-		state, _nonce = await _start_and_capture_state(client)
+		state, _nonce, _code_challenge = await _start_and_capture_state(client)
 		boundary = _GoogleBoundary(token_status=503)
 		monkeypatch.setattr(
 			oauth_router_module.auth_service,
@@ -354,7 +379,7 @@ async def test_callback_fails_closed_when_google_jwks_endpoint_is_unavailable(
 	app = _configure(monkeypatch, db_session, auth_mode="session", jwks_uri="https://jwks.example.test/certs/jwks-down")
 	_sub, email = _new_identity()
 	async with _client(app) as client:
-		state, _nonce = await _start_and_capture_state(client)
+		state, _nonce, _code_challenge = await _start_and_capture_state(client)
 		boundary = _GoogleBoundary({"id_token": "irrelevant", "access_token": "access-token"}, jwks_status=503)
 		monkeypatch.setattr(
 			oauth_router_module.auth_service,
@@ -379,7 +404,7 @@ async def test_start_normalizes_disallowed_redirect_to_across_the_full_roundtrip
 	client_id = get_backend_settings().google_client_id
 	sub, email = _new_identity()
 	async with _client(app) as client:
-		state, nonce = await _start_and_capture_state(client, "https://evil.example/steal")
+		state, nonce, _code_challenge = await _start_and_capture_state(client, "https://evil.example/steal")
 		token, jwks = _signed_id_token(client_id, nonce, sub=sub, email=email)
 		boundary = _GoogleBoundary({"id_token": token, "access_token": "access-token"}, _userinfo(sub, email), jwks)
 		monkeypatch.setattr(
