@@ -604,21 +604,21 @@ sequenceDiagram
 
 ## 7. サービス層の関数一覧
 
-### 7.1 `service/auth_service.py`
+### 7.1 認証サービス
 
 | 関数 | 引数 | 戻り値 | 処理概要 |
 |------|------|--------|----------|
-| `register` | `payload: RegisterRequest`, `background: BackgroundTasks` | `User` | 重複チェックと `CALL sp_register_user` → パスワードハッシュ化 → 認証トークン発行 → 確認メール送信予約。**Strategy.login は呼ばない** |
-| `verify_email` | `token: str` | `None` | Redis のトークンをワンタイム消費 → `CALL sp_verify_user_email`。無効なら 400 |
-| `resend_verification` | `email: str`, `background: BackgroundTasks` | `None` | 未認証ユーザーかつ再送間隔外の場合のみ再送。該当しなくても例外を出さない |
+| `register` | `payload: RegisterRequest`, `background: BackgroundTasks` | `User` | `api/app/service/auth_service.py`。重複チェックと `CALL sp_register_user` → パスワードハッシュ化 → 確認メール送信予約。**Strategy.login は呼ばない** |
+| `verify_email` | `token: str` | `None` | `api/app/service/email_verification_service.py`。Redis のトークンをワンタイム消費 → `CALL sp_verify_user_email`。無効なら 400 |
+| `resend_verification` | `email: str`, `background: BackgroundTasks` | `None` | `api/app/service/email_verification_service.py`。未認証ユーザーかつ再送間隔外の場合のみ再送。該当しなくても例外を出さない |
 | `login` | `identifier: str`, `password: str`, `request`, `response` | `LoginResult` | レート制限確認 → `SELECT fn_find_user_by_identifier` → パスワード検証 → `is_active` / `email_verified_at` 確認 → Strategy.login → `CALL sp_record_login_history` |
 | `logout` | `request`, `response`, `user: CurrentUser \| None` | `None` | sessionはsession Cookie、jwtはrefresh Cookieを使ってStrategy.logout。jwtはaccess tokenなしでも実行可能 |
 | `refresh` | `request`, `response` | `LoginResult` | Strategy.refresh（session モードでは `NotSupportedError`） |
-| `oauth_start` | `redirect_to: str \| None` | `str`（認可URL） | state/PKCE 生成 → Redis保存 → 認可URL組み立て |
-| `oauth_callback` | `code: str`, `state: str`, `request`, `response` | `OAuthCallbackResult` | state Cookie/Redis消費 → code交換 → id_token検証 → `fn_find_oauth_account` / `fn_find_user_by_email` → `CALL sp_upsert_oauth_account`。sessionはここでlogin、jwtはhandoff codeを発行 |
-| `oauth_exchange` | `code: str`, `request`, `response` | `OAuthExchangeResult` | jwtのみ。handoff codeをGETDELで消費 → `SELECT fn_get_user` → JwtStrategy.login → `CALL sp_record_login_history` |
-| `request_password_reset` | `email: str` | `None` | ユーザー検索 → トークン生成 → Redis保存 → メール送信（存在しなくても例外を出さない） |
-| `reset_password` | `token: str`, `new_password: str`, `db: AsyncSession` | `None` | トークン消費 → パスワードハッシュ化 → 全セッション/トークン失効 → `CALL sp_update_user_password` → DB commit |
+| `oauth_start` | `redirect_to: str \| None` | `str`（認可URL） | `api/app/service/oauth_service.py`。state/PKCE 生成 → Redis保存 → 認可URL組み立て |
+| `oauth_callback` | `code: str`, `state: str`, `request`, `response` | `OAuthCallbackResult` | `api/app/service/oauth_service.py`。state Cookie/Redis消費 → code交換 → id_token検証 → ユーザー解決。sessionはここでlogin、jwtはhandoff codeを発行 |
+| `oauth_exchange` | `code: str`, `request`, `response` | `OAuthExchangeResult` | `api/app/service/oauth_service.py`。jwtのみ。handoff codeをGETDELで消費 → `SELECT fn_get_user` → JwtStrategy.login → `CALL sp_record_login_history` |
+| `request_password_reset` | `email: str` | `None` | `api/app/service/email_verification_service.py`。ユーザー検索 → トークン生成 → Redis保存 → メール送信（存在しなくても例外を出さない） |
+| `reset_password` | `token: str`, `new_password: str`, `db: AsyncSession` | `None` | `api/app/service/email_verification_service.py`。トークン消費 → パスワードハッシュ化 → 全セッション/トークン失効 → `CALL sp_update_user_password` → DB commit |
 
 ### 7.2 `service/project_service.py` / `task_service.py`
 

@@ -8,6 +8,10 @@ from sqlalchemy import engine_from_config, pool
 config = context.config
 
 if config.config_file_name is not None:
+	# disable_existing_loggers=Falseを明示する。既定(True)だと、alembic.iniにない
+	# 既存のロガー（例: pytestプロセス内で先にimportされたapp.*系ロガー）が
+	# 無効化(disabled=True)され、以後のプロセス内でログ出力・caplogベースのテストに
+	# 影響するため（fileConfigの既知の副作用）。
 	fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata

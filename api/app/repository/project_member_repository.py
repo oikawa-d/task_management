@@ -3,6 +3,7 @@ import uuid
 from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import AlreadyMemberError
 from app.models.project_member import ProjectMember
@@ -34,6 +35,7 @@ async def list_by_project(db: AsyncSession, project_id: uuid.UUID) -> list[Proje
 		select(ProjectMember)
 		.from_statement(text("SELECT * FROM fn_list_project_members(:project_id)"))
 		.params(project_id=project_id)
+		.options(selectinload(ProjectMember.user))
 		.execution_options(populate_existing=True)
 	)
 	return list(result.scalars().all())
