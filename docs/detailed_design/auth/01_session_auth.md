@@ -54,7 +54,7 @@ TTL・Cookie名は`core/config.py`の`Settings`から取得し、`session_auth.p
 | 入力（authenticate） | `request.cookies[COOKIE_NAME_SESSION]` | Redis参照キー |
 | 入力（logout） | `request.cookies[COOKIE_NAME_SESSION]`、`AuthContext.user_id` | 削除対象の特定 |
 | 出力（login） | `Set-Cookie: cerberus_sid` / `Set-Cookie: cerberus_csrf`、`LoginResult(auth_mode="session")` | `access_token`/`refresh_token`は`None` |
-| 出力（authenticate） | `AuthContext(user_id, session_id)` または `None` | `role`/`username`は含めない |
+| 出力（authenticate） | `AuthContext(user_id, session_id)` （Cookie無し時のみ`None`） | Redis上のsessionが存在しない・絶対TTL超過時は`None`を返さず`SessionExpiredError`を送出する。`role`/`username`は含めない |
 | 出力（logout） | `Set-Cookie`（`Max-Age=0`によるCookie破棄） | Redisキー削除（副作用） |
 | Redisキー入出力 | `session:{sid}` / `csrf:{sid}` / `user_sessions:{uid}` | [`../../basic_design/02_redis.md`](../../basic_design/02_redis.md) §2 |
 
@@ -98,16 +98,22 @@ sequenceDiagram
     else Cookieあり
         ST->>STORE: get_session(sid)
         STORE->>RD: "GET session:{sid}"
-        alt 存在しない（TTL満了・Redis再起動）
+        alt 存在しない（TTL満了・ログアウト済み・強制ログアウト済み・Redis再起動）
             RD-->>STORE: nil
             STORE-->>ST: None
-            ST-->>DEP: None
+            ST--x DEP: SessionExpiredError
         else 存在する
             RD-->>STORE: SessionData
             STORE-->>ST: SessionData(user_id, created_at)
             ST->>STORE: touch_session(sid, user_id, ttl, absolute_expires_at)
             STORE->>RD: "EXPIRE session:{sid} / csrf:{sid} / user_sessions:{uid}"
-            ST-->>DEP: AuthContext(user_id, session_id=sid)
+            alt 絶対TTL超過（touch_session が False）
+                STORE-->>ST: False
+                ST--x DEP: SessionExpiredError
+            else 延長成功
+                STORE-->>ST: True
+                ST-->>DEP: AuthContext(user_id, session_id=sid)
+            end
         end
     end
 ```
@@ -140,14 +146,14 @@ sequenceDiagram
 ```mermaid
 flowchart TB
     A["authenticate 呼び出し"] --> B{"cerberus_sid Cookie あり?"}
-    B -->|No| Z["None を返す（呼び出し元が401判定）"]
+    B -->|No| Z["None を返す（呼び出し元が401 UNAUTHENTICATED判定）"]
     B -->|Yes| C["GET session:{sid}"]
     C --> D{"存在する?"}
-    D -->|No| Z
+    D -->|No| Y["SessionExpiredError を送出<br/>（呼び出し元が401 SESSION_EXPIRED判定）"]
     D -->|Yes| E["残余アイドルTTLを計算"]
     E --> F{"created_at + ABSOLUTE_TTL を超過?"}
     F -->|Yes| G["延長せず失効扱い<br/>touch_session が False を返す"]
-    G --> Z
+    G --> Y
     F -->|No| H["EXPIRE で session/csrf/user_sessions を延長"]
     H --> I["AuthContext を返す"]
 ```
@@ -188,8 +194,8 @@ stateDiagram-v2
 | シグネチャ / 定義 | `async def authenticate(self, request: Request) -> AuthContext \| None` |
 | 引数 / 入力 | `request.cookies.get(settings.cookie_name_session)` |
 | 戻り値 / 出力 | `AuthContext(user_id=..., role=None, username=None, session_id=sid)`。`role`/`username`は`00_strategy_base.md`の`get_current_user`がDBから再取得するため、本メソッドでは設定不要（フィールドは存在するが未使用） |
-| 送出例外 / 失敗条件 | 例外を送出せず、認証不可時は`None`を返す |
-| 処理内容 | 1. Cookieを読み取り、無ければ`None`<br/>2. `redis_store.get_session(sid)`を呼ぶ<br/>3. `None`なら`None`を返す<br/>4. `redis_store.touch_session(sid, user_id, ttl, absolute_expires_at)`を呼びTTLを延長する。`False`が返る場合（絶対TTL超過）は`None`を返す<br/>5. `AuthContext`を組み立てて返す |
+| 送出例外 / 失敗条件 | Cookie無しの場合のみ例外を送出せず`None`を返す。Cookieはあるがsessionが存在しない場合（TTL満了・ログアウト済み・強制ログアウト済み・Redis再起動）、および絶対TTL超過で`touch_session`が`False`を返す場合は`SessionExpiredError`を送出する |
+| 処理内容 | 1. Cookieを読み取り、無ければ`None`を返す<br/>2. `redis_store.get_session(sid)`を呼ぶ<br/>3. `None`なら`SessionExpiredError`を送出する<br/>4. `redis_store.touch_session(sid, user_id, ttl, absolute_expires_at)`を呼びTTLを延長する。`False`が返る場合（絶対TTL超過）は`SessionExpiredError`を送出する<br/>5. `AuthContext`を組み立てて返す |
 | 副作用 | Redisの`EXPIRE`（TTL延長） |
 
 ### 8.3 `auth/session_auth.py :: SessionAuthStrategy.logout`
@@ -262,13 +268,13 @@ flowchart LR
 | 1 | 単体 | `login`が新規`session_id`/`csrf_token`を発行しRedisに書き込む | `fakeredis` | `session:{sid}`/`csrf:{sid}`/`user_sessions:{uid}`が存在 | `test_session_login_creates_keys` |
 | 2 | 単体 | `authenticate`が有効なCookieで`AuthContext`を返す | 事前に`create_session`済み | `AuthContext.user_id`が一致 | `test_session_authenticate_success` |
 | 3 | 単体 | `authenticate`がCookie無しで`None`を返す | Cookieなしのリクエスト | `None` | `test_session_authenticate_no_cookie` |
-| 4 | 単体 | `authenticate`がTTL満了後に`None`を返す | TTLを1秒に上書きしsleep | `None` | `test_session_authenticate_expired` |
+| 4 | 単体 | `authenticate`がsession不在（TTL満了・Redis再起動相当）時に`SessionExpiredError`を送出する | `get_session`が`None`を返すようモック | `SessionExpiredError`送出 | `test_authenticate_raises_for_missing_session` |
 | 5 | 単体 | `authenticate`呼び出しごとにTTLが延長される（アイドルタイムアウト） | `touch_session`呼び出し前後のTTL比較 | 延長後TTL >= 延長前TTL | `test_session_authenticate_extends_ttl` |
-| 6 | 単体 | 絶対TTL超過時は延長されず失効扱いになる | `created_at`を`SESSION_ABSOLUTE_TTL_SECONDS`超過に設定 | `touch_session`が`False`、`authenticate`が`None` | `test_session_absolute_ttl_exceeded` |
+| 6 | 単体 | 絶対TTL超過時は延長されず失効扱いになる | `created_at`を`SESSION_ABSOLUTE_TTL_SECONDS`超過に設定 | `touch_session`が`False`、`authenticate`が`SessionExpiredError`を送出 | `test_authenticate_touches_valid_session_and_raises_for_expired_session` |
 | 7 | 単体 | `logout`がRedisキーを削除しCookieを破棄する | 事前ログイン状態 | `session:{sid}`が存在しない、レスポンスに`Max-Age=0` | `test_session_logout_deletes_keys` |
-| 8 | 単体 | `logout`後の`authenticate`が`None`を返す（即時失効） | logout実行直後 | `None` | `test_session_logout_immediate_invalidation` |
+| 8 | 単体 | `logout`後の`authenticate`が`SessionExpiredError`を送出する（即時失効） | logout実行直後、同じ（失効済み）Cookieで`authenticate`を呼ぶ | `SessionExpiredError`送出 | `test_session_logout_immediate_invalidation` |
 | 9 | 単体 | `refresh`が`NotSupportedInModeError`を送出する | - | 例外送出 | `test_session_refresh_not_supported` |
-| 10 | 結合 | `force_logout_user`が同一ユーザーの複数端末セッションを一括失効する | 2端末分`login`済み | 両方の`authenticate`が`None` | `test_force_logout_all_sessions` |
+| 10 | 結合 | `force_logout_user`が同一ユーザーの複数端末セッションを一括失効する | 2端末分`login`済み | 両方の`authenticate`が`SessionExpiredError`を送出 | `test_force_logout_all_sessions` |
 | 11 | 結合 | ログアウト後に旧`X-CSRF-Token`を使った更新系リクエストが401になる | logout後に同じCookie/ヘッダで再送 | `401 SESSION_EXPIRED` | `test_logout_then_request_returns_401` |
 | 網羅できない範囲 | Redisプロセス自体のダウン・再起動中の挙動 | 実プロセス障害はCIで再現しないため手動確認とする | - | - |
 
