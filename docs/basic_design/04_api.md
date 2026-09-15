@@ -153,7 +153,7 @@
 | フィールド | 型 | 必須 | 制約 |
 |-----------|----|------|------|
 | username | string | ○ | 3〜50文字、`^[A-Za-z0-9_-]+$` |
-| email | string | ○ | 50文字以内、メール形式 |
+| email | string | ○ | 254文字以内、メール形式 |
 | password | string | ○ | 8文字以上、大文字英字/小文字英字/数字/記号のうち2種類以上 |
 | password_confirm | string | ○ | `password` と一致 |
 | last_name / first_name | string | ○ | 各30文字以内 |
@@ -630,7 +630,7 @@ sequenceDiagram
 | `deactivate_project` | `project` | `None` | `CALL sp_deactivate_project(project_id, false)`。関連行は変更しない |
 | `add_member` / `remove_member` | `project`, `user_id`, `invited_by` | `Member` / `None` | `CALL sp_add_project_member` / `CALL sp_remove_project_member`。担当解除も後者のSP内で実施 |
 | `get_board` | `project`, `include_inactive` | `BoardResponse` | `SELECT fn_get_project_board`。status/position順の結果をグルーピング |
-| `list_tasks` | `user`, `project_id`, `page`, `per_page`, `include_inactive` | `Page[TaskSummary]` | `SELECT fn_list_tasks`。権限スコープはFN内で判定 |
+| `list_tasks` | `user`, `project_id`, `page`, `per_page`, `include_inactive` | `Page[TaskSummary]` | `SELECT fn_list_tasks`。権限スコープと未所属絞り込みはFN内で判定 |
 | `create_task` | `project \| None`, `payload`, `user` | `Task` | `CALL sp_create_task`。assignee検証、advisory lock、position採番、通知まで一体実行 |
 | `update_task` | `task`, `payload`, `user` | `Task` | `CALL sp_update_task`。version・列移動・再採番・通知をSP内で実行 |
 | `deactivate_task` | `task` | `None` | `CALL sp_deactivate_task`。position詰めは行わない |

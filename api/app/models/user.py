@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.constants import EMAIL_MAX_LENGTH
 from app.models.base import Base, TimestampMixin, UUIDPkMixin
 
 if TYPE_CHECKING:
@@ -15,7 +16,7 @@ class User(UUIDPkMixin, TimestampMixin, Base):
 	__tablename__ = "users"
 
 	username: Mapped[str] = mapped_column(String(50), nullable=False)
-	email: Mapped[str] = mapped_column(String(50), nullable=False)
+	email: Mapped[str] = mapped_column(String(EMAIL_MAX_LENGTH), nullable=False)
 	password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
 	last_name: Mapped[str | None] = mapped_column(String(30), nullable=True)
 	first_name: Mapped[str | None] = mapped_column(String(30), nullable=True)

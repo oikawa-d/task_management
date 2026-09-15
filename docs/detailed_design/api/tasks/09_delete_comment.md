@@ -23,7 +23,7 @@
 | AUTH_MODE差異 | CSRF検証の要否のみ差異あり |
 | 冪等性 | なし（削除済みIDへの再リクエストは404となり、初回の204とは異なる応答になる。§13参照） |
 | レート制限 | 対象外 |
-| トランザクション境界 | `task_comments` の1行DELETEのみ。関連する `position` 再採番等は発生しない（コメントに順序・カウンタ列は存在しないため） |
+| トランザクション境界 | `task_comments` の1行DELETEと`db.commit()`をサービス層で一体実行。例外時は`db.rollback()`で削除の部分更新を残さない（コメントに順序・カウンタ列は存在しない） |
 
 ## 2. 入出力仕様
 
@@ -67,43 +67,52 @@
 sequenceDiagram
     autonumber
     participant FE as "React SPA"
-    participant R as "comments_router"
+    participant R as "comment_router"
     participant V as "verify_origin_if_session/verify_csrf_if_session"
     participant D as "deps.get_comment_for_member"
-    participant S as "task_service"
-    participant TR as "task_repository"
+    participant S as "task_comment_service"
+    participant TR as "task_comment_repository"
     participant PG as "PostgreSQL"
 
     FE->>R: "DELETE /api/comments/{comment_id}"
-    R->>V: "Origin検証（+ sessionモードのみCSRF検証）"
-    alt "CSRF/Origin不正"
-        V-->>R: "CsrfError"
-        R-->>FE: "403 CSRF_INVALID"
-    else "検証OK"
-        R->>D: "get_comment_for_member(comment_id)"
-        D->>TR: "get_comment_with_task(comment_id)"
-        TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-        alt "コメント不存在"
-            D-->>R: "NotFoundError"
-            R-->>FE: "404 NOT_FOUND"
-        else "プロジェクト非所属（admin以外）"
-            D->>D: "require_project_member(comment.task.project_id, user)"
-            D-->>R: "NotFoundError"
-            R-->>FE: "404 NOT_FOUND"
-        else "所属確認OK"
-            D-->>R: "Comment"
-            R->>S: "delete_comment(comment, current_user)"
-            S->>S: "user.id == comment.user_id または user.role == 'admin' を判定"
-            alt "本人でもadminでもない"
-                S-->>R: "ForbiddenError"
-                R-->>FE: "403 FORBIDDEN"
-            else "権限あり"
-                S->>TR: "delete(comment_id, user_id)"
-                TR->>PG: "CALL sp_delete_task_comment(...)"
-                PG-->>TR: "削除完了"
-                TR-->>S: "None"
-                S-->>R: "None"
-                R-->>FE: "204 No Content"
+    R->>D: "get_comment_for_member(comment_id)"
+    D->>TR: "get_by_id(comment_id)"
+    TR->>PG: "コメントと関連task取得"
+    alt "コメントまたは関連task不存在"
+        D-->>R: "NotFoundError"
+        R-->>FE: "404 NOT_FOUND"
+    else "取得成功"
+        D-->>R: "TaskComment（task付き）"
+        R->>V: "Origin検証（+ sessionモードのみCSRF検証）"
+        alt "CSRF/Origin不正"
+            V-->>R: "CsrfError"
+            R-->>FE: "403 CSRF_INVALID"
+        else "検証OK"
+            R->>S: "delete_comment(task, comment, current_user, db)"
+            S->>S: "require_task_access(task, current_user, db)"
+            alt "論理削除・非所属・未所属taskの非作成者"
+                S-->>R: "NotFoundError"
+                R-->>FE: "404 NOT_FOUND"
+            else "taskアクセス許可"
+                S->>S: "require_comment_editor(comment.user_id, current_user)"
+                alt "本人でもadminでもない"
+                    S-->>R: "ForbiddenError"
+                    R-->>FE: "403 FORBIDDEN"
+                else "権限あり"
+                    S->>TR: "delete(comment_id, user_id)"
+                    TR->>PG: "CALL sp_delete_task_comment(...)"
+                    PG-->>TR: "削除完了"
+                    TR-->>S: "None"
+                    S->>PG: "db.commit()"
+                    alt "DB/transaction failure"
+                        S->>PG: "db.rollback()"
+                        S-->>R: "DB exception"
+                        R-->>FE: "503 SERVICE_UNAVAILABLE"
+                    else "commit success"
+                        S-->>R: "None"
+                        R-->>FE: "204 No Content"
+                    end
+                end
             end
         end
     end
@@ -119,62 +128,65 @@ flowchart TB
     C -->|"No"| C1["401 / 403 USER_INACTIVE"]
     C -->|"Yes"| D{"comment_idが存在する?"}
     D -->|"No"| D1["404 NOT_FOUND"]
-    D -->|"Yes"| E{"adminまたは<br/>対象タスクのプロジェクトメンバー?"}
+    D -->|"Yes"| E{"taskアクセスが許可されている?"}
     E -->|"No"| E1["404 NOT_FOUND"]
     E -->|"Yes"| F{"投稿者本人またはadmin?"}
     F -->|"No"| F1["403 FORBIDDEN"]
     F -->|"Yes"| G["task_comments からDELETE"]
-    G --> H["204 応答"]
+    G --> H{"db.commit()"}
+    H -->|"成功"| I["204 応答"]
+    H -->|"例外"| J["db.rollback() / 503 SERVICE_UNAVAILABLE"]
 ```
 
 ## 6. 関数詳細
 
-### 6.1 `api/routers/comments.py :: delete_comment`
+### 6.1 `api/app/api/routers/comment_router.py :: delete_task_comment`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def delete_comment(comment: Comment = Depends(get_comment_for_member), user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> Response` |
-| 引数 | `comment`：プロジェクト所属確認済みのコメント／`user`：現在ユーザー／`db`：DBセッション |
+| シグネチャ | `async def delete_task_comment(comment: TaskComment = Depends(get_comment_for_member), user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db_session), _: None = Depends(verify_origin_if_session), __csrf: None = Depends(verify_csrf_if_session)) -> Response` |
+| 引数 | `comment`：コメント・task取得済みの`TaskComment`／`user`：現在ユーザー／`db`：DBセッション |
 | 戻り値 | `Response(status_code=204)` |
 | 送出例外 | なし（下位の `ForbiddenError` はハンドラで403に変換） |
-| 処理内容 | 1. `task_service.delete_comment(comment, user, db)` を呼ぶ 2. `204` を返す |
+| 処理内容 | 1. `task_comment_service.delete_comment(comment.task, comment, user, db)`を呼ぶ 2. `204`を返す |
 | 副作用 | `task_comments` の1行DELETE（サービス層経由） |
 
-### 6.2 `core/deps.py :: get_comment_for_member`
+### 6.2 `api/app/core/deps.py :: get_comment_for_member`
 
 [08_patch_comment.md](./08_patch_comment.md) §6.2 と同一関数を共用する（PATCH/DELETEで重複定義しない）。
 
-### 6.3 `service/task_service.py :: delete_comment`
+### 6.3 `api/app/service/task_comment_service.py :: delete_comment`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def delete_comment(comment: Comment, user: CurrentUser, db: AsyncSession) -> None` |
-| 引数 | `comment`：所属確認済みコメント／`user`：操作者／`db`：DBセッション |
+| シグネチャ | `async def delete_comment(task: Task, comment: TaskComment, user: CurrentUser, db: AsyncSession) -> None` |
+| 引数 | `task`：対象task／`comment`：対象コメント／`user`：操作者／`db`：DBセッション |
 | 戻り値 | なし |
-| 送出例外 | `ForbiddenError`（投稿者本人でもadminでもない場合、403） |
-| 処理内容 | 1. `user.id == comment.user_id or user.role == 'admin'` を判定し、Falseなら `ForbiddenError` 2. `task_repository.delete(comment.id, user.id, db)`（`CALL sp_delete_task_comment(...)`）を呼ぶ |
+| 送出例外 | `NotFoundError`、`ForbiddenError`（投稿者本人でもadminでもない場合、403）、DB例外（rollback後に503へ変換） |
+| 処理内容 | `require_task_access`と`require_comment_editor`で認可後、`task_comment_repository.delete`（`CALL sp_delete_task_comment(...)`）と`db.commit()`を実行する。途中で例外が発生した場合は`db.rollback()`後に再送出する |
 | 副作用 | `task_comments` の1行DELETE |
 
-### 6.4 `repository/task_repository.py :: delete`
+### 6.4 `api/app/repository/task_comment_repository.py :: delete`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def delete(comment_id: UUID, user_id: UUID, db: AsyncSession) -> None` |
+| シグネチャ | `async def delete(db: AsyncSession, comment_id: UUID, user_id: UUID) -> None` |
 | 引数 | `comment_id`：対象コメントID／`user_id`：削除実行者ID／`db`：DBセッション |
 | 戻り値 | なし |
 | 送出例外 | なし（呼び出し時点で存在確認済み） |
-| 処理内容 | `CALL sp_delete_task_comment(:comment_id, :user_id)` を実行する。削除本体とトランザクション境界はSP内部 |
+| 処理内容 | `CALL sp_delete_task_comment(:comment_id, :user_id)`を実行する。repositoryはSQL実行のみを担い、トランザクションのcommit/rollbackはサービス層が担う |
 | 副作用 | `task_comments` の1行削除 |
 
 ## 7. 関数相関図
 
 ```mermaid
 flowchart LR
-    R["comments_router.delete_comment"] --> D["deps.get_comment_for_member"]
-    R --> S["task_service.delete_comment"]
-    D --> TR1["task_repository.fn_get_comment_with_task"]
-    D --> PR["project_repository.fn_is_project_member"]
-    S --> TR2["task_repository.delete<br/>（sp_delete_task_comment）"]
+    R["comment_router.delete_task_comment"] --> D["deps.get_comment_for_member"]
+    R --> S["task_comment_service.delete_comment"]
+    D --> TR1["task_comment_repository.get_by_id"]
+    S --> A["authorization_service.require_task_access"]
+    A --> PR["project_member_repository.exists"]
+    S --> TR2["task_comment_repository.delete<br/>（sp_delete_task_comment）"]
     TR1 --> DB[("PostgreSQL<br/>task_comments / tasks")]
     TR2 --> DB
     R --> V["deps.verify_origin_if_session / verify_csrf_if_session"]
@@ -191,7 +203,10 @@ stateDiagram-v2
     所属確認 --> 権限確認: "所属あり または admin"
     権限確認 --> 権限不足403: "投稿者本人でもadminでもない"
     権限確認 --> 削除: "投稿者本人 または admin"
-    削除 --> [*]: "task_commentsから行削除"
+    削除 --> commit{"db.commit()"}
+    commit --> [*]: "task_commentsから行削除を確定"
+    commit --> rollback["db.rollback() / 503 SERVICE_UNAVAILABLE"]
+    rollback --> [*]
 ```
 
 ## 9. SP/FNデータアクセス一覧
@@ -245,6 +260,11 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 8 | 結合 | adminが他人のコメントを削除 | 実DB、adminユーザー | `204` | `test_sp_delete_task_comment_admin_can_delete_others` |
 | 9 | 結合 | 削除済みcomment_idへの再削除 | 実DB、直前に削除済み | `404 NOT_FOUND` | `test_sp_delete_task_comment_twice_returns_404_on_second_call` |
 | 10 | パラメータ化 | `AUTH_MODE=session` / `jwt` の両方で正常系を確認 | 両モードのfixture | いずれも `204` | `test_sp_delete_task_comment_both_auth_modes` |
+| 11 | 結合 | API境界で本人が削除し、一覧から消える | 実DB、本人認証 | `204`、一覧に対象コメントが残らない | `test_comment_crud_round_trip_at_api_boundary` |
+| 12 | 結合 | adminが他人を削除し、peer/第三者を拒否 | 実DB、同一プロジェクトpeer・第三者・admin | peerは`403`、第三者は`404`、adminは`204` | `test_comment_authorization_boundary_for_peer_outsider_and_admin` |
+| 13 | 結合 | commit失敗時に削除前コメントを維持 | 実DB、commitを失敗させるfixture | `503 SERVICE_UNAVAILABLE`、一覧に対象コメントが残る | `test_comment_update_and_delete_transaction_failure_leave_original_state` |
+| 14 | 結合 | 未認証ユーザーが削除 | 実HTTP、認証情報なし | `401 UNAUTHENTICATED` | `test_comment_endpoints_require_authentication` |
+| 15 | 結合 | session方式でCSRFトークンなしで削除 | 実HTTP、認証済みsession、`X-CSRF-Token` 未送信 | `403 CSRF_INVALID` | `test_comment_mutations_require_csrf_in_session_mode` |
 
 ## 13. 不明点・要検討事項
 

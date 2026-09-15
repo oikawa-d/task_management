@@ -38,11 +38,51 @@ def _register_payload(**overrides: object) -> dict[str, object]:
 	return payload
 
 
+def _email_of_length(length: int) -> str:
+	local_part = "a" * 64
+	domain_middle_length = length - 197
+	return f"{local_part}@{'a' * 63}.{'b' * 63}.{'c' * domain_middle_length}.com"
+
+
 def test_register_request_accepts_valid_payload() -> None:
 	payload = RegisterRequest(**_register_payload())
 
 	assert payload.username == "taro_01"
 	assert payload.birth_date == date(1995, 4, 1)
+
+
+@pytest.mark.parametrize("model", [RegisterRequest, ResendVerifyEmailRequest, PasswordForgotRequest])
+def test_email_requests_accept_254_characters(model: type[object]) -> None:
+	email = _email_of_length(254)
+	if model is RegisterRequest:
+		request = model(**_register_payload(email=email))
+	else:
+		request = model(email=email)
+
+	assert len(request.email) == 254
+
+
+@pytest.mark.parametrize("model", [RegisterRequest, ResendVerifyEmailRequest, PasswordForgotRequest])
+def test_email_requests_reject_255_characters(model: type[object]) -> None:
+	email = _email_of_length(255)
+	if model is RegisterRequest:
+		payload = _register_payload(email=email)
+	else:
+		payload = {"email": email}
+
+	with pytest.raises(ValidationError):
+		model(**payload)
+
+
+def test_login_request_accepts_254_character_email() -> None:
+	request = LoginRequest(identifier=_email_of_length(254), password="password")
+
+	assert len(request.identifier) == 254
+
+
+def test_login_request_rejects_255_character_email() -> None:
+	with pytest.raises(ValidationError):
+		LoginRequest(identifier=_email_of_length(255), password="password")
 
 
 @pytest.mark.parametrize(
@@ -52,7 +92,7 @@ def test_register_request_accepts_valid_payload() -> None:
 		("username", "a" * 51),
 		("username", "taro@example.com"),
 		("email", "not-an-email"),
-		("email", "taro@example.com" + "a" * 40),
+		("email", _email_of_length(255)),
 		("last_name", ""),
 		("last_name", "a" * 31),
 		("first_name", ""),
@@ -92,7 +132,7 @@ def test_login_request_accepts_identifier_and_password() -> None:
 	assert request.identifier == "taro_01"
 
 
-@pytest.mark.parametrize("field,value", [("identifier", ""), ("identifier", "a" * 51), ("password", "")])
+@pytest.mark.parametrize("field,value", [("identifier", ""), ("identifier", _email_of_length(255)), ("password", "")])
 def test_login_request_rejects_invalid_field(field: str, value: object) -> None:
 	payload: dict[str, object] = {"identifier": "taro", "password": "password"}
 	payload[field] = value
@@ -174,7 +214,7 @@ def test_resend_verify_email_request_and_response_accept_valid_values() -> None:
 	assert response.message == "確認メールを送信しました。"
 
 
-@pytest.mark.parametrize("email", ["", "not-an-email", "taro@example.com" + "a" * 40])
+@pytest.mark.parametrize("email", ["", "not-an-email", _email_of_length(255)])
 def test_resend_verify_email_request_rejects_invalid_email(email: str) -> None:
 	with pytest.raises(ValidationError):
 		ResendVerifyEmailRequest(email=email)
@@ -188,7 +228,7 @@ def test_password_forgot_request_and_response_accept_valid_values() -> None:
 	assert response.message == "再設定用メールを送信しました。"
 
 
-@pytest.mark.parametrize("email", ["", "not-an-email", "taro@example.com" + "a" * 40])
+@pytest.mark.parametrize("email", ["", "not-an-email", _email_of_length(255)])
 def test_password_forgot_request_rejects_invalid_email(email: str) -> None:
 	with pytest.raises(ValidationError):
 		PasswordForgotRequest(email=email)
