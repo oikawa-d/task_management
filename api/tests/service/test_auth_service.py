@@ -17,7 +17,8 @@ from app.core.exceptions import (
 )
 from app.service import auth_service
 from redis.exceptions import ConnectionError as RedisConnectionError
-from sqlalchemy.exc import DBAPIError, OperationalError
+from sqlalchemy.exc import DBAPIError, DisconnectionError, InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 
 class _FakeBackgroundTasks:
@@ -450,7 +451,9 @@ async def test_login_success_records_history_and_resets_failures(monkeypatch: py
 	assert history_mock.await_args.kwargs["login_method"] == "session"
 
 
-async def test_login_rolls_back_auth_state_when_history_write_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_login_rolls_back_auth_state_when_history_write_fails(
+	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
 	user = _login_user()
 	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
 	monkeypatch.setattr(auth_service.redis_store, "reset_login_failure", AsyncMock())
@@ -463,15 +466,19 @@ async def test_login_rolls_back_auth_state_when_history_write_fails(monkeypatch:
 	)
 	strategy = _FakeStrategy("session")
 
-	with pytest.raises(ServiceUnavailableError):
+	with caplog.at_level("INFO", logger="app.oauth"), pytest.raises(ServiceUnavailableError):
 		await auth_service.login("taro", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), strategy)  # type: ignore[arg-type]
 
 	assert len(strategy.login_calls) == 1
 	assert len(strategy.rollback_calls) == 1
+	record = next(record for record in caplog.records if getattr(record, "event", None) == "login_history_write_failed")
+	assert record.failure_reason == "service_unavailable"
+	assert record.login_method == "session"
+	assert "Passw0rd!" not in caplog.text
 
 
 async def test_login_returns_service_unavailable_when_auth_state_rollback_fails(
-	monkeypatch: pytest.MonkeyPatch,
+	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
 	user = _login_user()
 	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
@@ -486,10 +493,12 @@ async def test_login_returns_service_unavailable_when_auth_state_rollback_fails(
 	strategy = _FakeStrategy("session")
 	strategy.rollback_login = AsyncMock(side_effect=RuntimeError("rollback failed"))  # type: ignore[method-assign]
 
-	with pytest.raises(ServiceUnavailableError):
+	with caplog.at_level("INFO", logger="app.oauth"), pytest.raises(ServiceUnavailableError):
 		await auth_service.login("taro", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), strategy)  # type: ignore[arg-type]
 
 	strategy.rollback_login.assert_awaited_once()
+	record = next(record for record in caplog.records if getattr(record, "event", None) == "auth_state_revoke_failed")
+	assert record.operation == "login_rollback"
 
 
 async def test_login_unknown_user_records_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -613,7 +622,9 @@ async def test_login_rate_limited_emits_structured_log(
 	assert "Passw0rd!" not in caplog.text
 
 
-async def test_login_fails_closed_when_rate_limit_check_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_login_fails_closed_when_rate_limit_check_raises(
+	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
 	"""ensure_login_not_rate_limited内のRedis障害（get_login_failure_countの例外）は503へ変換される。"""
 	monkeypatch.setattr(
 		auth_service.redis_store,
@@ -623,10 +634,14 @@ async def test_login_fails_closed_when_rate_limit_check_raises(monkeypatch: pyte
 	lookup_mock = AsyncMock()
 	monkeypatch.setattr(auth_service.user_repository, "get_by_login_identifier", lookup_mock)
 
-	with pytest.raises(ServiceUnavailableError):
+	with caplog.at_level("INFO", logger="app.oauth"), pytest.raises(ServiceUnavailableError):
 		await auth_service.login("taro", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), _FakeStrategy())  # type: ignore[arg-type]
 
 	lookup_mock.assert_not_awaited()
+	record = next(record for record in caplog.records if getattr(record, "event", None) == "login_attempt")
+	assert record.failure_reason == "service_unavailable"
+	assert record.success is False
+	assert "Passw0rd!" not in caplog.text
 
 
 async def test_login_fails_closed_when_record_login_failure_raises(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -665,7 +680,7 @@ async def test_login_fails_closed_when_record_login_success_raises(monkeypatch: 
 
 
 async def test_login_fails_closed_when_login_history_write_raises_on_failure_path(
-	monkeypatch: pytest.MonkeyPatch,
+	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
 	"""失敗系（invalid_credentials）でのDB書き込み障害も503へ変換される。"""
 	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
@@ -677,13 +692,124 @@ async def test_login_fails_closed_when_login_history_write_raises_on_failure_pat
 		AsyncMock(side_effect=DBAPIError("INSERT login_history", {}, Exception())),
 	)
 
-	with pytest.raises(ServiceUnavailableError):
+	with caplog.at_level("WARNING", logger="app.oauth"), pytest.raises(ServiceUnavailableError):
 		await auth_service.login(
 			"ghost", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), _FakeStrategy()
 		)  # type: ignore[arg-type]
 
+	record = next(record for record in caplog.records if getattr(record, "event", None) == "login_history_write_failed")
+	assert record.user_id is None
+	assert record.login_method == "session"
+	assert record.failure_reason == "service_unavailable"
 
-async def test_login_fails_closed_when_strategy_login_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+
+@pytest.mark.parametrize(
+	"user",
+	[
+		pytest.param(_login_user(is_active=False), id="inactive_user"),
+		pytest.param(_login_user(verified=False), id="unverified_email"),
+	],
+)
+async def test_login_history_write_failure_on_account_state_path_is_logged(
+	monkeypatch: pytest.MonkeyPatch,
+	caplog: pytest.LogCaptureFixture,
+	user: SimpleNamespace,
+) -> None:
+	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
+	monkeypatch.setattr(auth_service.redis_store, "reset_login_failure", AsyncMock())
+	monkeypatch.setattr(auth_service.user_repository, "get_by_login_identifier", AsyncMock(return_value=user))
+	monkeypatch.setattr(auth_service, "verify_password", lambda *_args: True)
+	monkeypatch.setattr(
+		auth_service.login_history_repository,
+		"create",
+		AsyncMock(side_effect=DBAPIError("INSERT login_history", {}, Exception())),
+	)
+
+	with caplog.at_level("WARNING", logger="app.oauth"), pytest.raises(ServiceUnavailableError) as exc_info:
+		await auth_service.login("taro", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), _FakeStrategy())  # type: ignore[arg-type]
+
+	assert isinstance(exc_info.value, ServiceUnavailableError)
+	record = next(record for record in caplog.records if getattr(record, "event", None) == "login_history_write_failed")
+	assert record.user_id == str(user.id)
+	assert record.login_method == "session"
+	assert record.failure_reason == "service_unavailable"
+
+
+async def test_login_fails_closed_when_user_lookup_raises(
+	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
+	monkeypatch.setattr(
+		auth_service.user_repository,
+		"get_by_login_identifier",
+		AsyncMock(side_effect=ServiceUnavailableError()),
+	)
+
+	with caplog.at_level("INFO", logger="app.oauth"), pytest.raises(ServiceUnavailableError):
+		await auth_service.login(
+			"ghost", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), _FakeStrategy()
+		)  # type: ignore[arg-type]
+
+	record = next(record for record in caplog.records if getattr(record, "event", None) == "login_attempt")
+	assert record.failure_reason == "service_unavailable"
+	assert record.user_id is None
+	assert record.success is False
+	assert "ghost" not in caplog.text
+
+
+async def test_login_propagates_non_connection_user_lookup_operational_error(
+	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
+	monkeypatch.setattr(
+		auth_service.user_repository,
+		"get_by_login_identifier",
+		AsyncMock(side_effect=OperationalError("SELECT user", {}, SimpleNamespace(sqlstate="40P01"))),
+	)
+
+	with caplog.at_level("INFO", logger="app.oauth"), pytest.raises(OperationalError):
+		await auth_service.login(
+			"ghost", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), _FakeStrategy()
+		)  # type: ignore[arg-type]
+
+	assert not [record for record in caplog.records if getattr(record, "event", None) == "login_attempt"]
+
+
+@pytest.mark.parametrize(
+	"error",
+	[
+		InterfaceError("SELECT user", {}, Exception("connection lost")),
+		OperationalError("SELECT user", {}, SimpleNamespace(sqlstate="08006")),
+		SQLAlchemyTimeoutError("connection pool timeout"),
+		DisconnectionError("connection invalidated"),
+	],
+	ids=["interface", "connection_operational", "pool_timeout", "disconnection"],
+)
+async def test_login_logs_and_fails_closed_for_connection_user_lookup_errors(
+	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, error: Exception
+) -> None:
+	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
+	monkeypatch.setattr(
+		auth_service.user_repository,
+		"get_by_login_identifier",
+		AsyncMock(side_effect=error),
+	)
+
+	with caplog.at_level("INFO", logger="app.oauth"), pytest.raises(ServiceUnavailableError):
+		await auth_service.login(
+			"ghost", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), _FakeStrategy()
+		)  # type: ignore[arg-type]
+
+	record = next(record for record in caplog.records if getattr(record, "event", None) == "login_attempt")
+	assert record.failure_reason == "service_unavailable"
+	assert record.user_id is None
+	assert record.success is False
+	assert "ghost" not in caplog.text
+
+
+async def test_login_fails_closed_when_strategy_login_raises(
+	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
 	"""strategy.login()自体の障害（セッション/JWT基盤の障害）も503へ変換される。"""
 	user = _login_user()
 	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
@@ -695,10 +821,16 @@ async def test_login_fails_closed_when_strategy_login_raises(monkeypatch: pytest
 	history_mock = AsyncMock()
 	monkeypatch.setattr(auth_service.login_history_repository, "create", history_mock)
 
-	with pytest.raises(ServiceUnavailableError):
+	with caplog.at_level("INFO", logger="app.oauth"), pytest.raises(ServiceUnavailableError):
 		await auth_service.login("taro", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), strategy)  # type: ignore[arg-type]
 
 	history_mock.assert_not_awaited()
+	record = next(record for record in caplog.records if getattr(record, "event", None) == "login_attempt")
+	assert record.failure_reason == "service_unavailable"
+	assert record.user_id == str(user.id)
+	assert record.success is False
+	assert "session backend down" not in caplog.text
+	assert "Passw0rd!" not in caplog.text
 
 
 async def test_login_attempt_structured_log_emitted_on_success(
@@ -722,6 +854,8 @@ async def test_login_attempt_structured_log_emitted_on_success(
 	assert record.success is True
 	assert record.auth_mode == "session"
 	assert record.user_id == str(user.id)
+	assert len(record.identifier) == 64
+	assert record.identifier != "taro"
 	assert "Passw0rd!" not in caplog.text
 
 

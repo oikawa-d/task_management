@@ -646,8 +646,8 @@ async def test_oauth_callback_logs_rollback_failure_without_sensitive_values(
 	record = next(record for record in caplog.records if record.event == "auth_state_revoke_failed")
 	assert record.user_id == str(user.id)
 	assert record.operation == "oauth_callback_session"
-	assert record.deleted_session_count == 1
-	assert record.deleted_refresh_count == 0
+	assert record.deleted_session_count is None
+	assert record.deleted_refresh_count is None
 	assert "history secret" not in caplog.text
 	assert "revoke secret" not in caplog.text
 

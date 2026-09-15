@@ -89,8 +89,8 @@ sequenceDiagram
 | event | 記録項目 | 失敗時の扱い |
 |-------|----------|--------------|
 | `rate_limit_rejected` | route、scope、limit、window、client_ip、request_id | APIは429。Redis障害なら503 |
-| `login_history_write_failed` | user_id（NULL可）、login_method、client_ip、request_id | ログインを成立させず、作成済みRedis状態を補償削除 |
-| `auth_state_revoke_failed` | user_id、operation、deleted_session_count、deleted_refresh_count、request_id | DB更新を行わず503。Redis復旧後に同じ操作を再実行 |
+| `login_history_write_failed` | user_id（NULL可）、login_method、client_ip、failure_reason、request_id | ログインを成立させず、作成済みRedis状態を補償削除。認証サービス障害時の`failure_reason`は`service_unavailable` |
+| `auth_state_revoke_failed` | user_id、operation、deleted_session_count（NULL可）、deleted_refresh_count（NULL可）、request_id | DB更新を行わず503。rollbackの途中失敗時は削除件数を確定できないためNULLとし、Redis復旧後に同じ操作を再実行 |
 | `oauth_callback_failed` | operation、event、failure_reason（例外クラス名） | ブラウザへは302で`error=oauth_failed`等へ変換し、詳細はログにのみ出力 |
 | `force_logout` | actor_user_id、target_user_id、mode、access_token_revocation_delay_seconds、request_id | 成功時INFO。JWTの遅延上限は`ACCESS_TOKEN_TTL_SECONDS` |
 
