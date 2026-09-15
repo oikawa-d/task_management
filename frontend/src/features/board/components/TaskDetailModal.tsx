@@ -1,26 +1,25 @@
 import { useEffect, useRef } from "react";
 
-import type { BoardTask, TaskStatus } from "../types";
+import { useAuthStore } from "../../../auth/authStore";
+import type { TaskDetailApiError, TaskUpdateFields } from "../../../lib/api/taskDetail";
+import { CommentForm } from "../../task-detail/components/CommentForm";
+import { CommentList } from "../../task-detail/components/CommentList";
+import { TaskEditForm, type TaskEditFormValues, type TaskMember } from "../../task-detail/components/TaskEditForm";
+import { useTaskDetail } from "../../task-detail/hooks/useTaskDetail";
 import styles from "./TaskDetailModal.module.css";
-
-const STATUS_LABELS: Record<TaskStatus, string> = {
-	todo: "未着手",
-	in_progress: "進行中",
-	done: "完了",
-};
 
 interface TaskDetailModalProps {
 	projectId: string;
 	taskId: string;
-	task?: BoardTask;
-	isLoading?: boolean;
 	onClose: () => void;
 }
 
-export function TaskDetailModal({ task, isLoading = false, onClose }: TaskDetailModalProps) {
+export function TaskDetailModal({ taskId, onClose }: TaskDetailModalProps) {
 	const dialogRef = useRef<HTMLDivElement>(null);
 	const titleInputRef = useRef<HTMLInputElement>(null);
 	const previousFocus = useRef<HTMLElement | null>(null);
+	const user = useAuthStore((state) => state.user);
+	const detail = useTaskDetail(taskId, { onClose });
 
 	useEffect(() => {
 		previousFocus.current = document.activeElement as HTMLElement | null;
@@ -33,17 +32,15 @@ export function TaskDetailModal({ task, isLoading = false, onClose }: TaskDetail
 	}, []);
 
 	useEffect(() => {
-		if (!task) return;
-		titleInputRef.current?.focus();
-	}, [task]);
+		if (detail.task) titleInputRef.current?.focus();
+	}, [detail.task]);
 
 	useEffect(() => {
 		const dialog = dialogRef.current;
 		if (!dialog) return;
-		const focusable = () =>
-			Array.from(dialog.querySelectorAll<HTMLElement>("button, input, textarea, select, [tabindex='0']")).filter(
-				(element) => !element.hasAttribute("disabled"),
-			);
+		const focusable = () => Array.from(dialog.querySelectorAll<HTMLElement>(
+			"button, input, textarea, select, [tabindex='0']",
+		)).filter((element) => !element.hasAttribute("disabled"));
 		const onKeyDown = (event: KeyboardEvent) => {
 			if (event.key === "Escape") return onClose();
 			if (event.key !== "Tab") return;
@@ -63,6 +60,10 @@ export function TaskDetailModal({ task, isLoading = false, onClose }: TaskDetail
 		return () => dialog.removeEventListener("keydown", onKeyDown);
 	}, [onClose]);
 
+	const errorMessage = getErrorMessage(detail.error);
+	const commentsError = getErrorMessage(detail.commentsError);
+	const task = detail.task;
+
 	return (
 		<div className={styles.overlay}>
 			<div ref={dialogRef} className={styles.modal} role="dialog" aria-modal="true" aria-labelledby="task-detail-title">
@@ -70,24 +71,49 @@ export function TaskDetailModal({ task, isLoading = false, onClose }: TaskDetail
 					<h1 id="task-detail-title">タスク詳細</h1>
 					<button type="button" aria-label="閉じる" onClick={onClose}>×</button>
 				</header>
-				{isLoading && <p role="status">読み込み中...</p>}
-				{!isLoading && !task && <NotFoundState onClose={onClose} />}
-				{task && (
+				{detail.isLoading && <p role="status">読み込み中...</p>}
+				{!detail.isLoading && detail.notFound && (!task || !detail.commentsError) && <NotFoundState onClose={onClose} />}
+				{!detail.isLoading && !task && !detail.notFound && detail.error && <ErrorState message={errorMessage} onRetry={detail.refresh} />}
+				{task && (!detail.notFound || Boolean(detail.commentsError)) && (
 					<>
-						<div className={styles.fields}>
-							<label>タイトル<input ref={titleInputRef} defaultValue={task.title} maxLength={150} readOnly /></label>
-							<label>説明<textarea defaultValue={task.description ?? ""} maxLength={2000} rows={4} readOnly /></label>
-							<div className={styles.row}>
-								<label>担当者<select defaultValue={task.assignee?.id ?? ""} disabled><option value="">未割当</option>{task.assignee && <option value={task.assignee.id}>{task.assignee.display_name}</option>}</select></label>
-								<label>期限<input type="datetime-local" defaultValue={task.due_at?.slice(0, 16) ?? ""} readOnly /></label>
-							</div>
-							<label>ステータス<select defaultValue={task.status} disabled>{Object.entries(STATUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-						</div>
+						{detail.conflictBannerVisible && (
+							<p role="alert">他のユーザーが更新したため最新の内容を再取得しました</p>
+						)}
+						<TaskEditForm
+							task={toFormValues(task)}
+							members={getMembers(task)}
+							isSaving={detail.isSaving}
+							titleInputRef={titleInputRef}
+							onUpdate={(field, value) => void detail.updateTask(toUpdateFields(field, value))}
+						/>
+						{detail.error && <p role="alert">{errorMessage}</p>}
 						<section aria-labelledby="comments-title" className={styles.comments}>
 							<h2 id="comments-title">コメント</h2>
-							<p className={styles.placeholder}>コメント一覧・投稿は準備中です。</p>
+							{detail.notFound && detail.commentsError ? (
+								<p role="alert">コメントが見つかりません</p>
+							) : (
+								<CommentList
+									comments={detail.comments}
+									currentUserId={user?.id ?? ""}
+									currentUserRole={user?.role ?? "member"}
+									error={commentsError}
+									onEdit={(commentId, body) => detail.updateComment(commentId, body)}
+									onDelete={(commentId) => detail.removeComment(taskId, commentId)}
+								/>
+							)}
+							<CommentForm
+								onSubmit={(body) => detail.addComment(body)}
+								isSubmitting={detail.isSaving}
+							/>
 						</section>
-						<button type="button" className={styles.delete} disabled>タスクを削除</button>
+						<button
+							type="button"
+							className={styles.delete}
+							disabled={detail.isSaving}
+							onClick={() => window.confirm("このタスクを削除しますか？") && void detail.removeTask()}
+						>
+							タスクを削除
+						</button>
 					</>
 				)}
 			</div>
@@ -95,6 +121,42 @@ export function TaskDetailModal({ task, isLoading = false, onClose }: TaskDetail
 	);
 }
 
+function toFormValues(task: NonNullable<ReturnType<typeof useTaskDetail>["task"]>): TaskEditFormValues {
+	return {
+		title: task.title,
+		description: task.description,
+		assignee_id: task.assignee?.id ?? null,
+		due_at: task.due_at?.slice(0, 16) ?? null,
+		status: task.status,
+	};
+}
+
+function getMembers(task: NonNullable<ReturnType<typeof useTaskDetail>["task"]>): TaskMember[] {
+	return task.assignee ? [{ ...task.assignee, is_active: true }] : [];
+}
+
+function toUpdateFields(field: Parameters<NonNullable<React.ComponentProps<typeof TaskEditForm>["onUpdate"]>>[0], value: string | null): TaskUpdateFields {
+	if (field === "title") return { title: value ?? "" };
+	if (field === "description") return { description: value };
+	if (field === "assignee_id") return { assignee_id: value };
+	if (field === "due_at") return { due_at: value };
+	return { status: value as TaskUpdateFields["status"] };
+}
+
+function getErrorMessage(error: TaskDetailApiError | Error | null): string | undefined {
+	if (!error) return undefined;
+	if (!("status" in error)) return "エラーが発生しました。しばらくしてから再度お試しください";
+	if (error.status >= 500 || error.status === 0) return "エラーが発生しました。しばらくしてから再度お試しください";
+	if (error.code === "ASSIGNEE_INACTIVE") return "指定した担当者は無効化されています";
+	if (error.status === 403) return "この操作を行う権限がありません";
+	if (error.status === 422) return error.message || "入力内容を確認してください";
+	return error.message || "エラーが発生しました。しばらくしてから再度お試しください";
+}
+
 function NotFoundState({ onClose }: Pick<TaskDetailModalProps, "onClose">) {
 	return <div><p>タスクが見つかりません</p><button type="button" onClick={onClose}>ボードへ戻る</button></div>;
+}
+
+function ErrorState({ message, onRetry }: { message?: string; onRetry: () => Promise<void> }) {
+	return <div><p role="alert">{message}</p><button type="button" onClick={() => void onRetry()}>再取得</button></div>;
 }

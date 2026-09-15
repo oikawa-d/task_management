@@ -34,6 +34,12 @@ describe("BoardPage and TaskDetailModal", () => {
 			if (String(input).endsWith("/auth/config")) {
 				return jsonResponse({ auth_mode: "session" });
 			}
+			if (String(input).endsWith("/api/tasks/task-1")) {
+				return jsonResponse({ ...task, project_is_active: true });
+			}
+			if (String(input).endsWith("/api/tasks/task-1/comments")) {
+				return jsonResponse({ task_id: task.id, items: [], count: 0 });
+			}
 			return jsonResponse({
 				project_id: "project-1",
 				project_is_active: true,

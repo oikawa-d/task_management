@@ -294,7 +294,7 @@ flowchart TB
 |------|------|
 | シグネチャ | `function useTaskDetail(taskId: string \| undefined, options?: { onClose?: () => void }): TaskDetailState & actions` |
 | 引数 | `taskId`（route param）、`options.onClose`（`closeRequested`消費後の画面遷移） |
-| 戻り値 | `taskDetailStore`のstateと`updateTask`、`updateComment`、`removeComment`、`removeTask`、`refresh` |
+| 戻り値 | `taskDetailStore`のstateと`updateTask`、`addComment`、`updateComment`、`removeComment`、`removeTask`、`refresh` |
 | 処理内容 | `useSyncExternalStore(taskDetailStore.subscribe, taskDetailStore.getSnapshot)`で購読し、`taskId`変更時に`taskDetailStore.open`を呼ぶ。`closeRequested`は1回だけ`onClose`へ通知してacknowledgeする |
 | 副作用 | task/comments取得、state変更、close callbackの呼び出し |
 
@@ -302,7 +302,7 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| 公開API | `getSnapshot`、`subscribe`、`reset`、`open`、`updateTask`、`updateComment`、`removeComment`、`removeTask`、`requestClose`、`acknowledgeClose` |
+| 公開API | `getSnapshot`、`subscribe`、`reset`、`open`、`updateTask`、`addComment`、`updateComment`、`removeComment`、`removeTask`、`requestClose`、`acknowledgeClose` |
 | state | `TaskDetailState`。task/comments、loading/error、`notFound`、`conflictBannerVisible`、`closeRequested`、`boardRefreshToken`を保持する |
 | 処理内容 | `open`はtask/commentsを`Promise.allSettled`で並行取得する。各非同期処理はrequest世代と`taskId`を確認し、古い結果をstateへ反映しない。`updateTask`はstateのversionを付与し、成功時にtaskと`boardRefreshToken`を更新する |
 | 404契約 | task 404とcomments 404はどちらも`notFound=true`、`closeRequested=false`とする。自動navigateはせず、画面層が表示を決定する |
@@ -312,7 +312,7 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| 入出力 | `getTask`、`getTaskComments`、`patchTask`、`patchComment`、`deleteComment`、`deleteTask`。型は`TaskDetail`、`TaskComment`、`TaskCommentsResponse`、`TaskUpdatePayload`で定義する |
+| 入出力 | `getTask`、`getTaskComments`、`addTaskComment`、`patchTask`、`patchComment`、`deleteComment`、`deleteTask`。型は`TaskDetail`、`TaskComment`、`TaskCommentsResponse`、`TaskUpdatePayload`で定義する |
 | 認証 | 共通`authAdapter`で認証ヘッダーを付与し、session/jwtの方式差をstoreへ漏らさない |
 | エラー | HTTP statusとAPI `code`を`TaskDetailApiError`へ変換する。404判定はstoreが`status === 404`または`code === 'NOT_FOUND'`で行う |
 
@@ -397,6 +397,9 @@ flowchart LR
 | 9 | 結合 | フォーカストラップ・閉じた後のフォーカス復帰 | モーダル表示中にTabを繰り返す／⑫で閉じる | フォーカスがモーダル外へ出ない／直前のカードへ復帰する | `TaskDetailModal traps and restores focus` |
 | 10 | 結合 | URL直接アクセス（リロード相当） | `/projects/:pid/tasks/:tid`へ直接遷移、`GET /tasks/:id`→200 | モーダルが開いた状態で初期表示される | `TaskDetailModal opens directly from URL on mount` |
 | 11 | 結合 | 非所属／不存在タスクへのアクセス | `GET /tasks/:id` → 404 | 「タスクが見つかりません」表示、自動closeなし | `TaskDetailModal shows not-found state without auto close` |
+| 12 | 結合 | ボードからのopen、task編集、comment CRUD、Esc close | BoardPageから遷移し、各APIを実応答相当で返す | URL同期、編集・投稿・編集・削除、ボード再取得、Esc closeが連携する | `taskDetailIntegration opens, edits, manages comments, and closes` |
+| 13 | 結合 | 直接URL、ブラウザ戻る、タスク削除成功 | 履歴にboardとtask URLを設定し、DELETE → 204 | 戻るでboardへ戻り、削除成功でもモーダルを閉じてboardを同期する | `taskDetailIntegration handles history and delete close` |
+| 14 | 結合 | 409競合、task/comments 404、API障害、入力validation | PATCH → 409、GET → 404、PATCH → 503、空／空白入力 | 最新値と競合表示、not found表示、自動closeなし、共通エラーとvalidationを表示する | `taskDetailIntegration keeps modal state for conflict, not-found, and failure` |
 
 ## 15. 不明点・要検討事項
 
@@ -405,5 +408,5 @@ flowchart LR
 | 確定 | タスク`description`の文字数上限はissue #40で0〜2000文字に確定（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)、[04_patch_task.md §5](../api/tasks/04_patch_task.md)） | - |
 | 確定 | `TASK_COMMENT_BODY_MAX_LENGTH`（既定2000）はissue #40で`VITE_TASK_COMMENT_BODY_MAX_LENGTH`環境変数として共有することに確定（[05_frontend.md §6.2](../../basic_design/05_frontend.md#62-環境変数vite)） | - |
 | 要検討 | フィールド更新を「1回のPATCHにつき1フィールド」とする設計は本書独自の具体化であり、複数フィールドをまとめて1回のPATCHで送信する設計（バックエンドの部分更新自体は複数フィールド対応済み）でも基本設計と矛盾しない。UI応答性とversion競合の起こりやすさのトレードオフのため、実装時に見直す余地がある | フィールドごとのAPI呼び出し回数・体感速度に影響 |
-| 要検討 | コメント投稿のAPI client/store接続は#166/#167の結合時に確定する。現行#167実装は取得・編集・削除を対象とし、`CommentForm`のcallback接続は本issueで新規実装しない | コメント投稿の統合タイミングに影響 |
+| 確定 | コメント投稿は`addTaskComment`、`taskDetailStore.addComment`、`useTaskDetail().addComment`を経由して`CommentForm`へ接続する。Issue #433の結合テストで一覧追加と入力クリアを検証する | コメント投稿の画面統合を保証する |
 | なし | 上記以外 | - |

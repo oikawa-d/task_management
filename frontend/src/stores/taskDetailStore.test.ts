@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	deleteComment,
 	deleteTask,
+	addTaskComment,
 	getTask,
 	getTaskComments,
 	patchComment,
@@ -11,6 +12,7 @@ import {
 import { taskDetailStore } from "./taskDetailStore";
 
 vi.mock("../lib/api/taskDetail", () => ({
+	addTaskComment: vi.fn(),
 	deleteComment: vi.fn(),
 	deleteTask: vi.fn(),
 	getTask: vi.fn(),
@@ -136,7 +138,7 @@ describe("taskDetailStore", () => {
 		});
 	});
 
-	it("更新対象が404の場合はclose要求をstateへ記録する", async () => {
+	it("更新対象が404の場合はclose要求を立てずnotFoundをstateへ記録する", async () => {
 		vi.mocked(getTask).mockResolvedValue(task);
 		vi.mocked(getTaskComments).mockResolvedValue({ task_id: task.id, items: [], count: 0 });
 		vi.mocked(patchTask).mockRejectedValue(apiError(404, "NOT_FOUND"));
@@ -144,7 +146,20 @@ describe("taskDetailStore", () => {
 
 		await taskDetailStore.updateTask(task.id, { title: "更新" });
 
-		expect(taskDetailStore.getSnapshot()).toMatchObject({ closeRequested: true, isSaving: false });
+		expect(taskDetailStore.getSnapshot()).toMatchObject({ closeRequested: false, notFound: true, isSaving: false });
+	});
+
+	it("コメント投稿成功時は一覧と件数を更新する", async () => {
+		vi.mocked(getTask).mockResolvedValue(task);
+		vi.mocked(getTaskComments).mockResolvedValue({ task_id: task.id, items: [comment], count: 1 });
+		const added = { ...comment, id: "comment-2", body: "追加コメント" };
+		vi.mocked(addTaskComment).mockResolvedValue(added);
+		await taskDetailStore.open(task.id);
+
+		await taskDetailStore.addComment(task.id, added.body);
+
+		expect(addTaskComment).toHaveBeenCalledWith(task.id, added.body);
+		expect(taskDetailStore.getSnapshot()).toMatchObject({ comments: [comment, added], task: { comment_count: 2 }, isSaving: false });
 	});
 
 	it("コメント更新・削除をstateへ反映する", async () => {
@@ -184,5 +199,16 @@ describe("taskDetailStore", () => {
 		await taskDetailStore.removeTask(task.id);
 
 		expect(taskDetailStore.getSnapshot()).toMatchObject({ boardRefreshToken: 1, closeRequested: true });
+	});
+
+	it("タスク削除の404時はclose要求を立てずnotFoundをstateへ記録する", async () => {
+		vi.mocked(getTask).mockResolvedValue(task);
+		vi.mocked(getTaskComments).mockResolvedValue({ task_id: task.id, items: [], count: 0 });
+		vi.mocked(deleteTask).mockRejectedValue(apiError(404, "NOT_FOUND"));
+		await taskDetailStore.open(task.id);
+
+		await taskDetailStore.removeTask(task.id);
+
+		expect(taskDetailStore.getSnapshot()).toMatchObject({ closeRequested: false, notFound: true, isSaving: false });
 	});
 });

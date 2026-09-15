@@ -105,6 +105,13 @@ export function getTaskComments(taskId: string): Promise<TaskCommentsResponse> {
 	return request<TaskCommentsResponse>(`/tasks/${encodeURIComponent(taskId)}/comments`);
 }
 
+export function addTaskComment(taskId: string, body: string): Promise<TaskComment> {
+	return request<TaskComment>(`/tasks/${encodeURIComponent(taskId)}/comments`, {
+		method: "POST",
+		body: JSON.stringify({ body }),
+	});
+}
+
 export function patchTask(taskId: string, payload: TaskUpdatePayload): Promise<TaskUpdateResponse> {
 	return request<TaskUpdateResponse>(`/tasks/${encodeURIComponent(taskId)}`, {
 		method: "PATCH",

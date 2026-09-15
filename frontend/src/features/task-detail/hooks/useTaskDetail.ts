@@ -26,6 +26,7 @@ export function useTaskDetail(taskId: string | undefined, options: UseTaskDetail
 	return {
 		...state,
 		updateTask: (fields: TaskUpdateFields) => (taskId ? taskDetailStore.updateTask(taskId, fields) : Promise.resolve()),
+		addComment: (body: string) => (taskId ? taskDetailStore.addComment(taskId, body) : Promise.resolve()),
 		updateComment: taskDetailStore.updateComment.bind(taskDetailStore),
 		removeComment: taskDetailStore.removeComment.bind(taskDetailStore),
 		removeTask: (id = taskId) => (id ? taskDetailStore.removeTask(id) : Promise.resolve()),

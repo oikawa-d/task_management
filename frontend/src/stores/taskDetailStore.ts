@@ -1,4 +1,5 @@
 import {
+	addTaskComment,
 	deleteComment,
 	deleteTask,
 	getTask,
@@ -120,7 +121,7 @@ class TaskDetailStore {
 			this.setState({ task, error: null, notFound: false, conflictBannerVisible: keepConflict });
 		} catch (reason: unknown) {
 			if (this.state.taskId !== taskId) return;
-			this.setState({ error: asError(reason), notFound: isNotFound(reason), closeRequested: isNotFound(reason) });
+			this.setState({ error: asError(reason), notFound: isNotFound(reason), closeRequested: false });
 		}
 	}
 
@@ -143,9 +144,27 @@ class TaskDetailStore {
 			this.setState({
 				isSaving: false,
 				error: asError(reason),
-				closeRequested: isNotFound(reason),
+				closeRequested: false,
 				notFound: isNotFound(reason),
 			});
+		}
+	}
+
+	async addComment(taskId: string, body: string): Promise<void> {
+		if (this.state.taskId !== taskId || !this.state.task) return;
+		this.setState({ isSaving: true, error: null });
+		try {
+			const added = await addTaskComment(taskId, body);
+			if (this.state.taskId !== taskId) return;
+			this.setState({
+				task: { ...this.state.task, comment_count: this.state.task.comment_count + 1 },
+				comments: [...this.state.comments, added],
+				isSaving: false,
+			});
+		} catch (reason: unknown) {
+			if (this.state.taskId !== taskId) return;
+			this.setState({ isSaving: false, error: asError(reason), notFound: isNotFound(reason), closeRequested: false });
+			throw reason;
 		}
 	}
 
@@ -163,6 +182,7 @@ class TaskDetailStore {
 			if (this.state.taskId !== taskId) return;
 			this.setState({ isSaving: false, error: asError(reason) });
 			if (isNotFound(reason) && this.state.taskId) await this.refreshComments(this.state.taskId);
+			throw reason;
 		}
 	}
 
@@ -192,7 +212,7 @@ class TaskDetailStore {
 		} catch (reason: unknown) {
 			if (this.state.taskId !== taskId) return;
 			const missing = isNotFound(reason);
-			this.setState({ isSaving: false, error: missing ? null : asError(reason), closeRequested: missing, notFound: missing });
+			this.setState({ isSaving: false, error: asError(reason), closeRequested: false, notFound: missing });
 		}
 	}
 

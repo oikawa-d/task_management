@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CSRF_HEADER_NAME, DEFAULT_CSRF_COOKIE_NAME } from "../../api/authAdapter/constants";
 import { clearAuthAdapter, setAuthAdapterMode } from "../../api/authAdapter/client";
-import { TaskDetailApiError, deleteComment, getTask, patchTask } from "./taskDetail";
+import { TaskDetailApiError, addTaskComment, deleteComment, getTask, patchTask } from "./taskDetail";
 
 function response(body: unknown, init: { ok: boolean; status: number }) {
 	return {
@@ -40,6 +40,18 @@ describe("taskDetail API", () => {
 		expect(fetchMock).toHaveBeenCalledWith(
 			"/api/tasks/task-1",
 			expect.objectContaining({ method: "PATCH", body: JSON.stringify({ title: "更新", version: 2 }) }),
+		);
+	});
+
+	it("コメント投稿はtask配下へbodyをJSON送信する", async () => {
+		const comment = { id: "comment-1", body: "投稿" };
+		const fetchMock = vi.fn().mockResolvedValue(response(comment, { ok: true, status: 201 }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(addTaskComment("task/1", "投稿")).resolves.toEqual(comment);
+		expect(fetchMock).toHaveBeenCalledWith(
+			"/api/tasks/task%2F1/comments",
+			expect.objectContaining({ method: "POST", body: JSON.stringify({ body: "投稿" }) }),
 		);
 	});
 
