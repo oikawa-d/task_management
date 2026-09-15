@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import NotFoundError, ValidationError, raise_database_error
 from app.models.project import Project
 from app.models.user import User
 from app.repository import project_member_repository, project_repository, task_repository
@@ -70,7 +71,7 @@ async def list_projects(
 	offset = (page - 1) * per_page
 	items = await project_repository.list_for_user(db, user.id, include_inactive, per_page, offset)
 	responses = [_summary(item.project, user.id, item.member_count, _counts(item)) for item in items]
-	total = sum(1 for _ in items)
+	total = items[0].total_count if items else 0
 	return ProjectListResponse(
 		items=responses,
 		meta=ProjectListMeta(
@@ -83,13 +84,19 @@ async def list_projects(
 
 
 async def create_project(user: CurrentUser, payload: ProjectCreateRequest, db: AsyncSession) -> ProjectSummaryResponse:
-	project_id = await project_repository.create(
-		db, user.id, payload.name, payload.description, payload.start_at, payload.end_at
-	)
-	project = await project_repository.get_by_id(db, project_id)
-	if project is None:
-		raise NotFoundError("作成したプロジェクトを取得できません")
-	return _summary(project, user.id, member_count=1)
+	try:
+		project_id = await project_repository.create(
+			db, user.id, payload.name, payload.description, payload.start_at, payload.end_at
+		)
+		project = await project_repository.get_by_id(db, project_id)
+		if project is None:
+			await db.rollback()
+			raise NotFoundError("作成したプロジェクトを取得できません")
+		await db.commit()
+		return _summary(project, user.id, member_count=1)
+	except DBAPIError as exc:
+		await db.rollback()
+		raise_database_error(exc)
 
 
 async def get_project_detail(db: AsyncSession, project: Project, user: CurrentUser) -> ProjectDetailResponse:
@@ -120,16 +127,29 @@ async def update_project(
 ) -> ProjectSummaryResponse:
 	name = payload.name if payload.name is not None else project.name
 	description = payload.description if "description" in payload.model_fields_set else project.description
-	start_at = payload.start_at if payload.start_at is not None else project.start_at
-	end_at = payload.end_at if payload.end_at is not None else project.end_at
-	await project_repository.update(db, project.id, name, description, start_at, end_at)
-	if payload.is_active is not None:
-		await project_repository.set_active(db, project.id, payload.is_active)
-	updated = await project_repository.get_by_id(db, project.id)
-	if updated is None:
-		raise NotFoundError("プロジェクトが見つかりません")
-	return _summary(updated, user.id)
+	start_at = payload.start_at if "start_at" in payload.model_fields_set else project.start_at
+	end_at = payload.end_at if "end_at" in payload.model_fields_set else project.end_at
+	if start_at is not None and end_at is not None and end_at < start_at:
+		raise ValidationError("終了日時は開始日時以降である必要があります")
+	try:
+		await project_repository.update(db, project.id, name, description, start_at, end_at)
+		if payload.is_active is not None:
+			await project_repository.set_active(db, project.id, payload.is_active)
+		updated = await project_repository.get_by_id(db, project.id)
+		if updated is None:
+			await db.rollback()
+			raise NotFoundError("プロジェクトが見つかりません")
+		await db.commit()
+		return _summary(updated, user.id)
+	except DBAPIError as exc:
+		await db.rollback()
+		raise_database_error(exc)
 
 
 async def deactivate_project(db: AsyncSession, project: Project) -> None:
-	await project_repository.set_active(db, project.id, False)
+	try:
+		await project_repository.set_active(db, project.id, False)
+		await db.commit()
+	except DBAPIError as exc:
+		await db.rollback()
+		raise_database_error(exc)
