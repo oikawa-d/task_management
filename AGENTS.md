@@ -62,6 +62,8 @@ CIでは、`api/`・`batch/`それぞれに対して`ruff check`、`ruff format 
 
 バックエンドはpytest、フロントエンドはVitestを使用する予定です。テスト名は`test_login_endpoint_email_not_verified`や`KanbanBoard refetches board on 409 TASK_CONFLICT`のように、対象と期待動作が分かる名前にします。エンドポイントの動作やエラー処理を変更した場合は、設計書のテスト表も更新してください。
 
+APIエンドポイントの結合テストは`api/tests/integration/`に配置します。service層の実DB結合テストは`api/tests/service/test_z_*_integration.py`に配置し、router/serviceの単体テストはそれぞれの層別ディレクトリに配置します。`test_z_`接頭辞は、DB状態や実行順に依存するservice結合テストの実行順を制御する必要がある場合に限って使用します。既存テストは現行の責務を維持し、一括移動・分割は行わず、今後の修正・追加時にこの方針へ段階的に合わせます。
+
 ## コミット・プルリクエスト
 
 既存の`<type>: <description>`形式に従います。例：`docs: 要件・基本・詳細設計の整合性を修正`、`fix: ...`、`ci: ...`。コミットは目的ごとに分けてください。プルリクエストには変更対象の文書、関連Issue、他文書への影響を記載し、図やUIを変更した場合は描画結果のスクリーンショットを添付してください。
