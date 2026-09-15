@@ -1,3 +1,4 @@
+from typing import Literal, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Response, status
@@ -53,7 +54,7 @@ async def list_tasks(
 ) -> TaskListResponse:
 	return await task_service.list_tasks(
 		user,
-		query.project_id,
+		cast(UUID | Literal["unassigned"] | None, query.project_id),
 		query.status,
 		query.include_inactive,
 		query.page,
