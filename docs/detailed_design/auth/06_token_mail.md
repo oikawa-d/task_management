@@ -337,8 +337,9 @@ flowchart LR
 | 7 | 単体 | `request_password_reset`が存在しないメールでも例外を出さない | `find_by_email`が`None` | 正常終了、SMTP未呼び出し | `test_request_password_reset_unknown_email_noop` |
 | 8 | 単体 | `reset_password`成功時に全セッション・全リフレッシュが失効する | 有効なtoken、対象ユーザーに複数セッション/トークンあり | `delete_all_sessions`・`revoke_all_refresh_tokens`が呼ばれる | `test_reset_password_revokes_all_sessions` |
 | 9 | 単体 | `reset_password`が無効tokenで例外 | `GETDEL`が`None` | `InvalidResetTokenError` | `test_reset_password_invalid_token` |
-| 10 | 結合 | 登録→確認メール受信→認証→ログイン可能になる一連の流れ | 実DB＋`fakeredis`、SMTPは`aiosmtplib`をモック | 各ステップが基本設計§6.1のシーケンス通りに完了する | `test_register_verify_login_flow` |
+| 10 | 結合 | 登録→確認メール受信→認証→ログイン可能になる一連の流れ | 実PostgreSQL＋実Redis、SMTP境界をテスト用 outbox に差し替え | 各ステップが基本設計§6.1のシーケンス通りに完了する | `test_email_verification_flow_is_one_time_and_enables_login`（Issue #425） |
 | 11 | 結合 | メール本文にfragment形式のURLが含まれる | テンプレートレンダリング結果を検証 | `#token=`形式でquery stringを含まない | `test_mail_template_uses_fragment_url` |
+| 12 | 結合 | token expiry・再送・単回消費・refresh rotation・外部I/O fail-close | `api/tests/integration_token_mail/test_auth_token_mail_flow.py`、CI services | 対象APIが詳細設計のHTTPステータス・エラーコード・Redis状態を返す | `test_email_verification_expiry_is_rejected_at_api_boundary`、`test_resend_replaces_old_token_and_new_token_verifies`、`test_jwt_refresh_rotation_rejects_missing_and_reused_tokens`、`test_verify_email_redis_failure_is_fail_closed` 他（Issue #425） |
 | 網羅できない範囲 | 実際のSMTPサーバー（本番外部SMTP）への到達性・迷惑メール判定 | - | 外部サービス依存のため自動テスト対象外。開発環境ではMailpit Web UIでの手動確認とする |
 
 ## 12. Issue #8で確定した事項

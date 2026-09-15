@@ -230,13 +230,16 @@ stateDiagram-v2
 |----|------|--------|------|----------|-----------------|
 | 1 | 単体（モック） | 有効なトークンで認証成功 | `redis_store.consume_email_verify_token` が `user_id` を返すようモック | `user_repository.mark_email_verified` が呼ばれ204相当が返る | `test_verify_email_service_success` |
 | 2 | 単体（モック） | 無効なトークン | `consume_email_verify_token` が `None` を返す | `InvalidVerifyTokenError` 送出 | `test_verify_email_service_invalid_token` |
-| 3 | 結合（実Redis/PostgreSQL） | 会員登録直後のトークンで認証成功 | `register` 実行済み、`emailverify:*` キー存在 | `204`、`users.email_verified_at` が `NOT NULL` に更新 | `test_verify_email_endpoint_success` |
-| 4 | 結合（実Redis/PostgreSQL） | 同一トークンを2回送信 | 1回目成功済み | 2回目は `400 INVALID_VERIFY_TOKEN` | `test_verify_email_endpoint_reuse_rejected` |
+| 3 | 結合（実Redis/PostgreSQL） | 会員登録直後のトークンで認証成功 | `register` 実行済み、`emailverify:*` キー存在 | `204`、`users.email_verified_at` が `NOT NULL` に更新 | `test_email_verification_flow_is_one_time_and_enables_login`（Issue #425） |
+| 4 | 結合（実Redis/PostgreSQL） | 同一トークンを2回送信 | 1回目成功済み | 2回目は `400 INVALID_VERIFY_TOKEN` | `test_email_verification_flow_is_one_time_and_enables_login`（Issue #425） |
 | 5 | 結合 | 存在しないトークン | ランダム文字列 | `400 INVALID_VERIFY_TOKEN` | `test_verify_email_endpoint_unknown_token` |
 | 6 | 結合 | `token` 未指定 | ボディ空 | `422 VALIDATION_ERROR` | `test_verify_email_endpoint_missing_token` |
 | 7 | 結合 | 認証後にログイン可能になること | 認証完了後に `POST /auth/login` | ログイン成功（`EMAIL_NOT_VERIFIED` が発生しない） | `test_verify_email_then_login_success` |
 
-このAPIは `AUTH_MODE` に依存しないため、session/jwt両モードでの重複実施は不要（1系統のみ実施）。TTL満了ケース（24時間経過）は実時間待機が非現実的なため、Redisの短TTL上書き設定を用いた単体テスト（No.2相当のモック）で代替し、実TTLの実測は行わない。
+| 8 | 結合（実Redis/PostgreSQL） | TTL満了後のトークン | Redis上の対象キーをテスト用短TTLに変更 | `400 INVALID_VERIFY_TOKEN` | `test_email_verification_expiry_is_rejected_at_api_boundary`（Issue #425） |
+| 9 | 結合（境界障害） | Redis/PostgreSQL障害 | RedisまたはDB境界で接続例外を注入 | `503 SERVICE_UNAVAILABLE`、認証成功を返さない | `test_verify_email_redis_failure_is_fail_closed` / `test_verify_email_db_failure_is_fail_closed`（Issue #425） |
+
+このAPIは `AUTH_MODE` に依存しないため、session/jwt両モードでの重複実施は不要（CIのいずれかのmatrixで実API境界を検証する）。TTL満了は実時間待機を避けるため、実Redisの対象キーをテスト用短TTLに変更してAPIから検証する。
 
 ## 13. 不明点・要検討事項
 
