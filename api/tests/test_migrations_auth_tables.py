@@ -56,18 +56,20 @@ async def test_users_email_accepts_254_characters_and_rejects_255(db_session: As
 	)
 
 	with pytest.raises(DBAPIError):
-		await db_session.execute(
-			text("INSERT INTO users (username, email, password_hash) VALUES ('email-over', :email, 'hash')"),
-			{"email": _email_of_length(255)},
-		)
+		async with db_session.begin_nested():
+			await db_session.execute(
+				text("INSERT INTO users (username, email, password_hash) VALUES ('email-over', :email, 'hash')"),
+				{"email": _email_of_length(255)},
+			)
 	with pytest.raises(DBAPIError):
-		await db_session.execute(
-			text(
-				"INSERT INTO login_history (user_id, login_identifier, login_method, success) "
-				"VALUES (:user_id, :identifier, 'oauth_google', true)"
-			),
-			{"user_id": user_id, "identifier": _email_of_length(255)},
-		)
+		async with db_session.begin_nested():
+			await db_session.execute(
+				text(
+					"INSERT INTO login_history (user_id, login_identifier, login_method, success) "
+					"VALUES (:user_id, :identifier, 'oauth_google', true)"
+				),
+				{"user_id": user_id, "identifier": _email_of_length(255)},
+			)
 	await db_session.rollback()
 
 
