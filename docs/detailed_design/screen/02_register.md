@@ -72,7 +72,7 @@
 | ⑥ | 生年月日：年 | select | 未選択 | 必須、選択範囲は現在年から100年前まで（画面側の目安。厳密な妥当性はzod＋サーバー側で検証） | 常時活性 | onChange で⑧の日数選択肢を再計算（うるう年考慮） |
 | ⑦ | 生年月日：月 | select | 未選択 | 必須、1〜12 | 常時活性 | 同上 |
 | ⑧ | 生年月日：日 | select | 未選択 | 必須、選択中の年月に応じた日数（28〜31） | ⑥⑦選択後に活性 | onChange |
-| ⑨ | メールアドレス | text input(email) | `""` | 必須、50文字以内、メール形式 | 常時活性 | onChange |
+| ⑨ | メールアドレス | text input(email) | `""` | 必須、254文字以内、メール形式 | 常時活性 | onChange |
 | ⑩ | ユーザー名 | text input | `""` | 必須、3〜50文字、`^[A-Za-z0-9_-]+$` | 常時活性 | onChange |
 | ⑪ | パスワード | password/text input | `""` | 必須、8文字以上、英大文字/英小文字/数字/記号のうち2種類以上 | 常時活性 | onChangeで⑫再計算 |
 | ⑫ | 強度インジケータ | progress bar + ラベル | 「未入力」 | - | ⑪入力中に更新 | §9.1参照 |
@@ -216,7 +216,7 @@ flowchart TB
 | フィールド | zodスキーマ | ルール | エラーメッセージ | バックエンド（pydantic）対応 |
 |-----------|-------------|--------|-------------------|-------------------------------|
 | `username` | `registerSchema.username` | `z.string().min(3).max(50).regex(/^[A-Za-z0-9_-]+$/)` | 「3〜50文字の英数字・ハイフン・アンダースコアで入力してください」 | `username`（[04_api.md §3.1](../../basic_design/04_api.md#31-認証)） |
-| `email` | `registerSchema.email` | `z.string().max(50).email()` | 「メールアドレスの形式が正しくありません」 | `email` |
+| `email` | `registerSchema.email` | `z.string().max(254).email()` | 「メールアドレスの形式が正しくありません」 | `email` |
 | `password` | `registerSchema.password` | `z.string().min(8).refine(2種類以上の文字種)` | 「8文字以上で、英大文字/英小文字/数字/記号のうち2種類以上を含めてください」 | `password`（同一規則） |
 | `password_confirm` | `registerSchema` の `.refine`（オブジェクト全体） | `password_confirm === password` | 「パスワードが一致しません」 | `password_confirm` |
 | `last_name` / `first_name` | `registerSchema.last_name` / `first_name` | `z.string().min(1).max(30)` | 「30文字以内で入力してください」 | `last_name` / `first_name` |
