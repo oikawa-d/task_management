@@ -1,3 +1,4 @@
+import logging
 import os
 from pathlib import Path
 from uuid import uuid4
@@ -107,6 +108,15 @@ def _reset_schema():
 
 def test_migration_upgrade_head_succeeds() -> None:
 	command.upgrade(_alembic_config(), "head")
+
+
+def test_migration_keeps_application_loggers_enabled() -> None:
+	application_logger = logging.getLogger("app.audit")
+	application_logger.disabled = False
+
+	command.upgrade(_alembic_config(), "head")
+
+	assert application_logger.disabled is False
 
 
 def test_migration_pgcrypto_extension_enabled_after_upgrade() -> None:

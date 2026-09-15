@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_backend_settings
-from app.core.exceptions import AlreadyMemberError, NotFoundError, OwnerCannotBeRemovedError
+from app.core.exceptions import AlreadyMemberError, NotFoundError, OwnerCannotBeRemovedError, raise_database_error
 from app.models.project import Project
 from app.models.project_member import ProjectMember
 from app.repository import project_member_repository, user_repository
@@ -58,9 +59,15 @@ async def add_member(project: Project, user_id: UUID, invited_by: UUID, db: Asyn
 			raise NotFoundError("追加したメンバーを取得できません")
 		await db.commit()
 		return MemberResponse(**_member_summary(created, project.owner_id).model_dump())
-	except Exception:
+	except AlreadyMemberError:
 		await db.rollback()
 		raise
+	except NotFoundError:
+		await db.rollback()
+		raise
+	except DBAPIError as exc:
+		await db.rollback()
+		raise_database_error(exc)
 
 
 async def search_candidates(project: Project, query: str, db: AsyncSession) -> CandidateListResponse:
@@ -86,6 +93,6 @@ async def remove_member(project: Project, user_id: UUID, db: AsyncSession) -> No
 	try:
 		await project_member_repository.delete(db, project.id, user_id)
 		await db.commit()
-	except Exception:
+	except DBAPIError as exc:
 		await db.rollback()
-		raise
+		raise_database_error(exc)

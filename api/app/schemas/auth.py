@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import Field, field_validator, model_validator
 
+from app.core.constants import EMAIL_MAX_LENGTH
 from app.schemas.base import StrictSchema
 
 USERNAME_PATTERN = r"^[A-Za-z0-9_-]+$"
@@ -32,7 +33,7 @@ def _validate_password_categories(value: str) -> str:
 
 class RegisterRequest(StrictSchema):
 	username: str = Field(min_length=3, max_length=50, pattern=USERNAME_PATTERN)
-	email: str = Field(max_length=50)
+	email: str = Field(max_length=EMAIL_MAX_LENGTH)
 	password: str = Field(min_length=8)
 	password_confirm: str
 	last_name: str = Field(min_length=1, max_length=30)
@@ -67,7 +68,7 @@ class RegisterResponse(StrictSchema):
 
 
 class LoginRequest(StrictSchema):
-	identifier: str = Field(min_length=1, max_length=50)
+	identifier: str = Field(min_length=1, max_length=EMAIL_MAX_LENGTH)
 	password: str = Field(min_length=1)
 
 
@@ -88,7 +89,7 @@ class VerifyEmailRequest(StrictSchema):
 
 
 class ResendVerifyEmailRequest(StrictSchema):
-	email: str = Field(max_length=50)
+	email: str = Field(max_length=EMAIL_MAX_LENGTH)
 
 	@field_validator("email")
 	@classmethod
@@ -101,7 +102,7 @@ class ResendVerifyEmailResponse(StrictSchema):
 
 
 class PasswordForgotRequest(StrictSchema):
-	email: str = Field(max_length=50)
+	email: str = Field(max_length=EMAIL_MAX_LENGTH)
 
 	@field_validator("email")
 	@classmethod

@@ -17,5 +17,5 @@ description: GitHub破壊操作hookを複数の実装から共通化・統合す
 
 - 統合前に各実装のGraphQLクエリ、`pageInfo`検証、cursor更新、fail-close条件を比較する。
 - 共通実装へ統合した後、統合元ごとの回帰テストを同じ共通hookに対して実行する。
-- `hasNextPage=true`、次ページのreviewed PR、cursor欠落、不正なレスポンス形状をテストする。
+- `hasNextPage=true`、次ページのapprove PR、cursor欠落、不正なレスポンス形状をテストする。
 - 統合後の共通実装と各クライアント用wrapperの参照先が一致することを確認する。

@@ -33,7 +33,7 @@
 | AUTH_MODE差異 | CSRF検証の要否のみ異なる。楽観ロック・列並べ替えのロジックに差異なし |
 | 冪等性 | **なし**。同一リクエストの再送は2回目以降が `version` 不一致となり `409 TASK_CONFLICT` を返す（意図せぬ多重適用を防ぐという意味では実質的に安全側） |
 | レート制限 | 対象外 |
-| トランザクション境界 | `CALL sp_update_task(...)` 1回。対象行ロック、advisory lock、position再採番、version更新はSP内部で同一トランザクションとして行う |
+| トランザクション境界 | `task_service.update_task`の書き込み呼び出しから更新結果の取得までを1単位とする。対象行ロック、advisory lock、position再採番、version更新はSP内部で行い、成功時にserviceが`COMMIT`する。`task_repository.update`がP0005/P0006を`TaskConflictError`/`AssigneeInactiveError`へ変換した場合またはDBAPIErrorが発生した場合はserviceが`ROLLBACK`して再送出する。事前の存在確認・認可で発生する例外はこの境界の対象外とする |
 
 ## 2. 入出力仕様（全体の出入力）
 
@@ -235,7 +235,7 @@ flowchart TB
 | 引数 | task_id：対象タスクID／payload：`version` を含む部分更新内容／user：現在ユーザー |
 | 戻り値 | 更新後の `Task` |
 | 送出例外 | `NotFoundError`、`ConflictError(TASK_CONFLICT)`、`ConflictError(ASSIGNEE_INACTIVE)`、`ValidationError` |
-| 処理内容 | 1. `task_repository.get_with_project(task_id)` と所属FNで対象の事実を取得し、空集合/falseは404 2. `payload.version` 等を引数にして `task_repository.update(task_id, user.id, version, ...)`（`CALL sp_update_task(...)`）を1回呼ぶ 3. SP内部でversion検証、advisory lock、列内・列間再採番、assignee検証、期限判定、notifications dedupe INSERTを一体実行 4. SQLSTATE `P0005` / `P0006` はAPIの409へ変換 5. 成功後に`fn_get_task`で更新結果を取得 |
+| 処理内容 | 1. `task_repository.get_with_project(task_id)` と所属FNで対象の事実を取得し、空集合/falseは404 2. `payload.version` 等を引数にして `task_repository.update(task_id, user.id, version, ...)`（`CALL sp_update_task(...)`）を1回呼ぶ 3. SP内部でversion検証、advisory lock、列内・列間再採番、assignee検証、期限判定、notifications dedupe INSERTを一体実行 4. SQLSTATE `P0005` / `P0006` はrepositoryで`TaskConflictError` / `AssigneeInactiveError`へ変換され、serviceはこの2例外を`ROLLBACK`して再送出する。DBAPIErrorもserviceで`ROLLBACK`して共通変換する 5. 成功後に`fn_get_task`で更新結果を取得し、検証後に`COMMIT`する。事前の存在確認・認可で発生した例外ではrollbackしない |
 | 副作用 | SP内のtasks更新・通知INSERT（同一トランザクション） |
 
 ### 6.3 `repository/task_repository.py :: get_with_project`
@@ -342,7 +342,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | ユーザー列挙対策 | 非所属アクセスは404で統一 |
 | タイミング攻撃対策 | 対象外 |
 | レート制限 | なし |
-| fail-close方針 | advisory lock取得やシフトUPDATEの途中で失敗した場合はROLLBACKし、部分適用のposition状態を残さない |
+| fail-close方針 | advisory lock取得やシフトUPDATEの途中で失敗した場合、およびP0005/P0006のドメイン例外への変換時はserviceがROLLBACKし、部分適用のposition・tasks・notifications状態を残さない |
 | 同時更新制御 | 対象列のadvisory lockを行ロック（`FOR UPDATE`）より先に取得して列内の複数タスク更新を直列化し、その後の行ロックで同一タスクへの同時PATCHを直列化する。`version` 比較で「先勝ち」の楽観ロック意味論を維持し、`TASK_CONFLICT` の判定基準はあくまで `version` 一致とする |
 | デッドロック回避 | 影響する `(project_id, status)` のadvisory lockは常にstatus文字列の昇順で取得する。異なる2タスクが逆順で列を跨ぐ移動を同時に行っても、ロック取得順序が一致するため待機のみでデッドロックしない |
 | is_active変更の権限 | 一般のプロジェクトメンバーは`is_active`を変更できない（403 `FORBIDDEN`）。作成者本人／プロジェクトオーナー／adminのみ許可し、無効化の取り消し（再有効化）操作の誤用・悪用を防ぐ |
@@ -370,6 +370,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 17 | 結合 | is_active再有効化（プロジェクトオーナー） | 実DB、作成者以外のオーナーが`is_active:true`でPATCH | 200 | `test_patch_task_reactivate_by_owner` |
 | 18 | 結合 | is_active変更・権限なし | 実DB、作成者でも オーナーでもない一般メンバーが`is_active:true`でPATCH | 403 `FORBIDDEN` | `test_patch_task_is_active_forbidden_for_non_owner` |
 | 19 | 結合 | is_active未指定時は無関係 | 実DB、`is_active`を送らずtitleのみ更新 | 200、`is_active`不変 | `test_patch_task_is_active_unaffected_when_omitted` |
+| 20 | 単体 | repositoryがP0005/P0006をドメイン例外へ変換した後の更新失敗 | `task_repository.update`が`TaskConflictError`または`AssigneeInactiveError`を送出 | `db.rollback()`後に同じ例外を再送出し、`commit`しない | `test_update_task_rolls_back_repository_constraint_error` |
 
 ## 13. 不明点・要検討事項
 
