@@ -23,7 +23,7 @@
 | AUTH_MODE差異 | session: `X-CSRF-Token` 検証あり／jwt: ヘッダ方式のためCSRF検証なし |
 | 冪等性 | あり（既に`is_active=false`の対象への再実行も`UPDATE`が0件更新になるだけで200/204として扱い、副作用なく完了する。プロジェクト自体が存在しない場合のみ404） |
 | レート制限 | 対象外 |
-| トランザクション境界 | `CALL sp_deactivate_project(:project_id, false)` 1回。`project_members` / `tasks` / `task_comments` は変更しない |
+| トランザクション境界 | serviceが`CALL sp_deactivate_project(:project_id, false)`とcommitを1トランザクションで実行し、DB例外時はrollback。`project_members` / `tasks` / `task_comments` は変更しない |
 
 **本APIの意味変更（issue #10）**：従来の物理削除仕様を、`projects.is_active` による論理削除へ変更した。物理削除を実行する経路はアプリケーションAPIとして提供しない。
 
@@ -80,8 +80,14 @@ sequenceDiagram
     RP->>PG: "CALL sp_deactivate_project(:project_id, false);"
     PG-->>RP: 更新後の行（トリガでupdated_at更新。project_members/tasks/task_commentsは無変更）
     RP-->>S: OK
+    S->>PG: COMMIT
     S-->>R: None
     R-->>FE: 204 No Content
+    alt DB例外
+        S->>PG: ROLLBACK
+        S-->>R: ServiceUnavailableError
+        R-->>FE: 503 SERVICE_UNAVAILABLE
+    end
 ```
 
 ## 5. 処理フロー・分岐
@@ -104,7 +110,9 @@ flowchart TB
     G -->|"所属"| I{"owner_id == user.id?"}
     I -->|"No"| I1["403 FORBIDDEN"]
     I -->|"Yes"| H
-    H["CALL sp_deactivate_project<br/>（project_members/tasks/task_commentsは無変更）"] --> J["204 No Content"]
+    H["CALL sp_deactivate_project<br/>（project_members/tasks/task_commentsは無変更）"] --> I2["COMMIT"]
+    I2 --> J["204 No Content"]
+    H -.->|"DB例外"| K["ROLLBACK → 503 SERVICE_UNAVAILABLE"]
 ```
 
 ## 6. 関数詳細
@@ -113,11 +121,11 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def delete_project(project: Project = Depends(require_project_owner), db: AsyncSession = Depends(get_db), _: None = Depends(verify_csrf)) -> Response` |
+| シグネチャ | `async def delete_project(project: Project = Depends(require_project_owner), db: AsyncSession = Depends(get_db_session), _: None = Depends(verify_origin_if_session), __csrf: None = Depends(verify_csrf_if_session)) -> Response` |
 | 引数 | `project`: `04_patch_project.md` §6.1 と同一の `require_project_owner` が解決した対象 / `db`: DBセッション |
 | 戻り値 | `Response(status_code=204)` |
-| 送出例外 | なし（依存関係が例外を送出） |
-| 処理内容 | 1. `project_service.deactivate_project(db, project)` を呼び出す 2. `204 No Content` を返す |
+| 送出例外 | `UnauthenticatedError`（401）、`ForbiddenError`/`CsrfInvalidError`（403）、`NotFoundError`（404）を依存関係が送出 / `ServiceUnavailableError`（503）をサービス層が送出 |
+| 処理内容 | 1. sessionモードではOrigin/CSRFを検証する 2. `project_service.deactivate_project(db, project)`を呼び出す 3. `204 No Content`を返す |
 | 副作用 | なし（副作用はservice層に委譲） |
 
 ### 6.2 `service/project_service.py :: deactivate_project`
@@ -131,15 +139,15 @@ flowchart TB
 | 処理内容 | 1. `sp_deactivate_project(db, project.id)` を呼び出す 2. `commit` する |
 | 副作用 | `sp_deactivate_project` による `projects.is_active` 更新のみ。`project_members` / `tasks` / `task_comments` は変更しない（配下タスクは有効なまま維持される） |
 
-### 6.3 `repository/project_repository.py :: sp_deactivate_project`
+### 6.3 `repository/project_repository.py :: set_active`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def deactivate(db: AsyncSession, project_id: UUID) -> None` |
+| シグネチャ | `async def set_active(db: AsyncSession, project_id: UUID, is_active: bool) -> None` |
 | 引数 | `project_id`: 論理削除対象 |
 | 戻り値 | なし |
 | 送出例外 | `OperationalError` |
-| 処理内容 | `CALL sp_deactivate_project(:project_id, false)` を実行する。SP内で `is_active=false` とトリガ更新を行い、既に無効でも冪等に完了する |
+| 処理内容 | `CALL sp_deactivate_project(:project_id, :is_active)`を実行する。SP内で`is_active`とトリガを更新し、既に無効でも冪等に完了する |
 | 副作用 | `projects` のUPDATE（物理DELETEは行わない） |
 
 ## 7. 関数相関図
@@ -147,8 +155,8 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["projects_router.delete_project"] --> D["deps.require_project_owner"]
-    D --> RP1["project_repository.fn_get_project"]
-    D --> RP2["project_repository.fn_is_project_member"]
+    D --> RP1["project_repository.get_by_id"]
+    D --> RP2["project_member_repository.exists"]
     R --> S["project_service.deactivate_project"]
     S --> RP3["sp_deactivate_project"]
     RP3 --> M1["models.Project"]
@@ -234,8 +242,10 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 8 | 結合 | 存在しないproject_idは404 | ランダムなUUIDへDELETE | `404 NOT_FOUND` | `test_delete_project_not_found_for_nonexistent_id` |
 | 9 | 結合 | 無効化後にPATCHで再有効化できる | オーナーが無効化後、`04_patch_project.md`の`is_active:true`でPATCH | `200`、`is_active=true`に戻る | `test_delete_project_reactivatable_via_patch` |
 | 10 | 結合 | sessionモードでCSRFヘッダ欠落は403 | `X-CSRF-Token`なし | `403 CSRF_INVALID` | `test_delete_project_missing_csrf_session_mode` |
+| 11 | 結合（router・認証依存性） | memberは削除不可、adminは削除可能、未所属・未認証は拒否 | 実PostgreSQL、JWTアクセストークンでmember/admin/未所属を切り替える | memberは403、adminは204、未所属は404、未認証は401 | `test_project_crud_router_enforces_authz_and_hides_non_member` |
+| 12 | 結合（実DB・障害） | 論理削除途中のDB障害時に変更前状態へrollbackする | 実PostgreSQL、無効化後のDB障害を発生させる | `SERVICE_UNAVAILABLE`、`is_active=true`を維持 | `test_deactivate_project_rolls_back_real_db_changes_on_db_failure` |
 
-`AUTH_MODE=session` / `jwt` の両方で No.2・No.4・No.5を実施する。Google連携そのものは対象外。
+既存の認証方式別テストに加え、No.11ではJWTの実認証依存性を通してmember/admin/未所属/未認証の境界を検証する。Google連携そのものは対象外。
 
 ## 13. 不明点・要検討事項
 

@@ -147,29 +147,27 @@ flowchart TB
 | 項目 | 内容 |
 |------|------|
 | シグネチャ | `async def password_reset(payload: PasswordResetRequest, db: AsyncSession = Depends(get_db_session)) -> None` |
-| 引数 | `payload: PasswordResetRequest`、`db: AsyncSession` |
-| 戻り値 | `None`（`204 No Content`） |
+| 引数 | `payload: PasswordResetRequest`、`db: AsyncSession`（DI） |
+| 戻り値 | `Response`（`204 No Content`） |
 | 送出例外 | `InvalidResetTokenError`（グローバル例外ハンドラで400 `INVALID_RESET_TOKEN`に変換）。Redis障害またはPostgreSQL接続障害はグローバル例外ハンドラで503 `SERVICE_UNAVAILABLE`に変換 |
-| 処理内容 | `auth_service.reset_password(payload.token, payload.new_password, db)` を呼び出す。成功時は`204 No Content`を返す |
+| 処理内容 | `email_verification_service.reset_password(payload.token, payload.new_password, db)` を呼び出す。成功時は`204 No Content`を返す |
 | 副作用 | なし（副作用は service 層に委譲） |
 
-### 6.2 `service/auth_service.py :: reset_password`
+### 6.2 `api/app/service/email_verification_service.py :: reset_password`
 
 | 項目 | 内容 |
 |------|------|
 | シグネチャ | `async def reset_password(token: str, new_password: str, db: AsyncSession) -> None` |
-| 引数 | `token: str`（メールリンクのトークン）、`new_password: str`（バリデーション済み平文）、`db: AsyncSession`（DBトランザクション） |
+| 引数 | `token: str`（メールリンクのトークン）、`new_password: str`（バリデーション済み平文）、`db: AsyncSession`（ユーザー更新用DBセッション） |
 | 戻り値 | `None` |
 | 送出例外 | `InvalidResetTokenError`（HTTP 400）。Redis障害またはPostgreSQL接続障害はグローバル例外ハンドラで503 `SERVICE_UNAVAILABLE`に変換 |
 | 処理内容 | 1. `redis_store.consume_password_reset_token(token)` を呼び user_id を取得 2. `None` の場合は `InvalidResetTokenError` を送出 3. `core/security.py` の `hash_password(new_password)` で argon2 ハッシュを生成 4. `redis_store.delete_all_sessions(user_id)` を呼ぶ 5. `redis_store.revoke_all_refresh_tokens(user_id)` を呼ぶ 6. Redis失効成功後に `user_repository.update_password(db, user_id, password_hash)` を呼ぶ 7. `db.commit()` を呼ぶ。Redis失効に失敗した場合はfail-closeとし、DB更新・`commit()`を行わない |
 | 副作用 | Redis：`pwreset:{hash}` 削除、`session:*` / `csrf:*` / `user_sessions:{uid}` 全削除、`refresh:*` / `user_refresh:{uid}` 全削除。PostgreSQL：`users.password_hash` 更新 |
 
-### 6.3 `repository/user_repository.py :: update_password`
-
 | 項目 | 内容 |
 |------|------|
 | シグネチャ | `async def update_password(db: AsyncSession, user_id: UUID, password_hash: str) -> None` |
-| 引数 | `db: AsyncSession`、`user_id: UUID`、`password_hash: str`（argon2ハッシュ済み） |
+| 引数 | `db: AsyncSession`（DBセッション）、`user_id: UUID`、`password_hash: str`（argon2ハッシュ済み） |
 | 戻り値 | `None` |
 | 送出例外 | `ServiceUnavailableError`（PostgreSQL接続障害時。グローバル例外ハンドラで503 `SERVICE_UNAVAILABLE`に変換） |
 | 処理内容 | `CALL sp_update_user_password(:user_id, :password_hash)` を実行する |
@@ -223,7 +221,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    R["auth_router.password_reset"] --> S["auth_service.reset_password"]
+    R["auth_router.password_reset"] --> S["email_verification_service.reset_password"]
     S --> RD1["redis_store.consume_password_reset_token"]
     S --> SEC["core/security.hash_password"]
     S --> UR["user_repository.update_password"]

@@ -164,7 +164,7 @@ flowchart TB
 | 処理内容 | 1. `verify_origin` 依存性でOrigin確認 2. `auth_service.register` を呼び出す 3. 結果を `RegisterResponse` に詰めて201で返す |
 | 副作用 | なし（service層に委譲） |
 
-### 6.2 `service/auth_service.py :: register`
+### 6.2 `api/app/service/auth_service.py :: register`
 
 | 項目 | 内容 |
 |------|------|

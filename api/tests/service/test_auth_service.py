@@ -8,16 +8,21 @@ from app.core.exceptions import (
 	DuplicateUsernameError,
 	EmailNotVerifiedError,
 	InvalidCredentialsError,
-	InvalidResetTokenError,
-	InvalidVerifyTokenError,
 	NotSupportedInModeError,
 	ServiceUnavailableError,
 	TooManyAttemptsError,
 	UserInactiveError,
 )
-from app.service import auth_service
-from redis.exceptions import ConnectionError as RedisConnectionError
-from sqlalchemy.exc import DBAPIError, OperationalError
+from app.service import auth_service, email_verification_service
+from sqlalchemy.exc import DBAPIError, DisconnectionError, InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
+
+
+class _FakeRequest:
+	def __init__(self, headers: dict[str, str] | None = None) -> None:
+		self.headers = headers or {}
+		self.client = SimpleNamespace(host="203.0.113.10")
+		self.state = SimpleNamespace()
 
 
 class _FakeBackgroundTasks:
@@ -26,234 +31,6 @@ class _FakeBackgroundTasks:
 
 	def add_task(self, func: object, *args: object) -> None:
 		self.tasks.append((func, args))
-
-
-class _FakeDb:
-	def __init__(self, calls: list[str] | None = None) -> None:
-		self.calls = calls if calls is not None else []
-
-	async def commit(self) -> None:
-		self.calls.append("db.commit")
-
-	async def rollback(self) -> None:
-		self.calls.append("db.rollback")
-
-
-def _user(*, verified: bool = False, email: str = "taro@example.com"):
-	return SimpleNamespace(id=uuid4(), email=email, email_verified_at="2026-01-01T00:00:00+09:00" if verified else None)
-
-
-async def test_issue_email_verify_token_replaces_old_and_schedules_mail(monkeypatch: pytest.MonkeyPatch) -> None:
-	user = _user()
-	replace_mock = AsyncMock()
-	sent_mock = AsyncMock(return_value=True)
-	monkeypatch.setattr(auth_service.redis_store, "replace_email_verify_token", replace_mock)
-	monkeypatch.setattr(auth_service.redis_store, "mark_email_verify_sent", sent_mock)
-	background = _FakeBackgroundTasks()
-
-	await auth_service.issue_email_verify_token(user, background)  # type: ignore[arg-type]
-
-	replace_mock.assert_awaited_once()
-	assert replace_mock.await_args.args[1] == user.id
-	sent_mock.assert_awaited_once()
-	assert len(background.tasks) == 1
-	func, args = background.tasks[0]
-	assert func is auth_service.mail_service.send_email_verification_mail
-	assert args[0] == user.email
-	assert args[2] == auth_service.get_backend_settings().email_verify_ttl_seconds // 3600
-
-
-async def test_verify_email_success(monkeypatch: pytest.MonkeyPatch) -> None:
-	user_id = uuid4()
-	monkeypatch.setattr(auth_service.redis_store, "consume_email_verify_token", AsyncMock(return_value=user_id))
-	mark_verified_mock = AsyncMock()
-	monkeypatch.setattr(auth_service.user_repository, "mark_email_verified", mark_verified_mock)
-
-	await auth_service.verify_email("token", _FakeDb())  # type: ignore[arg-type]
-
-	mark_verified_mock.assert_awaited_once()
-	assert mark_verified_mock.await_args.args[1] == user_id
-
-
-async def test_verify_email_invalid_token(monkeypatch: pytest.MonkeyPatch) -> None:
-	monkeypatch.setattr(auth_service.redis_store, "consume_email_verify_token", AsyncMock(return_value=None))
-
-	with pytest.raises(InvalidVerifyTokenError):
-		await auth_service.verify_email("bad-token", _FakeDb())  # type: ignore[arg-type]
-
-
-async def test_verify_email_token_reuse_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-	user_id = uuid4()
-	consume_mock = AsyncMock(side_effect=[user_id, None])
-	monkeypatch.setattr(auth_service.redis_store, "consume_email_verify_token", consume_mock)
-	monkeypatch.setattr(auth_service.user_repository, "mark_email_verified", AsyncMock())
-
-	await auth_service.verify_email("token", _FakeDb())  # type: ignore[arg-type]
-	with pytest.raises(InvalidVerifyTokenError):
-		await auth_service.verify_email("token", _FakeDb())  # type: ignore[arg-type]
-
-
-async def test_resend_verification_rate_limited(monkeypatch: pytest.MonkeyPatch) -> None:
-	user = _user()
-	monkeypatch.setattr(auth_service.user_repository, "get_by_email", AsyncMock(return_value=user))
-	monkeypatch.setattr(auth_service.redis_store, "mark_email_verify_sent", AsyncMock(return_value=False))
-	replace_mock = AsyncMock()
-	monkeypatch.setattr(auth_service.redis_store, "replace_email_verify_token", replace_mock)
-	background = _FakeBackgroundTasks()
-
-	await auth_service.resend_verification("taro@example.com", background, _FakeDb())  # type: ignore[arg-type]
-
-	replace_mock.assert_not_awaited()
-	assert background.tasks == []
-
-
-async def test_resend_verification_already_verified_noop(monkeypatch: pytest.MonkeyPatch) -> None:
-	user = _user(verified=True)
-	monkeypatch.setattr(auth_service.user_repository, "get_by_email", AsyncMock(return_value=user))
-	sent_mock = AsyncMock()
-	monkeypatch.setattr(auth_service.redis_store, "mark_email_verify_sent", sent_mock)
-	background = _FakeBackgroundTasks()
-
-	await auth_service.resend_verification("taro@example.com", background, _FakeDb())  # type: ignore[arg-type]
-
-	sent_mock.assert_not_awaited()
-	assert background.tasks == []
-
-
-async def test_resend_verification_unknown_user_noop(monkeypatch: pytest.MonkeyPatch) -> None:
-	monkeypatch.setattr(auth_service.user_repository, "get_by_email", AsyncMock(return_value=None))
-	sent_mock = AsyncMock()
-	monkeypatch.setattr(auth_service.redis_store, "mark_email_verify_sent", sent_mock)
-	background = _FakeBackgroundTasks()
-
-	await auth_service.resend_verification("unknown@example.com", background, _FakeDb())  # type: ignore[arg-type]
-
-	sent_mock.assert_not_awaited()
-	assert background.tasks == []
-
-
-async def test_resend_verification_issues_new_token_when_interval_elapsed(monkeypatch: pytest.MonkeyPatch) -> None:
-	user = _user()
-	monkeypatch.setattr(auth_service.user_repository, "get_by_email", AsyncMock(return_value=user))
-	monkeypatch.setattr(auth_service.redis_store, "mark_email_verify_sent", AsyncMock(return_value=True))
-	replace_mock = AsyncMock()
-	monkeypatch.setattr(auth_service.redis_store, "replace_email_verify_token", replace_mock)
-	background = _FakeBackgroundTasks()
-
-	await auth_service.resend_verification("taro@example.com", background, _FakeDb())  # type: ignore[arg-type]
-
-	replace_mock.assert_awaited_once()
-	assert len(background.tasks) == 1
-
-
-async def test_request_password_reset_unknown_email_noop(monkeypatch: pytest.MonkeyPatch) -> None:
-	monkeypatch.setattr(auth_service.user_repository, "get_by_email", AsyncMock(return_value=None))
-	save_mock = AsyncMock()
-	monkeypatch.setattr(auth_service.redis_store, "save_password_reset_token", save_mock)
-	background = _FakeBackgroundTasks()
-
-	await auth_service.request_password_reset("unknown@example.com", background, _FakeDb())  # type: ignore[arg-type]
-
-	save_mock.assert_not_awaited()
-	assert background.tasks == []
-
-
-async def test_request_password_reset_success_schedules_mail(monkeypatch: pytest.MonkeyPatch) -> None:
-	user = _user()
-	monkeypatch.setattr(auth_service.user_repository, "get_by_email", AsyncMock(return_value=user))
-	save_mock = AsyncMock()
-	monkeypatch.setattr(auth_service.redis_store, "save_password_reset_token", save_mock)
-	background = _FakeBackgroundTasks()
-
-	await auth_service.request_password_reset("taro@example.com", background, _FakeDb())  # type: ignore[arg-type]
-
-	save_mock.assert_awaited_once()
-	assert save_mock.await_args.args[1] == user.id
-	assert len(background.tasks) == 1
-	func, args = background.tasks[0]
-	assert func is auth_service.mail_service.send_password_reset_mail
-	assert args[2] == auth_service.get_backend_settings().password_reset_ttl_seconds // 60
-
-
-async def test_reset_password_invalid_token(monkeypatch: pytest.MonkeyPatch) -> None:
-	monkeypatch.setattr(auth_service.redis_store, "consume_password_reset_token", AsyncMock(return_value=None))
-	delete_sessions_mock = AsyncMock()
-	monkeypatch.setattr(auth_service.redis_store, "delete_all_sessions", delete_sessions_mock)
-
-	with pytest.raises(InvalidResetTokenError):
-		await auth_service.reset_password("bad-token", "NewPassw0rd!", _FakeDb())  # type: ignore[arg-type]
-
-	delete_sessions_mock.assert_not_awaited()
-
-
-async def test_reset_password_revokes_all_sessions_before_db_update(monkeypatch: pytest.MonkeyPatch) -> None:
-	user_id = uuid4()
-	call_order: list[str] = []
-
-	async def _consume(token: str) -> object:
-		call_order.append("consume_password_reset_token")
-		return user_id
-
-	async def _delete_sessions(uid: object) -> int:
-		call_order.append("delete_all_sessions")
-		return 1
-
-	async def _revoke_refresh(uid: object) -> int:
-		call_order.append("revoke_all_refresh_tokens")
-		return 1
-
-	async def _update_password(db: object, uid: object, password_hash: str) -> None:
-		call_order.append("update_password")
-
-	monkeypatch.setattr(auth_service.redis_store, "consume_password_reset_token", _consume)
-	monkeypatch.setattr(auth_service.redis_store, "delete_all_sessions", _delete_sessions)
-	monkeypatch.setattr(auth_service.redis_store, "revoke_all_refresh_tokens", _revoke_refresh)
-	monkeypatch.setattr(auth_service.user_repository, "update_password", _update_password)
-	monkeypatch.setattr(auth_service, "hash_password", lambda new_password: f"hashed:{new_password}")
-
-	db = _FakeDb(call_order)
-	await auth_service.reset_password("token", "NewPassw0rd!", db)  # type: ignore[arg-type]
-
-	assert call_order == [
-		"consume_password_reset_token",
-		"delete_all_sessions",
-		"revoke_all_refresh_tokens",
-		"update_password",
-		"db.commit",
-	]
-
-
-async def test_reset_password_db_not_updated_when_session_revocation_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-	"""トランザクション境界（10_post_auth_password_reset.md §3、basic_design/03_auth.md §7）:
-
-	Redisでの全セッション・全リフレッシュトークン失効を先に完了させ、その後にDB更新をcommitする。
-	delete_all_sessionsがRedis障害で失敗した場合、DBのパスワードは更新されない（commitされない）こと、
-	かつ変換前の生例外が伝播すること（サービス層で握りつぶさないこと）を確認する。
-	"""
-	user_id = uuid4()
-	monkeypatch.setattr(auth_service.redis_store, "consume_password_reset_token", AsyncMock(return_value=user_id))
-	update_password_mock = AsyncMock()
-	monkeypatch.setattr(auth_service.user_repository, "update_password", update_password_mock)
-	monkeypatch.setattr(
-		auth_service.redis_store, "delete_all_sessions", AsyncMock(side_effect=RedisConnectionError("redis down"))
-	)
-	revoke_refresh_mock = AsyncMock()
-	monkeypatch.setattr(auth_service.redis_store, "revoke_all_refresh_tokens", revoke_refresh_mock)
-
-	db = _FakeDb()
-	with pytest.raises(RedisConnectionError):
-		await auth_service.reset_password("token", "NewPassw0rd!", db)  # type: ignore[arg-type]
-
-	update_password_mock.assert_not_awaited()
-	revoke_refresh_mock.assert_not_awaited()
-	assert "db.commit" not in db.calls
-
-
-class _FakeRequest:
-	def __init__(self, headers: dict[str, str] | None = None) -> None:
-		self.headers = headers or {}
-		self.client = SimpleNamespace(host="203.0.113.10")
-		self.state = SimpleNamespace()
 
 
 class _FakeStrategy:
@@ -323,7 +100,7 @@ async def test_register_creates_user_and_schedules_verification(monkeypatch: pyt
 	monkeypatch.setattr(auth_service.user_repository, "update_profile", update_profile_mock)
 	monkeypatch.setattr(auth_service.user_repository, "get_by_id", AsyncMock(return_value=created))
 	issue_mock = AsyncMock()
-	monkeypatch.setattr(auth_service, "issue_email_verify_token", issue_mock)
+	monkeypatch.setattr(email_verification_service, "issue_email_verify_token", issue_mock)
 	db = _RegisterDb()
 
 	user = await auth_service.register(_register_payload(), _FakeBackgroundTasks(), _FakeRequest(), db)  # type: ignore[arg-type]
@@ -348,7 +125,7 @@ async def test_register_emits_user_registered_structured_log(
 	monkeypatch.setattr(auth_service.user_repository, "create", AsyncMock(return_value=user_id))
 	monkeypatch.setattr(auth_service.user_repository, "update_profile", AsyncMock())
 	monkeypatch.setattr(auth_service.user_repository, "get_by_id", AsyncMock(return_value=created))
-	monkeypatch.setattr(auth_service, "issue_email_verify_token", AsyncMock())
+	monkeypatch.setattr(email_verification_service, "issue_email_verify_token", AsyncMock())
 
 	with caplog.at_level("INFO", logger="app.oauth"):
 		await auth_service.register(_register_payload(), _FakeBackgroundTasks(), _FakeRequest(), _RegisterDb())  # type: ignore[arg-type]
@@ -450,7 +227,9 @@ async def test_login_success_records_history_and_resets_failures(monkeypatch: py
 	assert history_mock.await_args.kwargs["login_method"] == "session"
 
 
-async def test_login_rolls_back_auth_state_when_history_write_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_login_rolls_back_auth_state_when_history_write_fails(
+	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
 	user = _login_user()
 	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
 	monkeypatch.setattr(auth_service.redis_store, "reset_login_failure", AsyncMock())
@@ -463,15 +242,19 @@ async def test_login_rolls_back_auth_state_when_history_write_fails(monkeypatch:
 	)
 	strategy = _FakeStrategy("session")
 
-	with pytest.raises(ServiceUnavailableError):
+	with caplog.at_level("INFO", logger="app.oauth"), pytest.raises(ServiceUnavailableError):
 		await auth_service.login("taro", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), strategy)  # type: ignore[arg-type]
 
 	assert len(strategy.login_calls) == 1
 	assert len(strategy.rollback_calls) == 1
+	record = next(record for record in caplog.records if getattr(record, "event", None) == "login_history_write_failed")
+	assert record.failure_reason == "service_unavailable"
+	assert record.login_method == "session"
+	assert "Passw0rd!" not in caplog.text
 
 
 async def test_login_returns_service_unavailable_when_auth_state_rollback_fails(
-	monkeypatch: pytest.MonkeyPatch,
+	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
 	user = _login_user()
 	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
@@ -486,10 +269,12 @@ async def test_login_returns_service_unavailable_when_auth_state_rollback_fails(
 	strategy = _FakeStrategy("session")
 	strategy.rollback_login = AsyncMock(side_effect=RuntimeError("rollback failed"))  # type: ignore[method-assign]
 
-	with pytest.raises(ServiceUnavailableError):
+	with caplog.at_level("INFO", logger="app.oauth"), pytest.raises(ServiceUnavailableError):
 		await auth_service.login("taro", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), strategy)  # type: ignore[arg-type]
 
 	strategy.rollback_login.assert_awaited_once()
+	record = next(record for record in caplog.records if getattr(record, "event", None) == "auth_state_revoke_failed")
+	assert record.operation == "login_rollback"
 
 
 async def test_login_unknown_user_records_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -613,7 +398,9 @@ async def test_login_rate_limited_emits_structured_log(
 	assert "Passw0rd!" not in caplog.text
 
 
-async def test_login_fails_closed_when_rate_limit_check_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_login_fails_closed_when_rate_limit_check_raises(
+	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
 	"""ensure_login_not_rate_limited内のRedis障害（get_login_failure_countの例外）は503へ変換される。"""
 	monkeypatch.setattr(
 		auth_service.redis_store,
@@ -623,10 +410,14 @@ async def test_login_fails_closed_when_rate_limit_check_raises(monkeypatch: pyte
 	lookup_mock = AsyncMock()
 	monkeypatch.setattr(auth_service.user_repository, "get_by_login_identifier", lookup_mock)
 
-	with pytest.raises(ServiceUnavailableError):
+	with caplog.at_level("INFO", logger="app.oauth"), pytest.raises(ServiceUnavailableError):
 		await auth_service.login("taro", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), _FakeStrategy())  # type: ignore[arg-type]
 
 	lookup_mock.assert_not_awaited()
+	record = next(record for record in caplog.records if getattr(record, "event", None) == "login_attempt")
+	assert record.failure_reason == "service_unavailable"
+	assert record.success is False
+	assert "Passw0rd!" not in caplog.text
 
 
 async def test_login_fails_closed_when_record_login_failure_raises(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -665,7 +456,7 @@ async def test_login_fails_closed_when_record_login_success_raises(monkeypatch: 
 
 
 async def test_login_fails_closed_when_login_history_write_raises_on_failure_path(
-	monkeypatch: pytest.MonkeyPatch,
+	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
 	"""失敗系（invalid_credentials）でのDB書き込み障害も503へ変換される。"""
 	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
@@ -677,13 +468,124 @@ async def test_login_fails_closed_when_login_history_write_raises_on_failure_pat
 		AsyncMock(side_effect=DBAPIError("INSERT login_history", {}, Exception())),
 	)
 
-	with pytest.raises(ServiceUnavailableError):
+	with caplog.at_level("WARNING", logger="app.oauth"), pytest.raises(ServiceUnavailableError):
 		await auth_service.login(
 			"ghost", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), _FakeStrategy()
 		)  # type: ignore[arg-type]
 
+	record = next(record for record in caplog.records if getattr(record, "event", None) == "login_history_write_failed")
+	assert record.user_id is None
+	assert record.login_method == "session"
+	assert record.failure_reason == "service_unavailable"
 
-async def test_login_fails_closed_when_strategy_login_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+
+@pytest.mark.parametrize(
+	"user",
+	[
+		pytest.param(_login_user(is_active=False), id="inactive_user"),
+		pytest.param(_login_user(verified=False), id="unverified_email"),
+	],
+)
+async def test_login_history_write_failure_on_account_state_path_is_logged(
+	monkeypatch: pytest.MonkeyPatch,
+	caplog: pytest.LogCaptureFixture,
+	user: SimpleNamespace,
+) -> None:
+	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
+	monkeypatch.setattr(auth_service.redis_store, "reset_login_failure", AsyncMock())
+	monkeypatch.setattr(auth_service.user_repository, "get_by_login_identifier", AsyncMock(return_value=user))
+	monkeypatch.setattr(auth_service, "verify_password", lambda *_args: True)
+	monkeypatch.setattr(
+		auth_service.login_history_repository,
+		"create",
+		AsyncMock(side_effect=DBAPIError("INSERT login_history", {}, Exception())),
+	)
+
+	with caplog.at_level("WARNING", logger="app.oauth"), pytest.raises(ServiceUnavailableError) as exc_info:
+		await auth_service.login("taro", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), _FakeStrategy())  # type: ignore[arg-type]
+
+	assert isinstance(exc_info.value, ServiceUnavailableError)
+	record = next(record for record in caplog.records if getattr(record, "event", None) == "login_history_write_failed")
+	assert record.user_id == str(user.id)
+	assert record.login_method == "session"
+	assert record.failure_reason == "service_unavailable"
+
+
+async def test_login_fails_closed_when_user_lookup_raises(
+	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
+	monkeypatch.setattr(
+		auth_service.user_repository,
+		"get_by_login_identifier",
+		AsyncMock(side_effect=ServiceUnavailableError()),
+	)
+
+	with caplog.at_level("INFO", logger="app.oauth"), pytest.raises(ServiceUnavailableError):
+		await auth_service.login(
+			"ghost", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), _FakeStrategy()
+		)  # type: ignore[arg-type]
+
+	record = next(record for record in caplog.records if getattr(record, "event", None) == "login_attempt")
+	assert record.failure_reason == "service_unavailable"
+	assert record.user_id is None
+	assert record.success is False
+	assert "ghost" not in caplog.text
+
+
+async def test_login_propagates_non_connection_user_lookup_operational_error(
+	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
+	monkeypatch.setattr(
+		auth_service.user_repository,
+		"get_by_login_identifier",
+		AsyncMock(side_effect=OperationalError("SELECT user", {}, SimpleNamespace(sqlstate="40P01"))),
+	)
+
+	with caplog.at_level("INFO", logger="app.oauth"), pytest.raises(OperationalError):
+		await auth_service.login(
+			"ghost", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), _FakeStrategy()
+		)  # type: ignore[arg-type]
+
+	assert not [record for record in caplog.records if getattr(record, "event", None) == "login_attempt"]
+
+
+@pytest.mark.parametrize(
+	"error",
+	[
+		InterfaceError("SELECT user", {}, Exception("connection lost")),
+		OperationalError("SELECT user", {}, SimpleNamespace(sqlstate="08006")),
+		SQLAlchemyTimeoutError("connection pool timeout"),
+		DisconnectionError("connection invalidated"),
+	],
+	ids=["interface", "connection_operational", "pool_timeout", "disconnection"],
+)
+async def test_login_logs_and_fails_closed_for_connection_user_lookup_errors(
+	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, error: Exception
+) -> None:
+	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
+	monkeypatch.setattr(
+		auth_service.user_repository,
+		"get_by_login_identifier",
+		AsyncMock(side_effect=error),
+	)
+
+	with caplog.at_level("INFO", logger="app.oauth"), pytest.raises(ServiceUnavailableError):
+		await auth_service.login(
+			"ghost", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), _FakeStrategy()
+		)  # type: ignore[arg-type]
+
+	record = next(record for record in caplog.records if getattr(record, "event", None) == "login_attempt")
+	assert record.failure_reason == "service_unavailable"
+	assert record.user_id is None
+	assert record.success is False
+	assert "ghost" not in caplog.text
+
+
+async def test_login_fails_closed_when_strategy_login_raises(
+	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
 	"""strategy.login()自体の障害（セッション/JWT基盤の障害）も503へ変換される。"""
 	user = _login_user()
 	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
@@ -695,10 +597,16 @@ async def test_login_fails_closed_when_strategy_login_raises(monkeypatch: pytest
 	history_mock = AsyncMock()
 	monkeypatch.setattr(auth_service.login_history_repository, "create", history_mock)
 
-	with pytest.raises(ServiceUnavailableError):
+	with caplog.at_level("INFO", logger="app.oauth"), pytest.raises(ServiceUnavailableError):
 		await auth_service.login("taro", "Passw0rd!", _FakeRequest(), SimpleNamespace(), _RegisterDb(), strategy)  # type: ignore[arg-type]
 
 	history_mock.assert_not_awaited()
+	record = next(record for record in caplog.records if getattr(record, "event", None) == "login_attempt")
+	assert record.failure_reason == "service_unavailable"
+	assert record.user_id == str(user.id)
+	assert record.success is False
+	assert "session backend down" not in caplog.text
+	assert "Passw0rd!" not in caplog.text
 
 
 async def test_login_attempt_structured_log_emitted_on_success(
@@ -722,6 +630,8 @@ async def test_login_attempt_structured_log_emitted_on_success(
 	assert record.success is True
 	assert record.auth_mode == "session"
 	assert record.user_id == str(user.id)
+	assert len(record.identifier) == 64
+	assert record.identifier != "taro"
 	assert "Passw0rd!" not in caplog.text
 
 
@@ -787,7 +697,7 @@ async def test_register_missing_user_after_insert_is_service_unavailable(monkeyp
 	monkeypatch.setattr(auth_service.user_repository, "update_profile", AsyncMock())
 	monkeypatch.setattr(auth_service.user_repository, "get_by_id", AsyncMock(return_value=None))
 	issue_mock = AsyncMock()
-	monkeypatch.setattr(auth_service, "issue_email_verify_token", issue_mock)
+	monkeypatch.setattr(email_verification_service, "issue_email_verify_token", issue_mock)
 
 	with pytest.raises(ServiceUnavailableError):
 		await auth_service.register(_register_payload(), _FakeBackgroundTasks(), _FakeRequest(), _RegisterDb())  # type: ignore[arg-type]
@@ -819,13 +729,3 @@ async def test_refresh_propagates_not_supported_in_session_mode() -> None:
 
 	with pytest.raises(NotSupportedInModeError):
 		await auth_service.refresh(_FakeRequest(), SimpleNamespace(), _SessionStrategy())  # type: ignore[arg-type]
-
-
-async def test_verify_email_commits_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
-	monkeypatch.setattr(auth_service.redis_store, "consume_email_verify_token", AsyncMock(return_value=uuid4()))
-	monkeypatch.setattr(auth_service.user_repository, "mark_email_verified", AsyncMock())
-	db = _RegisterDb()
-
-	await auth_service.verify_email("token", db)  # type: ignore[arg-type]
-
-	assert db.calls == ["db.commit"]

@@ -112,7 +112,7 @@ sequenceDiagram
     actor U as ユーザー
     participant FE as React SPA
     participant R as "api/app/api/routers/oauth_router.py"
-    participant S as auth_service.oauth_start
+    participant S as oauth_service.oauth_start
     participant OA as GoogleOAuthProvider
     participant RS as redis_store
     participant RD as Redis
@@ -174,10 +174,10 @@ flowchart TB
 | 引数 | `redirect_to`: クエリパラメータ、任意のフロントパス文字列（未検証のまま渡ってくる） |
 | 戻り値 | `RedirectResponse`（302、`Set-Cookie` 付き） |
 | 送出例外 | `OAuthDisabledError` → 404 `OAUTH_DISABLED`、`ServiceUnavailableError` → 503（例外ハンドラで変換） |
-| 処理内容 | 1. `google_login_enabled`を確認し、無効ならstateを発行せず404 2. 有効時は`redirect_to`、`request`、`response`を`auth_service.oauth_start`に渡す 3. 戻り値の`authorize_url`を`Location`に設定 4. serviceが設定したCookieをレスポンスへ引き継ぎ、`RedirectResponse(status_code=302)`を返す |
+| 処理内容 | 1. `google_login_enabled`を確認し、無効ならstateを発行せず404 2. 有効時は`redirect_to`、`request`、`response`を`oauth_service.oauth_start`に渡す 3. 戻り値の`authorize_url`を`Location`に設定 4. serviceが設定したCookieをレスポンスへ引き継ぎ、`RedirectResponse(status_code=302)`を返す |
 | 副作用 | Cookie発行のみ（Redis更新はservice層で発生） |
 
-### 6.2 `service/auth_service.py :: oauth_start`
+### 6.2 `api/app/service/oauth_service.py :: oauth_start`
 
 | 項目 | 内容 |
 |------|------|
@@ -188,7 +188,7 @@ flowchart TB
 | 処理内容 | 1. requestのIP単位レート制限を確認 2. `normalize_redirect_to(redirect_to)` で正規化 3. `secrets.token_urlsafe(32)` で `state` 生成 4. `secrets.token_urlsafe(64)` で `code_verifier` 生成 5. PKCE S256で `code_challenge` を導出 6. `secrets.token_urlsafe(32)` で `nonce` 生成 7. `redis_store.save_oauth_state(state, redirect_to, code_verifier, nonce, settings.oauth_state_ttl_seconds)` を呼ぶ 8. `response`へstate Cookieを設定し、`GoogleOAuthProvider.build_authorize_url(state, code_challenge, nonce)`を呼び `OAuthStartResult`を返す |
 | 副作用 | Redis書き込み（`oauth_state:{state}`） |
 
-### 6.3 `service/auth_service.py :: normalize_redirect_to`
+### 6.3 `api/app/service/oauth_support.py :: normalize_redirect_to`
 
 | 項目 | 内容 |
 |------|------|
@@ -214,8 +214,8 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    R["api/app/api/routers/oauth_router.py<br/>oauth_google_start"] --> S["auth_service.oauth_start"]
-    S --> N["auth_service.normalize_redirect_to"]
+    R["api/app/api/routers/oauth_router.py<br/>oauth_google_start"] --> S["oauth_service.oauth_start"]
+    S --> N["oauth_support.normalize_redirect_to"]
     S --> OA["GoogleOAuthProvider.build_authorize_url"]
     S --> RS["redis_store.save_oauth_state"]
     RS --> RD[("Redis")]
