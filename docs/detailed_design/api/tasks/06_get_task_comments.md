@@ -105,36 +105,38 @@
 sequenceDiagram
     autonumber
     participant FE as "React SPA"
-    participant R as "comments_router"
+    participant R as "comment_router"
     participant D as "deps.get_task_for_member"
-    participant S as "task_service"
+    participant S as "task_comment_service"
     participant TR as "task_repository"
     participant PG as "PostgreSQL"
 
     FE->>R: "GET /api/tasks/{task_id}/comments"
-    R->>D: "get_current_user + get_task_for_member(task_id)"
-    D->>TR: "get_task(task_id)"
+    R->>D: "get_task_for_member(task_id)"
+    D->>TR: "get_by_id(task_id)"
     TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
     PG-->>TR: "task行 または 0件"
     alt "タスクが存在しない"
         TR-->>D: "None"
         D-->>R: "NotFoundError"
         R-->>FE: "404 NOT_FOUND"
-    else "タスクは存在するがプロジェクト非所属（admin以外）"
-        D->>D: "require_project_member(task.project_id, user)"
-        D-->>R: "NotFoundError"
-        R-->>FE: "404 NOT_FOUND"
-    else "所属メンバーまたはadmin"
+    else "タスクが存在する"
         D-->>R: "Task"
-        R->>S: "list_comments(task)"
-        S->>TR: "fn_list_task_comments(task_id)"
+        R->>S: "list_comments(task, user, db)"
+        S->>S: "require_task_access(task, user)"
+        alt "論理削除・非所属・未所属taskの非作成者"
+            S-->>R: "NotFoundError"
+            R-->>FE: "404 NOT_FOUND"
+        else "所属メンバー・admin・未所属taskの作成者"
+            S->>TR: "list_by_task(task_id)"
         TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>TR: "comments行"
         TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
         PG-->>TR: "users行"
-        TR-->>S: "list[Comment]（authorをロード済み）"
-        S-->>R: "list[CommentResponse]"
-        R-->>FE: "200 {task_id, items, count}"
+            TR-->>S: "list[TaskComment]（authorをロード済み）"
+            S-->>R: "CommentListResponse"
+            R-->>FE: "200 {task_id, items, count}"
+        end
     end
 ```
 
@@ -159,7 +161,7 @@ flowchart TB
 
 ## 6. 関数詳細
 
-### 6.1 `api/routers/comments.py :: list_task_comments`
+### 6.1 `api/app/api/routers/comment_router.py :: list_task_comments`
 
 | 項目 | 内容 |
 |------|------|
@@ -170,50 +172,51 @@ flowchart TB
 | 処理内容 | 1. `task_service.list_comments(task, db)` を呼び出す 2. 結果をレスポンススキーマへ変換して返す |
 | 副作用 | なし |
 
-### 6.2 `core/deps.py :: get_task_for_member`
+### 6.2 `api/app/core/deps.py :: get_task_for_member`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def get_task_for_member(task_id: UUID, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> Task` |
-| 引数 | `task_id`：パスパラメータ／`user`：現在ユーザー／`db`：DBセッション |
-| 戻り値 | 所属確認済みの `Task`（`project_id` を含む） |
-| 送出例外 | `NotFoundError`（タスク不存在・非所属いずれも404） |
-| 処理内容 | 1. `task_repository.fn_get_task(task_id)` でタスク取得 2. 存在しなければ `NotFoundError` 3. `user.role == 'admin'` なら通過 4. それ以外は `project_repository.fn_is_project_member(task.project_id, user.id)` を確認し、Falseなら `NotFoundError` |
+| シグネチャ | `async def get_task_for_member(task_id: UUID, db: AsyncSession = Depends(get_db_session)) -> Task` |
+| 引数 | `task_id`：パスパラメータ／`db`：DBセッション |
+| 戻り値 | 存在確認済みの `Task`（`project_id` を含む） |
+| 送出例外 | `NotFoundError`（タスク不存在） |
+| 処理内容 | `task_repository.get_by_id(db, task_id)` でタスクを取得し、存在しなければ `NotFoundError`。プロジェクト所属・未所属taskの作成者判定はサービス層へ委譲する |
 | 副作用 | なし |
 
-### 6.3 `service/task_service.py :: list_comments`
+### 6.3 `api/app/service/task_comment_service.py :: list_comments`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def list_comments(task: Task, db: AsyncSession) -> list[Comment]` |
-| 引数 | `task`：対象タスク／`db`：DBセッション |
-| 戻り値 | `Comment`（ORMモデル、`author` をロード済み）のリスト |
-| 送出例外 | なし |
-| 処理内容 | 1. `task_repository.fn_list_task_comments(task.id)` を呼び出しそのまま返す |
+| シグネチャ | `async def list_comments(task: Task, user: CurrentUser, db: AsyncSession) -> CommentListResponse` |
+| 引数 | `task`：対象タスク／`user`：現在ユーザー／`db`：DBセッション |
+| 戻り値 | `CommentListResponse`（コメントと投稿者情報を含む） |
+| 送出例外 | `NotFoundError`（論理削除task・非所属task・非作成者の未所属task） |
+| 処理内容 | `require_task_access(task, user, db)`で認可後、`task_comment_repository.list_by_task(db, task.id)`を呼び出しレスポンスへ写像する |
 | 副作用 | なし |
 
-### 6.4 `repository/task_repository.py :: fn_list_task_comments`
+### 6.4 `api/app/repository/task_comment_repository.py :: list_by_task`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def fn_list_task_comments(task_id: UUID, db: AsyncSession) -> list[Comment]` |
+| シグネチャ | `async def list_by_task(db: AsyncSession, task_id: UUID) -> list[TaskComment]` |
 | 引数 | `task_id`：対象タスクID／`db`：DBセッション |
-| 戻り値 | `task_comments` 行のORMモデルリスト（`FN結果の一括マッピング(Comment.author)` 適用） |
+| 戻り値 | `task_comments` 行のORMモデルリスト（`TaskComment.author` をロード済み） |
 | 送出例外 | なし |
-| 処理内容 | `SELECT fn_list_task_comments(:task_id)` を1回実行する。コメントと表示用author情報の結合・順序はFN内部で行い、repositoryで追加SELECTを発行しない |
+| 処理内容 | `SELECT * FROM fn_list_task_comments(:task_id)` を発行し、`TaskComment.author`を一括ロードする |
 | 副作用 | なし |
 
 ## 7. 関数相関図
 
 ```mermaid
 flowchart LR
-    R["comments_router.list_task_comments"] --> D["deps.get_task_for_member"]
+    R["comment_router.list_task_comments"] --> D["deps.get_task_for_member"]
     D --> TR1["task_repository.fn_get_task"]
-    D --> PR["project_repository.fn_is_project_member"]
-    R --> S["task_service.list_comments"]
-    S --> TR2["task_repository.fn_list_task_comments"]
+    A --> PR["project_member_repository.exists"]
+    R --> S["task_comment_service.list_comments"]
+    S --> A["authorization_service.require_task_access"]
+    S --> TR2["task_comment_repository.list_by_task"]
     TR1 --> M1["models.Task"]
-    TR2 --> M2["models.Comment"]
+    TR2 --> M2["models.TaskComment"]
     PR --> M3["models.ProjectMember"]
 ```
 
@@ -285,6 +288,8 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 4 | 結合 | 存在しないtask_id | 実DB | `404 NOT_FOUND` | `test_get_task_comments_missing_task_returns_404` |
 | 5 | 結合 | admin は所属外プロジェクトでも取得可能 | 実DB、adminユーザー | `200` | `test_get_task_comments_admin_bypasses_membership` |
 | 6 | パラメータ化 | `AUTH_MODE=session` / `jwt` の両方で正常系を確認 | 両モードのfixture | いずれも `200` | `test_get_task_comments_both_auth_modes` |
+| 7 | 結合 | API境界で投稿後の一覧取得と投稿者情報を確認 | 実DB、本人認証 | `200`、作成順の末尾に追加コメント、`author.username`が現在ユーザー | `test_comment_crud_round_trip_at_api_boundary` |
+| 8 | 結合 | 論理削除task・非所属task・不存在taskへの一覧取得 | 実DB、本人/非所属ユーザー | いずれも`404 NOT_FOUND` | `test_comment_task_scope_handles_inactive_unassigned_and_missing_resources` |
 
 コメントが0件のタスクに対する取得（`items: []`）は上記No.2の派生ケースとしてアサーションに含め、個別ケースは省略する。
 
