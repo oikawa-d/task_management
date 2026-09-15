@@ -80,6 +80,42 @@ async def test_list_tasks_member_scope_includes_shared_and_own_unassigned_only(
 	assert str(scenario.outsider_unassigned_task_id) not in ids
 
 
+async def test_list_tasks_filters_by_status_using_database(
+	client: TestClient, scenario: TaskScenario, authenticate
+) -> None:
+	response = client.get("/api/tasks", params={"status": "done", "per_page": 20}, headers=authenticate())
+
+	assert response.status_code == 200, response.text
+	assert {item["id"] for item in _items(response)} == {str(scenario.own_unassigned_task_id)}
+	assert all(item["status"] == "done" for item in _items(response))
+	assert response.json()["meta"] == {"page": 1, "per_page": 20, "total": 1, "total_pages": 1}
+
+
+async def test_list_tasks_paginates_using_database(client: TestClient, scenario: TaskScenario, authenticate) -> None:
+	visible_ids = {
+		str(scenario.member_project_task_id),
+		str(scenario.shared_project_task_id),
+		str(scenario.own_unassigned_task_id),
+	}
+	auth_headers = authenticate()
+
+	first_page = client.get("/api/tasks", params={"page": 1, "per_page": 2}, headers=auth_headers)
+	second_page = client.get("/api/tasks", params={"page": 2, "per_page": 2}, headers=auth_headers)
+
+	assert first_page.status_code == 200, first_page.text
+	assert second_page.status_code == 200, second_page.text
+	first_ids = {item["id"] for item in _items(first_page)}
+	second_ids = {item["id"] for item in _items(second_page)}
+	assert len(first_ids) == 2
+	assert len(second_ids) == 1
+	assert first_ids.isdisjoint(second_ids)
+	assert first_ids | second_ids == visible_ids
+	assert first_page.json()["meta"]["page"] == 1
+	assert first_page.json()["meta"]["per_page"] == 2
+	assert second_page.json()["meta"]["page"] == 2
+	assert second_page.json()["meta"]["per_page"] == 2
+
+
 async def test_list_tasks_project_id_filter_scopes_to_unassigned_member_and_non_member(
 	client: TestClient, scenario: TaskScenario, authenticate
 ) -> None:
