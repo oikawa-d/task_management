@@ -303,7 +303,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | 13 | 単体 | pageが範囲外で`items`が空でも`meta.total`が正しい全体件数になる | `list_by_user`が空リストを返すモック、`count_notifications`が実際の全体件数を返すモック | `items=[]`、`meta.total`が`count_notifications`の返す全体件数と一致（0にならない） | `test_list_notifications_meta_total_uses_fallback_when_no_rows` |
 | 14 | 単体 | `task_id`が非NULLでも`tasks`側に行が無い（LEFT JOIN不一致）場合は`task=null` | `task_title is None`かつ`task_id`が非NULLのモック | レスポンスの `task` が `null`（空文字titleのオブジェクトにしない） | `test_list_notifications_task_title_none_returns_null_task` |
 | 15 | 結合 | レート制限超過時にTTLを取得できない | Redis TTLが0以下を返す | 429 `TOO_MANY_ATTEMPTS`、`Retry-After`が設定窓以上の正の整数 | `test_all_notification_rate_limited_endpoints_return_positive_retry_after_when_ttl_unavailable` |
-| 16 | 結合（router・認証依存性） | 未認証・無効なJWT/session認証 | Cookie/Bearerなし、または無効な認証情報 | 401 `UNAUTHENTICATED`、サービス層を呼ばない | `test_notifications_router_rejects_missing_and_invalid_jwt_authentication` / `test_notifications_router_rejects_missing_and_invalid_session_authentication` |
+| 16 | 結合（router・認証依存性） | 未認証・無効なJWT/session認証 | Cookie/Bearerなし、または無効な認証情報 | JWTモードはヘッダなし・無効トークンいずれも401 `UNAUTHENTICATED`。sessionモードはCookieなしは401 `UNAUTHENTICATED`、Cookieありで対応するRedisセッションが無ければ401 `SESSION_EXPIRED`。いずれもサービス層を呼ばない | `test_notifications_router_rejects_missing_and_invalid_jwt_authentication` / `test_notifications_router_rejects_missing_and_invalid_session_authentication` |
 | 17 | 結合（router） | PostgreSQL接続不能 | 認証成功後の通知取得でSQLSTATE `08xxx` | 503 `SERVICE_UNAVAILABLE`、空配列・0件へ変換しない | `test_notification_router_returns_503_for_postgresql_failure_instead_of_empty_result` |
 | 18 | 結合（router） | Redis接続不能 | 認証成功後のレート制限でRedis例外 | 503 `SERVICE_UNAVAILABLE`、通知サービスを呼ばない | `test_notification_router_returns_503_for_redis_failure_instead_of_zero_result` |
 

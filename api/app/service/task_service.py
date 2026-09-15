@@ -29,6 +29,7 @@ from app.schemas.task import (
 	TaskSummary,
 	TaskUpdateRequest,
 )
+from app.service.authorization_service import require_task_access
 
 
 def _assignee(task: Task) -> TaskAssignee | None:
@@ -110,8 +111,17 @@ async def list_tasks(
 	db: AsyncSession,
 ) -> TaskListResponse:
 	project_id = project_id_filter if isinstance(project_id_filter, UUID) else None
+	if isinstance(project_id_filter, UUID) and not await project_repository.is_member(db, project_id_filter, user.id):
+		raise NotFoundError()
 	items = await task_repository.list_for_user(
-		db, user.id, project_id, status, include_inactive, per_page, (page - 1) * per_page
+		db,
+		user.id,
+		project_id,
+		status,
+		include_inactive,
+		per_page,
+		(page - 1) * per_page,
+		project_id_filter == "unassigned",
 	)
 	responses = [TaskListItem(**_response(item, user).model_dump()) for item in items]
 	return TaskListResponse(
@@ -152,6 +162,7 @@ async def create_task(
 		payload.due_at,
 		None,
 	)
+	await db.commit()
 	item = await task_repository.get_by_id(db, task_id)
 	if item is None:
 		raise NotFoundError()
@@ -167,6 +178,7 @@ async def update_task(task_id: UUID, payload: TaskUpdateRequest, user: CurrentUs
 	if item is None:
 		raise NotFoundError()
 	task = item.task
+	await require_task_access(task, user, db)
 	await task_repository.update(
 		db,
 		task_id,
@@ -179,24 +191,29 @@ async def update_task(task_id: UUID, payload: TaskUpdateRequest, user: CurrentUs
 		payload.due_at if "due_at" in payload.model_fields_set else task.due_at,
 		payload.position if payload.position is not None else task.position,
 	)
+	await db.commit()
 	updated = await task_repository.get_by_id(db, task_id)
 	if updated is None:
 		raise NotFoundError()
 	return _response(updated, user)
 
 
-async def deactivate_task(task_id: UUID, db: AsyncSession) -> None:
-	if await task_repository.get_by_id(db, task_id) is None:
+async def deactivate_task(task_id: UUID, user: CurrentUser, db: AsyncSession) -> None:
+	item = await task_repository.get_by_id(db, task_id)
+	if item is None:
 		raise NotFoundError()
+	await require_task_access(item.task, user, db)
 	await task_repository.set_active(db, task_id, False)
+	await db.commit()
 
 
 async def get_task_detail(task_id: UUID, user: CurrentUser, db: AsyncSession) -> TaskDetailResponse:
 	item = await task_repository.get_by_id(db, task_id)
 	if item is None:
 		raise NotFoundError()
+	await require_task_access(item.task, user, db)
 	return _response(item, user)
 
 
 async def delete_task(task_id: UUID, user: CurrentUser, db: AsyncSession) -> None:
-	await deactivate_task(task_id, db)
+	await deactivate_task(task_id, user, db)

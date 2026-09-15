@@ -1,5 +1,6 @@
 from datetime import date, datetime
 from typing import Literal
+from uuid import UUID
 
 from pydantic import UUID4, BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -135,7 +136,12 @@ class BoardResponse(BaseModel):
 class TaskListQuery(BaseModel):
 	page: int = Field(default=1, ge=1)
 	per_page: int = Field(default_factory=_default_per_page, ge=1)
-	project_id: UUID4 | Literal["unassigned"] | None = None
+	# FastAPIはDepends()でクエリパラメータモデルを解決する際、この型注釈だけから
+	# 生成した別フィールドで先に素の値を検証してから本体のバリデータへ渡すため、
+	# UUID4 | Literal["unassigned"] | Noneのままだと"null"がその時点で拒否され
+	# normalize_unassigned_filterに届かない。strを経由させて素通しし、本バリデータで
+	# "null"→"unassigned"への正規化とUUID変換を行う（router側で正しい型へcastする）。
+	project_id: UUID4 | str | None = None
 	status: TaskStatus | None = None
 	include_inactive: bool = False
 	sort: TaskSort = "created_at"
@@ -146,8 +152,13 @@ class TaskListQuery(BaseModel):
 	def normalize_unassigned_filter(cls, value: object) -> object:
 		if value == "null":
 			return "unassigned"
-		if value == "unassigned":
+		if isinstance(value, str) and value == "unassigned":
 			raise ValueError('project_id must be a UUID or "null"')
+		if isinstance(value, str):
+			try:
+				return UUID(value)
+			except ValueError as exc:
+				raise ValueError('project_id must be a UUID or "null"') from exc
 		return value
 
 	@field_validator("per_page")

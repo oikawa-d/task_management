@@ -16,6 +16,7 @@ from app.core.deps import (
 from app.core.exceptions import (
 	ForbiddenError,
 	ServiceUnavailableError,
+	SessionExpiredError,
 	TooManyAttemptsError,
 	UnauthenticatedError,
 	UserInactiveError,
@@ -29,6 +30,11 @@ class _Strategy:
 
 	async def authenticate(self, request):
 		return self.context
+
+
+class _SessionExpiredStrategy:
+	async def authenticate(self, request):
+		raise SessionExpiredError()
 
 
 def _user(user_id, *, active=True, role="member"):
@@ -83,6 +89,12 @@ async def test_get_current_user_rejects_missing_context_and_require_admin_reject
 
 	with pytest.raises(ForbiddenError):
 		require_admin(CurrentUser(id=uuid4(), username="taro", role="member", is_active=True, email_verified_at=None))
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_propagates_session_expired() -> None:
+	with pytest.raises(SessionExpiredError):
+		await get_current_user(None, _SessionExpiredStrategy(), _Db())
 
 
 @pytest.mark.asyncio
