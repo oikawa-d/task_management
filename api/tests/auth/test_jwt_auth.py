@@ -50,7 +50,8 @@ async def test_login_issues_access_token_and_refresh_cookie(monkeypatch: pytest.
 	monkeypatch.setattr("app.auth.jwt_auth.redis_store.store_refresh_token", store)
 	strategy = JwtAuthStrategy(_settings())
 	response = Response()
-	result = await strategy.login(_user(), _request(), response)
+	user = _user()
+	result = await strategy.login(user, _request(), response)
 
 	claims = jwt.decode(result.access_token or "", _settings().jwt_secret_key, algorithms=["HS256"])
 	cookies = [value.decode() for key, value in response.raw_headers if key == b"set-cookie"]
@@ -58,6 +59,7 @@ async def test_login_issues_access_token_and_refresh_cookie(monkeypatch: pytest.
 	assert claims["jti"]
 	assert len(stored) == 1
 	assert result.refresh_token in stored
+	assert result.user_id == user.id
 	assert any(
 		"cerberus_rt=" in value
 		and "HttpOnly" in value
@@ -183,13 +185,14 @@ async def test_rollback_login_revokes_refresh_token_and_clears_cookies(monkeypat
 	monkeypatch.setattr("app.auth.jwt_auth.redis_store.revoke_refresh_token", revoke)
 	strategy = JwtAuthStrategy(_settings())
 	response = Response()
-	result = LoginResult("jwt", "access-token", "refresh-token", "csrf-token", 60)
 	user = _user()
+	rollback_user_id = uuid4()
+	result = LoginResult("jwt", "access-token", "refresh-token", "csrf-token", 60, user_id=rollback_user_id)
 	strategy._set_cookies(response, result.refresh_token or "", result.csrf_token or "")
 
 	await strategy.rollback_login(user, result, response)
 
-	revoke.assert_awaited_once_with(result.refresh_token, user.id)
+	revoke.assert_awaited_once_with(result.refresh_token, rollback_user_id)
 	deleted = [header for key, header in response.raw_headers if key == b"set-cookie"][2:]
 	assert len(deleted) == 2
 	assert all(b"Max-Age=0" in header for header in deleted)
