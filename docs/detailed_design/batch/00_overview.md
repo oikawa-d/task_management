@@ -11,7 +11,7 @@
 |------|------|
 | 対象 | `batch/` 配下一式（専用コンテナ。API とは別プロセス・別イメージ） |
 | 責務 | 要件書§3.4 N-1 の定期実行（毎日10時・17時の期限通知）を、10時用・17時用の2つのcronジョブとして常駐スケジューラで担う。バックエンドAPIのプロセス内では実行しない |
-| 適用条件 | `docker compose up -d batch`。CD/CIでも `batch` イメージを独立してビルド・デプロイする |
+| 適用条件 | ローカルComposeで `docker compose up -d batch` を実行する。CIでは `batch` イメージのビルドを確認する |
 | 依存先 | PostgreSQL（`db/migrations` は backend の Alembic が正）、Redis（実行ロック）。`api/app` への import 依存はない |
 | 実装ファイル | `batch/app/main.py`、`batch/app/core/{config.py,logger.py}`、`batch/app/jobs/due_notification_job.py`、`batch/app/repository/`、`batch/app/models/`、`batch/Dockerfile`、`batch/requirements.txt` |
 
@@ -68,7 +68,7 @@ flowchart LR
 | 観点 | 内容 |
 |------|------|
 | コンテナ独立性 | `batch` と `backend` は別イメージ・別コンテナであり、実行時に互いのソースを共有しない（[../infra/01_docker_compose.md](../infra/01_docker_compose.md)）。`import app...` は `api/` パッケージが `batch` イメージ内に存在しないため実行時エラーとなる |
-| デプロイの独立性 | `backend` のリリースサイクルと `batch` のリリースサイクルを分離できる（片方のみのホットフィックスが可能） |
+| コンテナ・コードの独立性 | `backend` と `batch` は別イメージ・別コンテナとして責務と依存関係を分離できる。片方のコードを変更しても、もう片方の実装へ直接影響しない |
 | 責務の分離 | `batch` はDB/Redisへ直接アクセスし、HTTP API層（認証・認可・入出力DTO）を経由しない。`api/app` のルータ・サービス層を持ち込む必要がない |
 
 この方針の結果、ORMモデル（`tasks`/`notifications` に相当する部分）を `batch/app/models/` に**二重定義**する必要がある。

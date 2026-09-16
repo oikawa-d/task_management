@@ -22,6 +22,7 @@ def test_cd_workflow_and_actionlint_config_are_absent() -> None:
 
 
 def test_env_example_does_not_contain_cd_only_settings() -> None:
-	cd_only_keys = {"DEPLOY_STATE_FILE", "IMAGE_RETENTION_DAYS"}
+	env_keys = _env_example_keys()
 
-	assert cd_only_keys.isdisjoint(_env_example_keys())
+	assert "IMAGE_RETENTION_DAYS" not in env_keys
+	assert not any(key.startswith("DEPLOY_") for key in env_keys)
