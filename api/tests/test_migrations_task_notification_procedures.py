@@ -86,3 +86,30 @@ def test_task_notification_procedure_revision_is_reversible() -> None:
 				assert not {"p_day_start_utc", "p_day_end_utc"} & set(argument_names)
 	finally:
 		engine.dispose()
+
+
+def test_task_api_contract_revision_is_reversible() -> None:
+	cfg = _alembic_config()
+	command.upgrade(cfg, "head")
+	count_signature = "fn_count_tasks(uuid,uuid,character varying,boolean,boolean)"
+	list_signature = "fn_list_tasks(uuid,uuid,character varying,boolean,integer,integer,boolean)"
+
+	engine = create_engine(_sync_database_url())
+	try:
+		with engine.connect() as connection:
+			assert connection.execute(text(f"SELECT to_regprocedure('{count_signature}')")).scalar_one()
+			assert connection.execute(text(f"SELECT to_regprocedure('{list_signature}')")).scalar_one()
+			argument_names = connection.execute(
+				text("SELECT p.proargnames FROM pg_proc p WHERE p.proname = 'sp_update_task'")
+			).scalar_one()
+			assert "p_is_active" in argument_names
+
+		command.downgrade(cfg, "0027")
+		with engine.connect() as connection:
+			assert connection.execute(text(f"SELECT to_regprocedure('{count_signature}')")).scalar_one() is None
+
+		command.upgrade(cfg, "head")
+		with engine.connect() as connection:
+			assert connection.execute(text(f"SELECT to_regprocedure('{count_signature}')")).scalar_one()
+	finally:
+		engine.dispose()

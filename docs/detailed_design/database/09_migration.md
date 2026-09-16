@@ -57,6 +57,7 @@
 | `0022_optimize_admin_list_functions.py` | `fn_admin_list_projects`へmember/task集計を追加し、`fn_admin_list_login_history`へusersのLEFT JOINを追加（戻り値型変更のためDROP→CREATE。downgradeでは0020定義へ復元） |
 | `0023_return_notification_read_results.py` | 通知既読SPへ既読日時・更新件数のOUT値を追加 |
 | `0024_add_calendar_task_function.py` | カレンダー表示用の期限タスク取得FNを追加 |
+| `0028_align_task_api_contracts.py` | タスク更新SPへ`is_active`引数を追加し、タスク取得FNへコメント件数、横断一覧FNへ総件数・空ページ用COUNT関数を追加 |
 
 リビジョンファイルは `NNNN_<snake_caseの変更概要>.py` で命名し、**ファイル名の4桁接頭辞は `revision` ID と一致させる**。`revision` IDは全ファイルで一意にし、`down_revision`には直前のリビジョンIDを指定して単一のチェーンを維持する。並行して作成されたリビジョンを統合する場合は、先行リビジョンを取り込んだ最新`develop`を起点に後続リビジョンを採番し直してからマージする。
 
@@ -90,13 +91,14 @@ flowchart LR
     R24 --> R25["0025<br/>未所属フィルタ"]
     R25 --> R26["0026<br/>メール長拡張"]
     R26 --> R27["0027<br/>failure_reason<br/>バックフィル"]
+    R27 --> R28["0028<br/>タスクAPI契約整合"]
 ```
 
 追加リビジョンは、`0020`を起点に `#374（0021）→ #377（0022）→ #379（0023、0024）→ #445（0025）→ #451（0026）→ #459（0027）` の順で統合する。後続PRは先行PRのリビジョンを`down_revision`として参照するため、先行PRの統合後に最新`develop`へ追従してからマージする。
 
 ### 2.7 SP/FN適用順序
 
-`0010`、`0014`〜`0016`、`0019`、`0020`〜`0024`は、対象テーブルのDDLと既存のUUID/CHECK/FK定義が完了した後に適用する。`0016`では、`0010`が作成するtask SPの旧シグネチャを削除して、`db/procedures/`の現行SQLを再適用する。`0019`では、`0014`が作成した`fn_list_notifications`（戻り値`SETOF notifications`）を`DROP FUNCTION`で削除してから`TABLE(notification notifications, task_title VARCHAR, task_project_id UUID, total_count BIGINT)`を返す現行定義で再作成する。`0020`ではadmin一覧FNの総件数と更新SPの対象不存在・OUT値を追加し、`0021`では個別既読SPを永続化した`p_read_at`返却へ更新する。`0022`ではadmin一覧FNをowner情報・集計値を含む現行定義へ更新し、`0023`では通知既読SPを、`0024`ではカレンダーFNを現行SQL資材から再作成する。PostgreSQLは`CREATE OR REPLACE FUNCTION`で既存関数の戻り値型を変更できないため、戻り値型を変えるリビジョンは必ずDROP→CREATEの手順を取る。各リビジョンはSQL資材を読み込んで作成し、repositoryの直接CRUDを追加しない。
+`0010`、`0014`〜`0016`、`0019`、`0020`〜`0024`、`0028`は、対象テーブルのDDLと既存のUUID/CHECK/FK定義が完了した後に適用する。`0016`では、`0010`が作成するtask SPの旧シグネチャを削除して、`db/procedures/`の現行SQLを再適用する。`0019`では、`0014`が作成した`fn_list_notifications`（戻り値`SETOF notifications`）を`DROP FUNCTION`で削除してから`TABLE(notification notifications, task_title VARCHAR, task_project_id UUID, total_count BIGINT)`を返す現行定義で再作成する。`0020`ではadmin一覧FNの総件数と更新SPの対象不存在・OUT値を追加し、`0021`では個別既読SPを永続化した`p_read_at`返却へ更新する。`0022`ではadmin一覧FNをowner情報・集計値を含む現行定義へ更新し、`0023`では通知既読SPを、`0024`ではカレンダーFNを、`0028`ではタスク関連FN/SPを現行SQL資材から再作成する。PostgreSQLは`CREATE OR REPLACE FUNCTION`で既存関数の戻り値型を変更できないため、戻り値型を変えるリビジョンは必ずDROP→CREATEの手順を取る。各リビジョンはSQL資材を読み込んで作成し、repositoryの直接CRUDを追加しない。
 
 | リビジョン | 依存するテーブル | 適用内容 |
 |------------|------------------|----------|
@@ -113,6 +115,7 @@ flowchart LR
 | `0025` | `tasks`関数 | `fn_list_tasks`に未所属タスク絞り込み引数を追加 |
 | `0026` | `users`, `login_history` | `users.email`と`login_history.login_identifier`をVARCHAR(50)からVARCHAR(254)へ拡張 |
 | `0027` | `login_history` | `failure_reason`の既存値を`lower()`で小文字へ正規化。downgradeは値を復元せずno-op |
+| `0028` | `tasks`, `task_comments` | `sp_update_task`の`is_active`更新、タスク取得FNのコメント件数、横断一覧FNの`total_count`と`fn_count_tasks`を現行SQL資材から再作成 |
 
 関数・プロシージャのDROPは依存するAPIが停止している環境でのみ行う。ローカル開発ではdowngradeを必要に応じて手動実行する。
 

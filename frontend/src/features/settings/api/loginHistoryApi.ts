@@ -1,4 +1,4 @@
-import { getApiClient } from "../../../api/client";
+import { requestJson } from "../../../api/http";
 
 export interface LoginHistoryItem {
 	id: string;
@@ -16,6 +16,5 @@ export interface LoginHistoryResponse {
 }
 
 export async function getLoginHistory(): Promise<LoginHistoryResponse> {
-	const { data } = await getApiClient().get<LoginHistoryResponse>("/users/me/login-history");
-	return data;
+	return requestJson<LoginHistoryResponse>("/users/me/login-history");
 }

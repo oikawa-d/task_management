@@ -38,7 +38,7 @@ describe("fetchUnreadCount", () => {
 		});
 		vi.stubGlobal("fetch", fetchMock);
 
-		await expect(fetchUnreadCount()).rejects.toThrow("failed to fetch unread count: 401");
+		await expect(fetchUnreadCount()).rejects.toThrow("API request failed: 401");
 
 		const error = await fetchUnreadCount().catch((e: unknown) => e);
 		expect(error).toBeInstanceOf(UnreadCountFetchError);
@@ -54,8 +54,8 @@ describe("fetchUnreadCount", () => {
 
 		const error = await fetchUnreadCount().catch((e: unknown) => e);
 
-		expect(error).toBe(networkError);
-		expect(error).not.toBeInstanceOf(UnreadCountFetchError);
+		expect((error as Error).message).toBe("通信に失敗しました");
+		expect(error).toBeInstanceOf(UnreadCountFetchError);
 	});
 
 	it("AbortSignalをfetchへ伝搬する", async () => {

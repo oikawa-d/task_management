@@ -47,13 +47,16 @@ async def get_current_user(
 		raise UnauthenticatedError()
 	if not user.is_active:
 		raise UserInactiveError()
-	return CurrentUser(
+	current_user = CurrentUser(
 		id=user.id,
 		username=user.username,
 		role=user.role,
 		is_active=user.is_active,
 		email_verified_at=user.email_verified_at,
 	)
+	if request is not None:
+		request.state.current_user = current_user
+	return current_user
 
 
 async def get_current_user_optional(
@@ -183,8 +186,8 @@ async def get_comment_for_member(
 	return comment
 
 
-def _resolved_client_ip(request: Request) -> str:
-	return request.client.host if request.client else "unknown"
+def _resolved_client_ip(request: Request, settings: BackendSettings) -> str:
+	return resolve_client_ip(request, settings.trusted_proxy_cidrs).client_ip
 
 
 async def _enforce_rate_limit_by_key(
@@ -208,11 +211,12 @@ async def _enforce_rate_limit_by_key(
 async def _enforce_rate_limit(
 	request: Request,
 	user: CurrentUser,
+	settings: BackendSettings,
 	scope: str,
 	max_requests: int,
 	window: int,
 ) -> None:
-	value = f"{user.id}:{_resolved_client_ip(request)}"
+	value = f"{user.id}:{_resolved_client_ip(request, settings)}"
 	await _enforce_rate_limit_by_key(scope, value, max_requests, window)
 
 
@@ -225,6 +229,7 @@ async def enforce_notification_read_rate_limit(
 	await _enforce_rate_limit(
 		request,
 		user,
+		settings,
 		"notification_read",
 		settings.rate_limit_notification_read_max_requests,
 		settings.rate_limit_notification_window_seconds,
@@ -240,6 +245,7 @@ async def enforce_notification_write_rate_limit(
 	await _enforce_rate_limit(
 		request,
 		user,
+		settings,
 		"notification_write",
 		settings.rate_limit_notification_write_max_requests,
 		settings.rate_limit_notification_window_seconds,

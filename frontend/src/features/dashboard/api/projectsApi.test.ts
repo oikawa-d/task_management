@@ -1,21 +1,8 @@
-import axios, { type AxiosInstance } from "axios";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { resetApiClient } from "../../../api/client";
-import { ApiError } from "../../../api/errors";
+import { clearAuthAdapter, setAuthAdapterMode } from "../../../api/authAdapter/client";
 import { createProject, getCalendarTasks, getProjects } from "./projectsApi";
 import type { ProjectSummary } from "./types";
-
-function createMockClient(): AxiosInstance {
-	return {
-		get: vi.fn(),
-		post: vi.fn(),
-		interceptors: {
-			request: { use: vi.fn() },
-			response: { use: vi.fn() },
-		},
-	} as unknown as AxiosInstance;
-}
 
 function buildProject(overrides: Partial<ProjectSummary> = {}): ProjectSummary {
 	return {
@@ -37,66 +24,58 @@ function buildProject(overrides: Partial<ProjectSummary> = {}): ProjectSummary {
 describe("projectsApi", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
-		resetApiClient();
+		vi.unstubAllGlobals();
+		clearAuthAdapter();
 	});
 
+	function mockResponse(data: unknown, status = 200): Response {
+		return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
+	}
+
 	it("getProjects: GET /projects をページング既定値付きで呼び、itemsとmetaを返す", async () => {
-		const client = createMockClient();
 		const response = { items: [buildProject()], meta: { page: 1, per_page: 20, total: 1, total_pages: 1 } };
-		(client.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: response });
-		vi.spyOn(axios, "create").mockReturnValue(client);
+		setAuthAdapterMode("session");
+		const fetchMock = vi.fn().mockResolvedValue(mockResponse(response));
+		vi.stubGlobal("fetch", fetchMock);
 
 		const result = await getProjects();
 
-		expect(client.get).toHaveBeenCalledWith("/projects", {
-			params: { page: 1, per_page: 20, include_inactive: false },
-		});
+		expect(fetchMock).toHaveBeenCalledWith("/api/projects?page=1&per_page=20&include_inactive=false", expect.any(Object));
 		expect(result).toEqual(response);
 	});
 
 	it("getProjects: 5xx応答は共通クライアントのインターセプタが変換したApiErrorのまま伝搬する", async () => {
-		const client = createMockClient();
-		(client.get as ReturnType<typeof vi.fn>).mockRejectedValue(
-			new ApiError({ code: "INTERNAL_ERROR", message: "サーバーエラー", status: 500 }),
-		);
-		vi.spyOn(axios, "create").mockReturnValue(client);
+		setAuthAdapterMode("session");
+		const fetchMock = vi.fn().mockResolvedValue(mockResponse({ error: { code: "INTERNAL_ERROR", message: "サーバーエラー" } }, 500));
+		vi.stubGlobal("fetch", fetchMock);
 
 		await expect(getProjects()).rejects.toMatchObject({ code: "INTERNAL_ERROR", status: 500 });
 	});
 
 	it("getProjects: ネットワークエラーもApiErrorのまま伝搬する", async () => {
-		const client = createMockClient();
-		(client.get as ReturnType<typeof vi.fn>).mockRejectedValue(
-			new ApiError({ code: "NETWORK_ERROR", message: "通信に失敗しました", status: null }),
-		);
-		vi.spyOn(axios, "create").mockReturnValue(client);
+		setAuthAdapterMode("session");
+		const fetchMock = vi.fn().mockRejectedValue(new TypeError("network"));
+		vi.stubGlobal("fetch", fetchMock);
 
 		await expect(getProjects()).rejects.toMatchObject({ code: "NETWORK_ERROR", status: null });
 	});
 
 	it("createProject: POST /projects へname/descriptionを送信し、作成結果を返す", async () => {
-		const client = createMockClient();
 		const created = buildProject({ member_count: 1, task_counts: { todo: 0, in_progress: 0, done: 0 } });
-		(client.post as ReturnType<typeof vi.fn>).mockResolvedValue({ data: created });
-		vi.spyOn(axios, "create").mockReturnValue(client);
+		setAuthAdapterMode("session");
+		const fetchMock = vi.fn().mockResolvedValue(mockResponse(created));
+		vi.stubGlobal("fetch", fetchMock);
 
 		const result = await createProject({ name: "Cerberus開発", description: "説明" });
 
-		expect(client.post).toHaveBeenCalledWith("/projects", { name: "Cerberus開発", description: "説明" });
+		expect(fetchMock).toHaveBeenCalledWith("/api/projects", expect.objectContaining({ method: "POST", body: JSON.stringify({ name: "Cerberus開発", description: "説明" }) }));
 		expect(result).toEqual(created);
 	});
 
 	it("createProject: 422 VALIDATION_ERRORはfield別detailsを持つApiErrorとして伝搬する", async () => {
-		const client = createMockClient();
-		(client.post as ReturnType<typeof vi.fn>).mockRejectedValue(
-			new ApiError({
-				code: "VALIDATION_ERROR",
-				message: "入力内容に誤りがあります",
-				status: 422,
-				details: [{ field: "name", message: "プロジェクト名を1〜100文字で入力してください" }],
-			}),
-		);
-		vi.spyOn(axios, "create").mockReturnValue(client);
+		setAuthAdapterMode("session");
+		const fetchMock = vi.fn().mockResolvedValue(mockResponse({ error: { code: "VALIDATION_ERROR", message: "入力内容に誤りがあります", details: [{ field: "name", message: "プロジェクト名を1〜100文字で入力してください" }] } }, 422));
+		vi.stubGlobal("fetch", fetchMock);
 
 		await expect(createProject({ name: "" })).rejects.toMatchObject({
 			code: "VALIDATION_ERROR",
@@ -106,11 +85,12 @@ describe("projectsApi", () => {
 	});
 
 	it("getCalendarTasks: 日付範囲とscopeを指定してタスク配列を返す", async () => {
-		const client = createMockClient();
 		const tasks = [{ id: "task-1", project_id: null, title: "期限", due_at: "2026-09-10T00:00:00Z", due_date: "2026-09-10", status: "todo" as const }];
-		(client.get as ReturnType<typeof vi.fn>).mockResolvedValue({ data: tasks });
+		setAuthAdapterMode("session");
+		const fetchMock = vi.fn().mockResolvedValue(mockResponse(tasks));
+		vi.stubGlobal("fetch", fetchMock);
 
-		await expect(getCalendarTasks({ from: "2026-09-01", to: "2026-09-30", scope: "me" }, client)).resolves.toEqual(tasks);
-		expect(client.get).toHaveBeenCalledWith("/tasks/calendar", { params: { from: "2026-09-01", to: "2026-09-30", scope: "me" } });
+		await expect(getCalendarTasks({ from: "2026-09-01", to: "2026-09-30", scope: "me" })).resolves.toEqual(tasks);
+		expect(fetchMock).toHaveBeenCalledWith("/api/tasks/calendar?from=2026-09-01&to=2026-09-30&scope=me", expect.any(Object));
 	});
 });

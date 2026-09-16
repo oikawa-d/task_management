@@ -131,7 +131,7 @@ flowchart TB
 | DB | `db.py` が `create_async_engine(DATABASE_URL, pool_size=..., max_overflow=...)` を起動時に1度だけ生成し、プロセス終了まで再利用する。`DATABASE_POOL_SIZE`/`DATABASE_MAX_OVERFLOW`（[../infra/04_env_config.md](../infra/04_env_config.md)）を `api` と共通の変数名で参照する |
 | Redis | `redis_client.py` が `redis.asyncio.ConnectionPool.from_url(REDIS_URL)` を起動時に1度だけ生成する |
 | 再接続 | 個々の操作失敗時にコネクションプール自体を再生成しない（プール内の切断済み接続は次回利用時に自動再接続される、`redis-py`/`SQLAlchemy` 標準動作に依存） |
-| クローズ | SIGTERM受信時（§5）に `engine.dispose()` / `redis_pool.disconnect()` を呼び、明示的にクローズする |
+| クローズ | 常駐終了時と`--run-once`の成功・失敗時に、`engine.dispose()` / `close_redis_client()`を呼び、明示的にクローズする。`BATCH_ENABLED=false`の常駐起動では不要なDB/Redis資源を生成しない |
 
 ## 8. ヘルスチェック（プロセス生存監視）
 

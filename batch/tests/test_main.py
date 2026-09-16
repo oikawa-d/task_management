@@ -65,8 +65,16 @@ def test_build_scheduler_rejects_invalid_run_hour() -> None:
 def test_async_main_run_once_executes_job_without_scheduler(monkeypatch: pytest.MonkeyPatch) -> None:
 	job = AsyncMock()
 	build_scheduler = MagicMock()
+	get_engine = MagicMock()
+	get_redis = MagicMock()
+	close_redis = AsyncMock()
+	dispose_engine = AsyncMock()
 	monkeypatch.setattr(main, "run_due_notification_job", job)
 	monkeypatch.setattr(main, "build_scheduler", build_scheduler)
+	monkeypatch.setattr(main, "get_db_engine", get_engine)
+	monkeypatch.setattr(main, "get_redis_client", get_redis)
+	monkeypatch.setattr(main, "close_redis_client", close_redis)
+	monkeypatch.setattr(main, "dispose_db_engine", dispose_engine)
 	settings = _settings(enabled=False)
 	args = Namespace(run_once="due_notification", slot=17)
 
@@ -74,6 +82,10 @@ def test_async_main_run_once_executes_job_without_scheduler(monkeypatch: pytest.
 
 	job.assert_awaited_once_with(slot=17, settings=settings)
 	build_scheduler.assert_not_called()
+	get_engine.assert_called_once_with()
+	get_redis.assert_called_once_with(settings)
+	close_redis.assert_awaited_once_with()
+	dispose_engine.assert_awaited_once_with()
 
 
 def test_handle_sigterm_sets_shutdown_event() -> None:
@@ -106,3 +118,46 @@ def test_async_main_shuts_down_scheduler_after_signal(monkeypatch: pytest.Monkey
 
 	scheduler.start.assert_called_once_with()
 	scheduler.shutdown.assert_called_once_with(wait=True)
+
+
+def test_async_main_disabled_does_not_create_datastore_resources(monkeypatch: pytest.MonkeyPatch) -> None:
+	scheduler = MagicMock()
+	monkeypatch.setattr(main, "build_scheduler", lambda settings: scheduler)
+	get_engine = MagicMock()
+	get_redis = MagicMock()
+	close_redis = AsyncMock()
+	dispose_engine = AsyncMock()
+	monkeypatch.setattr(main, "get_db_engine", get_engine)
+	monkeypatch.setattr(main, "get_redis_client", get_redis)
+	monkeypatch.setattr(main, "close_redis_client", close_redis)
+	monkeypatch.setattr(main, "dispose_db_engine", dispose_engine)
+
+	def stop_on_signal(_signum: int, handler: object) -> object:
+		assert callable(handler)
+		handler(signal.SIGTERM, None)
+		return signal.SIG_DFL
+
+	monkeypatch.setattr(main.signal, "signal", stop_on_signal)
+	asyncio.run(main.async_main(Namespace(run_once=None, slot=None), _settings(enabled=False)))
+
+	get_engine.assert_not_called()
+	get_redis.assert_not_called()
+	close_redis.assert_not_awaited()
+	dispose_engine.assert_not_awaited()
+
+
+def test_async_main_disposes_db_when_redis_initialization_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+	get_engine = MagicMock()
+	monkeypatch.setattr(main, "get_db_engine", get_engine)
+	monkeypatch.setattr(main, "get_redis_client", MagicMock(side_effect=RuntimeError("redis unavailable")))
+	close_redis = AsyncMock()
+	dispose_engine = AsyncMock()
+	monkeypatch.setattr(main, "close_redis_client", close_redis)
+	monkeypatch.setattr(main, "dispose_db_engine", dispose_engine)
+
+	with pytest.raises(RuntimeError, match="redis unavailable"):
+		asyncio.run(main.async_main(Namespace(run_once="due_notification", slot=10), _settings()))
+
+	get_engine.assert_called_once_with()
+	close_redis.assert_not_awaited()
+	dispose_engine.assert_awaited_once_with()
