@@ -40,7 +40,7 @@
 | 変数名 | 型 | 既定値 | 用途 | 秘匿 |
 |--------|-----|--------|------|------|
 | `COMPOSE_PROJECT_NAME` | str | `cerberus` | Composeプロジェクト名 | 平文可 |
-| `APP_ENV` | Literal["local","ci","production"] | `local` | 実行環境の判定（mailpit有効化等） | 平文可 |
+| `APP_ENV` | Literal["local","ci","production"] | `local` | アプリケーションの実行環境（`local` / `ci` / `production`）の判定 | 平文可 |
 | `LOG_LEVEL` | str | `INFO` | `core/logger.py` のログレベル | 平文可 |
 | `FRONTEND_PORT` | int | `5173` | frontendのホスト公開ポート | 平文可 |
 | `BACKEND_PORT` | int | `8000` | 開発時のみbackendをホストへ公開する場合のポート | 平文可 |
