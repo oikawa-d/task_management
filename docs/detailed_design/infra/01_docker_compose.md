@@ -27,7 +27,7 @@
 | `mailpit` | サービス | 開発用SMTPモック | イメージ `axllent/mailpit`。`profiles: [dev]` |
 | `cerberus_net` | ネットワーク | bridge。6サービスを内部DNS名（サービス名）で疎通 | 外部公開は `frontend` の1ポートのみが原則 |
 | `pgdata` | volume | PostgreSQLデータ永続化 | named volume |
-| `compose.dev.yml` | オーバーレイファイル | バインドマウント・ホットリロード・追加ポート公開を開発時だけ有効化 | `docker compose -f docker-compose.yml -f compose.dev.yml up` |
+| `compose.dev.yml` | オーバーレイファイル | バインドマウント・ホットリロード・追加ポート公開を開発時だけ有効化 | `docker compose -f docker-compose.yml -f compose.dev.yml --profile dev up` |
 | `compose.integration.yml` | 受入テスト用Compose | `.env.example`を使った最小のPostgreSQL/Redis/batch構成を起動し、実コンテナからの直接接続を検証 | CIの`batch-container-integration`のみで使用 |
 
 ## 3. 設定項目（環境変数）
@@ -35,7 +35,7 @@
 | 変数名 | 型 | 既定値 | 用途 | 秘匿 |
 |--------|-----|--------|------|------|
 | `COMPOSE_PROJECT_NAME` | str | `cerberus` | Composeプロジェクト名（リソース名の接頭辞） | 否 |
-| `APP_ENV` | str | `local` | `local` / `ci` / `production`。`mailpit` profile有効化の判断材料 | 否 |
+| `APP_ENV` | str | `local` | アプリケーションの実行環境（`local` / `ci` / `production`）。`mailpit` profileはCLIの`--profile dev`で有効化 | 否 |
 | `FRONTEND_PORT` | int | `5173` | ホスト公開ポート（`frontend` の80番へ） | 否 |
 | `BACKEND_PORT` | int | `8000` | 開発時のみ`compose.dev.yml`で`127.0.0.1`に公開 | 否 |
 | `POSTGRES_PORT` | int | `5432` | 開発時のみ`compose.dev.yml`で`127.0.0.1`に公開 | 否 |
@@ -59,18 +59,18 @@
 
 | 区分 | 内容 |
 |------|------|
-| 入力 | `.env`（Compose変数展開）、各サービスのビルドコンテキスト（backend/batchはリポジトリルート、frontendは`frontend/`）、ホストの `docker compose up` コマンド |
-| 出力 | 起動済みコンテナ群、`pgdata` volume（永続データ）、`cerberus_net` 経由の内部通信、ホストへ公開される `${FRONTEND_PORT}`（本番/CD）および開発時追加ポート |
+| 入力 | `.env`（Compose変数展開）、各サービスのビルドコンテキスト（backend/batchはリポジトリルート、frontendは`frontend/`）、ホストの `docker compose -f docker-compose.yml -f compose.dev.yml --profile dev up` コマンド |
+| 出力 | 起動済みコンテナ群、`pgdata` volume（永続データ）、`cerberus_net` 経由の内部通信、ホストへ公開される `${FRONTEND_PORT}`および開発時追加ポート |
 | 副作用 | `backend` 起動時の `alembic upgrade head` によるDBスキーマ変更 |
 
 ## 5. シーケンス図
 
-### 5.1 `docker compose up -d` 起動シーケンス
+### 5.1 `docker compose ... --profile dev up -d` 起動シーケンス
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor DEV as 開発者/CD
+    actor DEV as 開発者
     participant DC as Docker Compose
     participant PG as postgres
     participant RD as redis
@@ -78,7 +78,7 @@ sequenceDiagram
     participant BA as batch
     participant FE as frontend
 
-    DEV->>DC: docker compose up -d
+    DEV->>DC: docker compose -f docker-compose.yml -f compose.dev.yml --profile dev up -d
     DC->>PG: コンテナ起動
     DC->>RD: コンテナ起動
     par ヘルスチェック待機
@@ -120,7 +120,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart TB
-    A["docker compose up -d"] --> B{"postgres / redis<br/>healthcheck OK?"}
+    A["docker compose<br/>-f docker-compose.yml<br/>-f compose.dev.yml<br/>--profile dev up -d"] --> B{"postgres / redis<br/>healthcheck OK?"}
     B -->|No<br/>タイムアウト| F1["backend起動せず<br/>fail-close"]
     B -->|Yes| C["backend起動<br/>alembic upgrade head"]
     C --> D{"マイグレーション成功?"}
@@ -129,16 +129,16 @@ flowchart TB
     E --> G{"healthy?"}
     G -->|No| F3["frontend起動待機のまま<br/>（depends_on未充足）"]
     G -->|Yes| H["frontend起動<br/>nginx配信開始"]
-    H --> I{"APP_ENV=local?"}
+    H --> I{"--profile dev?"}
     I -->|Yes| J["mailpit起動（profile: dev）"]
-    I -->|No（ci/production）| K["mailpitは起動しない<br/>外部SMTPを使用"]
+    I -->|No| K["mailpitは起動しない<br/>外部SMTPを使用"]
 ```
 
 ## 7. データ遷移図
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Created: docker compose up
+    [*] --> Created: docker compose ... --profile dev up
     Created --> Starting: コンテナ起動
     Starting --> HealthChecking: healthcheck開始
     HealthChecking --> Healthy: 条件成功
@@ -146,11 +146,11 @@ stateDiagram-v2
     Healthy --> Running: 依存先のservice_healthy充足で下流起動
     Unhealthy --> Restarting: restart policyに従う
     Restarting --> Starting
-    Running --> Stopped: docker compose down
+    Running --> Stopped: docker compose ... --profile dev down
     Stopped --> [*]
 
     note right of Healthy
-      pgdata volumeはdocker compose down単体では消えない
+      pgdata volumeはdocker compose ... --profile dev down単体では消えない
       down -v または volume rm で明示削除が必要
     end note
 ```
@@ -165,7 +165,7 @@ stateDiagram-v2
 | 入力 | `.env` の各変数（`env_file: .env` または `environment:` 個別指定） |
 | 出力 | コンテナ群、named volume `pgdata` |
 | 失敗条件 | 必須環境変数未設定時、`docker compose config` で警告（未定義変数は空文字扱い）。`backend` の `core/config.py` 起動時バリデーションで実質的に失敗させる（[04_env_config.md](./04_env_config.md)参照） |
-| 処理内容 | 1. `postgres`/`redis` を healthcheck 付きで起動 2. `depends_on.condition: service_healthy` で `backend` と `batch` を待機起動 3. `backend` の healthcheck 成功後に `frontend` を起動 4. `APP_ENV=local` かつ `--profile dev` 指定時のみ `mailpit` を起動 |
+| 処理内容 | 1. `postgres`/`redis` を healthcheck 付きで起動 2. `depends_on.condition: service_healthy` で `backend` と `batch` を待機起動 3. `backend` の healthcheck 成功後に `frontend` を起動 4. CLIで `--profile dev` を指定した時のみ `mailpit` を起動 |
 | 副作用 | `pgdata` volumeへの書き込み、`cerberus_net` へのコンテナ参加 |
 
 ### 8.2 各サービスの healthcheck 仕様
@@ -184,10 +184,11 @@ stateDiagram-v2
 | 項目 | 内容 |
 |------|------|
 | 目的 | ソースのバインドマウント、ホットリロード（`uvicorn --reload` / `vite dev`）、開発用ポート公開を本体定義から分離する |
-| 入力 | `docker compose -f docker-compose.yml -f compose.dev.yml up` |
+| 入力 | `docker compose -f docker-compose.yml -f compose.dev.yml --profile dev up` |
+| 停止 | `docker compose -f docker-compose.yml -f compose.dev.yml --profile dev down` |
 | 出力 | `backend`/`frontend`のバインドマウント有効化、`${BACKEND_PORT}`/`${POSTGRES_PORT}`/`${REDIS_PORT}`/`${MAILPIT_SMTP_PORT}`/`${MAILPIT_UI_PORT}` を `127.0.0.1` に限定公開 |
 | 処理内容 | 1. `backend.volumes` に `./api:/app/api` と `./db:/app/db:ro` を追加 2. `backend.command` を `uvicorn app.main:app --reload` に上書き 3. `postgres`/`redis`/`mailpit` の `ports` を `127.0.0.1:${PORT}:内部固定ポート` で追加 |
-| 副作用 | 本番/CD構成（`docker-compose.yml`単体）には影響しない（オーバーレイのみに閉じる） |
+| 副作用 | 基本Compose（`docker-compose.yml`単体）には影響しない（開発オーバーレイのみに閉じる） |
 
 ## 9. 関数・要素相関図
 
@@ -219,7 +220,7 @@ flowchart LR
 | 観点 | 方針 | 根拠 |
 |------|------|------|
 | ポート露出 | `backend`/`postgres`/`redis`/`mailpit` は本体Composeで `ports` を持たない。開発時のみ `compose.dev.yml` で `127.0.0.1` 限定公開 | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §1 |
-| 秘匿情報 | `POSTGRES_PASSWORD`/`DATABASE_URL`/`JWT_SECRET_KEY`等は `.env`（コミット禁止）およびCI/CD時はGitHub Secrets経由 | [04_env_config.md](./04_env_config.md) |
+| 秘匿情報 | `POSTGRES_PASSWORD`/`DATABASE_URL`/`JWT_SECRET_KEY`等は `.env`（コミット禁止）およびCI実行時はGitHub Secrets経由 | [04_env_config.md](./04_env_config.md) |
 | Redis永続化 | `--save "" --appendonly no --maxmemory-policy noeviction`、volumeを割り当てない。再起動で全ログアウトになる挙動を意図的に許容 | 要件書§4、[../../basic_design/00_overview.md](../../basic_design/00_overview.md) §8 |
 | 起動順序 | `depends_on.condition: service_healthy` を用い、DB/Redis未準備状態でのAPI起動（＝マイグレーション失敗の温床）を防ぐ | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §2 |
 | イメージ最小化 | `-alpine` 系イメージを使用し攻撃対象面を縮小 | 同上 |
@@ -230,7 +231,7 @@ flowchart LR
 | No | 区分 | ケース | 前提 | 期待結果 | テスト名案 |
 |----|------|--------|------|----------|-----------|
 | 1 | 結合 | `docker compose config` で構文検証 | `.env.example` をコピーして `.env` 生成 | エラーなく解決される | `test_compose_config_valid`（CIのシェルステップ） |
-| 2 | 結合 | `docker compose up -d` 後に全サービスhealthy | ローカル/CI環境 | 6サービス（dev profile込み）が `healthy` または起動継続 | `test_compose_up_all_healthy` |
+| 2 | 結合 | `docker compose -f docker-compose.yml -f compose.dev.yml --profile dev up -d` 後に全サービスhealthy | ローカル/CI環境 | 6サービス（dev profile込み）が `healthy` または起動継続 | `test_compose_up_all_healthy` |
 | 3 | 結合 | backend起動時にAlembicマイグレーションが適用される | 空のpostgresボリューム | `alembic_version`テーブルが最新headと一致 | `test_backend_migration_on_start` |
 | 4 | 結合 | redisコンテナ再起動でセッションが消える | session方式でログイン後 `docker compose restart redis` | `/auth/me`が401になる | `test_redis_restart_invalidates_session` |
 | 5 | 結合 | backend/postgres/redisのポートが本体Composeで非公開 | `docker-compose.yml`単体起動 | `docker compose port backend 8000`等が失敗、またはホストから疎通不可 | `test_no_unintended_port_exposure` |
@@ -242,5 +243,5 @@ flowchart LR
 | 区分 | 内容 | 影響 |
 |------|------|------|
 | 確定 | backendはPython標準ライブラリ、frontendはnginx:alpineのBusyBox `wget`、batchはPythonでPID 1を確認する。追加のOSパッケージは導入しない | [02_dockerfile_api.md](./02_dockerfile_api.md)、[03_dockerfile_frontend.md](./03_dockerfile_frontend.md)、[08_dockerfile_batch.md](./08_dockerfile_batch.md) |
-| 要検討 | `mailpit` を `production`/CD環境で誤って起動しない保証は `profiles: [dev]` 運用に依存しており、CDワークフロー側で `--profile` を明示的に付与しない運用ルールが必要 | [06_cd_workflow.md](./06_cd_workflow.md) |
+| 要検討 | `mailpit` を開発用profile以外で誤って起動しない保証は `profiles: [dev]` 運用に依存するため、開発時以外のCompose実行ではprofile指定を確認する | [04_env_config.md](./04_env_config.md) |
 | 不明 | `pgdata` volumeのバックアップ自動化はスコープ外（要件書§11、[../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §8）のため、本書では手動 `pg_dump` のみを前提とする | 運用手順（[07_operation.md](./07_operation.md)） |

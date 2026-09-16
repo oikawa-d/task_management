@@ -2,15 +2,11 @@
 
 ## 0. 本書の位置づけ
 
-フロントエンド⇔API⇔DB連携、複数の認証方式の実装・比較、GitHub Actionsを用いたCI/CD設計を学習することを目的とした題材の要件定義書。実務での使用は想定せず、学習の進め方が確認できる粒度でまとめている。
+フロントエンド⇔API⇔DB連携、複数の認証方式の実装・比較、GitHub Actionsを用いたCI設計を学習することを目的とした題材の要件定義書。実務での使用は想定せず、学習の進め方が確認できる粒度でまとめている。
 
-**確認事項（要合意）**
+**確認事項（決定）**
 
-ヒアリング内容のうち、CI/CDについて「デプロイまで含めた本格的なCD」「ローカル/Docker Composeのみで完結」という2つの回答があったため、本書では以下のように解釈して設計している。
-
-- クラウド（AWS/GCP等）は使用しない
-- GitHub Actions上でビルド・テスト・Dockerイメージ作成までを自動化する
-- self-hosted runner（自分のPCまたは自宅サーバー等にGitHub Actionsのランナーを常駐させる仕組み）を使い、mainブランチへのマージをトリガーにローカル環境のDocker Composeを再起動して反映する
+本プロジェクトは開発・学習用途に限定し、デプロイ自動化は行わない。クラウド、GHCRへのイメージpush、self-hosted runnerは使用せず、GitHub Actionsでは品質検証とDockerイメージのビルド確認だけを実行する。アプリケーションの起動・反映は開発者がローカルでDocker Composeを手動実行する。
 
 セキュリティ・業務ルールの確定値は [security_business_rules.md](./security_business_rules.md) に集約する。認証、監査、環境変数、画面の詳細設計は同書の採用案を正とする。
 
@@ -202,7 +198,7 @@ Issue #8で、ログイン以外のRate Limit、パスワード再設定トー�
 
 ---
 
-## 8. CI/CD設計
+## 8. CIとローカル開発運用
 
 ### 8.1 CI（継続的インテグレーション）
 
@@ -213,20 +209,17 @@ Issue #8で、ログイン以外のRate Limit、パスワード再設定トー�
 - フロントエンド：ESLintによるLint、TypeScriptの型チェック、Vitest/Jestによるテスト
 - Dockerイメージのビルド確認（buildのみ、pushは行わない）
 
-### 8.2 CD（継続的デリバリー）
+### 8.2 ローカルDocker Compose
 
-mainブランチへのマージをトリガーに以下を実行する。
-
-- Dockerイメージをビルドし、GHCR（GitHub Container Registry）へpush
-- self-hosted runnerを通じて、デプロイ対象環境（学習者自身のPC/サーバー）上で最新イメージをpullし、`docker compose up -d`で反映
+開発者が`.env`を用意し、`docker compose -f docker-compose.yml -f compose.dev.yml --profile dev up`でbackend、frontend、batch、PostgreSQL、Redis、Mailpitを起動する。停止時は`docker compose -f docker-compose.yml -f compose.dev.yml --profile dev down`を使用する。開発時のソース反映は`compose.dev.yml`によるバインドマウントとホットリロードで行う。
 
 ### 8.3 ポイント
 
 - ワークフロー構文（`on`によるトリガー設定、`jobs`と`steps`の書き方）
 - Secretsの利用方法（DB接続情報やJWT署名鍵の受け渡し）
 - pip/npmの依存関係キャッシュによるビルド時間短縮
-- self-hosted runnerのセットアップと登録
-- CIとCDでワークフローファイルを分割する設計（`ci.yml` / `cd.yml`）
+- Docker Composeの開発環境構築と環境変数管理
+- CIワークフロー（`ci.yml`）による品質検証とイメージビルド確認
 
 ---
 
@@ -237,7 +230,6 @@ project-root/
 ├── .github/
 │   └── workflows/
 │       ├── ci.yml
-│       └── cd.yml
 ├── api/
 │   ├── alembic/
 │   │   ├── versions/        # マイグレーションファイル（自動生成 + 手動編集）
@@ -290,7 +282,7 @@ project-root/
 4. Google OAuth2ログインの追加
 5. RBAC（ロールベースアクセス制御）の実装
 6. CI（Lint・型チェック・テスト自動化）の構築
-7. Dockerイメージ化とCD（self-hosted runnerによる自動デプロイ）の構築
+7. Dockerイメージ化とCI（イメージビルド確認）の構築
 8. タスク期限のアプリ内通知機能（`due_at` 移行 → 通知テーブル・通知API → 通知UI → `batch` コンテナによる毎日10時・17時の定期通知）
 9. 3つの認証方式を比較し、違いを整理してまとめる
 
@@ -299,5 +291,6 @@ project-root/
 ## 11. スコープ外（対象外とする範囲）
 
 - クラウド環境への本番デプロイ、負荷分散、監視・アラート設計
+- 自動デプロイ、GHCRへのイメージpush、self-hosted runnerの運用
 - 本番用の外部SMTPサービス固有の運用・契約（メール送信インターフェース、開発用Mailpit、SMTP接続設定は対象）
 - モバイルアプリ対応

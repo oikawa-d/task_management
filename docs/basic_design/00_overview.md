@@ -15,11 +15,11 @@
 | 認証方式 | session（Cookie + Redis） / JWT（Access + Refresh） / Google OAuth2 |
 | 定期実行 | `batch` コンテナ（常駐スケジューラ。現在は毎日10時・17時のタスク期限通知。将来の定期ジョブ追加基盤） |
 | 基準タイムゾーン | `APP_TIMEZONE`（既定 `Asia/Tokyo`）。DBはUTC保存、日次境界・「10時・17時」の判定はこのTZで行う |
-| CI/CD | GitHub Actions（CI: Lint・型チェック・テスト、CD: GHCR + self-hosted runner） |
+| CI | GitHub Actions（Lint・型チェック・テスト・Dockerイメージビルド確認） |
 
 ## 2. システム構成
 
-> drawio版：[diagrams/01_system_architecture.drawio](./diagrams/01_system_architecture.drawio)（公開ポート・CI/CD経路を含む詳細版）
+> drawio版：[diagrams/01_system_architecture.drawio](./diagrams/01_system_architecture.drawio)（公開ポート・CI経路を含む詳細版）
 
 ```mermaid
 flowchart TB
@@ -82,7 +82,7 @@ flowchart TB
 
 ```
 project-root/
-├── .github/workflows/{ci.yml, cd.yml}
+├── .github/workflows/ci.yml
 ├── api/
 │   ├── alembic/{versions/, env.py, script.py.mako}
 │   ├── alembic.ini
