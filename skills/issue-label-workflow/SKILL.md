@@ -1,16 +1,16 @@
 ---
 name: issue-label-workflow
-description: このtask_managementリポジトリでGitHub issueに対応する一連の作業(着手・PR作成・レビュー指摘対応・修正再開)のたびに必ず使う。Issueに`in-progress`/`review`、PRにレビュー中の`in-progress`/完了後の`approve`を付与して進捗状態を管理し、他エージェント・他人との作業重複を防ぐ。実装・レビュー・修正を別々のエージェントが担当する運用を前提とする。
+description: このtask_managementリポジトリでGitHub issueに対応する一連の作業(着手・PR作成・レビュー指摘対応・修正再開)のたびに必ず使う。IssueとPRに`review-request`/`in-progress`、PRのレビュー完了後に`approve`を付与して進捗状態を管理し、他エージェント・他人との作業重複を防ぐ。実装・レビュー・修正を別々のエージェントが担当する運用を前提とする。
 ---
 
 # issueラベルによる進捗状態管理
 
-このリポジトリではgh CLIの認証が単一のGitHubアカウント(oikawa-d)に紐づいているため、`assignee`では「誰が/どのエージェントが対応中か」を区別できない。また、実装・レビュー・修正を別々のエージェントが担当することが前提のため、「自分か他人か」でも判断できない。そのため、**「誰が」ではなく「Issueが今どのフェーズにあるか」をラベルで管理し、これから始めようとしているフェーズの前提ラベルと一致するかだけを確認する。**Issueは`in-progress`/`review`、PRはレビュー中に`in-progress`、完了後に`approve`を付与する。1つのIssueに複数PRは作成しない。PR側は、gh CLIが単一アカウント認証のため**自分のPRに`Approve`/`Request changes`を提出できない**(GitHubが拒否する)。そのためレビュー結果は`gh pr comment`で判定を明記したコメントとして残す。詳細は`pr-review-workflow` skillを参照。
+このリポジトリではgh CLIの認証が単一のGitHubアカウント(oikawa-d)に紐づいているため、`assignee`では「誰が/どのエージェントが対応中か」を区別できない。また、実装・レビュー・修正を別々のエージェントが担当することが前提のため、「自分か他人か」でも判断できない。そのため、**「誰が」ではなく「Issueが今どのフェーズにあるか」をラベルで管理し、これから始めようとしているフェーズの前提ラベルと一致するかだけを確認する。**レビュー待ち・修正後の再レビュー待ちは`review-request`、レビュー中・修正中は`in-progress`、問題のないレビュー完了PRは`approve`を付与する。1つのIssueに複数PRは作成しない。PR側は、gh CLIが単一アカウント認証のため**自分のPRに`Approve`/`Request changes`を提出できない**(GitHubが拒否する)。そのためレビュー結果は`gh pr comment`で判定を明記したコメントとして残す。詳細は`pr-review-workflow` skillを参照。
 
 ## 状態ラベル(常にどれか1つ、またはラベルなし)
 
-- `in-progress` : 実装・修正作業中
-- `review` : PR作成後のレビュー待ち・レビュー中・変更依頼後の再レビュー待ち
+- `review-request` : レビュー待ち・修正後の再レビュー待ち
+- `in-progress` : 実装・レビュー・修正作業中
 - `approve` : レビュー完了。PR側に付与する
 
 **状態ラベルを複数同時に付けない。** ラベルを付ける際は、付与対象以外の状態ラベルが付いていれば必ず外す。
@@ -22,8 +22,8 @@ description: このtask_managementリポジトリでGitHub issueに対応する�
 | これから行う作業 | 開始前ラベル(前提) | 開始後に付けるラベル |
 | --- | --- | --- |
 | 新規実装(未着手のissue) | ラベルなし | `in-progress` |
-| レビュー | `review` | (Issueはレビュー中このまま。結果に応じて手順4または5へ) |
-| 修正対応 | `review` | `in-progress` |
+| レビュー | `review-request` | IssueとPRを`in-progress`へ変更してレビューを開始する |
+| 修正対応 | `review-request` | IssueとPRを`in-progress`へ変更する |
 
 ## 状態遷移
 
@@ -34,10 +34,13 @@ description: このtask_managementリポジトリでGitHub issueに対応する�
  in-progress ───────────────┐
       │ PRを作成             │ 修正を再開
       ▼                     │
- review (Issue) ────────────┐
-      │ PR作成・レビュー      │ 修正を再開
+ review-request ────────────┐
+      │ レビュー・修正開始    │ 修正を再開
       ▼                      │
- in-progress (PR)            │
+ in-progress (Issue/PR)      │
+      │ 再レビュー依頼        │
+      ▼                      │
+ review-request              │
       │ レビュー完了           │
       ▼                      │
  approve (PR)                │
@@ -58,7 +61,7 @@ description: このtask_managementリポジトリでGitHub issueに対応する�
   gh issue view <番号> --repo <owner/repo> --json labels,state,title
   ```
 
-- 前提ラベルは「ラベルなし」。`in-progress`/`review`/`approve` のいずれかが既に付いている場合、実装フェーズを始めてよい状態ではないので着手しない。誰が付けたラベルかに関わらず、現在どのフェーズかをユーザーに報告し、対応してよいか確認する。
+- 前提ラベルは「ラベルなし」。`in-progress`/`review-request`/`approve` のいずれかが既に付いている場合、実装フェーズを始めてよい状態ではないので着手しない。誰が付けたラベルかに関わらず、現在どのフェーズかをユーザーに報告し、対応してよいか確認する。
 - ラベルが何も付いていないことを確認できたら、`in-progress` を付与してから実装に進む。
 
   ```bash
@@ -70,34 +73,36 @@ description: このtask_managementリポジトリでGitHub issueに対応する�
 - `state` が `CLOSED` の場合、着手前にユーザーに確認する。ただしレビュー指摘対応など、close済みPRに紐づく再オープン前提の作業であることが明確な場合はこの限りではない。
 
 ### 2. PR作成時
-- PRを作成したら、Issueの`in-progress`を`review`へ変更し、PRに`in-progress`を付ける(このときIssueの前提ラベルは`in-progress`)。
+- PRを作成したら、Issueの`in-progress`を`review-request`へ変更し、PRに`review-request`を付ける(このときIssueの前提ラベルは`in-progress`)。
 
   ```bash
-  gh issue edit <番号> --repo <owner/repo> --remove-label in-progress --add-label review
-  gh api -X POST repos/<owner>/<repo>/issues/<PR番号>/labels -f "labels[]=in-progress"
+  gh issue edit <番号> --repo <owner>/<repo> --remove-label in-progress --add-label review-request
+  gh api -X POST repos/<owner>/<repo>/issues/<PR番号>/labels -f "labels[]=review-request"
   ```
 
 ### 3. レビューに着手する前
-- レビューを依頼された/レビュー作業を始める前にも、必ず現在のラベルを確認する。前提ラベルは `review`。付いていない場合、まだ実装中・レビュー対象外・フェーズ不一致の可能性があるため、着手前にユーザーに確認する。
-- **変更依頼あり**の場合は、レビューコメントの冒頭に`要修正 (Changes requested)`と明記したうえで、Issueの`review`を維持する。専用の状態ラベルは追加せず、修正作業を開始するときに手順4へ進む。
+- レビューを依頼された/レビュー作業を始める前にも、必ず現在のラベルを確認する。前提ラベルは `review-request`。付いていない場合、まだ実装中・レビュー対象外・フェーズ不一致の可能性があるため、着手前にユーザーに確認する。
+- **変更依頼あり**の場合は、レビューコメントの冒頭に`要修正 (Changes requested)`と明記したうえで、IssueとPRを`in-progress`へ変更する。
 - **LGTM → マージ**の場合は、レビューコメントに「レビュー済み / LGTM」と明記し、PRに`approve`を付与してから手順5へ進む。
 
 ### 4. 修正対応への着手前
-- 前提ラベルは `review`。付いていない場合、まだレビュー中・フェーズ不一致の可能性があるため、着手前にユーザーに確認する。
-- 前提ラベルを確認できたら、Issueの`review`を`in-progress`へ変更してから修正する。PRの`in-progress`は維持する。
+- 前提ラベルは `review-request`。付いていない場合、まだレビュー中・フェーズ不一致の可能性があるため、着手前にユーザーに確認する。
+- 前提ラベルを確認できたら、IssueとPRを`in-progress`へ変更してから修正する。
 
   ```bash
-  gh issue edit <番号> --repo <owner/repo> --remove-label review --add-label in-progress
+  gh issue edit <番号> --repo <owner/repo> --remove-label review-request --add-label in-progress
+  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/review-request
   ```
 
-- 修正後、再度PRを更新・レビュー依頼したらIssueを`review`へ戻す。PRは`in-progress`を維持する。
+- 修正後、再度PRを更新・レビュー依頼したらIssueとPRを`review-request`へ戻す。
 
 ### 5. 完了時(マージ・close)
 - PRがマージされ、issueがcloseされたら状態ラベルを外す(close済みissueに状態ラベルを残さない)。
 
   ```bash
-  gh issue edit <番号> --repo <owner/repo> --remove-label in-progress --remove-label review
+  gh issue edit <番号> --repo <owner/repo> --remove-label in-progress --remove-label review-request
   gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/in-progress
+  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/review-request
   gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/approve
   ```
 

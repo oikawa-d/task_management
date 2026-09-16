@@ -30,7 +30,7 @@ gh pr comment <番号> --body-file <file>
 
 `.agents/review-policy.md` が「レビュー結果は問題がない場合も『レビュー済み』と明記する」と定めているため、**LGTMの場合もマージ前に必ずコメントを残す**。
 
-レビューで指摘がある場合は、`要修正 (Changes requested)`のコメントを投稿して変更要求を記録します。変更要求はレビュー結果の判定であり、Issue・PRに専用の状態ラベルは追加しません。Issueの`review`とPRの`in-progress`を維持し、修正着手時のラベル遷移は`issue-label-workflow`に従います。
+レビューで指摘がある場合は、`要修正 (Changes requested)`のコメントを投稿して変更要求を記録します。レビュー中・修正中はIssueとPRを`in-progress`にし、修正着手時・再レビュー依頼時のラベル遷移は`issue-label-workflow`に従います。
 
 ## レビューの実施単位
 
@@ -62,7 +62,7 @@ gh pr comment <番号> --body-file <file>
 自分のPRであっても、レビュー担当と修正担当は分ける。
 
 1. **親エージェント**がレビュー結果を `gh pr comment` で投稿する（指摘ごとに「なぜ問題か」「推奨対応」を書く）。
-2. `issue-label-workflow` に従い、対応するIssueの `review` を維持し、PRはレビュー中の `in-progress` を維持する。
+2. `issue-label-workflow` に従い、レビュー中・修正中は対応するIssueとPRの `in-progress` を維持する。
 3. **修正用サブエージェントを起動する。** 複数PRを並行修正する場合は、Agentツールの `isolation: "worktree"` を必ず指定して各エージェントを独立worktreeに分離する（同一チェックアウトを共有すると `git checkout`/`add`/`commit` が競合する）。起動前に「作業前のworktree清掃」（末尾）を済ませておくこと — 過去のworktreeがブランチを掴んでいると分離worktreeを作れない。
    修正エージェントへの指示に必ず含める:
    - 対象ブランチ名と `git fetch && git checkout <branch> && git pull --ff-only`
@@ -137,7 +137,7 @@ gh pr reopen <番号>                                        # PRを再オープ
 
 `Closes #<番号>` がPR本文にあってもGitHubが自動closeしない場合があるので、マージ後に `gh issue view` でstateを必ず確認する。逆に自動closeされていた場合は `gh issue close` がエラーになるため、申し送りは `gh issue comment` で別途残す。
 
-close後は `issue-label-workflow` の手順5に従い、Issueから状態ラベル（`in-progress` / `review`）を、PRから`in-progress` / `approve`を外す。
+close後は `issue-label-workflow` の手順5に従い、IssueとPRから状態ラベル（`in-progress` / `review-request`）を、PRから`approve`も外す。
 
 ## 作業前のworktree清掃
 
