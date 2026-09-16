@@ -3,6 +3,7 @@ import type { KeyboardEvent } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
+import { APP_TIMEZONE } from "../../task-detail/dateTime";
 import type { BoardTask } from "../types";
 import styles from "./TaskCard.module.css";
 
@@ -50,5 +51,10 @@ function formatDueAt(dueAt: string | null): string {
 	if (!dueAt) return "なし";
 	const date = new Date(dueAt);
 	if (Number.isNaN(date.getTime())) return "日付を確認できません";
-	return new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "long", day: "numeric" }).format(date);
+	return new Intl.DateTimeFormat("ja-JP", {
+		timeZone: APP_TIMEZONE,
+		year: "numeric",
+		month: "long",
+		day: "numeric",
+	}).format(date);
 }

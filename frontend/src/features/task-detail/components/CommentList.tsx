@@ -68,7 +68,9 @@ export function CommentList({
 	};
 
 	const remove = (commentId: string) => {
-		if (window.confirm("このコメントを削除しますか？")) onDelete?.(commentId);
+		if (!window.confirm("このコメントを削除しますか？")) return;
+		const result = onDelete?.(commentId);
+		if (isPromiseLike(result)) void result.catch(() => undefined);
 	};
 
 	return (

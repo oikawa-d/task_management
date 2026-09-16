@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type Ref } from "react";
 
 export type TaskStatus = "todo" | "in_progress" | "done";
 export type TaskEditableField = "title" | "description" | "assignee_id" | "due_at" | "status";
@@ -22,6 +22,7 @@ export interface TaskEditFormProps {
 	members: TaskMember[];
 	fieldErrors?: Partial<Record<TaskEditableField, string>>;
 	isSaving?: boolean;
+	titleInputRef?: Ref<HTMLInputElement>;
 	onUpdate: (field: TaskEditableField, value: string | null) => void;
 }
 
@@ -39,6 +40,7 @@ export function TaskEditForm({
 	members,
 	fieldErrors = {},
 	isSaving = false,
+	titleInputRef,
 	onUpdate,
 }: TaskEditFormProps) {
 	const [title, setTitle] = useState(task.title);
@@ -97,6 +99,7 @@ export function TaskEditForm({
 			<label>
 				タイトル
 				<input
+					ref={titleInputRef}
 					value={title}
 					maxLength={TITLE_MAX_LENGTH}
 					onChange={(event) => setTitle(event.target.value)}
