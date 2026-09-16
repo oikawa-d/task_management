@@ -28,7 +28,7 @@ def _to_item(history: LoginHistory, user: User | None) -> AdminLoginHistoryItem:
 		else None,
 		login_identifier=history.login_identifier,
 		login_method=history.login_method,
-		ip_address=history.ip_address,
+		ip_address=str(history.ip_address) if history.ip_address is not None else None,
 		user_agent=history.user_agent,
 		success=history.success,
 		failure_reason=history.failure_reason,
