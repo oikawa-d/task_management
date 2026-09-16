@@ -30,7 +30,7 @@ gh pr comment <番号> --body-file <file>
 
 `.agents/review-policy.md` が「レビュー結果は問題がない場合も『レビュー済み』と明記する」と定めているため、**LGTMの場合もマージ前に必ずコメントを残す**。
 
-レビューで指摘がある場合は、`要修正 (Changes requested)`のコメントを投稿して変更要求を記録します。レビュー中・修正中はIssueとPRを`in-progress`にし、修正着手時・再レビュー依頼時のラベル遷移は`issue-label-workflow`に従います。
+レビューで指摘がある場合は、`要修正 (Changes requested)`のコメントを投稿して変更要求を記録します。レビュー中・修正中はIssueとPRを`in-progress`にし、修正担当はこのラベルを前提に着手します。修正着手時・再レビュー依頼時のラベル遷移は`issue-label-workflow`に従います。
 
 ## レビューの実施単位
 

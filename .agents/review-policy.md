@@ -28,8 +28,9 @@ PRとIssueのラベルは、レビューの進行状況を並行作業中の他�
 | issueへ着手（worktree作成・実装開始） | Issue | `in-progress` | - |
 | PR作成・レビュー依頼 | Issue | `review-request` | `in-progress` |
 | PR作成・レビュー依頼 | PR | `review-request` | `in-progress` |
-| レビュー着手・修正着手 | Issue | `in-progress` | `review-request` |
-| レビュー着手・修正着手 | PR | `in-progress` | `review-request` |
+| レビュー着手 | Issue | `in-progress` | `review-request` |
+| レビュー着手 | PR | `in-progress` | `review-request` |
+| レビューで修正要求後の修正着手 | Issue/PR | `in-progress`を維持 | なし |
 | 修正push後・再レビュー依頼 | Issue | `review-request` | `in-progress` |
 | 修正push後・再レビュー依頼 | PR | `review-request` | `in-progress` |
 | 「受入可」コメント投稿後（レビュー主体のみ） | PR | `approve` | `review-request`／`in-progress` |
@@ -37,7 +38,7 @@ PRとIssueのラベルは、レビューの進行状況を並行作業中の他�
 - `in-progress`は実装・レビュー・修正の作業中、`review-request`はレビュー待ち・修正後の再レビュー待ちに使用します。
 - `approve`はレビュー結果に問題がないPRにのみ付与します。
 - IssueとPRは同じ状態ラベル遷移を行い、`approve`だけはPRに付与します。
-- レビューで指摘があった場合は、レビューコメントの冒頭に`要修正 (Changes requested)`と明記します。レビュー中・修正中はIssueとPRを`in-progress`にします。
+- レビューで指摘があった場合は、レビューコメントの冒頭に`要修正 (Changes requested)`と明記します。レビュー中・修正中はIssueとPRを`in-progress`にし、修正担当はこのラベルを前提に着手します。
 - 指摘の修正をpushして再レビューを依頼するときは、IssueとPRを`review-request`へ戻します。
 
 ### ラベル操作コマンド
