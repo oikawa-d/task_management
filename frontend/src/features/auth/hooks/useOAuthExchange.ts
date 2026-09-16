@@ -6,8 +6,8 @@ import { oauthExchange, type OAuthExchangeResult } from "../api/oauthCallbackApi
 /**
  * design doc: docs/detailed_design/screen/11_oauth_callback.md §9.1 useOAuthExchange
  *
- * jwtモードのハンドオフコード交換。成功時はaccessTokenを共通APIクライアント
- * （api/authAdapter/client）のTokenStoreへ保存し、以降のfetchWithAuth呼び出しへ引き継ぐ。
+ * jwtモードのハンドオフコード交換。成功時は共有TokenStoreへ保存し、以降の
+ * fetchWithAuth呼び出しへ引き継ぐ。
  */
 export function useOAuthExchange(): UseMutationResult<OAuthExchangeResult, unknown, { code: string }> {
 	return useMutation({

@@ -41,6 +41,8 @@ describe("taskDetail API", () => {
 			"/api/tasks/task-1",
 			expect.objectContaining({ method: "PATCH", body: JSON.stringify({ title: "更新", version: 2 }) }),
 		);
+		const [, requestInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(new Headers(requestInit.headers).get("content-type")).toBe("application/json");
 	});
 
 	it("コメント投稿はtask配下へbodyをJSON送信する", async () => {
@@ -63,7 +65,7 @@ describe("taskDetail API", () => {
 	});
 
 	it("エラー応答のcodeをTaskDetailApiErrorとして返す", async () => {
-		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ code: "TASK_CONFLICT" }, { ok: false, status: 409 })));
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ error: { code: "TASK_CONFLICT", message: "競合" } }, { ok: false, status: 409 })));
 
 		await expect(getTask("task-1")).rejects.toEqual(expect.objectContaining({
 			constructor: TaskDetailApiError,
@@ -108,7 +110,7 @@ describe("taskDetail API", () => {
 	});
 
 	it("CSRFトークン欠落・不一致時の403 CSRF_INVALIDをTaskDetailApiErrorとして返す", async () => {
-		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ code: "CSRF_INVALID" }, { ok: false, status: 403 })));
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ error: { code: "CSRF_INVALID", message: "CSRF不正" } }, { ok: false, status: 403 })));
 
 		await expect(patchTask("task-1", { title: "更新", version: 2 })).rejects.toEqual(expect.objectContaining({
 			constructor: TaskDetailApiError,

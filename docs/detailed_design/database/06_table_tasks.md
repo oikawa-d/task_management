@@ -248,11 +248,11 @@ repositoryは下表のSP/FN呼び出しとDTO写像だけを行う。advisory lo
 | `acquire_status_lock` / `next_position` | 単独公開しない。`sp_create_task` / `sp_update_task` 内でlock→`fn_next_task_position` | SPトランザクション内でのみ有効 |
 | `insert` | `CALL sp_create_task(:project_id, :created_by, :assignee_id, :title, :body, :status, :due_at, :position, :day_start_utc, :day_end_utc, :task_id)`（`:task_id` はOUTパラメータ。DB側で `gen_random_uuid()` により採番される。日境界はAPIがUTCへ変換して渡す） | `fn_get_task(:task_id)`で作成結果を取得 |
 | `get_by_id_for_update` | `SELECT fn_get_task(:task_id)` | 存在しなければ空集合。行ロックはSP内部 |
-| `update_with_optimistic_lock` / reorder | `CALL sp_update_task(:task_id, :editor_id, :version, :title, :body, :status, :assignee_id, :due_at, :position, :day_start_utc, :day_end_utc)` | version不一致は `P0005 TASK_CONFLICT` |
+| `update_with_optimistic_lock` / reorder | `CALL sp_update_task(:task_id, :editor_id, :version, :title, :body, :status, :assignee_id, :due_at, :position, :is_active, :day_start_utc, :day_end_utc)` | version不一致は `P0005 TASK_CONFLICT`。`is_active`はNULL時に不変、指定時はサービス層で作成者・オーナー・adminだけに制限 |
 | `deactivate` / `reactivate` | `CALL sp_deactivate_task(:task_id, :is_active)` | `is_active`だけ変更、position詰めなし |
 | `list_by_project_grouped` | `SELECT fn_get_project_board(:project_id, :include_inactive)` | status/position順のFN結果を3列へ写像 |
-| 横断一覧 | `SELECT fn_list_tasks(:user_id, :project_id, :status, :include_inactive, :limit, :offset, :unassigned)` | 権限スコープと未所属絞り込みはFN内で判定 |
-| カレンダー一覧 | `SELECT (task).*, project_is_active FROM fn_list_calendar_tasks(:user_id, :from_utc, :to_utc, :scope, :project_id)` | 日付範囲・scopeごとの権限・有効タスク判定はFN内で行う |
+| 横断一覧 | `SELECT (task).*, project_is_active, comment_count, total_count FROM fn_list_tasks(:user_id, :project_id, :status, :include_inactive, :limit, :offset, :unassigned)`。空ページ時は`fn_count_tasks`を追加呼び出し | 権限スコープ、未所属絞り込み、コメント件数、ページング前の総件数はFN内で判定・集計 |
+| カレンダー一覧 | `SELECT (task).*, project_is_active, comment_count FROM fn_list_calendar_tasks(:user_id, :from_utc, :to_utc, :scope, :project_id)` | 日付範囲・scopeごとの権限・有効タスク判定・コメント件数はFN内で行う |
 
 repositoryは上表のSP/FN呼び出しと戻り値のDTO写像のみを実装し、`tasks` テーブルへの直接SELECT/INSERT/UPDATE/DELETEは行わない。`sp_create_task` / `sp_update_task` の内部処理契約は[08_db_functions.md](./08_db_functions.md) §3.8を正とし、以下は advisory lock・position再採番・楽観ロックの具体的なアルゴリズムをSP内部実装の要点として補足するものである（repositoryから直接発行しない）。
 
@@ -300,7 +300,7 @@ repositoryは上表のSP/FN呼び出しと戻り値のDTO写像のみを実装�
 | 項目 | 内容 |
 |------|------|
 | 参照SQL | `tasks` と `projects` を `LEFT JOIN` し、`project_is_active`（`projects.is_active`。`project_id` がNULLの行は `null`）を1クエリで返す。デフォルトは `is_active = true` のみを対象とし、`p_include_inactive=true` で無効化済みタスクも含める。`ORDER BY status, position ASC` |
-| N+1回避 | コメント件数は `task_comment_repository.count_by_task_ids()` で別クエリ集計する |
+| N+1回避 | コメント件数は `task_comments` を `GROUP BY task_id` で集約し、FNの主クエリへJOINする |
 
 `GET /api/tasks`（横断一覧、`fn_list_tasks`）も同様に `projects` を `LEFT JOIN` して `project_is_active` を含める。`p_unassigned=true` の絞り込みは `WHERE t.project_id IS NULL` と権限スコープ（adminまたは作成者本人）を適用する。
 

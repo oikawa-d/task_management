@@ -19,6 +19,13 @@ class TaskWithProjectStatus:
 
 	task: Task
 	project_is_active: bool | None
+	comment_count: int = 0
+
+
+class TaskListResult(list[TaskWithProjectStatus]):
+	def __init__(self, items: list[TaskWithProjectStatus], total_count: int) -> None:
+		super().__init__(items)
+		self.total_count = total_count
 
 
 def _build_task(row: RowMapping) -> Task:
@@ -40,7 +47,11 @@ def _build_task(row: RowMapping) -> Task:
 
 
 def _build_task_with_project_status(row: RowMapping) -> TaskWithProjectStatus:
-	return TaskWithProjectStatus(task=_build_task(row), project_is_active=row["project_is_active"])
+	return TaskWithProjectStatus(
+		task=_build_task(row),
+		project_is_active=row["project_is_active"],
+		comment_count=int(row.get("comment_count", 0)),
+	)
 
 
 def _app_day_bounds_utc(now: datetime | None = None, app_timezone: str | None = None) -> tuple[datetime, datetime]:
@@ -91,7 +102,7 @@ async def create(
 
 async def get_by_id(db: AsyncSession, task_id: uuid.UUID) -> TaskWithProjectStatus | None:
 	result = await db.execute(
-		text("SELECT (task).*, project_is_active FROM fn_get_task(:task_id)"),
+		text("SELECT (task).*, project_is_active, comment_count FROM fn_get_task(:task_id)"),
 		{"task_id": task_id},
 	)
 	row = result.mappings().one_or_none()
@@ -100,13 +111,16 @@ async def get_by_id(db: AsyncSession, task_id: uuid.UUID) -> TaskWithProjectStat
 
 async def list_board(db: AsyncSession, project_id: uuid.UUID, include_inactive: bool) -> list[TaskWithProjectStatus]:
 	result = await db.execute(
-		text("SELECT (task).*, project_is_active FROM fn_get_project_board(:project_id, :include_inactive)"),
+		text(
+			"SELECT (task).*, project_is_active, comment_count "
+			"FROM fn_get_project_board(:project_id, :include_inactive)"
+		),
 		{"project_id": project_id, "include_inactive": include_inactive},
 	)
 	return [_build_task_with_project_status(row) for row in result.mappings().all()]
 
 
-async def list_for_user(
+async def list_for_user_with_total(
 	db: AsyncSession,
 	user_id: uuid.UUID,
 	project_id: uuid.UUID | None,
@@ -115,10 +129,10 @@ async def list_for_user(
 	limit: int,
 	offset: int,
 	unassigned: bool = False,
-) -> list[TaskWithProjectStatus]:
+) -> tuple[list[TaskWithProjectStatus], int]:
 	result = await db.execute(
 		text(
-			"SELECT (task).*, project_is_active FROM "
+			"SELECT (task).*, project_is_active, comment_count, total_count FROM "
 			"fn_list_tasks(:user_id, :project_id, :status, :include_inactive, :limit, :offset, :unassigned)"
 		),
 		{
@@ -131,7 +145,36 @@ async def list_for_user(
 			"unassigned": unassigned,
 		},
 	)
-	return [_build_task_with_project_status(row) for row in result.mappings().all()]
+	rows = result.mappings().all()
+	if rows:
+		return [_build_task_with_project_status(row) for row in rows], int(rows[0]["total_count"])
+	count_result = await db.execute(
+		text("SELECT fn_count_tasks(:user_id, :project_id, :status, :include_inactive, :unassigned) AS count"),
+		{
+			"user_id": user_id,
+			"project_id": project_id,
+			"status": status,
+			"include_inactive": include_inactive,
+			"unassigned": unassigned,
+		},
+	)
+	return [], int(count_result.scalar_one())
+
+
+async def list_for_user(
+	db: AsyncSession,
+	user_id: uuid.UUID,
+	project_id: uuid.UUID | None,
+	status: str | None,
+	include_inactive: bool,
+	limit: int,
+	offset: int,
+	unassigned: bool = False,
+) -> list[TaskWithProjectStatus]:
+	items, total = await list_for_user_with_total(
+		db, user_id, project_id, status, include_inactive, limit, offset, unassigned
+	)
+	return TaskListResult(items, total)
 
 
 async def list_calendar(
@@ -144,7 +187,7 @@ async def list_calendar(
 ) -> list[TaskWithProjectStatus]:
 	result = await db.execute(
 		text(
-			"SELECT (task).*, project_is_active FROM fn_list_calendar_tasks("
+			"SELECT (task).*, project_is_active, comment_count FROM fn_list_calendar_tasks("
 			":user_id, :from_utc, :to_utc, :scope, :project_id)"
 		),
 		{"user_id": user_id, "from_utc": from_utc, "to_utc": to_utc, "scope": scope, "project_id": project_id},
@@ -163,13 +206,14 @@ async def update(
 	assignee_id: uuid.UUID | None,
 	due_at: datetime | None,
 	position: int | None,
+	is_active: bool | None = None,
 ) -> None:
 	day_start_utc, day_end_utc = _app_day_bounds_utc()
 	try:
 		await db.execute(
 			text(
 				"CALL sp_update_task(:task_id, :editor_id, :version, :title, :body, "
-				":status, :assignee_id, :due_at, :position, :day_start_utc, :day_end_utc)"
+				":status, :assignee_id, :due_at, :position, :is_active, :day_start_utc, :day_end_utc)"
 			),
 			{
 				"task_id": task_id,
@@ -181,6 +225,7 @@ async def update(
 				"assignee_id": assignee_id,
 				"due_at": due_at,
 				"position": position,
+				"is_active": is_active,
 				"day_start_utc": day_start_utc,
 				"day_end_utc": day_end_utc,
 			},

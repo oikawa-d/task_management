@@ -278,7 +278,7 @@ flowchart LR
 
 | 観点 | 方針 | 根拠 |
 |------|------|------|
-| アクセストークンの保存場所 | フロントのメモリ（Zustand）。`localStorage`には置かない | XSS時のトークン持ち出しリスク低減（[`../../basic_design/03_auth.md`](../../basic_design/03_auth.md) §4.1） |
+| アクセストークンの保存場所 | フロントのメモリ上の共有`TokenStore`。`localStorage`には置かない | XSS時のトークン持ち出しリスク低減（[`../../basic_design/03_auth.md`](../../basic_design/03_auth.md) §4.1） |
 | リフレッシュトークンをJWTにしない | ランダム文字列＋Redisハッシュ保存とし、内容を持たせない | 失効管理をRedis一元管理で完結させるため |
 | ローテーション必須 | `/auth/refresh`成功のたびに新トークンへ差し替え、旧トークンはtombstone化して二度と使えなくする | リフレッシュトークン漏洩時の被害window縮小 |
 | 再利用検知とfamily失効 | tombstone化済みトークンの再提示を検知したら同一family全体を失効させる | 盗まれたrefresh tokenが正規ユーザーより先に使われた場合の検知（Rotation + Reuse Detection） |

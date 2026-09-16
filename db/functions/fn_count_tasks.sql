@@ -1,32 +1,15 @@
-CREATE OR REPLACE FUNCTION fn_list_tasks(
+CREATE OR REPLACE FUNCTION fn_count_tasks(
     p_user_id UUID,
     p_project_id UUID,
     p_status VARCHAR,
     p_include_inactive BOOLEAN,
-    p_limit INTEGER,
-    p_offset INTEGER,
     p_unassigned BOOLEAN
-) RETURNS TABLE (
-    task tasks,
-    project_is_active BOOLEAN,
-    comment_count BIGINT,
-    total_count BIGINT
-)
+) RETURNS BIGINT
 LANGUAGE sql
 STABLE
 AS $$
-    WITH comment_counts AS (
-        SELECT task_id, count(*) AS comment_count
-        FROM task_comments
-        GROUP BY task_id
-    )
-    SELECT t,
-           p.is_active,
-           COALESCE(cc.comment_count, 0),
-           count(*) OVER ()
+    SELECT count(*)
     FROM tasks t
-    LEFT JOIN projects p ON p.id = t.project_id
-    LEFT JOIN comment_counts cc ON cc.task_id = t.id
     WHERE (p_include_inactive OR t.is_active = true)
       AND (p_status IS NULL OR t.status = p_status)
       AND (
@@ -73,7 +56,5 @@ AS $$
                   )
               )
           )
-      )
-    ORDER BY t.created_at DESC
-    LIMIT p_limit OFFSET p_offset;
+      );
 $$;

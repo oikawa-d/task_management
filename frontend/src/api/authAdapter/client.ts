@@ -1,5 +1,8 @@
+import { AxiosError } from "axios";
 import { createAuthAdapter } from "./index";
+import { REFRESH_EXEMPT_PATHS } from "./constants";
 import type { AuthAdapter, AuthMode } from "./types";
+import { authTokenStore } from "../../auth/tokenStore";
 
 const DEFAULT_API_BASE_URL = "/api";
 
@@ -10,8 +13,7 @@ export type AuthConfigResponse = {
 
 let authAdapter: AuthAdapter | null = null;
 let authConfigRequest: Promise<AuthAdapter> | null = null;
-/** setAuthAccessToken()がアダプタ未登録時に呼ばれた場合に保持する、登録後へ持ち越すトークン */
-let pendingAccessToken: string | null = null;
+let logoutHandler: (() => void) | null = null;
 
 function isAuthMode(value: unknown): value is AuthMode {
 	return value === "session" || value === "jwt";
@@ -38,55 +40,38 @@ function toFetchHeaders(headers: unknown): Headers {
 	return result;
 }
 
-/** 登録されたアダプタへ、持ち越し中のアクセストークンがあれば反映する */
-function applyPendingAccessToken(adapter: AuthAdapter): void {
-	if (pendingAccessToken === null) {
-		return;
-	}
-	adapter.onLoginSuccess({ access_token: pendingAccessToken });
-	pendingAccessToken = null;
-}
-
 /**
  * bootstrapAuth()が生成したアダプタを共有する。
  * これを呼ばないとjwtモードでトークンを持たない別インスタンスが使われ、
  * Authorizationヘッダが付与されない。
  */
-export function setAuthAdapter(adapter: AuthAdapter): void {
+export function setAuthAdapter(adapter: AuthAdapter, onLogout?: () => void): void {
 	authAdapter = adapter;
+	logoutHandler = onLogout ?? null;
 	authConfigRequest = null;
-	applyPendingAccessToken(adapter);
 }
 
 /** bootstrap未実行時のフォールバックと単体テスト用に、auth_modeだけからアダプタを生成する */
 export function setAuthAdapterMode(mode: AuthMode, csrfCookieName?: string): void {
-	authAdapter = createAuthAdapter(mode, { csrfCookieName });
-	applyPendingAccessToken(authAdapter);
+	authAdapter = createAuthAdapter(mode, { csrfCookieName, tokenStore: authTokenStore });
+	logoutHandler = null;
+	authConfigRequest = null;
 }
 
 /**
  * ログイン成功時と同様に、現在共有中のアダプタへアクセストークンを反映する（OAuthハンドオフ交換など）。
- * アダプタが未登録の場合はトークンを保持し、setAuthAdapter()/setAuthAdapterMode()での
- * 登録時に反映する。tokenにnullを渡すと、登録済みアダプタのトークンをクリアする
- * （未登録時は持ち越し中のトークンをクリアする）。
+ * 共有TokenStoreへ保存し、tokenにnullを渡すと登録済みアダプタのトークンもクリアする。
  */
 export function setAuthAccessToken(token: string | null): void {
-	if (!authAdapter) {
-		pendingAccessToken = token;
-		return;
-	}
-	pendingAccessToken = null;
-	if (token) {
-		authAdapter.onLoginSuccess({ access_token: token });
-	} else {
-		authAdapter.onLogout();
-	}
+	authTokenStore.setAccessToken(token);
+	if (!token) authAdapter?.onLogout();
 }
 
 export function clearAuthAdapter(): void {
 	authAdapter = null;
+	logoutHandler = null;
 	authConfigRequest = null;
-	pendingAccessToken = null;
+	authTokenStore.setAccessToken(null);
 }
 
 export async function resolveAuthAdapter(
@@ -134,6 +119,15 @@ export async function fetchWithAuth(
 	init: RequestInit = {},
 	apiBaseUrl: string = DEFAULT_API_BASE_URL,
 ): Promise<Response> {
+	return fetchWithAuthInternal(url, init, apiBaseUrl, false);
+}
+
+async function fetchWithAuthInternal(
+	url: string,
+	init: RequestInit,
+	apiBaseUrl: string,
+	retried: boolean,
+): Promise<Response> {
 	const adapter = await resolveAuthAdapter(apiBaseUrl);
 	const headers = new Headers(init.headers);
 	const attached = adapter.attach({
@@ -142,9 +136,41 @@ export async function fetchWithAuth(
 		headers: toHeaderRecord(headers),
 	});
 
-	return fetch(url, {
+	const response = await fetch(url, {
 		...init,
 		credentials: attached.withCredentials ? "include" : "same-origin",
 		headers: toFetchHeaders(attached.headers),
 	});
+	if (response.ok || response.status !== 401) {
+		return response;
+	}
+
+	const requestConfig = {
+		url,
+		method: init.method ?? "GET",
+		headers: attached.headers,
+	};
+	const unauthorized = new AxiosError("Unauthorized", "ERR_BAD_REQUEST", requestConfig as never, undefined, {
+		status: 401,
+		statusText: "Unauthorized",
+		headers: {},
+		config: requestConfig as never,
+		data: undefined,
+	});
+	let shouldRetry = false;
+	if (!retried && !REFRESH_EXEMPT_PATHS.some((path) => url.includes(path))) {
+		try {
+			shouldRetry = await adapter.onUnauthorized(unauthorized);
+		} catch {
+			shouldRetry = false;
+		}
+	}
+	if (shouldRetry) {
+		return fetchWithAuthInternal(url, init, apiBaseUrl, true);
+	}
+	if (!REFRESH_EXEMPT_PATHS.some((path) => url.includes(path))) {
+		adapter.onLogout();
+		logoutHandler?.();
+	}
+	return response;
 }

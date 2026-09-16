@@ -15,6 +15,7 @@ from app.api.routers.tasks_router import router as tasks_router
 from app.api.routers.users_router import router as users_router
 from app.core.config import get_backend_settings
 from app.core.exceptions import register_error_handling
+from app.core.history_middleware import register_history_middleware
 from app.core.logger import configure_logging
 from app.redis_client import close_redis_client, get_redis_client
 
@@ -39,6 +40,7 @@ app = FastAPI(
 )
 
 register_error_handling(app)
+register_history_middleware(app)
 # allow_credentials=Trueは固定値。CookieベースのDouble Submit Cookie認証（core/deps.pyの
 # verify_origin/verify_csrf）を前提としており、settings.cors_allow_originsのワイルドカード
 # 禁止バリデータ（core/config.py :: _reject_wildcard_origin）はallow_credentials=Trueである

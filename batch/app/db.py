@@ -21,3 +21,11 @@ async def get_db_session() -> AsyncIterator[AsyncSession]:
 	session_factory = get_session_factory()
 	async with session_factory() as session:
 		yield session
+
+
+async def dispose_db_engine() -> None:
+	if get_db_engine.cache_info().currsize == 0:
+		return
+	await get_db_engine().dispose()
+	get_session_factory.cache_clear()
+	get_db_engine.cache_clear()

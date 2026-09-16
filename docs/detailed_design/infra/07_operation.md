@@ -184,11 +184,11 @@ stateDiagram-v2
 
 | 項目 | 内容 |
 |------|------|
-| 手順定義 | `core/logger.py`が発行する構造化ログ（JSON Lines想定）に、各リクエストのミドルウェアが採番した`X-Request-ID`を含める |
-| 入力 | 各リクエストのミドルウェア（`request_id_middleware`相当）が`uuid4`等でリクエストIDを生成し、レスポンスヘッダ`X-Request-ID`にも付与 |
+| 手順定義 | `core/logger.py`が発行する構造化ログ（JSON Lines想定）に、`history_middleware`が採番した`X-Request-ID`を含める |
+| 入力 | 各APIリクエストの`history_middleware`が`uuid4`でリクエストIDを生成し、レスポンスヘッダ`X-Request-ID`にも付与（内側のエラーミドルウェアは同じIDを再利用） |
 | 出力 | `docker compose logs backend`で閲覧可能なログ行（`timestamp`/`level`/`request_id`/`path`/`status_code`/`message`等のフィールドを想定） |
 | 失敗条件 | なし（ログ出力自体は失敗しても処理を止めない設計とする） |
-| 処理内容 | 1. リクエスト受信時にミドルウェアが`request_id`を生成しコンテキストへ格納 2. ルータ/サービス層のログ呼び出しは`request_id`を自動的に含める（`contextvars`等での伝播、実装詳細は担当外） 3. レスポンスヘッダ`X-Request-ID`をクライアントへ返し、問い合わせ時にユーザーからも提示可能にする 4. 障害調査時は`docker compose logs backend \| grep <request_id>`で該当リクエストの一連のログを追跡する |
+| 処理内容 | 1. リクエスト受信時に`history_middleware`が`request_id`を生成しコンテキストへ格納 2. ルータ/サービス層のログ呼び出しは`request_id`を自動的に含める（`contextvars`等での伝播、実装詳細は担当外） 3. レスポンスヘッダ`X-Request-ID`をクライアントへ返し、問い合わせ時にユーザーからも提示可能にする 4. 障害調査時は`docker compose logs backend \| grep <request_id>`で該当リクエストの一連のログを追跡する |
 | 副作用 | ログ出力（ディスク/標準出力への書き込み） |
 
 ### 8.3 ログ保管

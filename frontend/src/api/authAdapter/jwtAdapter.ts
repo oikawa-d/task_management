@@ -24,7 +24,7 @@ function isCookieAuthenticatedPath(url: string | undefined): boolean {
 	return url.includes(REFRESH_ENDPOINT_PATH) || url.includes(LOGOUT_ENDPOINT_PATH);
 }
 
-/** authStore未実装のため既定で使う、メモリのみのトークン保持実装 */
+/** TokenStoreが注入されない単体利用時に使う、メモリのみのトークン保持実装 */
 function createInMemoryTokenStore(): TokenStore {
 	let accessToken: string | null = null;
 	return {

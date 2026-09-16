@@ -49,13 +49,14 @@ repository層は `CALL sp_xxx(...)` または `SELECT fn_xxx(...)` と戻り値�
 | 14 | プロシージャ | `sp_deactivate_project` | `p_project_id UUID`, `p_is_active BOOLEAN` | なし | projectの有効/無効切替 |
 | 15 | プロシージャ | `sp_add_project_member` | `p_project_id UUID`, `p_user_id UUID`, `p_invited_by UUID` | なし | 重複防止付き所属追加 |
 | 16 | プロシージャ | `sp_remove_project_member` | `p_project_id UUID`, `p_user_id UUID` | なし | 担当解除後の所属削除 |
-| 17 | 関数 | `fn_get_project_board` | `p_project_id UUID`, `p_include_inactive BOOLEAN` | `SETOF tasks` | カンバン取得 |
-| 18 | 関数 | `fn_get_task` | `p_task_id UUID` | `SETOF tasks` | タスク1件取得 |
-| 19 | 関数 | `fn_list_tasks` | `p_user_id UUID`, `p_project_id UUID`, `p_status VARCHAR`, `p_include_inactive BOOLEAN`, `p_limit INTEGER`, `p_offset INTEGER`, `p_unassigned BOOLEAN` | `SETOF tasks` | 権限スコープ付き一覧。`p_unassigned=true`は未所属のみ |
+| 17 | 関数 | `fn_get_project_board` | `p_project_id UUID`, `p_include_inactive BOOLEAN` | `TABLE(task tasks, project_is_active BOOLEAN, comment_count BIGINT)` | カンバン取得。コメント件数を同一クエリで返す |
+| 18 | 関数 | `fn_get_task` | `p_task_id UUID` | `TABLE(task tasks, project_is_active BOOLEAN, comment_count BIGINT)` | タスク1件取得。コメント件数を同一クエリで返す |
+| 19 | 関数 | `fn_list_tasks` | `p_user_id UUID`, `p_project_id UUID`, `p_status VARCHAR`, `p_include_inactive BOOLEAN`, `p_limit INTEGER`, `p_offset INTEGER`, `p_unassigned BOOLEAN` | `TABLE(task tasks, project_is_active BOOLEAN, comment_count BIGINT, total_count BIGINT)` | 権限スコープ付き一覧。`p_unassigned=true`は未所属のみ。コメント件数とページング前の総件数を返し、該当ページが空の場合は`fn_count_tasks`で補完する |
+| 19a | 関数 | `fn_count_tasks` | `p_user_id UUID`, `p_project_id UUID`, `p_status VARCHAR`, `p_include_inactive BOOLEAN`, `p_unassigned BOOLEAN` | `BIGINT` | `fn_list_tasks`の該当ページが空の場合に、同一の認可・絞り込み条件で総件数を返すフォールバック |
 | 20 | 関数 | `fn_list_task_comments` | `p_task_id UUID` | `SETOF task_comments` | コメント一覧 |
 | 21 | 関数 | `fn_get_comment_with_task` | `p_comment_id UUID` | `SETOF task_comments` | コメント・所属判定用取得 |
 | 22 | プロシージャ | `sp_create_task` | `p_project_id UUID`, `p_created_by UUID`, `p_assignee_id UUID`, `p_title VARCHAR`, `p_body TEXT`, `p_status VARCHAR`, `p_due_at TIMESTAMPTZ`, `p_position INTEGER`, `p_day_start_utc TIMESTAMPTZ`, `p_day_end_utc TIMESTAMPTZ`, `OUT p_task_id UUID` | `p_task_id UUID`（OUT） | task作成・position採番・当日期限通知を一体実行し、DB側で採番したtask_idをOUTで返す |
-| 23 | プロシージャ | `sp_update_task` | `p_task_id UUID`, `p_editor_id UUID`, `p_version INTEGER`, `p_title VARCHAR`, `p_body TEXT`, `p_status VARCHAR`, `p_assignee_id UUID`, `p_due_at TIMESTAMPTZ`, `p_position INTEGER`, `p_day_start_utc TIMESTAMPTZ`, `p_day_end_utc TIMESTAMPTZ` | なし | version・再採番・当日期限通知を一体実行 |
+| 23 | プロシージャ | `sp_update_task` | `p_task_id UUID`, `p_editor_id UUID`, `p_version INTEGER`, `p_title VARCHAR`, `p_body TEXT`, `p_status VARCHAR`, `p_assignee_id UUID`, `p_due_at TIMESTAMPTZ`, `p_position INTEGER`, `p_is_active BOOLEAN`, `p_day_start_utc TIMESTAMPTZ`, `p_day_end_utc TIMESTAMPTZ` | なし | version・再採番・有効/無効切替・当日期限通知を一体実行 |
 | 24 | プロシージャ | `sp_deactivate_task` | `p_task_id UUID`, `p_is_active BOOLEAN` | なし | taskの有効/無効切替 |
 | 25 | プロシージャ | `sp_add_task_comment` | `p_task_id UUID`, `p_user_id UUID`, `p_body TEXT`, `OUT p_comment_id UUID` | `p_comment_id UUID`（OUT） | コメント追加。DB側で採番したcomment_idをOUTで返す |
 | 26 | プロシージャ | `sp_update_task_comment` | `p_comment_id UUID`, `p_user_id UUID`, `p_body TEXT` | なし | コメント更新 |
@@ -66,7 +67,7 @@ repository層は `CALL sp_xxx(...)` または `SELECT fn_xxx(...)` と戻り値�
 | 29a | 関数 | `fn_list_due_notification_tasks` | `p_threshold TIMESTAMPTZ` | `SETOF tasks` | batchの期限通知対象抽出 |
 | 30 | プロシージャ | `sp_mark_notification_read` | `p_notification_id UUID`, `p_user_id UUID`, `OUT p_read_at TIMESTAMPTZ` | `p_read_at TIMESTAMPTZ`（OUT。対象なしはNULL） | 本人の通知を既読化し、永続化した既読時刻を返す |
 | 31 | プロシージャ | `sp_mark_all_notifications_read` | `p_user_id UUID`, `OUT p_updated_count INTEGER` | `p_updated_count INTEGER` | 本人の未読通知を一括既読化し、更新件数を返す |
-| 31a | 関数 | `fn_list_calendar_tasks` | `p_user_id UUID`, `p_from TIMESTAMPTZ`, `p_to TIMESTAMPTZ`, `p_scope VARCHAR`, `p_project_id UUID` | `TABLE(task tasks, project_is_active BOOLEAN)` | APP_TIMEZONEの日付範囲に該当する本人/プロジェクトの有効タスクを返す |
+| 31a | 関数 | `fn_list_calendar_tasks` | `p_user_id UUID`, `p_from TIMESTAMPTZ`, `p_to TIMESTAMPTZ`, `p_scope VARCHAR`, `p_project_id UUID` | `TABLE(task tasks, project_is_active BOOLEAN, comment_count BIGINT)` | APP_TIMEZONEの日付範囲に該当する本人/プロジェクトの有効タスクとコメント件数を返す |
 | 32 | 関数 | `fn_admin_list_users` | `p_query VARCHAR`, `p_role VARCHAR`, `p_is_active BOOLEAN`, `p_limit INTEGER`, `p_offset INTEGER` | `TABLE("user" users, total_count BIGINT)` | admin用ユーザー一覧。`count(*) OVER()`でページング前の総件数を1回の呼び出しで返す（#347レビュー対応） |
 | 32a | 関数 | `fn_count_admin_users` | `p_query VARCHAR`, `p_role VARCHAR`, `p_is_active BOOLEAN` | `BIGINT` | `fn_admin_list_users`の`total_count`が取得できない場合（該当0件）のフォールバック用件数取得 |
 | 33 | 関数 | `fn_admin_list_projects` | `p_query VARCHAR`, `p_is_active BOOLEAN`, `p_limit INTEGER`, `p_offset INTEGER` | `TABLE(project projects, owner users, member_count BIGINT, task_count_todo BIGINT, task_count_in_progress BIGINT, task_count_done BIGINT, total_count BIGINT)` | admin用プロジェクト一覧。owner情報、member/task集計、`count(*) OVER()`による総件数を同時返却（#347/#348対応） |
@@ -343,8 +344,8 @@ $$;
 | `sp_deactivate_project` | `projects.is_active`だけをUPDATE | 関連行は変更しない |
 | `sp_add_project_member` | membership存在を確認し、無ければINSERT | 重複はP0003 |
 | `sp_remove_project_member` | ownerでないことを確認し、tasksのassigneeをNULL化後DELETE | 同一トランザクション。ownerはP0004 |
-| `fn_get_project_board` | tasksをproject/status/position順で参照し、inactive条件を適用 | 参照のみ |
-| `fn_get_task` | tasksを主キーで参照 | 参照のみ |
+| `fn_get_project_board` | tasksをproject/status/position順で参照し、inactive条件を適用。task_commentsをtask_idで集計してcomment_countを付与 | 参照のみ。タスクごとの追加クエリなし |
+| `fn_get_task` | tasksを主キーで参照し、task_commentsをtask_idで集計してcomment_countを付与 | 参照のみ |
 | `fn_list_tasks` | user role・所属・未所属作成者条件を適用してtasksをページング | 参照のみ |
 | `fn_list_task_comments` | task_commentsと表示用usersを結合しcreated_at昇順で返す | 参照のみ |
 | `fn_get_comment_with_task` | comment、task、project owner、投稿者の判定材料を一括取得 | 参照のみ |
@@ -360,7 +361,7 @@ $$;
 | `fn_list_due_notification_tasks` | threshold以下・未完了・担当者ありのtasksを返す | batch専用の参照FN |
 | `sp_mark_notification_read` | user_id一致する行だけ`COALESCE(read_at, now())`で更新し、更新後の`read_at`を`OUT p_read_at`で返す | 対象外は`p_read_at = NULL` |
 | `sp_mark_all_notifications_read` | user_id一致かつ未読の行を一括UPDATEし、`ROW_COUNT`を返す | 既読は上書きしない |
-| `fn_list_calendar_tasks` | `due_at`を`p_from`以上`p_to`未満、`is_active=true`で絞り、scopeごとの所有範囲を返す | `me`は未所属の作成者本人または担当者、`project`は指定プロジェクト |
+| `fn_list_calendar_tasks` | `due_at`を`p_from`以上`p_to`未満、`is_active=true`で絞り、scopeごとの所有範囲とtask_commentsのcomment_countを返す | `me`は未所属の作成者本人または担当者、`project`は指定プロジェクト。コメント集計は主クエリ内で実行 |
 | `fn_admin_list_users` | role/status/queryをusersへ適用し、ウィンドウ関数`count(*) OVER()`によるページング前total_countとともに一覧返却 | admin APIからのみ呼ぶ。`total_count`は該当0件の場合は取得できない（`fn_count_admin_users`で別途取得） |
 | `fn_count_admin_users` | `fn_admin_list_users`と同一条件でCOUNTを返す | `fn_admin_list_users`の該当行が0件のときのフォールバックとしてのみ使用する |
 | `fn_admin_list_projects` | query/statusをprojectsへ適用し、projects.owner_idでusersを結合する。project_members/tasksをproject_id単位で集計したmember_count・status別task_count、およびウィンドウ関数`count(*) OVER()`によるtotal_countとともに一覧返却 | admin APIからのみ呼ぶ。タスク件数は既存サービスの挙動に合わせてis_activeによる除外を行わない |
