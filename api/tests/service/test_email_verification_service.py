@@ -3,9 +3,10 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from app.core.exceptions import InvalidResetTokenError, InvalidVerifyTokenError
+from app.core.exceptions import InvalidResetTokenError, InvalidVerifyTokenError, ServiceUnavailableError
 from app.service import email_verification_service
 from redis.exceptions import ConnectionError as RedisConnectionError
+from sqlalchemy.exc import OperationalError
 
 
 class _FakeBackgroundTasks:
@@ -17,11 +18,17 @@ class _FakeBackgroundTasks:
 
 
 class _FakeDb:
-	def __init__(self, calls: list[str] | None = None) -> None:
+	def __init__(self, calls: list[str] | None = None, commit_error: Exception | None = None) -> None:
 		self.calls = calls if calls is not None else []
+		self.commit_error = commit_error
 
 	async def commit(self) -> None:
 		self.calls.append("db.commit")
+		if self.commit_error is not None:
+			raise self.commit_error
+
+	async def rollback(self) -> None:
+		self.calls.append("db.rollback")
 
 
 def _user(*, verified: bool = False, email: str = "taro@example.com") -> SimpleNamespace:
@@ -97,6 +104,23 @@ async def test_verify_email_commits_database_update(monkeypatch: pytest.MonkeyPa
 
 	mark_verified.assert_awaited_once_with(db, user_id)
 	assert db.calls == ["db.commit"]
+
+
+@pytest.mark.asyncio
+async def test_verify_email_converts_database_connection_failure_and_rolls_back(
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	user_id = uuid4()
+	monkeypatch.setattr(
+		email_verification_service.redis_store, "consume_email_verify_token", AsyncMock(return_value=user_id)
+	)
+	monkeypatch.setattr(email_verification_service.user_repository, "mark_email_verified", AsyncMock())
+	db = _FakeDb(commit_error=OperationalError("verify email", {}, SimpleNamespace(sqlstate="08006")))
+
+	with pytest.raises(ServiceUnavailableError):
+		await email_verification_service.verify_email("token", db)  # type: ignore[arg-type]
+
+	assert db.calls == ["db.commit", "db.rollback"]
 
 
 @pytest.mark.asyncio

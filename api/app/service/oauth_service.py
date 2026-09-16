@@ -8,6 +8,7 @@ import secrets
 from typing import Any
 
 from fastapi import Request, Response
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.factory import get_auth_strategy
@@ -23,6 +24,7 @@ from app.core.exceptions import (
 	OAuthHandoffInvalidError,
 	ServiceUnavailableError,
 	UserInactiveError,
+	raise_database_error,
 )
 from app.models.user import User
 from app.repository import login_history_repository as _login_history_repository
@@ -88,20 +90,30 @@ async def _resolve_or_create_user(db: AsyncSession, userinfo: GoogleUserInfo) ->
 			raise OAuthEmailUnverifiedError()
 		if not existing.is_active:
 			raise UserInactiveError()
-		await oauth_account_repository.upsert(db, existing.id, "google", userinfo.sub)
-		if existing.email_verified_at is None:
-			await user_repository.mark_email_verified(db, existing.id)
-		await db.commit()
+		try:
+			await oauth_account_repository.upsert(db, existing.id, "google", userinfo.sub)
+			if existing.email_verified_at is None:
+				await user_repository.mark_email_verified(db, existing.id)
+			await db.commit()
+		except DBAPIError as exc:
+			await db.rollback()
+			raise_database_error(exc)
 		return existing
 	if not userinfo.email_verified:
 		raise OAuthEmailUnverifiedError()
 	username = f"google_{hashlib.sha256(userinfo.sub.encode()).hexdigest()[:16]}"
-	user_id = await user_repository.create(db, username, userinfo.email, None)
-	await oauth_account_repository.upsert(db, user_id, "google", userinfo.sub)
-	await user_repository.mark_email_verified(db, user_id)
-	if userinfo.given_name is not None or userinfo.family_name is not None:
-		await user_repository.update_profile(db, user_id, userinfo.family_name, userinfo.given_name, None, None, None)
-	await db.commit()
+	try:
+		user_id = await user_repository.create(db, username, userinfo.email, None)
+		await oauth_account_repository.upsert(db, user_id, "google", userinfo.sub)
+		await user_repository.mark_email_verified(db, user_id)
+		if userinfo.given_name is not None or userinfo.family_name is not None:
+			await user_repository.update_profile(
+				db, user_id, userinfo.family_name, userinfo.given_name, None, None, None
+			)
+		await db.commit()
+	except DBAPIError as exc:
+		await db.rollback()
+		raise_database_error(exc)
 	user = await user_repository.get_by_id(db, user_id)
 	if user is None:
 		raise OAuthFailedError()
@@ -273,10 +285,11 @@ async def oauth_exchange(
 		except Exception as rollback_exc:
 			raise ServiceUnavailableError() from rollback_exc
 		raise OAuthFailedError()
+	login_user_id = str(user.id)
 	try:
 		await _record_oauth_login(db, user, request, client_info)
 	except Exception as exc:
-		log_login_history_write_failed(request, user, client_info)
+		log_login_history_write_failed(request, user, client_info, user_id=login_user_id)
 		try:
 			await rollback_oauth_login(
 				configured_strategy,

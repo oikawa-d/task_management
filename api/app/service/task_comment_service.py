@@ -1,8 +1,9 @@
 from typing import Protocol, cast
 
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import NotFoundError, raise_database_error
 from app.models.task import Task
 from app.models.task_comment import TaskComment
 from app.repository import task_comment_repository
@@ -54,8 +55,8 @@ async def list_comments(task: Task, user: CurrentUser, db: AsyncSession) -> Comm
 async def add_comment(
 	task: Task, payload: CommentCreateRequest, user: CurrentUser, db: AsyncSession
 ) -> CommentResponse:
+	await require_task_access(task, user, db)
 	try:
-		await require_task_access(task, user, db)
 		comment_id = await task_comment_repository.create(db, task.id, user.id, payload.body)
 		comment = await task_comment_repository.get_by_id(db, comment_id)
 		if comment is None:
@@ -63,6 +64,9 @@ async def add_comment(
 		response = _comment_response(comment, user)
 		await db.commit()
 		return response
+	except DBAPIError as exc:
+		await db.rollback()
+		raise_database_error(exc)
 	except Exception:
 		await db.rollback()
 		raise
@@ -75,9 +79,9 @@ async def update_comment(
 	user: CurrentUser,
 	db: AsyncSession,
 ) -> CommentResponse:
+	await require_task_access(task, user, db)
+	require_comment_editor(comment.user_id, user)
 	try:
-		await require_task_access(task, user, db)
-		require_comment_editor(comment.user_id, user)
 		await task_comment_repository.update(db, comment.id, user.id, payload.body)
 		updated = await task_comment_repository.get_by_id(db, comment.id)
 		if updated is None:
@@ -85,17 +89,23 @@ async def update_comment(
 		response = _comment_response(updated, user)
 		await db.commit()
 		return response
+	except DBAPIError as exc:
+		await db.rollback()
+		raise_database_error(exc)
 	except Exception:
 		await db.rollback()
 		raise
 
 
 async def delete_comment(task: Task, comment: TaskComment, user: CurrentUser, db: AsyncSession) -> None:
+	await require_task_access(task, user, db)
+	require_comment_editor(comment.user_id, user)
 	try:
-		await require_task_access(task, user, db)
-		require_comment_editor(comment.user_id, user)
 		await task_comment_repository.delete(db, comment.id, user.id)
 		await db.commit()
+	except DBAPIError as exc:
+		await db.rollback()
+		raise_database_error(exc)
 	except Exception:
 		await db.rollback()
 		raise

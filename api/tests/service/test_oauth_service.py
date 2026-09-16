@@ -26,6 +26,7 @@ from app.schemas.oauth import OAuthExchangeResponse
 from app.service import oauth_service as auth_service
 from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt.algorithms import RSAAlgorithm
+from sqlalchemy.exc import OperationalError
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -723,6 +724,42 @@ async def test_resolve_user_links_verified_existing_email(monkeypatch: pytest.Mo
 	assert upsert.await_args.args[1:] == (user.id, "google", "google-sub")
 	mark_email_verified.assert_awaited_once_with(db, user.id)
 	commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_resolve_user_converts_database_connection_failure_and_rolls_back(
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	user = SimpleNamespace(id=uuid4(), email="alice@example.com", email_verified_at=None, is_active=True)
+	commit = AsyncMock(side_effect=OperationalError("oauth account", {}, SimpleNamespace(sqlstate="08006")))
+	rollback = AsyncMock()
+	monkeypatch.setattr(auth_service.oauth_account_repository, "get_by_provider_identity", AsyncMock(return_value=None))
+	monkeypatch.setattr(auth_service.user_repository, "get_by_email", AsyncMock(return_value=user))
+	monkeypatch.setattr(auth_service.oauth_account_repository, "upsert", AsyncMock())
+	monkeypatch.setattr(auth_service.user_repository, "mark_email_verified", AsyncMock())
+
+	with pytest.raises(ServiceUnavailableError):
+		await auth_service._resolve_or_create_user(
+			SimpleNamespace(commit=commit, rollback=rollback),
+			GoogleUserInfo("google-sub", user.email, True),
+		)
+
+	rollback.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_record_oauth_login_converts_database_connection_failure_and_rolls_back(
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	commit = AsyncMock(side_effect=OperationalError("oauth login history", {}, SimpleNamespace(sqlstate="08006")))
+	rollback = AsyncMock()
+	user = SimpleNamespace(id=uuid4(), email="alice@example.com")
+	monkeypatch.setattr(auth_service.login_history_repository, "create", AsyncMock())
+
+	with pytest.raises(ServiceUnavailableError):
+		await auth_service.record_oauth_login(SimpleNamespace(commit=commit, rollback=rollback), user, _request())
+
+	rollback.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio

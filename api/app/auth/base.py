@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from uuid import UUID
 
 from fastapi import Request, Response
@@ -24,6 +24,7 @@ class LoginResult:
 	csrf_token: str | None = None
 	expires_in: int | None = None
 	session_id: str | None = None
+	user_id: UUID | None = field(default=None, compare=False, repr=False)
 
 
 class AuthStrategy(ABC):

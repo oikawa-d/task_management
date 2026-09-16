@@ -80,7 +80,7 @@ class JwtAuthStrategy(AuthStrategy):
 	async def rollback_login(self, user: User, result: LoginResult, response: Response) -> None:
 		try:
 			if result.refresh_token is not None:
-				await redis_store.revoke_refresh_token(result.refresh_token, user.id)
+				await redis_store.revoke_refresh_token(result.refresh_token, result.user_id or user.id)
 		finally:
 			# Access tokenはstatelessで既存基盤に失効機構がないため、refresh tokenのみ失効する。
 			self._delete_cookies(response)
@@ -92,7 +92,14 @@ class JwtAuthStrategy(AuthStrategy):
 		await redis_store.store_refresh_token(refresh_token, user_id, family_id, self.settings.refresh_ttl_seconds)
 		csrf_token = secrets.token_urlsafe(32)
 		self._set_cookies(response, refresh_token, csrf_token)
-		return LoginResult("jwt", access_token, refresh_token, csrf_token, self.settings.access_token_ttl_seconds)
+		return LoginResult(
+			"jwt",
+			access_token,
+			refresh_token,
+			csrf_token,
+			self.settings.access_token_ttl_seconds,
+			user_id=user_id,
+		)
 
 	def _issue_access_token(self, user_id: UUID, issued_at: datetime) -> str:
 		return security.encode_jwt(

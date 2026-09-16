@@ -7,10 +7,11 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from fastapi import Request, Response
+from sqlalchemy.exc import DBAPIError
 
 from app.core.client_ip import ClientIpInfo, resolve_client_ip
 from app.core.config import BackendSettings, get_backend_settings
-from app.core.exceptions import ServiceUnavailableError, TooManyAttemptsError
+from app.core.exceptions import ServiceUnavailableError, TooManyAttemptsError, raise_database_error
 from app.models.user import User
 from app.repository import login_history_repository, redis_store
 from app.service.auth_logging import log_auth_state_revoke_failed, log_login_history_write_failed, request_id
@@ -110,17 +111,21 @@ async def check_oauth_rate_limit(request: Request, scope: str, route: str, setti
 
 async def record_oauth_login(db: Any, user: User, request: Request, client_info: ClientIpInfo | None = None) -> None:
 	resolved_ip = client_info or resolve_client_ip(request, get_backend_settings().trusted_proxy_cidrs)
-	await login_history_repository.create(
-		db,
-		user_id=user.id,
-		login_identifier=user.email,
-		login_method="oauth_google",
-		ip_address=resolved_ip.client_ip,
-		user_agent=request.headers.get("user-agent"),
-		success=True,
-		failure_reason=None,
-	)
-	await db.commit()
+	try:
+		await login_history_repository.create(
+			db,
+			user_id=user.id,
+			login_identifier=user.email,
+			login_method="oauth_google",
+			ip_address=resolved_ip.client_ip,
+			user_agent=request.headers.get("user-agent"),
+			success=True,
+			failure_reason=None,
+		)
+		await db.commit()
+	except DBAPIError as exc:
+		await db.rollback()
+		raise_database_error(exc)
 
 
 async def rollback_oauth_login(
@@ -135,13 +140,15 @@ async def rollback_oauth_login(
 	client_info: ClientIpInfo,
 	operation: str,
 ) -> None:
+	# ここでのrollback_loginは認証状態の補償処理であり、DBトランザクションとは別責務。
+	login_user_id = str(user.id)
 	try:
 		rollback = getattr(strategy, "rollback_login", None)
 		if rollback is None:
 			raise RuntimeError("auth strategy does not support login rollback")
 		await rollback(user, login_result, response)
 	except Exception:
-		log_auth_state_revoke_failed(request, user, operation, client_info)
+		log_auth_state_revoke_failed(request, user, operation, client_info, user_id=login_user_id)
 		raise
 	finally:
 		if clear_state_cookie:
@@ -159,10 +166,11 @@ async def complete_oauth_session_login(
 	login_result: Any,
 	record_login: Any,
 ) -> None:
+	login_user_id = str(user.id)
 	try:
 		await record_login(db, user, request, client_info)
 	except Exception as exc:
-		log_login_history_write_failed(request, user, client_info)
+		log_login_history_write_failed(request, user, client_info, user_id=login_user_id)
 		try:
 			await rollback_oauth_login(
 				strategy,

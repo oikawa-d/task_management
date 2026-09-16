@@ -60,12 +60,13 @@ class SessionAuthStrategy(AuthStrategy):
 			csrf_token=csrf_token,
 			expires_in=self.settings.session_ttl_seconds,
 			session_id=session_id,
+			user_id=user.id,
 		)
 
 	async def rollback_login(self, user: User, result: LoginResult, response: Response) -> None:
 		try:
 			if result.session_id is not None:
-				await redis_store.delete_session(result.session_id, user.id)
+				await redis_store.delete_session(result.session_id, result.user_id or user.id)
 		finally:
 			self._delete_cookies(response)
 
