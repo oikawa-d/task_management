@@ -309,7 +309,7 @@ async def test_provider_rejects_invalid_issuer_exp_or_kid(issuer: str, expires_i
 
 @pytest.mark.asyncio
 async def test_oauth_start_saves_state_and_pkce_cookie(monkeypatch: pytest.MonkeyPatch) -> None:
-	settings = _settings()
+	settings = _settings(auth_token_max_length=8)
 	save_state = AsyncMock()
 	monkeypatch.setattr(auth_service.redis_store, "save_oauth_state", save_state)
 	response = Response()
@@ -657,6 +657,7 @@ async def test_oauth_callback_logs_rollback_failure_without_sensitive_values(
 async def test_oauth_callback_jwt_issues_handoff_without_recording_history(
 	monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+	settings = _settings(auth_mode="jwt", auth_token_max_length=8)
 	user = SimpleNamespace(id=uuid4(), email="alice@example.com", is_active=True)
 	provider = SimpleNamespace(
 		exchange_code=AsyncMock(return_value=OAuthTokenResponse("id", "access")),
@@ -682,14 +683,14 @@ async def test_oauth_callback_jwt_issues_handoff_without_recording_history(
 		_request(),
 		Response(),
 		db=db,
-		settings=_settings(auth_mode="jwt"),
+		settings=settings,
 		provider=provider,
 	)
 
 	assert result.auth_mode == "jwt"
 	assert result.handoff_code
 	save_handoff.assert_awaited_once_with(
-		result.handoff_code, user.id, "/projects/1", _settings(auth_mode="jwt").oauth_handoff_ttl_seconds
+		result.handoff_code, user.id, "/projects/1", settings.oauth_handoff_ttl_seconds
 	)
 	login_history.assert_not_awaited()
 
@@ -864,6 +865,7 @@ async def test_oauth_exchange_rejects_unknown_handoff() -> None:
 async def test_oauth_exchange_returns_token_and_records_login_history(monkeypatch: pytest.MonkeyPatch) -> None:
 	user_id = uuid4()
 	user = SimpleNamespace(id=user_id, email="alice@example.com", is_active=True)
+	settings = _settings(auth_mode="jwt", auth_token_max_length=8)
 	monkeypatch.setattr(
 		auth_service.redis_store,
 		"consume_oauth_handoff",
@@ -877,7 +879,11 @@ async def test_oauth_exchange_returns_token_and_records_login_history(monkeypatc
 			mode="jwt",
 			login=AsyncMock(
 				return_value=SimpleNamespace(
-					auth_mode="jwt", access_token="access", refresh_token="refresh", csrf_token="csrf", expires_in=900
+					auth_mode="jwt",
+					access_token="generated-access-token",
+					refresh_token="refresh",
+					csrf_token="csrf",
+					expires_in=900,
 				)
 			),
 		),
@@ -886,12 +892,10 @@ async def test_oauth_exchange_returns_token_and_records_login_history(monkeypatc
 	monkeypatch.setattr(auth_service.login_history_repository, "create", login_history)
 	db = SimpleNamespace(commit=AsyncMock())
 
-	result = await auth_service.oauth_exchange(
-		"code", _request(), Response(), db=db, settings=_settings(auth_mode="jwt")
-	)
+	result = await auth_service.oauth_exchange("code", _request(), Response(), db=db, settings=settings)
 
 	assert isinstance(result, OAuthExchangeResponse)
-	assert result.access_token == "access"
+	assert result.access_token == "generated-access-token"
 	assert result.redirect_to == "/dashboard"
 	login_history.assert_awaited_once()
 	assert login_history.await_args.kwargs["login_identifier"] == user.email

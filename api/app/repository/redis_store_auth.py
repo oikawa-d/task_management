@@ -26,11 +26,16 @@ _ROTATE_REFRESH_SCRIPT = (Path(__file__).parent / "redis_scripts" / "rotate_refr
 )
 
 _SAVE_PASSWORD_RESET_SCRIPT = """
-if ARGV[1] ~= '' and redis.call('GET', KEYS[1]) ~= ARGV[1] then
+local current_hash = redis.call('GET', KEYS[1])
+if ARGV[1] == '' then
+    if current_hash then return 0 end
+elseif current_hash ~= ARGV[1] then
     return 0
 end
-redis.call('DEL', KEYS[2])
-redis.call('SET', KEYS[3], ARGV[3], 'EX', ARGV[4])
+if current_hash then
+    redis.call('DEL', ARGV[5] .. 'pwreset:' .. current_hash)
+end
+redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[4])
 redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[4])
 return 1
 """
@@ -197,14 +202,14 @@ async def save_password_reset_token(client: Redis, prefix: str, token: str, user
 	old_hash = await cast(Any, client.get)(current_key) or ""
 	result = await cast(Any, client.eval)(
 		_SAVE_PASSWORD_RESET_SCRIPT,
-		3,
+		2,
 		current_key,
-		key("pwreset", prefix, old_hash or token_hash_value),
 		key("pwreset", prefix, token_hash_value),
 		old_hash,
 		token_hash_value,
 		dump({"user_id": user_id, "requested_at": datetime.now(UTC).isoformat()}),
 		ttl,
+		prefix,
 	)
 	return bool(int(result))
 

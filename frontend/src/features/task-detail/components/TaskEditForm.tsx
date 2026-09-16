@@ -1,5 +1,6 @@
 import { useEffect, useState, type Ref } from "react";
 import { TASK_DESCRIPTION_MAX_LENGTH } from "../config/taskConfig";
+import { countCodePoints } from "../../../lib/validation/stringLength";
 
 export type TaskStatus = "todo" | "in_progress" | "done";
 export type TaskEditableField = "title" | "description" | "assignee_id" | "due_at" | "status";
@@ -59,7 +60,7 @@ export function TaskEditForm({
 	const validateText = (field: "title" | "description", value: string): boolean => {
 		const invalid =
 			(field === "title" && (value.length < 1 || value.length > TITLE_MAX_LENGTH)) ||
-			(field === "description" && value.length > TASK_DESCRIPTION_MAX_LENGTH);
+			(field === "description" && countCodePoints(value) > TASK_DESCRIPTION_MAX_LENGTH);
 		if (invalid) {
 			setError(
 				field,
@@ -114,7 +115,6 @@ export function TaskEditForm({
 				説明
 				<textarea
 					value={description}
-					maxLength={TASK_DESCRIPTION_MAX_LENGTH}
 					rows={4}
 					onChange={(event) => setDescription(event.target.value)}
 					onBlur={(event) => handleTextBlur("description", event.target.value)}

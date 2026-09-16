@@ -10,11 +10,6 @@ class OAuthStartResult(StrictSchema):
 	authorize_url: str = Field(min_length=1)
 	state: str = Field(min_length=1)
 
-	@field_validator("state")
-	@classmethod
-	def validate_state_length(cls, value: str) -> str:
-		return validate_auth_token_max_length(value)
-
 
 class OAuthCallbackQuery(StrictSchema):
 	code: str | None = None
@@ -32,11 +27,6 @@ class OAuthCallbackResult(StrictSchema):
 	redirect_to: str = Field(min_length=1)
 	handoff_code: str | None = Field(default=None, min_length=1)
 
-	@field_validator("handoff_code")
-	@classmethod
-	def validate_handoff_code_length(cls, value: str | None) -> str | None:
-		return None if value is None else validate_auth_token_max_length(value)
-
 
 class OAuthExchangeRequest(StrictSchema):
 	code: str = Field(min_length=1)
@@ -52,8 +42,3 @@ class OAuthExchangeResponse(StrictSchema):
 	token_type: Literal["bearer"]
 	expires_in: int = Field(ge=1)
 	redirect_to: str = Field(min_length=1)
-
-	@field_validator("access_token")
-	@classmethod
-	def validate_access_token_length(cls, value: str) -> str:
-		return validate_auth_token_max_length(value)
