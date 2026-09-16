@@ -263,11 +263,11 @@ sessionモードの認証解決・CSRF検証（`GET session:{sid}` / `GET csrf:{
 | 5 | 単体 | 生年月日に未来日を指定 | `{"birth_date": "2999-01-01"}` | `VALIDATION_ERROR`（422） | `test_update_profile_future_birth_date_rejected` |
 | 6 | 単体 | profile_completed再算出（全項目補完完了） | OAuth新規ユーザーが残り全項目を送信 | `profile_completed=true` | `test_update_profile_completes_profile` |
 | 7 | 単体 | profile_completed再算出（一部のみ補完） | 5項目中1項目のみ残存NULL | `profile_completed=false` | `test_update_profile_still_incomplete` |
-| 8 | 結合 | 正常系（session） | 実PostgreSQL/Redis、ログイン済み、CSRFヘッダあり | `200`、DBの値が更新される | `test_patch_users_me_endpoint_session_success` |
-| 9 | 結合 | 正常系（jwt） | 有効なaccess token | `200` | `test_patch_users_me_endpoint_jwt_success` |
-| 10 | 結合 | CSRFトークン欠落（session） | `X-CSRF-Token`ヘッダなし | `403 CSRF_INVALID` | `test_patch_users_me_endpoint_csrf_missing` |
-| 11 | 結合 | 未認証 | Cookie/ヘッダなし | `401 UNAUTHENTICATED` | `test_patch_users_me_endpoint_unauthenticated` |
-| 12 | 結合 | 無効化ユーザー | `is_active=false` | `403 USER_INACTIVE` | `test_patch_users_me_endpoint_inactive_user` |
+| 8 | 結合 | 正常系（session/jwt） | 実PostgreSQL/Redis、ログイン済み、CSRFヘッダあり | `200`、DBの値が更新される | `test_patch_users_me_endpoint_success` |
+| 9 | - | - | - | - | -（No.8でsession/jwtをパラメータにより検証） |
+| 10 | - | - | - | - | -（未実装） |
+| 11 | 結合 | 未認証 | Cookie/ヘッダなし | `401 UNAUTHENTICATED` | `test_users_me_endpoints_unauthenticated` |
+| 12 | - | - | - | - | -（未実装） |
 
 `AUTH_MODE=session`/`jwt`の両方で8・9を実施する。
 

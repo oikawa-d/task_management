@@ -141,7 +141,7 @@ flowchart TB
     A["リクエスト受信"] --> B["get_current_user で認証解決"]
     B --> C{"認証成功?"}
     C -->|"No"| E1["401系 / 403 USER_INACTIVE"]
-    C -->|"Yes"| D["login_history_repository.fn_list_user_login_history<br/>WHERE user_id=自分 ORDER BY created_at DESC LIMIT N"]
+    C -->|"Yes"| D["login_history_repository.list_by_user_id<br/>WHERE user_id=自分 ORDER BY created_at DESC LIMIT N"]
     D --> E["LoginHistoryListResponse組み立て"]
     E --> F["200 {items, meta}"]
 ```
@@ -167,10 +167,10 @@ flowchart TB
 | 引数 | `current_user`、`db`、`limit`（環境変数由来） |
 | 戻り値 | `LoginHistoryListResponse` |
 | 送出例外 | なし |
-| 処理内容 | 1. `login_history_repository.fn_list_user_login_history(db, current_user.id, limit=limit, offset=0)` 2. 取得した行を`LoginHistoryItem`へマッピング（通常ログインのusername/email、OAuthの検証済みGoogle emailを含む`login_identifier`はレスポンスへ写像しない） 3. `meta.limit=limit`、`meta.count=len(items)`を設定し`LoginHistoryListResponse`を返す |
+| 処理内容 | 1. `login_history_repository.list_by_user_id(db, current_user.id, limit=limit, offset=0)` 2. 取得した行を`LoginHistoryItem`へマッピング（通常ログインのusername/email、OAuthの検証済みGoogle emailを含む`login_identifier`はレスポンスへ写像しない） 3. `meta.limit=limit`、`meta.count=len(items)`を設定し`LoginHistoryListResponse`を返す |
 | 副作用 | なし |
 
-### 6.3 `repository/login_history_repository.py :: fn_list_user_login_history`
+### 6.3 `repository/login_history_repository.py :: list_by_user_id`
 
 `../../database/03_table_login_history.md`§8.2を参照（担当外だが再利用する既存関数）。本APIでは`offset=0`固定・`limit=LOGIN_HISTORY_LIST_LIMIT`（既定50）で呼び出す。
 
@@ -180,7 +180,7 @@ flowchart TB
 flowchart LR
     R["users_router.get_my_login_history"] --> DEP["deps.get_current_user"]
     R --> S["user_service.get_login_history"]
-    S --> LRP["login_history_repository.fn_list_user_login_history"]
+    S --> LRP["login_history_repository.list_by_user_id"]
     LRP --> PG[("PostgreSQL: login_history")]
 ```
 
@@ -220,7 +220,7 @@ sessionモードの認証解決（`GET session:{sid}` → `EXPIRE`）以外の�
 | 監査ログ | 記録しない（参照APIのため。閲覧行為自体は監査ログ対象としない） |
 | ユーザー列挙対策 | 自分自身の履歴のみを返すため対象外 |
 | 件数上限の環境変数化 | 上限件数はコードにハードコードせず`LOGIN_HISTORY_LIST_LIMIT`（既定50。`basic_design/04_api.md`§2.2の「直近50件」に対応）として`core/config.py`の`Settings`に定義する。ページングは提供せず常に最新N件のみを返す |
-| 自分の履歴のみ | `login_history_repository.fn_list_user_login_history`が`user_id=current_user.id`を必ず条件に含むため、他ユーザーの履歴を混入させる経路がない。管理者であっても本APIでは自分の履歴のみが返る（全ユーザー分は`GET /admin/login-history`が別途提供） |
+| 自分の履歴のみ | `login_history_repository.list_by_user_id`が`user_id=current_user.id`を必ず条件に含むため、他ユーザーの履歴を混入させる経路がない。管理者であっても本APIでは自分の履歴のみが返る（全ユーザー分は`GET /admin/login-history`が別途提供） |
 | fail-close方針 | Redis（session時）/PostgreSQL接続不能時は503 |
 | 個人情報の露出範囲 | `login_identifier`（通常ログインの入力ID文字列、またはGoogle OAuthの検証済みGoogle email）はレスポンスに含めない。IPアドレス・UAは自分自身の履歴表示のため許容する |
 
@@ -232,11 +232,11 @@ sessionモードの認証解決（`GET session:{sid}` → `EXPIRE`）以外の�
 | 2 | 単体 | 件数上限超過 | `LOGIN_HISTORY_LIST_LIMIT=50`に対し60件存在 | `items`が新しい順に50件、`meta.limit=50` | `test_get_login_history_over_limit_truncated` |
 | 3 | 単体 | 該当履歴なし | 新規ユーザーで履歴0件 | `items=[]`、`meta.count=0` | `test_get_login_history_empty` |
 | 4 | 単体 | login_identifierの非露出 | 任意の履歴 | レスポンスに`login_identifier`キーが含まれない | `test_login_history_item_has_no_identifier` |
-| 5 | 結合 | 正常系（session） | 実PostgreSQL/Redis、複数回ログイン試行済み | `200`、新しい順に並ぶ | `test_users_me_login_history_endpoint_session_success` |
-| 6 | 結合 | 正常系（jwt） | 有効なaccess token | `200` | `test_users_me_login_history_endpoint_jwt_success` |
-| 7 | 結合 | 未認証 | Cookie/ヘッダなし | `401 UNAUTHENTICATED` | `test_users_me_login_history_endpoint_unauthenticated` |
-| 8 | 結合 | 無効化ユーザー | `is_active=false` | `403 USER_INACTIVE` | `test_users_me_login_history_endpoint_inactive_user` |
-| 9 | 結合 | 他ユーザーの履歴が混入しないこと | 2ユーザー分の履歴が存在 | 自分の履歴のみ返る | `test_users_me_login_history_does_not_leak_other_users` |
+| 5 | 結合 | 正常系（session/jwt） | 実PostgreSQL/Redis、ログイン済み | `200`、自分の履歴のみ返る | `test_get_users_me_login_history_endpoint_is_scoped` |
+| 6 | - | - | - | - | -（No.5でsession/jwtをパラメータにより検証） |
+| 7 | 結合 | 未認証 | Cookie/ヘッダなし | `401 UNAUTHENTICATED` | `test_users_me_endpoints_unauthenticated` |
+| 8 | - | - | - | - | -（未実装） |
+| 9 | 結合 | 他ユーザーの履歴が混入しないこと | 2ユーザーを作成し、一方だけログイン | 自分の履歴のみ返る | `test_get_users_me_login_history_endpoint_is_scoped` |
 
 `AUTH_MODE=session`/`jwt`の両方で5・6を実施する。
 
