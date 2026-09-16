@@ -174,6 +174,7 @@
 | `VITE_API_BASE_URL` | str | `/api` | フロントのAPIベースURL。**ビルド時にArgとして埋め込み**（backendの`Settings`には含めない） | 平文可 |
 | `VITE_USER_NAME_MAX_LENGTH` | int | `30` | フロントのプロフィール姓名・フリガナのzod上限。frontend Docker build argとして埋め込む | 平文可 |
 | `VITE_PASSWORD_MIN_LENGTH` | int | `8` | フロントのパスワードzod最小文字数。frontend Docker build argとして埋め込む | 平文可 |
+| `VITE_APP_TIMEZONE` | str | `Asia/Tokyo` | フロントの期限日時表示・入力に使用するタイムゾーン。frontend Docker build argとして埋め込む | 平文可 |
 
 ### 3.10 通知・batch
 

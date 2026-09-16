@@ -208,6 +208,9 @@ flowchart TB
 |------|-----|------|
 | `INITIAL_ADMIN_EMAIL` / `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD` | *** | seed 用管理者（**Secret**）。3項目すべて必須。未設定・空文字ならAlembic/backendを起動しない。ハードコードしない |
 | `VITE_API_BASE_URL` | `/api` | フロントのAPIベースURL（ビルド時埋め込み）。認証モード等は `/auth/config` で実行時取得 |
+| `VITE_USER_NAME_MAX_LENGTH` | `30` | プロフィール姓名・フリガナのzod上限（ビルド時埋め込み） |
+| `VITE_PASSWORD_MIN_LENGTH` | `8` | パスワードのzod最小文字数（ビルド時埋め込み） |
+| `VITE_APP_TIMEZONE` | `Asia/Tokyo` | 期限日時の表示・入力に使用するタイムゾーン（ビルド時埋め込み） |
 | `VITE_NOTIFICATION_POLL_INTERVAL_MS` | `60000` | 未読通知件数のポーリング間隔（ミリ秒。ビルド時埋め込み） |
 
 **pydantic-settings による定義**：`api/app/core/config.py` に `BackendSettings(BaseSettings)`、`batch/app/core/config.py` に `BatchSettings(BaseSettings)` を定義し、各サービスの項目を型付きで受け取る。既定値はコード側に持たせるが、URL・ポート・秘密情報は必ず環境変数から取得する（ハードコード禁止）。
