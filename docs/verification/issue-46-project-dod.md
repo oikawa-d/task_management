@@ -6,7 +6,7 @@
 
 | 要件 | 判定 | 根拠 |
 | --- | --- | --- |
-| 全roadmapが完了 | ✅ | #47、#53、#71、#75、#94、#145、#180、#189を本PRで完了扱いとする。各roadmapのphaseは全てCLOSED。 |
+| 全roadmapが完了 | ✅ | 各roadmapのphaseは全てCLOSED。#75、#94、#145、#180は本PRのマージにより完了扱いとする。 |
 | API・batch・frontend・DB・infraのCI成功 | ✅ | developのCI run [35061587009](https://github.com/oikawa-d/task_management/actions/runs/35061587009)で、detect、docs-check、workflow-lint、hook-test、backend lint/test(session・jwt)、frontend lint/test、batch test、batch container integration、docker buildが全て成功。 |
 | 全体シナリオテスト成功 | ✅ | 下記のAPI結合、認証方式別、OAuth、管理、通知、障害系テストをCIで実行し成功。運用手順はIssue #482の実機確認記録で成功。 |
 
