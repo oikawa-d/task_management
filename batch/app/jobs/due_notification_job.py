@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from app.core.config import BatchSettings
 from app.db import get_session_factory
-from app.redis_client import close_redis_client, create_redis_client
+from app.redis_client import get_redis_client
 from app.repository import batch_history_repository, redis_lock, task_repository
 from app.service import notification_service, purge_service
 
@@ -36,10 +36,11 @@ def _run_date_and_threshold(now: datetime, settings: BatchSettings) -> tuple[dat
 async def run_due_notification_job(*, now: datetime, settings: BatchSettings, notification_slot: str) -> JobResult:
 	run_date, threshold_utc = _run_date_and_threshold(now, settings)
 	runner_id = str(uuid.uuid4())
-	redis = create_redis_client(settings)
+	redis = get_redis_client(settings)
 	lock_acquired = False
 	job_failed = False
 	run_id: uuid.UUID | None = None
+	db = None
 	try:
 		async with get_session_factory()() as db:
 			run_id = await batch_history_repository.start(db, "due_notification", "scheduled", notification_slot)
@@ -81,9 +82,17 @@ async def run_due_notification_job(*, now: datetime, settings: BatchSettings, no
 	except Exception as exc:
 		job_failed = True
 		if run_id is not None:
+			if db is not None:
+				try:
+					await db.rollback()
+				except Exception:
+					logger.exception("failed to rollback due notification transaction")
 			try:
-				await batch_history_repository.fail(db, run_id, "DUE_NOTIFICATION_FAILED", str(exc), 0, 0, 0)
-				await db.commit()
+				async with get_session_factory()() as history_db:
+					await batch_history_repository.fail(
+						history_db, run_id, "DUE_NOTIFICATION_FAILED", str(exc), 0, 0, 0
+					)
+					await history_db.commit()
 			except Exception:
 				logger.exception("failed to update batch history", extra={"run_id": str(run_id)})
 		logger.exception("due notification job failed", extra={"run_id": str(run_id) if run_id else None})
@@ -100,4 +109,3 @@ async def run_due_notification_job(*, now: datetime, settings: BatchSettings, no
 				)
 			except Exception:
 				logger.exception("failed to release due notification lock")
-		await close_redis_client(redis)

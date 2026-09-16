@@ -65,6 +65,49 @@ async def test_task_crud_updates_position_and_rejects_stale_version(
 	]
 
 
+async def test_task_comment_count_is_aggregated_for_detail_board_list_and_calendar(
+	client: TestClient, scenario: TaskScenario, authenticate, db_session: AsyncSession
+) -> None:
+	auth_headers = authenticate()
+	write_auth_headers = write_headers(client, auth_headers)
+	detail = client.get(f"/api/tasks/{scenario.member_project_task_id}", headers=auth_headers)
+	assert detail.status_code == 200, detail.text
+
+	updated = client.patch(
+		f"/api/tasks/{scenario.member_project_task_id}",
+		json={"version": detail.json()["version"], "due_at": "2026-09-10T12:00:00Z"},
+		headers=write_auth_headers,
+	)
+	assert updated.status_code == 200, updated.text
+	for body in ("comment-1", "comment-2"):
+		created_comment = client.post(
+			f"/api/tasks/{scenario.member_project_task_id}/comments",
+			json={"body": body},
+			headers=write_auth_headers,
+		)
+		assert created_comment.status_code == 201, created_comment.text
+	await db_session.commit()
+
+	detail = client.get(f"/api/tasks/{scenario.member_project_task_id}", headers=auth_headers)
+	board = client.get(f"/api/projects/{scenario.member_project_id}/tasks", headers=auth_headers)
+	task_list = client.get("/api/tasks", params={"per_page": 20}, headers=auth_headers)
+	calendar = client.get(
+		"/api/tasks/calendar",
+		params={"from": "2026-09-10", "to": "2026-09-10", "scope": "project", "project_id": scenario.member_project_id},
+		headers=auth_headers,
+	)
+	assert calendar.status_code == 200, calendar.text
+
+	task_id = str(scenario.member_project_task_id)
+	board_item = next(item for item in board.json()["columns"]["todo"] if item["id"] == task_id)
+	list_item = next(item for item in _items(task_list) if item["id"] == task_id)
+	calendar_item = next(item for item in calendar.json() if item["id"] == task_id)
+	assert detail.json()["comment_count"] == 2
+	assert board_item["comment_count"] == 2
+	assert list_item["comment_count"] == 2
+	assert calendar_item["comment_count"] == 2
+
+
 async def test_list_tasks_member_scope_includes_shared_and_own_unassigned_only(
 	client: TestClient, scenario: TaskScenario, authenticate
 ) -> None:
@@ -178,7 +221,7 @@ def test_list_tasks_returns_503_when_database_is_unavailable(
 	client: TestClient, scenario: TaskScenario, authenticate, monkeypatch: pytest.MonkeyPatch
 ) -> None:
 	database_error = OperationalError("SELECT fn_list_tasks", {}, SimpleNamespace(sqlstate="08006"))
-	monkeypatch.setattr(task_repository, "list_for_user", AsyncMock(side_effect=database_error))
+	monkeypatch.setattr(task_repository, "list_for_user_with_total", AsyncMock(side_effect=database_error))
 
 	response = client.get("/api/tasks", params={"per_page": 20}, headers=authenticate())
 

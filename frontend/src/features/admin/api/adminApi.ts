@@ -1,6 +1,4 @@
-import type { AxiosInstance } from "axios";
-
-import { getApiClient } from "../../../api/client";
+import { requestJson } from "../../../api/http";
 
 export type AdminRole = "member" | "admin";
 export interface AdminUser { id: string; username: string; email: string; display_name: string; role: AdminRole; is_active: boolean; created_at: string; }
@@ -10,12 +8,19 @@ export interface AdminList<T> { items: T[]; meta: PageMeta; }
 export interface UserFilters { page: number; perPage: number; q: string; role: AdminRole | ""; isActive: "" | "true" | "false"; }
 export interface ProjectFilters { page: number; perPage: number; q: string; }
 
-export async function listAdminUsers(filters: UserFilters, client: AxiosInstance = getApiClient()): Promise<AdminList<AdminUser>> {
-	const { data } = await client.get<AdminList<AdminUser>>("/admin/users", { params: { page: filters.page, per_page: filters.perPage, q: filters.q || undefined, role: filters.role || undefined, is_active: filters.isActive === "" ? undefined : filters.isActive === "true" } });
-	return data;
+export function listAdminUsers(filters: UserFilters): Promise<AdminList<AdminUser>> {
+	const params = new URLSearchParams({ page: String(filters.page), per_page: String(filters.perPage) });
+	if (filters.q) params.set("q", filters.q);
+	if (filters.role) params.set("role", filters.role);
+	if (filters.isActive) params.set("is_active", String(filters.isActive === "true"));
+	return requestJson(`/admin/users?${params}`);
 }
-export async function patchAdminUserRole(userId: string, role: AdminRole, client: AxiosInstance = getApiClient()) { return (await client.patch<AdminUser>(`/admin/users/${userId}/role`, { role })).data; }
-export async function patchAdminUserStatus(userId: string, isActive: boolean, client: AxiosInstance = getApiClient()) { return (await client.patch<AdminUser>(`/admin/users/${userId}/status`, { is_active: isActive })).data; }
-export async function forceLogout(userId: string, client: AxiosInstance = getApiClient()) { await client.post(`/admin/users/${userId}/force-logout`); }
-export async function listAdminProjects(filters: ProjectFilters, client: AxiosInstance = getApiClient()): Promise<AdminList<AdminProject>> { const { data } = await client.get<AdminList<AdminProject>>("/admin/projects", { params: { page: filters.page, per_page: filters.perPage, q: filters.q || undefined } }); return data; }
-export async function deleteAdminProject(projectId: string, client: AxiosInstance = getApiClient()) { await client.delete(`/admin/projects/${projectId}`); }
+export function patchAdminUserRole(userId: string, role: AdminRole): Promise<AdminUser> { return requestJson(`/admin/users/${userId}/role`, { method: "PATCH", body: JSON.stringify({ role }), headers: { "Content-Type": "application/json" } }); }
+export function patchAdminUserStatus(userId: string, isActive: boolean): Promise<AdminUser> { return requestJson(`/admin/users/${userId}/status`, { method: "PATCH", body: JSON.stringify({ is_active: isActive }), headers: { "Content-Type": "application/json" } }); }
+export async function forceLogout(userId: string): Promise<void> { await requestJson(`/admin/users/${userId}/force-logout`, { method: "POST" }); }
+export function listAdminProjects(filters: ProjectFilters): Promise<AdminList<AdminProject>> {
+	const params = new URLSearchParams({ page: String(filters.page), per_page: String(filters.perPage) });
+	if (filters.q) params.set("q", filters.q);
+	return requestJson(`/admin/projects?${params}`);
+}
+export async function deleteAdminProject(projectId: string): Promise<void> { await requestJson(`/admin/projects/${projectId}`, { method: "DELETE" }); }

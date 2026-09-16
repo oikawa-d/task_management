@@ -7,6 +7,8 @@ import pytest
 from app.auth.base import AuthContext
 from app.core.config import get_backend_settings
 from app.core.deps import (
+	enforce_notification_read_rate_limit,
+	enforce_notification_write_rate_limit,
 	enforce_rate_limit,
 	get_current_user,
 	get_current_user_optional,
@@ -103,10 +105,10 @@ async def test_get_current_user_optional_returns_none_for_unauthenticated_reques
 
 
 class _CsrfRequest:
-	def __init__(self, cookies: dict[str, str]) -> None:
+	def __init__(self, cookies: dict[str, str], *, peer: str = "127.0.0.1", forwarded_for: str | None = None) -> None:
 		self.cookies = cookies
-		self.headers: dict[str, str] = {}
-		self.client = SimpleNamespace(host="127.0.0.1")
+		self.headers: dict[str, str] = {"x-forwarded-for": forwarded_for} if forwarded_for else {}
+		self.client = SimpleNamespace(host=peer)
 
 
 @pytest.mark.asyncio
@@ -206,3 +208,33 @@ async def test_enforce_rate_limit_fails_closed_on_redis_error(monkeypatch: pytes
 
 	with pytest.raises(ServiceUnavailableError):
 		await dependency(_CsrfRequest({}), get_backend_settings())
+
+
+@pytest.mark.asyncio
+async def test_notification_rate_limit_uses_resolved_client_ip(monkeypatch: pytest.MonkeyPatch) -> None:
+	user = CurrentUser(id=uuid4(), username="taro", role="member", is_active=True, email_verified_at=None)
+	settings = get_backend_settings().model_copy(update={"trusted_proxy_cidrs": ["10.0.0.0/8"]})
+	check_mock = AsyncMock(return_value=1)
+	monkeypatch.setattr("app.core.deps.redis_store.check_rate_limit", check_mock)
+	request = _CsrfRequest({}, peer="10.0.0.10", forwarded_for="198.51.100.20, 10.0.0.10")
+
+	await enforce_notification_read_rate_limit(request, user, settings)
+
+	assert check_mock.await_args.args[0] == "notification_read"
+	assert check_mock.await_args.args[1] == f"{user.id}:198.51.100.20"
+
+
+@pytest.mark.asyncio
+async def test_notification_write_rate_limit_ignores_forwarded_ip_from_untrusted_peer(
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	user = CurrentUser(id=uuid4(), username="taro", role="member", is_active=True, email_verified_at=None)
+	settings = get_backend_settings().model_copy(update={"trusted_proxy_cidrs": ["10.0.0.0/8"]})
+	check_mock = AsyncMock(return_value=1)
+	monkeypatch.setattr("app.core.deps.redis_store.check_rate_limit", check_mock)
+	request = _CsrfRequest({}, peer="192.0.2.10", forwarded_for="198.51.100.20, 10.0.0.10")
+
+	await enforce_notification_write_rate_limit(request, user, settings)
+
+	assert check_mock.await_args.args[0] == "notification_write"
+	assert check_mock.await_args.args[1] == f"{user.id}:192.0.2.10"

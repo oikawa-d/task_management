@@ -32,7 +32,7 @@ export interface AuthAdapter {
 
 /**
  * jwtモードのアクセストークン保持先を注入するためのインターフェース。
- * 将来 authStore（Zustand）実装後は、これを満たすアダプタを渡すことで接続できる。
+ * アプリ共有のTokenStoreを注入することで、認証状態とAPIリクエストのトークン保持を分離する。
  */
 export interface TokenStore {
 	getAccessToken(): string | null;

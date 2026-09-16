@@ -153,7 +153,7 @@ function toUpdateFields(field: Parameters<NonNullable<React.ComponentProps<typeo
 function getErrorMessage(error: TaskDetailApiError | Error | null): string | undefined {
 	if (!error) return undefined;
 	if (!("status" in error)) return "エラーが発生しました。しばらくしてから再度お試しください";
-	if (error.status >= 500 || error.status === 0) return "エラーが発生しました。しばらくしてから再度お試しください";
+	if (error.status === null || error.status >= 500 || error.status === 0) return "エラーが発生しました。しばらくしてから再度お試しください";
 	if (error.code === "ASSIGNEE_INACTIVE") return "指定した担当者は無効化されています";
 	if (error.status === 403) return "この操作を行う権限がありません";
 	if (error.status === 422) return error.message || "入力内容を確認してください";

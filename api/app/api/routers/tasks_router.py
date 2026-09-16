@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Annotated, Literal, cast
 from uuid import UUID
 
@@ -10,6 +11,7 @@ from app.models.project import Project
 from app.schemas.auth import CurrentUser
 from app.schemas.task import (
 	BoardResponse,
+	CalendarScope,
 	CalendarTaskItem,
 	CalendarTaskQuery,
 	TaskCreateFlatRequest,
@@ -65,10 +67,14 @@ async def list_tasks(
 
 @router.get("/api/tasks/calendar", response_model=list[CalendarTaskItem])
 async def list_calendar_tasks(
-	query: CalendarTaskQuery = Depends(),
+	from_date: date = Query(..., alias="from"),
+	to_date: date = Query(..., alias="to"),
+	scope: CalendarScope = Query(...),
+	project_id: UUID | None = Query(None),
 	user: CurrentUser = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db_session),
 ) -> list[CalendarTaskItem]:
+	query = CalendarTaskQuery(**{"from": from_date, "to": to_date, "scope": scope, "project_id": project_id})
 	return await task_service.list_calendar_tasks(user, query, db)
 
 

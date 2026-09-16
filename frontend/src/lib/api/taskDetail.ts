@@ -1,6 +1,4 @@
-import { fetchWithAuth } from "../../api/authAdapter/client";
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api";
+import { requestJson } from "../../api/http";
 
 export type TaskStatus = "todo" | "in_progress" | "done";
 
@@ -56,45 +54,10 @@ export interface TaskUpdateFields {
 export type TaskUpdatePayload = TaskUpdateFields & { version: number };
 export type TaskUpdateResponse = Omit<TaskDetail, "comment_count">;
 
-export class TaskDetailApiError extends Error {
-	readonly status: number;
-	readonly code: string | undefined;
-
-	constructor(status: number, code?: string, message?: string) {
-		super(message ?? code ?? "API_ERROR");
-		this.name = "TaskDetailApiError";
-		this.status = status;
-		this.code = code;
-	}
-}
+export { ApiError as TaskDetailApiError } from "../../api/errors";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-	const headers = new Headers(init?.headers);
-	headers.set("Accept", "application/json");
-	if (init?.body) headers.set("Content-Type", "application/json");
-
-	let response: Response;
-	try {
-		response = await fetchWithAuth(`${API_BASE_URL}${path}`, {
-			...init,
-			headers,
-		}, API_BASE_URL);
-	} catch {
-		throw new TaskDetailApiError(0, "NETWORK_ERROR");
-	}
-
-	if (!response.ok) {
-		let body: { code?: string; message?: string } = {};
-		try {
-			body = (await response.json()) as typeof body;
-		} catch {
-			body = {};
-		}
-		throw new TaskDetailApiError(response.status, body.code, body.message);
-	}
-
-	if (response.status === 204) return undefined as T;
-	return (await response.json()) as T;
+	return requestJson<T>(path, init);
 }
 
 export function getTask(taskId: string): Promise<TaskDetail> {

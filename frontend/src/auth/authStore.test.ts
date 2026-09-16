@@ -14,10 +14,10 @@ describe("authStore", () => {
 	});
 
 	it("clears the token when authentication is lost", () => {
-		useAuthStore.getState().setAccessToken("access-token");
+		authTokenStore.setAccessToken("access-token");
 
 		useAuthStore.getState().setUnauthenticated();
 
-		expect(useAuthStore.getState().accessToken).toBeNull();
+		expect(authTokenStore.getAccessToken()).toBeNull();
 	});
 });

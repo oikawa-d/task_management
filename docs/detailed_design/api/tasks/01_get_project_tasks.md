@@ -182,27 +182,27 @@ flowchart TB
 | 引数 | project_id: string(uuid)、対象プロジェクトID／include_inactive: クエリパラメータ、省略時 `False`／project: `require_project_member` が解決した `Project`／db: DBセッション |
 | 戻り値 | `BoardResponse`（`project_id`, `project_is_active`, `columns`） |
 | 送出例外 | `NotFoundError`（404）、`AppError` 系は `core/exceptions.py` のハンドラで変換 |
-| 処理内容 | 1. `require_project_member` の結果から `project` を受け取る（認可はDI側で完了済み）<br/>2. `task_service.get_board(project, include_inactive)` を呼び出す<br/>3. 結果をそのままレスポンスとして返す |
+| 処理内容 | 1. `require_project_member` の結果から認可済みのproject_idを受け取る（認可はDI側で完了済み）<br/>2. `task_service.get_board(project_id, include_inactive, db)` を呼び出す<br/>3. 結果をそのままレスポンスとして返す |
 | 副作用 | なし（参照のみ） |
 
 ### 6.2 `service/task_service.py :: get_board`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def get_board(project: Project, include_inactive: bool) -> BoardResponse` |
-| 引数 | project: 認可済みの `Project` エンティティ／include_inactive: 論理削除済みタスクを含めるか |
+| シグネチャ | `async def get_board(project_id: UUID, include_inactive: bool, db: AsyncSession) -> BoardResponse` |
+| 引数 | project_id: 対象プロジェクトID／include_inactive: 論理削除済みタスクを含めるか／db: DBセッション |
 | 戻り値 | `BoardResponse`（`project_id`, `project_is_active=project.is_active`, `todo` / `in_progress` / `done` の3キーを持つ `columns`） |
 | 送出例外 | なし（リポジトリ例外はそのまま上位へ伝播） |
-| 処理内容 | 1. `fn_get_project_board(project.id, include_inactive)` を呼び出す<br/>2. 取得した `TaskWithCommentCount` のリストを `status` ごとに分配し、各列内は `position` 昇順のまま整形する<br/>3. 該当行がない `status` は空配列とする<br/>4. `project.is_active` をレスポンスの `project_is_active` にそのまま設定する |
+| 処理内容 | 1. `task_repository.list_board(db, project_id, include_inactive)`で`fn_get_project_board`を呼び出す<br/>2. 取得した`TaskWithProjectStatus`のリストを`status`ごとに分配し、各列内は`position`昇順のまま整形する<br/>3. 該当行がない`status`は空配列とする<br/>4. FNが返す`project_is_active`と`comment_count`をレスポンスへ写像する |
 | 副作用 | なし |
 
 ### 6.3 `repository/task_repository.py :: fn_get_project_board`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def fn_get_project_board(db: AsyncSession, project_id: UUID, include_inactive: bool) -> list[TaskWithCommentCount]` |
+| シグネチャ | `async def list_board(db: AsyncSession, project_id: UUID, include_inactive: bool) -> list[TaskWithProjectStatus]` |
 | 引数 | db: DBセッション／project_id: 対象プロジェクトID／include_inactive: `False` の場合 `is_active=true` のみ返す |
-| 戻り値 | `TaskWithCommentCount`（`Task` に `comment_count: int` を付加したDTO）のリスト |
+| 戻り値 | `TaskWithProjectStatus`（`Task` に`project_is_active`と`comment_count`を付加したDTO）のリスト |
 | 送出例外 | `OperationalError`（DB接続不能。`infra_error_handler` が503へ変換） |
 | 処理内容 | `SELECT fn_get_project_board(:project_id, :include_inactive)` を1回実行する。担当者・コメント件数の集約、inactive条件、status/position順はFN内部で処理し、repositoryで追加SELECTを発行しない |
 | 副作用 | なし |
@@ -227,7 +227,7 @@ flowchart LR
     subgraph read["参照範囲（PostgreSQL）"]
         T["tasks<br/>WHERE project_id = :pid"]
         U["users<br/>assignee情報（JOIN）"]
-        C["task_comments<br/>COUNT（相関サブクエリ）"]
+        C["task_comments<br/>GROUP BY task_id（集約JOIN）"]
         PM["project_members<br/>認可チェック用"]
     end
     T -->|"assignee_id"| U
@@ -253,7 +253,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | project_members | SELECT | `project_id`, `user_id` | `require_project_member` による認可（admin時は省略） |
 | tasks | SELECT | `project_id` 一致（+ `include_inactive=false`時は`is_active=true`）、`ORDER BY status, position` | 主クエリ。`uq_tasks_project_status_position` を使用 |
 | users | SELECT（`FN結果の一括マッピング`の追加SELECT） | `tasks.assignee_id = users.id` | assignee 情報のEager Load。tasks主クエリとは別ラウンドトリップ |
-| task_comments | SELECT（相関サブクエリ COUNT） | `task_id = tasks.id` | `comment_count` 算出。`ix_task_comments_task_created` を使用 |
+| task_comments | SELECT（`GROUP BY task_id`の集約JOIN） | `task_id = tasks.id` | `comment_count` 算出。`ix_task_comments_task_created` を使用 |
 
 **Redis**：使用なし。
 
@@ -275,7 +275,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | タイミング攻撃対策 | 本APIは認証情報の真偽比較を含まないため対象外 |
 | レート制限 | なし |
 | fail-close方針 | DB接続不能時は503を返し、部分的なデータでの200応答は行わない |
-| N+1対策・クエリ回数 | 認可の所属確認1回（adminは省略）に加え、tasks主クエリ1回とassigneeの`FN結果の一括マッピング`追加SELECT 1回を実行する。`comment_count`は主クエリ内の相関サブクエリであり、タスクごとの追加クエリは発行しない。関連取得は同一ラウンドトリップではないが、タスク件数に比例してクエリ数は増えない |
+| N+1対策・クエリ回数 | 認可の所属確認1回（adminは省略）に加え、tasks主クエリ1回とassigneeの`FN結果の一括マッピング`追加SELECT 1回を実行する。`comment_count`はFN内部の`GROUP BY task_id`集約結果をJOINするため、タスクごとの追加クエリは発行しない。関連取得は同一ラウンドトリップではないが、タスク件数に比例してクエリ数は増えない |
 
 ## 12. テスト設計
 

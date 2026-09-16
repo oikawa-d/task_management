@@ -1,6 +1,7 @@
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 
-import { fetchUnreadCount, UnreadCountFetchError } from "../api/unreadCountApi";
+import { ApiError } from "../../../api/errors";
+import { fetchUnreadCount } from "../api/unreadCountApi";
 import { getNotificationPollIntervalMs } from "../config/pollingConfig";
 
 export const UNREAD_COUNT_QUERY_KEY = ["notifications", "unread-count"] as const;
@@ -40,7 +41,7 @@ export function useUnreadCount({
 		// 本taskではエラーコード別の分岐は行わず、HTTPステータスのみで一律リトライ抑止する。
 		// #178/#179 のマージ後にエラーコード別の制御へ差し替えること。
 		retry: (failureCount, error) => {
-			if (error instanceof UnreadCountFetchError && error.status === 401) {
+				if (error instanceof ApiError && error.status === 401) {
 				return false;
 			}
 			return failureCount < 3;

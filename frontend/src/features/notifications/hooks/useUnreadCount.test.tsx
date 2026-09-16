@@ -3,8 +3,8 @@ import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ApiError } from "../../../api/errors";
 import * as unreadCountApi from "../api/unreadCountApi";
-import { UnreadCountFetchError } from "../api/unreadCountApi";
 import { useUnreadCount } from "./useUnreadCount";
 
 function createWrapper() {
@@ -73,7 +73,7 @@ describe("useUnreadCount", () => {
 	it("fetchUnreadCountが401で失敗した場合はリトライせずisErrorになる", async () => {
 		const fetchSpy = vi
 			.spyOn(unreadCountApi, "fetchUnreadCount")
-			.mockRejectedValue(new UnreadCountFetchError(401));
+			.mockRejectedValue(new ApiError({ code: "UNAUTHENTICATED", message: "unauthenticated", status: 401 }));
 
 		const { result } = renderHook(() => useUnreadCount({ isAuthenticated: true }), {
 			wrapper: createWrapper(),
@@ -100,7 +100,7 @@ describe("useUnreadCount", () => {
 		vi.stubEnv("VITE_NOTIFICATION_POLL_INTERVAL_MS", "100000");
 		const fetchSpy = vi
 			.spyOn(unreadCountApi, "fetchUnreadCount")
-			.mockRejectedValue(new unreadCountApi.UnreadCountFetchError(503));
+			.mockRejectedValue(new ApiError({ code: "SERVICE_UNAVAILABLE", message: "unavailable", status: 503 }));
 
 		const { result } = renderHook(() => useUnreadCount({ isAuthenticated: true }), {
 			wrapper: createWrapper(),

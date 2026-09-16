@@ -67,6 +67,21 @@ def test_list_tasks_forwards_default_query(client: TestClient, monkeypatch: pyte
 	assert mock_list.await_args.args[1:6] == (None, None, False, 1, 20)
 
 
+def test_calendar_router_accepts_from_and_to_query_aliases(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	mock_list = AsyncMock(return_value=[])
+	monkeypatch.setattr(router_module.task_service, "list_calendar_tasks", mock_list)
+
+	response = client.get(
+		"/api/tasks/calendar",
+		params={"from": "2026-09-10", "to": "2026-09-10", "scope": "me"},
+	)
+
+	assert response.status_code == 200
+	query = mock_list.await_args.args[1]
+	assert query.from_date.isoformat() == "2026-09-10"
+	assert query.to_date.isoformat() == "2026-09-10"
+
+
 def test_list_tasks_rejects_non_member_project(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
 	mock_list = AsyncMock(side_effect=NotFoundError())
 	monkeypatch.setattr(router_module.task_service, "list_tasks", mock_list)

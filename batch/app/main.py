@@ -14,6 +14,8 @@ from apscheduler.triggers.cron import CronTrigger  # type: ignore[import-untyped
 
 from app.core.config import BatchSettings, get_batch_settings
 from app.core.logger import configure_logging
+from app.db import dispose_db_engine, get_db_engine
+from app.redis_client import close_redis_client, get_redis_client
 
 logger = logging.getLogger("app.main")
 JobRunner = Callable[..., Awaitable[Any]]
@@ -80,30 +82,44 @@ def handle_sigterm(_scheduler: AsyncIOScheduler, shutdown_event: asyncio.Event) 
 
 async def async_main(args: argparse.Namespace, settings: BatchSettings | None = None) -> None:
 	settings = settings or get_batch_settings()
-	if args.run_once:
-		if args.slot is None:
-			raise ValueError("--run-onceには--slotが必要です")
-		await run_due_notification_job(slot=args.slot, settings=settings)
-		return
-
-	shutdown_event = asyncio.Event()
-	scheduler = build_scheduler(settings)
-
-	def on_signal(signum: int, frame: FrameType | None) -> None:
-		handle_sigterm(scheduler, shutdown_event)
-
-	signal.signal(signal.SIGTERM, on_signal)
-	signal.signal(signal.SIGINT, on_signal)
+	needs_resources = bool(args.run_once or settings.batch_enabled)
+	db_initialized = False
+	redis_initialized = False
+	scheduler: AsyncIOScheduler | None = None
 	try:
-		if settings.batch_enabled:
+		if needs_resources:
+			get_db_engine()
+			db_initialized = True
+			get_redis_client(settings)
+			redis_initialized = True
+
+		shutdown_event = asyncio.Event()
+		scheduler = build_scheduler(settings) if not args.run_once else None
+
+		def on_signal(signum: int, frame: FrameType | None) -> None:
+			if scheduler is not None:
+				handle_sigterm(scheduler, shutdown_event)
+
+		signal.signal(signal.SIGTERM, on_signal)
+		signal.signal(signal.SIGINT, on_signal)
+		if args.run_once:
+			if args.slot is None:
+				raise ValueError("--run-onceには--slotが必要です")
+			await run_due_notification_job(slot=args.slot, settings=settings)
+			return
+		if settings.batch_enabled and scheduler is not None:
 			scheduler.start()
 			logger.info("batch scheduler started")
 		else:
 			logger.info("BATCH_ENABLED=false; scheduled jobs are disabled")
 		await shutdown_event.wait()
 	finally:
-		if scheduler.running:
+		if scheduler is not None and scheduler.running:
 			scheduler.shutdown(wait=True)
+		if redis_initialized:
+			await close_redis_client()
+		if db_initialized:
+			await dispose_db_engine()
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

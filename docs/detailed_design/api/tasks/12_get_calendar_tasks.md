@@ -61,7 +61,7 @@ sequenceDiagram
     S->>S: APP_TIMEZONEの日付境界をUTCへ変換
     S->>P: list_calendar(user_id, from_utc, to_utc, scope, project_id)
     P->>DB: SELECT fn_list_calendar_tasks(...)
-    DB-->>P: task + project_is_active
+    DB-->>P: task + project_is_active + comment_count
     P-->>S: TaskWithProjectStatus
     S-->>R: list[CalendarTaskItem]
     R-->>U: 200 JSON配列
@@ -74,7 +74,7 @@ sequenceDiagram
 | router | `list_calendar_tasks` | Query、CurrentUser、DB | `list[CalendarTaskItem]` |
 | service | `list_calendar_tasks` | CurrentUser、CalendarTaskQuery、DB | `list[CalendarTaskItem]` |
 | repository | `list_calendar` | user、UTC境界、scope、project_id | `list[TaskWithProjectStatus]` |
-| DB | `fn_list_calendar_tasks` | user、UTC境界、scope、project_id | task行とproject状態 |
+| DB | `fn_list_calendar_tasks` | user、UTC境界、scope、project_id | task行、project状態、comment_count |
 
 ```mermaid
 flowchart LR
@@ -83,6 +83,7 @@ flowchart LR
     P --> F["fn_list_calendar_tasks"]
     F --> T[("tasks")]
     F --> PR[("projects")]
+    F --> C[("task_comments（GROUP BY task_id）")]
 ```
 
 ## 5. データ遷移
