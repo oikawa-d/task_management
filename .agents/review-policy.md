@@ -44,7 +44,7 @@ PRとIssueのラベルは、レビューの進行状況を並行作業中の他�
 
 ### ラベル操作コマンド
 
-`gh pr edit --add-label` / `--remove-label` は Projects classic 廃止に伴うエラーで失敗するため使用しません（#386）。リポジトリ内の共通スクリプトで現在のラベルを取得し、存在する状態ラベルだけを削除してから遷移先を付与します。PRとissueはGitHub上で同じ番号空間のため、いずれも `issues/<番号>/labels` を対象とします。
+`gh pr edit --add-label` / `--remove-label` は Projects classic 廃止に伴うエラーで失敗するため使用しません（#386）。リポジトリ内の共通スクリプトで現在のラベルを取得し、存在する状態ラベルだけを削除してから遷移先を付与します。削除直前の競合によるHTTP 404は無視しますが、認証・通信エラーなど404以外の失敗は握りつぶしません。遷移後は状態ラベルが指定した1つだけ（`none`の場合は0個）であることを検証します。PRとissueはGitHub上で同じ番号空間のため、いずれも `issues/<番号>/labels` を対象とします。
 
 ```bash
 # Issueをレビュー待ちへ遷移
@@ -62,12 +62,16 @@ bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <PR番号> in-prog
 # PRをレビュー完了へ遷移
 bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <PR番号> approve
 
+# IssueとPRの状態ラベルを完了後に解除
+bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <番号> none
+bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <PR番号> none
+
 # 現在のラベル確認
 gh pr view <番号> --json labels --jq '[.labels[].name]|join(", ")'
 gh issue view <番号> --json labels --jq '[.labels[].name]|join(", ")'
 ```
 
-`set-review-state-label.sh` は第4の遷移先 `none` を指定すると状態ラベルだけを解除します。ラベル取得・削除・付与のいずれかでAPIエラーが発生した場合は終了し、認証・通信エラーを握りつぶしません。
+`set-review-state-label.sh` は第4の遷移先 `none` を指定すると状態ラベルだけを解除します。状態ラベル以外の恒久ラベルは削除しません。ラベル取得・削除・付与・遷移後検証のいずれかでAPIエラーが発生した場合は終了し、認証・通信エラーを握りつぶしません。
 
 ## `approve`ラベルの付与
 

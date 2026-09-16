@@ -69,7 +69,7 @@ description: このtask_managementリポジトリでGitHub issueに対応する�
   gh issue edit <番号> --repo <owner/repo> --add-label in-progress
   ```
 
-- 状態ラベルを削除する場合は、`bash .agents/scripts/set-review-state-label.sh` を使用する。このスクリプトが対象Issue/PRの現在のラベルを取得し、存在する状態ラベルだけを削除するため、未付与ラベルの削除によるHTTP 404で遷移処理が停止しない。
+- 状態ラベルを削除する場合は、`bash .agents/scripts/set-review-state-label.sh` を使用する。このスクリプトが対象Issue/PRの現在のラベルを取得し、存在する状態ラベルだけを削除するため、未付与ラベルの削除によるHTTP 404で遷移処理が停止しない。削除直前の競合で発生したHTTP 404も無視するが、認証・通信エラーなど404以外の失敗は握りつぶさない。
 
 - `state` が `CLOSED` の場合、着手前にユーザーに確認する。ただしレビュー指摘対応など、close済みPRに紐づく再オープン前提の作業であることが明確な場合はこの限りではない。
 
@@ -121,7 +121,7 @@ description: このtask_managementリポジトリでGitHub issueに対応する�
   bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <PR番号> none
   ```
 
-  (状態ラベル以外の恒久ラベルは削除しない。GitHub上で状態ラベルが存在しない場合は、存在するものだけを削除する)
+  (状態ラベル以外の恒久ラベルは削除しない。遷移後は状態ラベルが0個になることを検証する)
 
 ## 注意
 
