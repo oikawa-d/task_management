@@ -6,6 +6,16 @@ export interface ProfileFormValues {
 	birth_date: string | null;
 }
 
+export interface UserProfile extends ProfileFormValues {
+	id: string;
+	username: string;
+	email: string;
+	profile_completed: boolean;
+	role: "member" | "admin";
+	has_password: boolean;
+	oauth_providers: string[];
+}
+
 export type ProfilePatchInput = Partial<{
 	last_name: string;
 	first_name: string;

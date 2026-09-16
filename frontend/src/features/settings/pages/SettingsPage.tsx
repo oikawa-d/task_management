@@ -1,9 +1,20 @@
-import { createContext, useContext, useState, type PropsWithChildren, type ReactNode } from "react";
-import { useLocation } from "react-router-dom";
+import { createContext, useContext, useEffect, useState, type PropsWithChildren, type ReactNode } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 
+import { useAuthStore } from "../../../auth/authStore";
+import { setLoginMessage } from "../../../auth/loginMessage";
+import { clearUserSessionState } from "../../../auth/sessionCleanup";
+import { ApiError } from "../../../api/errors";
+import { ROUTES } from "../../../routes";
 import styles from "./SettingsPage.module.css";
 import { FontSizeSelector } from "../components/FontSizeSelector";
 import { LoginHistoryTable } from "../components/LoginHistoryTable";
+import { PasswordChangeForm } from "../PasswordChangeForm";
+import { ProfileForm } from "../ProfileForm";
+import { useChangePassword } from "../hooks/useChangePassword";
+import { useUpdateProfile } from "../hooks/useUpdateProfile";
+import { useUserProfile } from "../hooks/useUserProfile";
 
 type SettingsTab = "profile" | "password" | "display" | "history";
 
@@ -38,6 +49,65 @@ export function SettingsFormsProvider({
 	children,
 }: PropsWithChildren<{ slots?: SettingsFormSlots }>) {
 	return <SettingsFormsContext.Provider value={slots ?? {}}>{children}</SettingsFormsContext.Provider>;
+}
+
+export function ConnectedSettingsPage() {
+	const profileQuery = useUserProfile();
+	const updateProfile = useUpdateProfile();
+	const changePassword = useChangePassword();
+	const queryClient = useQueryClient();
+	const navigate = useNavigate();
+	const customSlots = useContext(SettingsFormsContext);
+	const adapter = useAuthStore((state) => state.authAdapter);
+
+	useEffect(() => {
+		if (profileQuery.error instanceof ApiError && profileQuery.error.status === 401) {
+			useAuthStore.getState().setUnauthenticated();
+		}
+	}, [profileQuery.error]);
+
+	if (profileQuery.isLoading) return <p role="status">設定情報を読み込み中...</p>;
+	if (profileQuery.isError || !profileQuery.data) {
+		return <div role="alert">設定情報を読み込めませんでした。<button type="button" onClick={() => void profileQuery.refetch()}>再試行</button></div>;
+	}
+
+	const logoutAfterPasswordChange = async () => {
+		try {
+			await adapter?.logout();
+		} catch {
+			// 設計書どおりlogout失敗時もクライアントは未認証状態へ遷移する
+		} finally {
+			setLoginMessage("パスワードを変更しました。再度ログインしてください");
+			navigate(ROUTES.LOGIN, { replace: true });
+			useAuthStore.getState().clear();
+			clearUserSessionState(queryClient);
+		}
+	};
+	const defaultSlots: SettingsFormSlots = {
+		profile: ({ onSuccess }) => (
+			<ProfileForm
+				initialValues={profileQuery.data!}
+				onSubmit={(values) => updateProfile.mutateAsync(values).then(() => undefined)}
+				onSaved={() => onSuccess("プロフィールを更新しました")}
+			/>
+		),
+		password: ({ onSuccess }) => (
+			<PasswordChangeForm
+				hasPassword={profileQuery.data!.has_password}
+				onSubmit={(values) => changePassword.mutateAsync(values)}
+				onSuccess={async () => {
+					onSuccess("パスワードを変更しました");
+					await logoutAfterPasswordChange();
+				}}
+			/>
+		),
+	};
+
+	return (
+		<SettingsFormsProvider slots={{ ...defaultSlots, ...customSlots }}>
+			<SettingsPage profileCompleted={profileQuery.data.profile_completed} />
+		</SettingsFormsProvider>
+	);
 }
 
 function FormPlaceholder({ label }: { label: string }) {
