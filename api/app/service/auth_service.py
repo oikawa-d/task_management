@@ -119,17 +119,21 @@ async def _record_login_attempt(
 	success: bool,
 	failure_reason: str | None,
 ) -> None:
-	await login_history_repository.create(
-		db,
-		user_id=user.id if user is not None else None,
-		login_identifier=identifier,
-		login_method=login_method,
-		ip_address=client_ip,
-		user_agent=request.headers.get("user-agent"),
-		success=success,
-		failure_reason=failure_reason,
-	)
-	await db.commit()
+	try:
+		await login_history_repository.create(
+			db,
+			user_id=user.id if user is not None else None,
+			login_identifier=identifier,
+			login_method=login_method,
+			ip_address=client_ip,
+			user_agent=request.headers.get("user-agent"),
+			success=success,
+			failure_reason=failure_reason,
+		)
+		await db.commit()
+	except DBAPIError as exc:
+		await db.rollback()
+		raise_database_error(exc)
 
 
 async def login(

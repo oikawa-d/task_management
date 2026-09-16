@@ -5,10 +5,11 @@ from __future__ import annotations
 import secrets
 
 from fastapi import BackgroundTasks
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_backend_settings
-from app.core.exceptions import InvalidResetTokenError, InvalidVerifyTokenError
+from app.core.exceptions import InvalidResetTokenError, InvalidVerifyTokenError, raise_database_error
 from app.core.security import hash_password
 from app.models.user import User
 from app.repository import redis_store, user_repository
@@ -38,8 +39,12 @@ async def verify_email(token: str, db: AsyncSession) -> None:
 	user_id = await redis_store.consume_email_verify_token(token)
 	if user_id is None:
 		raise InvalidVerifyTokenError()
-	await user_repository.mark_email_verified(db, user_id)
-	await db.commit()
+	try:
+		await user_repository.mark_email_verified(db, user_id)
+		await db.commit()
+	except DBAPIError as exc:
+		await db.rollback()
+		raise_database_error(exc)
 
 
 async def resend_verification(email: str, background: BackgroundTasks, db: AsyncSession) -> None:
@@ -76,5 +81,9 @@ async def reset_password(token: str, new_password: str, db: AsyncSession) -> Non
 	password_hash = hash_password(new_password)
 	await redis_store.delete_all_sessions(user_id)
 	await redis_store.revoke_all_refresh_tokens(user_id)
-	await user_repository.update_password(db, user_id, password_hash)
-	await db.commit()
+	try:
+		await user_repository.update_password(db, user_id, password_hash)
+		await db.commit()
+	except DBAPIError as exc:
+		await db.rollback()
+		raise_database_error(exc)

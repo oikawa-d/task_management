@@ -4,10 +4,11 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from app.core.exceptions import ForbiddenError, NotFoundError
+from app.core.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError
 from app.schemas.auth import CurrentUser
 from app.schemas.comment import CommentCreateRequest
 from app.service import authorization_service, task_comment_service
+from sqlalchemy.exc import OperationalError
 
 
 def _user(*, role: str = "member") -> CurrentUser:
@@ -135,6 +136,22 @@ async def test_add_comment_fetches_created_comment_by_id(monkeypatch) -> None:
 	create.assert_awaited_once_with(db, task.id, user.id, "本文")
 	get_by_id.assert_awaited_once_with(db, comment_id)
 	list_by_task.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_add_comment_converts_database_connection_failure_and_rolls_back(monkeypatch) -> None:
+	user = _user()
+	task = _task(user.id)
+	comment = _comment(user.id, task.id)
+	db = AsyncMock()
+	db.commit.side_effect = OperationalError("add comment", {}, SimpleNamespace(sqlstate="08006"))
+	monkeypatch.setattr(task_comment_service.task_comment_repository, "create", AsyncMock(return_value=comment.id))
+	monkeypatch.setattr(task_comment_service.task_comment_repository, "get_by_id", AsyncMock(return_value=comment))
+
+	with pytest.raises(ServiceUnavailableError):
+		await task_comment_service.add_comment(task, CommentCreateRequest(body="本文"), user, db)
+
+	db.rollback.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio

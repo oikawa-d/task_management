@@ -9,6 +9,7 @@ from app.repository import login_history_repository, oauth_account_repository, r
 from app.schemas.auth import CurrentUser
 from app.schemas.user import PasswordChangeRequest, UserProfileUpdateRequest
 from app.service import user_service
+from sqlalchemy.exc import OperationalError
 
 
 def _current_user(user_id: uuid.UUID) -> CurrentUser:
@@ -350,6 +351,29 @@ async def test_change_password_redis_failure_returns_service_unavailable_and_ski
 
 	update_password_mock.assert_not_awaited()
 	db.commit.assert_not_awaited()
+
+
+async def test_change_password_database_connection_failure_rolls_back(monkeypatch):
+	user_id = uuid.uuid4()
+	monkeypatch.setattr(
+		user_repository, "get_by_id", AsyncMock(return_value=_fake_user(id=user_id, password_hash="old-hash"))
+	)
+	monkeypatch.setattr(user_service, "verify_password", lambda plain, hashed: True)
+	monkeypatch.setattr(user_service, "hash_password", lambda plain: f"hashed:{plain}")
+	monkeypatch.setattr(user_repository, "update_password", AsyncMock())
+	monkeypatch.setattr(redis_store, "delete_all_sessions", AsyncMock())
+	monkeypatch.setattr(redis_store, "revoke_all_refresh_tokens", AsyncMock())
+	db = AsyncMock()
+	db.commit.side_effect = OperationalError("update password", {}, SimpleNamespace(sqlstate="08006"))
+
+	with pytest.raises(ServiceUnavailableError):
+		await user_service.change_password(
+			_current_user(user_id),
+			PasswordChangeRequest(current_password="OldPass1!", new_password="NewPass1!", password_confirm="NewPass1!"),
+			db=db,
+		)
+
+	db.rollback.assert_awaited_once_with()
 
 
 # --- get_login_history ---------------------------------------------------------

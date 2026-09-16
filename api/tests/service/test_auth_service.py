@@ -52,11 +52,14 @@ class _FakeStrategy:
 
 
 class _RegisterDb:
-	def __init__(self) -> None:
+	def __init__(self, commit_error: Exception | None = None) -> None:
 		self.calls: list[str] = []
+		self.commit_error = commit_error
 
 	async def commit(self) -> None:
 		self.calls.append("db.commit")
+		if self.commit_error is not None:
+			raise self.commit_error
 
 	async def rollback(self) -> None:
 		self.calls.append("db.rollback")
@@ -188,6 +191,27 @@ async def test_register_reraises_unknown_sqlstate(monkeypatch: pytest.MonkeyPatc
 		await auth_service.register(_register_payload(), _FakeBackgroundTasks(), _FakeRequest(), db)  # type: ignore[arg-type]
 
 	assert db.calls == ["db.rollback"]
+
+
+async def test_record_login_attempt_converts_database_connection_failure_and_rolls_back(
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	monkeypatch.setattr(auth_service.login_history_repository, "create", AsyncMock())
+	db = _RegisterDb(OperationalError("login history", {}, SimpleNamespace(sqlstate="08006")))
+
+	with pytest.raises(ServiceUnavailableError):
+		await auth_service._record_login_attempt(
+			db,
+			None,
+			"taro",
+			_FakeRequest(),
+			"session",
+			"127.0.0.1",
+			success=True,
+			failure_reason=None,
+		)
+
+	assert db.calls == ["db.commit", "db.rollback"]
 
 
 @pytest.mark.parametrize("sqlstate", ["08006", "57P03"])

@@ -12,9 +12,16 @@
 from datetime import date
 from uuid import UUID
 
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import InvalidCredentialsError, NotFoundError, ServiceUnavailableError, ValidationError
+from app.core.exceptions import (
+	InvalidCredentialsError,
+	NotFoundError,
+	ServiceUnavailableError,
+	ValidationError,
+	raise_database_error,
+)
 from app.core.security import hash_password, verify_password
 from app.models.user import User
 from app.repository import login_history_repository, oauth_account_repository, redis_store, user_repository
@@ -138,9 +145,9 @@ async def update_profile(
 			has_password=user.password_hash is not None,
 			oauth_providers=[account.provider for account in providers],
 		)
-	except Exception:
+	except DBAPIError as exc:
 		await db.rollback()
-		raise
+		raise_database_error(exc)
 
 
 async def change_password(
@@ -169,8 +176,12 @@ async def change_password(
 	except Exception as exc:
 		raise ServiceUnavailableError() from exc
 
-	await user_repository.update_password(db, current_user.id, new_password_hash)
-	await db.commit()
+	try:
+		await user_repository.update_password(db, current_user.id, new_password_hash)
+		await db.commit()
+	except DBAPIError as exc:
+		await db.rollback()
+		raise_database_error(exc)
 
 
 async def get_login_history(current_user: CurrentUser, db: AsyncSession, limit: int) -> LoginHistoryListResponse:
