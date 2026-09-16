@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.input_validation import validate_password_max_length
+
 KANA_PATTERN = r"^[ぁ-んァ-ヶー0-9]+$"
 LoginMethod = Literal["session", "jwt", "oauth_google"]
 
@@ -46,6 +48,11 @@ class PasswordChangeRequest(BaseModel):
 	new_password: str = Field(min_length=8)
 	password_confirm: str
 
+	@field_validator("current_password", "password_confirm")
+	@classmethod
+	def validate_password_field_length(cls, value: str | None) -> str | None:
+		return None if value is None else validate_password_max_length(value)
+
 	@field_validator("new_password")
 	@classmethod
 	def validate_password_categories(cls, value: str) -> str:
@@ -57,7 +64,7 @@ class PasswordChangeRequest(BaseModel):
 		)
 		if sum(categories) < 2:
 			raise ValueError("password must contain at least two character categories")
-		return value
+		return validate_password_max_length(value)
 
 	@model_validator(mode="after")
 	def validate_confirmation(self) -> "PasswordChangeRequest":

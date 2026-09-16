@@ -18,6 +18,8 @@
 | 依存先 | Redis（`emailverify:*` / `pwreset:*` 系キー）、PostgreSQL（`users.email_verified_at` / `users.password_hash`）、SMTPサーバー（開発：Mailpit、本番：外部SMTP） |
 | 実装ファイル | `api/app/service/email_verification_service.py`、`api/app/service/mail_service.py`、`api/app/repository/redis_store.py`、`api/app/templates/mail/password_reset.{html,txt}`、`api/app/templates/mail/email_verification.{html,txt}` |
 
+メール認証・パスワードリセットのtokenは`AUTH_TOKEN_MAX_LENGTH`（既定512）文字以内とし、PythonのUnicodeコードポイント数で判定する。パスワード入力は`PASSWORD_MAX_LENGTH`（既定128）文字以内とし、Argon2処理前に検証する。
+
 ## 2. 構成要素
 
 | 要素 | 種別 | 責務 | 備考 |
@@ -26,7 +28,7 @@
 | `verify_email` | 関数（`auth_service`） | トークン消費・`email_verified_at`更新 | ワンタイム消費（`GETDEL`） |
 | `resend_verification` | 関数（`auth_service`） | 再送レート制限確認 → `issue_email_verify_token`呼び出し | ユーザー不存在・認証済みでも例外を出さない |
 | `request_password_reset` | 関数（`auth_service`） | token生成・Redis登録・送信予約 | ユーザー不存在でも例外を出さず202を維持 |
-| `reset_password` | 関数（`auth_service`） | トークン消費・Redis全失効・パスワード更新 | Redis失効成功後にDB更新 |
+| `reset_password` | 関数（`auth_service`） | トークン消費・Redis全失効・パスワード更新 | Redis失効成功後にDB更新。DB失敗時はトークンを補償復元 |
 | `send_email_verification_mail` | 関数（`mail_service`） | テンプレートレンダリング＋SMTP送信 | `{FRONTEND_BASE_URL}/verify-email#token=...` |
 | `send_password_reset_mail` | 関数（`mail_service`） | 同上 | `{FRONTEND_BASE_URL}/password/reset#token=...` |
 | `BackgroundTasks` | FastAPI標準機能 | レスポンス返却後にSMTP送信を非同期実行 | 送信失敗はログのみ、APIレスポンスへは影響させない |
@@ -268,8 +270,8 @@ stateDiagram-v2
 | シグネチャ / 定義 | `async def reset_password(token: str, new_password: str, db: AsyncSession) -> None` |
 | 引数 / 入力 | `token`（平文）、`new_password`（バリデーション済み）、`db` |
 | 戻り値 / 出力 | `None` |
-| 送出例外 / 失敗条件 | `InvalidResetTokenError`（→400 `INVALID_RESET_TOKEN`）：`consume_password_reset_token`が`None`を返した場合。Redis障害またはPostgreSQL接続障害はグローバル例外ハンドラで503 `SERVICE_UNAVAILABLE`へ変換する。Redis失効に失敗した場合はfail-closeとし、DB更新・`commit()`を行わない |
-| 処理内容 | 1. `user_id = await redis_store.consume_password_reset_token(token)` 2. `None`なら例外 3. `hash_password`で新パスワードをハッシュ化 4. `delete_all_sessions`を実行 5. `revoke_all_refresh_tokens`を実行 6. Redis成功後に`user_repository.update_password(db, user_id, password_hash)`を実行 7. `db.commit()`を実行 |
+| 送出例外 / 失敗条件 | `InvalidResetTokenError`（→400 `INVALID_RESET_TOKEN`）：`consume_password_reset_token`が`None`を返した場合。Redis障害またはPostgreSQL接続障害はグローバル例外ハンドラで503 `SERVICE_UNAVAILABLE`へ変換する。Redis失効に失敗した場合はfail-closeとし、DB更新・`commit()`を行わず、消費済みトークンを補償復元する |
+| 処理内容 | 1. `user_id = await redis_store.consume_password_reset_token(token)` 2. `None`なら例外 3. `hash_password`で新パスワードをハッシュ化 4. `delete_all_sessions`を実行 5. `revoke_all_refresh_tokens`を実行 6. Redis失敗時は`save_password_reset_token`で消費済みトークンを補償復元 7. Redis成功後に`user_repository.update_password(db, user_id, password_hash)`を実行 8. `db.commit()`を実行 9. DB失敗時はrollback後に`save_password_reset_token`でトークンを復元 |
 | 副作用 | Redis削除（ワンタイム消費＋全失効）、PostgreSQL UPDATE |
 
 ### 8.6 `service/mail_service.py :: send_email_verification_mail` / `send_password_reset_mail`

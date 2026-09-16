@@ -36,6 +36,7 @@ __all__ = [
 	"mark_email_verify_sent",
 	"ping",
 	"replace_email_verify_token",
+	"restore_email_verify_token",
 	"reset_login_failure",
 	"revoke_all_refresh_tokens",
 	"revoke_refresh_token",
@@ -123,8 +124,8 @@ async def consume_oauth_handoff(code: str) -> OAuthHandoffData | None:
 	return await redis_store_auth.consume_oauth_handoff(_redis(), _key_prefix(), code)
 
 
-async def save_password_reset_token(token: str, user_id: UUID, ttl: int) -> None:
-	await redis_store_auth.save_password_reset_token(_redis(), _key_prefix(), token, user_id, ttl)
+async def save_password_reset_token(token: str, user_id: UUID, ttl: int) -> bool:
+	return await redis_store_auth.save_password_reset_token(_redis(), _key_prefix(), token, user_id, ttl)
 
 
 async def consume_password_reset_token(token: str) -> UUID | None:
@@ -137,6 +138,10 @@ async def replace_email_verify_token(token: str, user_id: UUID, ttl: int) -> Non
 
 async def consume_email_verify_token(token: str) -> UUID | None:
 	return await redis_store_auth.consume_email_verify_token(_redis(), _key_prefix(), token)
+
+
+async def restore_email_verify_token(token: str, user_id: UUID, ttl: int) -> bool:
+	return await redis_store_auth.restore_email_verify_token(_redis(), _key_prefix(), token, user_id, ttl)
 
 
 async def mark_email_verify_sent(user_id: UUID, interval: int) -> bool:

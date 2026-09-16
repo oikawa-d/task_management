@@ -9,7 +9,11 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_backend_settings
-from app.core.exceptions import InvalidResetTokenError, InvalidVerifyTokenError, raise_database_error
+from app.core.exceptions import (
+	InvalidResetTokenError,
+	InvalidVerifyTokenError,
+	raise_database_error,
+)
 from app.core.security import hash_password
 from app.models.user import User
 from app.repository import redis_store, user_repository
@@ -44,6 +48,11 @@ async def verify_email(token: str, db: AsyncSession) -> None:
 		await db.commit()
 	except DBAPIError as exc:
 		await db.rollback()
+		try:
+			settings = get_backend_settings()
+			await redis_store.restore_email_verify_token(token, user_id, ttl=settings.email_verify_ttl_seconds)
+		except Exception:
+			pass
 		raise_database_error(exc)
 
 
@@ -64,7 +73,9 @@ async def request_password_reset(email: str, background: BackgroundTasks, db: As
 		return
 	settings = get_backend_settings()
 	token = _generate_token()
-	await redis_store.save_password_reset_token(token, user.id, ttl=settings.password_reset_ttl_seconds)
+	saved = await redis_store.save_password_reset_token(token, user.id, ttl=settings.password_reset_ttl_seconds)
+	if not saved:
+		return
 	background.add_task(
 		mail_service.send_password_reset_mail,
 		user.email,
@@ -79,11 +90,24 @@ async def reset_password(token: str, new_password: str, db: AsyncSession) -> Non
 		raise InvalidResetTokenError()
 
 	password_hash = hash_password(new_password)
-	await redis_store.delete_all_sessions(user_id)
-	await redis_store.revoke_all_refresh_tokens(user_id)
+	try:
+		await redis_store.delete_all_sessions(user_id)
+		await redis_store.revoke_all_refresh_tokens(user_id)
+	except Exception:
+		try:
+			settings = get_backend_settings()
+			await redis_store.save_password_reset_token(token, user_id, ttl=settings.password_reset_ttl_seconds)
+		except Exception:
+			pass
+		raise
 	try:
 		await user_repository.update_password(db, user_id, password_hash)
 		await db.commit()
 	except DBAPIError as exc:
 		await db.rollback()
+		try:
+			settings = get_backend_settings()
+			await redis_store.save_password_reset_token(token, user_id, ttl=settings.password_reset_ttl_seconds)
+		except Exception:
+			pass
 		raise_database_error(exc)

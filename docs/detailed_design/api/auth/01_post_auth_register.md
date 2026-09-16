@@ -43,8 +43,8 @@ Cookie：なし
 |------|----|------|------|------|
 | username | string | ○ | 3〜50文字、`^[A-Za-z0-9_-]+$` | ログインID。大文字小文字は区別しない一意制約（`uq_users_username`） |
 | email | string | ○ | 254文字以内、メール形式（`@ - _ . +` を許容） | 大文字小文字を区別しない一意制約（`uq_users_email`） |
-| password | string | ○ | 8文字以上、大文字英字/小文字英字/数字/記号のうち2種類以上 | 平文はログ・DBに保存しない |
-| password_confirm | string | ○ | `password` と一致 | |
+| password | string | ○ | 8〜`PASSWORD_MAX_LENGTH`（既定128）文字、Unicodeコードポイント数で判定、大文字英字/小文字英字/数字/記号のうち2種類以上 | 平文はログ・DBに保存しない |
+| password_confirm | string | ○ | `password` と一致し、`PASSWORD_MAX_LENGTH`以内 | |
 | last_name / first_name | string | ○ | 各1〜30文字 | |
 | last_name_kana / first_name_kana | string | ○ | 各1〜30文字、ひらがな・カタカナ・数字のみ | |
 | birth_date | string(date) | ○ | `YYYY-MM-DD`、未来日不可 | プルダウン選択想定。フロントは年/月/日を結合して送信 |

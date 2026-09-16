@@ -197,6 +197,10 @@ JWTのjti denylistをRedisへ保持する案は即時失効できるが、揮発
 
 force-logout直後のAccess TokenがTTL内は利用でき、TTL超過後は401になること、refreshは即時失効すること、status無効化ではAccess Tokenも`USER_INACTIVE`で直ちに拒否されることをモード別に検証する。
 
+### 2.10 認証入力の長さ
+
+パスワードの最大長は`PASSWORD_MAX_LENGTH=128`、メール認証・パスワードリセットtokenおよびOAuthのcode/stateの最大長は`AUTH_TOKEN_MAX_LENGTH=512`とする。上限値はbackend設定で管理し、frontendの`VITE_PASSWORD_MAX_LENGTH` / `VITE_AUTH_TOKEN_MAX_LENGTH`へ同じ値をビルド時に渡す。PythonとJavaScriptはいずれもUnicodeコードポイント数で判定し、上限超過は422としてArgon2、Redis、OAuth外部通信を実行しない。
+
 ## 3. 失敗時の共通原則と未決定事項の扱い
 
 認証・Rate Limit・失効・監査記録の判定に必要なDBまたはRedisが利用できない場合は、許可・成功・空データへの置換をせず `503 SERVICE_UNAVAILABLE` とする。RedisやDBの部分処理は監査ERRORへ出し、削除処理は同じ入力で再実行できるようにする。

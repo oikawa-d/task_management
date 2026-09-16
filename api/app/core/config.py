@@ -1,10 +1,15 @@
 from functools import lru_cache
 from typing import Annotated, Literal
+from urllib.parse import urlparse
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from app.core.constants import AUTH_TOKEN_MAX_LENGTH, PASSWORD_MAX_LENGTH
+
 AuthMode = Literal["session", "jwt"]
+
+_PRODUCTION_PLACEHOLDERS = frozenset({"secret", "password", "changeme", "change-me", "test-secret", "test-password"})
 
 
 class BackendSettings(BaseSettings):
@@ -38,6 +43,8 @@ class BackendSettings(BaseSettings):
 	cookie_samesite: Literal["lax", "strict", "none"] = "lax"
 	cookie_domain: str = ""
 	login_max_attempts: int = 5
+	password_max_length: int = PASSWORD_MAX_LENGTH
+	auth_token_max_length: int = AUTH_TOKEN_MAX_LENGTH
 	login_lock_window_seconds: int = 900
 	rate_limit_register_max_requests: int = 5
 	rate_limit_register_window_seconds: int = 900
@@ -162,6 +169,42 @@ class BackendSettings(BaseSettings):
 		if value <= 0:
 			raise ValueError("TTL must be positive")
 		return value
+
+	@field_validator("password_max_length", "auth_token_max_length")
+	@classmethod
+	def _validate_positive_input_limit(cls, value: int) -> int:
+		if value <= 0:
+			raise ValueError("input length limit must be positive")
+		return value
+
+	@model_validator(mode="after")
+	def _validate_production_security(self) -> "BackendSettings":
+		if self.app_env != "production":
+			return self
+
+		violations: list[str] = []
+		if not self.cookie_secure:
+			violations.append("cookie_secure must be true in production")
+		if not self.smtp_use_tls:
+			violations.append("smtp_use_tls must be true in production")
+		url_fields = ["frontend_base_url"]
+		if self.google_login_enabled:
+			url_fields.append("google_redirect_uri")
+		for field_name in url_fields:
+			parsed = urlparse(getattr(self, field_name))
+			if parsed.scheme != "https" or not parsed.netloc:
+				violations.append(f"{field_name} must be an HTTPS URL in production")
+		if self.enable_api_docs:
+			violations.append("enable_api_docs must be false in production")
+		for field_name in ("jwt_secret_key", "google_client_secret", "initial_admin_password"):
+			value = getattr(self, field_name).strip().lower()
+			if not value:
+				violations.append(f"{field_name} must not be blank in production")
+			elif value in _PRODUCTION_PLACEHOLDERS:
+				violations.append(f"{field_name} must not use a development placeholder in production")
+		if violations:
+			raise ValueError("; ".join(violations))
+		return self
 
 
 @lru_cache

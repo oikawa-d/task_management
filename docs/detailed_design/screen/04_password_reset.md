@@ -54,8 +54,8 @@
 |----|------|------|--------|----------|----------|----------------|
 | ① | ロゴ | 静的表示 | - | - | 常時 | クリックなし |
 | ② | タイトル | 静的表示 | "新しいパスワードを設定" | - | 常時 | - |
-| ③ | 新しいパスワード | password input | "" | 8文字以上、大文字/小文字/数字/記号のうち2種類以上（`basic_design/04_api.md` §3.1 registerと同一規則） | tokenが存在する場合のみ表示 | 目のアイコンで表示切替、入力毎にzod検証 |
-| ④ | パスワード確認 | password input | "" | ③と一致 | 同上 | 同上 |
+| ③ | 新しいパスワード | password input | "" | 8〜`VITE_PASSWORD_MAX_LENGTH`（既定128）文字、Unicodeコードポイント数で判定。大文字/小文字/数字/記号のうち2種類以上（`basic_design/04_api.md` §3.1 registerと同一規則） | tokenが存在する場合のみ表示 | 目のアイコンで表示切替、入力毎にzod検証 |
+| ④ | パスワード確認 | password input | "" | ③と一致し、`VITE_PASSWORD_MAX_LENGTH`以内 | 同上 | 同上 |
 | ⑤ | 強度インジケータ | 静的表示 | - | - | ③入力中 | zod検証結果に応じ表示更新 |
 | ⑥ | 再設定するボタン | button submit | disabled | - | ③④が有効かつ送信中でない | クリック／Enterで送信 |
 | ⑦ | エラーメッセージ | 静的表示 | 非表示 | - | 400応答時のみ表示 | - |
@@ -65,7 +65,7 @@
 
 | No | 呼び出しタイミング | メソッド／パス | 送信内容 | 成功時処理 | 失敗時処理 | queryKey / mutationKey |
 |----|---------------------|-----------------|----------|------------|------------|--------------------------|
-| 1 | ⑥ボタン押下（フォーム送信） | `POST /api/auth/password/reset` | `{ token, new_password, password_confirm }`（`password_confirm` はクライアント側一致検証のみに使い、APIへは送らない。実際の送信フィールドはAPI側スキーマ [10_post_auth_password_reset.md](../api/auth/10_post_auth_password_reset.md) を正とする） | 204 → トースト「パスワードを再設定しました」→ `/login` へ `navigate` | 400 `INVALID_RESET_TOKEN` → ⑦⑧を表示。422 → フィールドエラー表示。429 `TOO_MANY_ATTEMPTS` → `Retry-After`に基づく待機時間案内。503 → 再試行案内 | `mutationKey: ['auth', 'passwordReset']` |
+| 1 | ⑥ボタン押下（フォーム送信） | `POST /api/auth/password/reset` | `{ token, new_password, password_confirm }`（API側スキーマ [10_post_auth_password_reset.md](../api/auth/10_post_auth_password_reset.md) と一致） | 204 → トースト「パスワードを再設定しました」→ `/login` へ `navigate` | 400 `INVALID_RESET_TOKEN` → ⑦⑧を表示。422 → フィールドエラー表示。429 `TOO_MANY_ATTEMPTS` → `Retry-After`に基づく待機時間案内。503 → 再試行案内 | `mutationKey: ['auth', 'passwordReset']` |
 
 ## 5. 状態管理
 
@@ -191,15 +191,15 @@ flowchart TB
 | シグネチャ | `async function onSubmit(values: PasswordResetFormValues, token: string): Promise<void>` |
 | 引数 | `values`（`newPassword`, `passwordConfirm`）、`token`（親から渡される） |
 | 戻り値 | `void`（成功時は `navigate` を呼ぶため呼び出し元に戻り値は不要） |
-| 処理内容 | 1. zodスキーマで最終検証（RHFの`onSubmit`時点）<br>2. `resetPasswordMutation.mutateAsync({ token, new_password: values.newPassword })` を呼ぶ<br>3. 成功時：`navigate("/login", { state: { passwordResetDone: true } })`<br>4. 失敗時：`ApiError.code` に応じて `submitError` stateを更新 |
+| 処理内容 | 1. zodスキーマで最終検証（RHFの`onSubmit`時点）<br>2. `resetPasswordMutation.mutateAsync({ token, new_password: values.newPassword, password_confirm: values.passwordConfirm })` を呼ぶ<br>3. 成功時：`navigate("/login", { state: { passwordResetDone: true } })`<br>4. 失敗時：`ApiError.code` に応じて `submitError` stateを更新 |
 | 副作用 | API呼び出し、画面遷移 |
 
 ## 10. バリデーション
 
 | フィールド | zodスキーマ | 規則 | エラーメッセージ | バックエンド対応 |
 |------------|--------------|------|--------------------|--------------------|
-| `newPassword` | `passwordResetSchema.newPassword` | 8文字以上、大文字/小文字/数字/記号のうち2種類以上 | "8文字以上で、2種類以上の文字種を含めてください" | pydantic `RegisterRequest.password` と同一規則（`basic_design/04_api.md` §3.1） |
-| `passwordConfirm` | `passwordResetSchema.passwordConfirm` | `newPassword` と一致 | "パスワードが一致しません" | サーバー側は `new_password` のみ受け取り確認フィールドは持たない想定（要検討：APIリクエストスキーマに`password_confirm`が含まれるか [10_post_auth_password_reset.md](../api/auth/10_post_auth_password_reset.md) 側で確定させる） |
+| `newPassword` | `passwordResetSchema.newPassword` | 8〜`VITE_PASSWORD_MAX_LENGTH`（既定128）文字、Unicodeコードポイント数、2種類以上の文字種 | "8文字以上で、2種類以上の文字種を含めてください" | pydantic `RegisterRequest.password` と同一規則（`basic_design/04_api.md` §3.1） |
+| `passwordConfirm` | `passwordResetSchema.passwordConfirm` | `newPassword` と一致し、`VITE_PASSWORD_MAX_LENGTH`以内 | "パスワードが一致しません" | `PasswordResetRequest.password_confirm`で同じ上限と一致を検証 |
 
 ## 11. エラーハンドリング
 
@@ -253,5 +253,4 @@ flowchart LR
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 要検討 | `POST /auth/password/reset` のリクエストボディに `password_confirm` を含めるか（`basic_design/04_api.md` にリクエストスキーマの明記なし） | API側詳細設計（[10_post_auth_password_reset.md](../api/auth/10_post_auth_password_reset.md)）との整合を要確認 |
 | 不明 | 認証済みユーザーが本画面へ到達した場合の挙動（ガード対象外だが、既存セッション/トークンをどう扱うか） | 実装時の分岐に影響する可能性 |

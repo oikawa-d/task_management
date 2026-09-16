@@ -40,7 +40,7 @@
 | 名前 | 型 | 必須 | 制約 | 説明 |
 |------|----|------|------|------|
 | name | string | 任意 | 1〜100文字 | 指定時のみ更新 |
-| description | string \| null | 任意 | 上限なし | 指定時のみ更新（`null`への変更も許可） |
+| description | string \| null | 任意 | 0〜2,000文字 | 指定時のみ更新（`null`への変更も許可） |
 | start_at | string(datetime) \| null | 任意 | ISO 8601（UTC） | 指定時のみ更新（`null`への変更も許可） |
 | end_at | string(datetime) \| null | 任意 | ISO 8601（UTC） | 指定時のみ更新（`null`への変更も許可） |
 | is_active | boolean | 任意 | `true` / `false` | 指定時のみ更新。**オーナー／adminのみ**変更可能（後述）。`false`への変更は`05_delete_project.md`の論理削除と同一の効果を持つ。`true`への変更（無効化済みプロジェクトの再有効化）も許可する |
@@ -289,7 +289,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | pydanticスキーマ | フィールド | 制約 | フロント（zod）との整合 |
 |-------------------|-----------|------|--------------------------|
 | `ProjectUpdateRequest` | name | `str, min_length=1, max_length=100`, 任意 | `zod.string().min(1).max(100).optional()` |
-| `ProjectUpdateRequest` | description | `str \| None`, 任意 | `zod.string().nullable().optional()` |
+| `ProjectUpdateRequest` | description | `str \| None`, 0〜2,000文字、任意 | `zod.string().max(2000).nullable().optional()` |
 | `ProjectUpdateRequest` | start_at | `datetime \| None`, 任意 | `zod.string().datetime().nullable().optional()` |
 | `ProjectUpdateRequest` | end_at | `datetime \| None`, 任意 | `zod.string().datetime().nullable().optional()` |
 | `ProjectUpdateRequest` | is_active | `bool`, 任意 | `zod.boolean().optional()` |

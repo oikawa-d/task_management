@@ -26,7 +26,7 @@
 | AUTH_MODE差異 | 成功時の失効対象がsessionは`session:{sid}`系、jwtは`refresh:{hash}`系という保存先の違いのみ。判定ロジック・レスポンスに差異なし |
 | 冪等性 | なし（同一`current_password`/`new_password`で2回目を実行すると1回目成功後は`current_password`が新パスワードと一致しなくなるため2回目は`401 INVALID_CREDENTIALS`となる） |
 | レート制限 | 対象外（ログイン試行のレート制限とは別事象。ログイン済みユーザーの操作のため`login_fail`は使用しない） |
-| トランザクション境界 | Redisの全セッション/全リフレッシュトークン失効を先に完了し、その後`users.password_hash`をUPDATEしてcommitする。Redis失敗時はDBを更新せず503。DB失敗時は安全側にログアウト状態を維持する |
+| トランザクション境界 | Redisの全セッション/全リフレッシュトークン失効を先に完了し、その後`users.password_hash`をUPDATEしてcommitする。Redis失敗時はDBを更新せず503。DB失敗時はrollback後に全失効済み状態から再試行する |
 
 ## 2. 入出力仕様
 
@@ -52,9 +52,9 @@ Cookie
 
 | フィールド | 型 | 必須 | 制約 | 説明 |
 |-----------|----|------|------|------|
-| current_password | string | 条件付き必須 | `has_password=true`のユーザーは必須。`has_password=false`（Googleのみで登録し未設定）のユーザーは省略可 | 省略時にサーバーは検証をスキップする（値が来た場合は無視ではなく`VALIDATION_ERROR`とする。§13参照） |
-| new_password | string | ○ | 8文字以上、大文字英字/小文字英字/数字/記号のうち2種類以上（`04_api.md`§3.1の登録時パスワードポリシーと同一） | |
-| password_confirm | string | ○ | `new_password`と一致 | |
+| current_password | string | 条件付き必須 | `has_password=true`のユーザーは必須。`has_password=false`（Googleのみで登録し未設定）のユーザーは省略可。指定時は`PASSWORD_MAX_LENGTH`（既定128）以内 | 省略時にサーバーは検証をスキップする（値が来た場合は無視ではなく`VALIDATION_ERROR`とする。§13参照） |
+| new_password | string | ○ | 8〜`PASSWORD_MAX_LENGTH`（既定128）文字、Unicodeコードポイント数で判定、大文字英字/小文字英字/数字/記号のうち2種類以上（`04_api.md`§3.1の登録時パスワードポリシーと同一） | |
+| password_confirm | string | ○ | `new_password`と一致し、`PASSWORD_MAX_LENGTH`以内 | |
 
 ### 2.2 レスポンス
 
@@ -110,17 +110,22 @@ sequenceDiagram
             R-->>FE: 422 VALIDATION_ERROR
         else 検証通過
             S->>S: argon2でnew_passwordをハッシュ化
-            S->>RS: delete_all_sessions(user_id)
-            RS->>RD: SMEMBERS user_sessions:{uid} → 各session/csrf DEL → DEL user_sessions:{uid}
-            S->>RS: revoke_all_refresh_tokens(user_id)
-            RS->>RD: SMEMBERS user_refresh:{uid} → 各refresh DEL → DEL user_refresh:{uid}
-            S->>URP: update_password(db, user_id, new_hash)
-            URP->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
-            PG-->>URP: 更新完了
-            S->>PG: db.commit()
-            PG-->>S: commit完了
-            S-->>R: None
-            R-->>FE: 204
+            alt Redis全失効成功
+                S->>RS: delete_all_sessions(user_id)
+                RS->>RD: SMEMBERS user_sessions:{uid} → 各session/csrf DEL → DEL user_sessions:{uid}
+                S->>RS: revoke_all_refresh_tokens(user_id)
+                RS->>RD: SMEMBERS user_refresh:{uid} → 各refresh DEL → DEL user_refresh:{uid}
+                S->>URP: update_password(db, user_id, new_hash)
+                URP->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
+                PG-->>URP: 更新完了
+                S->>PG: db.commit()
+                PG-->>S: commit完了
+                S-->>R: None
+                R-->>FE: 204
+            else Redis失効失敗
+                S-->>R: ServiceUnavailableError
+                R-->>FE: 503 SERVICE_UNAVAILABLE（DB未更新）
+            end
         end
     end
 ```
@@ -149,7 +154,8 @@ flowchart TB
     K -->|"未送信"| J
     J --> L["全リフレッシュトークン失効<br/>revoke_all_refresh_tokens"]
     L --> M["password_hash更新<br/>DB更新を呼び出し"]
-    M --> N["204"]
+    M --> N["db.commit()"]
+    N --> O["204"]
 ```
 
 ## 6. 関数詳細
@@ -184,7 +190,7 @@ flowchart TB
 | 引数 | `current_user`、`payload`、`db` |
 | 戻り値 | `None` |
 | 送出例外 | `InvalidCredentialsError`(401)、`ValidationError`(422)、`ServiceUnavailableError`(503) |
-| 処理内容 | 1. `fn_get_user(user_id)` で現在のhashを取得 2. `core/security.py` の `verify_password` で現在パスワードを検証 3. 同モジュールの `hash_password` で `new_password` をargon2idでハッシュ化 4. Redisセッション/refreshを失効 5. Redis成功後に `CALL sp_update_user_password(user_id, new_hash)`を呼び出す 6. `db.commit()`でDB更新を確定する。Redis失敗時はDBを更新せず503 |
+| 処理内容 | 1. `fn_get_user(user_id)` で現在のhashを取得 2. `core/security.py` の `verify_password` で現在パスワードを検証 3. 同モジュールの `hash_password` で `new_password` をargon2idでハッシュ化 4. Redisセッション/refreshを失効 5. Redis成功後に`CALL sp_update_user_password(user_id, new_hash)`を呼び出す 6. `db.commit()`でDB更新を確定する。Redis失敗時はDBを更新せず503 |
 | 副作用 | DB更新（`password_hash`）、Redis全失効（`session:*` / `csrf:*` / `user_sessions:{uid}` / `refresh:*` / `user_refresh:{uid}`） |
 
 ### 6.4 `api/app/repository/user_repository.py :: update_password`
@@ -259,9 +265,9 @@ sessionモードの認証解決・CSRF検証自体の`GET`/`EXPIRE`は本APIの�
 
 | スキーマ | フィールド | 規則 |
 |----------|-----------|------|
-| `PasswordChangeRequest` | new_password | 8文字以上、大文字英字/小文字英字/数字/記号のうち2種類以上。フロント（zod）も同一ポリシーを`04_api.md`§3.1の登録時と共通のスキーマ定義で用いる |
-| `PasswordChangeRequest` | password_confirm | `new_password`と完全一致 |
-| `PasswordChangeRequest` | current_password | pydanticレベルでは任意（`str \| None`）。「送信可否」の妥当性判定（`has_password`との整合）はサービス層で行う（DBの現在値を見る必要があるため） |
+| `PasswordChangeRequest` | new_password | 8〜`PASSWORD_MAX_LENGTH`（既定128）文字、Unicodeコードポイント数で判定、大文字英字/小文字英字/数字/記号のうち2種類以上。フロント（zod）も同一ポリシーを`04_api.md`§3.1の登録時と共通のスキーマ定義で用いる |
+| `PasswordChangeRequest` | password_confirm | `new_password`と一致し、`PASSWORD_MAX_LENGTH`以内 |
+| `PasswordChangeRequest` | current_password | pydanticレベルでは任意（`str \| None`）。指定時は`PASSWORD_MAX_LENGTH`以内。「送信可否」の妥当性判定（`has_password`との整合）はサービス層で行う（DBの現在値を見る必要があるため） |
 
 ## 11. 非機能・セキュリティ考慮
 

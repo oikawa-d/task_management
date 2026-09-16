@@ -114,6 +114,8 @@ async def test_verify_email_converts_database_connection_failure_and_rolls_back(
 	monkeypatch.setattr(
 		email_verification_service.redis_store, "consume_email_verify_token", AsyncMock(return_value=user_id)
 	)
+	restore = AsyncMock()
+	monkeypatch.setattr(email_verification_service.redis_store, "restore_email_verify_token", restore)
 	monkeypatch.setattr(email_verification_service.user_repository, "mark_email_verified", AsyncMock())
 	db = _FakeDb(commit_error=OperationalError("verify email", {}, SimpleNamespace(sqlstate="08006")))
 
@@ -121,6 +123,9 @@ async def test_verify_email_converts_database_connection_failure_and_rolls_back(
 		await email_verification_service.verify_email("token", db)  # type: ignore[arg-type]
 
 	assert db.calls == ["db.commit", "db.rollback"]
+	restore.assert_awaited_once_with(
+		"token", user_id, ttl=email_verification_service.get_backend_settings().email_verify_ttl_seconds
+	)
 
 
 @pytest.mark.asyncio
@@ -173,6 +178,22 @@ async def test_request_password_reset_schedules_mail(monkeypatch: pytest.MonkeyP
 	func, args = background.tasks[0]
 	assert func is email_verification_service.mail_service.send_password_reset_mail
 	assert args == (user.email, "reset-token", settings.password_reset_ttl_seconds // 60)
+
+
+@pytest.mark.asyncio
+async def test_request_password_reset_does_not_schedule_mail_when_redis_cas_loses(
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	user = _user()
+	monkeypatch.setattr(email_verification_service.user_repository, "get_by_email", AsyncMock(return_value=user))
+	monkeypatch.setattr(
+		email_verification_service.redis_store, "save_password_reset_token", AsyncMock(return_value=False)
+	)
+	background = _FakeBackgroundTasks()
+
+	await email_verification_service.request_password_reset("taro@example.com", background, _FakeDb())  # type: ignore[arg-type]
+
+	assert background.tasks == []
 
 
 @pytest.mark.asyncio
@@ -242,6 +263,9 @@ async def test_reset_password_revokes_redis_state_before_db_update(monkeypatch: 
 		calls.append("update_password")
 
 	monkeypatch.setattr(email_verification_service.redis_store, "consume_password_reset_token", consume)
+	monkeypatch.setattr(
+		email_verification_service.redis_store, "save_password_reset_token", AsyncMock(return_value=True)
+	)
 	monkeypatch.setattr(email_verification_service.redis_store, "delete_all_sessions", delete_sessions)
 	monkeypatch.setattr(email_verification_service.redis_store, "revoke_all_refresh_tokens", revoke_refresh)
 	monkeypatch.setattr(email_verification_service.user_repository, "update_password", update_password)
@@ -253,21 +277,54 @@ async def test_reset_password_revokes_redis_state_before_db_update(monkeypatch: 
 
 
 @pytest.mark.asyncio
-async def test_reset_password_does_not_update_db_when_session_revocation_fails(
+async def test_reset_password_restores_token_when_database_commit_fails(
 	monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+	user_id = uuid4()
 	monkeypatch.setattr(
-		email_verification_service.redis_store, "consume_password_reset_token", AsyncMock(return_value=uuid4())
+		email_verification_service.redis_store, "consume_password_reset_token", AsyncMock(return_value=user_id)
 	)
+	restore = AsyncMock(return_value=True)
+	monkeypatch.setattr(email_verification_service.redis_store, "save_password_reset_token", restore)
 	update_password = AsyncMock()
 	monkeypatch.setattr(email_verification_service.user_repository, "update_password", update_password)
+	monkeypatch.setattr(email_verification_service.redis_store, "delete_all_sessions", AsyncMock())
+	monkeypatch.setattr(email_verification_service.redis_store, "revoke_all_refresh_tokens", AsyncMock())
+	db = _FakeDb(commit_error=OperationalError("update password", {}, SimpleNamespace(sqlstate="08006")))
+
+	with pytest.raises(ServiceUnavailableError):
+		await email_verification_service.reset_password("token", "NewPassw0rd!", db)  # type: ignore[arg-type]
+
+	update_password.assert_awaited_once()
+	restore.assert_awaited_once_with(
+		"token", user_id, ttl=email_verification_service.get_backend_settings().password_reset_ttl_seconds
+	)
+
+
+@pytest.mark.asyncio
+async def test_reset_password_does_not_update_db_when_redis_revocation_fails(
+	monkeypatch: pytest.MonkeyPatch,
+) -> None:
+	user_id = uuid4()
+	monkeypatch.setattr(
+		email_verification_service.redis_store, "consume_password_reset_token", AsyncMock(return_value=user_id)
+	)
 	monkeypatch.setattr(
 		email_verification_service.redis_store,
 		"delete_all_sessions",
 		AsyncMock(side_effect=RedisConnectionError("redis down")),
 	)
+	restore = AsyncMock(return_value=True)
+	monkeypatch.setattr(email_verification_service.redis_store, "save_password_reset_token", restore)
+	update_password = AsyncMock()
+	monkeypatch.setattr(email_verification_service.user_repository, "update_password", update_password)
+	db = _FakeDb()
 
 	with pytest.raises(RedisConnectionError):
-		await email_verification_service.reset_password("token", "NewPassw0rd!", _FakeDb())  # type: ignore[arg-type]
+		await email_verification_service.reset_password("token", "NewPassw0rd!", db)  # type: ignore[arg-type]
 
 	update_password.assert_not_awaited()
+	assert db.calls == []
+	restore.assert_awaited_once_with(
+		"token", user_id, ttl=email_verification_service.get_backend_settings().password_reset_ttl_seconds
+	)

@@ -419,6 +419,8 @@ flowchart TB
 | `VITE_TASK_COMMENT_BODY_MAX_LENGTH` | `2000` | コメント本文のzodバリデーション上限文字数。バックエンドの`TASK_COMMENT_BODY_MAX_LENGTH`と同じ値を`.env`へ設定し、値の一致は運用（`.env.example`のコメント併記）で担保する |
 | `VITE_USER_NAME_MAX_LENGTH` | `30` | プロフィールの姓名・フリガナに対するzodバリデーション上限文字数。未設定・不正値は既定値へフォールバックする |
 | `VITE_PASSWORD_MIN_LENGTH` | `8` | パスワードのzodバリデーション最小文字数。未設定・不正値は既定値へフォールバックする |
+| `VITE_PASSWORD_MAX_LENGTH` | `128` | パスワードのzodバリデーション最大文字数。backendの`PASSWORD_MAX_LENGTH`と一致させ、Unicodeコードポイント数で判定する |
+| `VITE_AUTH_TOKEN_MAX_LENGTH` | `512` | メール認証・パスワードリセットtokenとOAuth codeのzod最大文字数。backendの`AUTH_TOKEN_MAX_LENGTH`と一致させ、Unicodeコードポイント数で判定する |
 | `VITE_APP_TIMEZONE` | `Asia/Tokyo` | 期限日時の表示・入力に使用するタイムゾーン。未設定時は既定値へフォールバックする |
 
 認証モード、Googleログインの有効/無効、CSRF Cookie名は `GET /auth/config` から実行時に取得する。`VITE_AUTH_MODE` / `VITE_GOOGLE_LOGIN_ENABLED` / `VITE_CSRF_COOKIE_NAME` は定義しない。これによりfrontendイメージとbackendの設定がずれても、起動時にbackendの設定へ追従できる。

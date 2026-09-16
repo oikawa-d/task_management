@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, model_validator
 
 from app.core.config import BackendSettings
+from app.core.constants import DESCRIPTION_MAX_LENGTH
 
 _PAGINATION_DEFAULT_PER_PAGE = cast(int, BackendSettings.model_fields["pagination_default_per_page"].default)
 _PAGINATION_MAX_PER_PAGE = cast(int, BackendSettings.model_fields["pagination_max_per_page"].default)
@@ -18,7 +19,7 @@ class ProjectListQuery(BaseModel):
 
 class ProjectCreateRequest(BaseModel):
 	name: str = Field(min_length=1, max_length=100)
-	description: str | None = None
+	description: str | None = Field(default=None, max_length=DESCRIPTION_MAX_LENGTH)
 	start_at: datetime | None = None
 	end_at: datetime | None = None
 
@@ -31,7 +32,7 @@ class ProjectCreateRequest(BaseModel):
 
 class ProjectUpdateRequest(BaseModel):
 	name: str | None = Field(default=None, min_length=1, max_length=100)
-	description: str | None = None
+	description: str | None = Field(default=None, max_length=DESCRIPTION_MAX_LENGTH)
 	start_at: datetime | None = None
 	end_at: datetime | None = None
 	is_active: bool | None = None

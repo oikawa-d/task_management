@@ -325,7 +325,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 |-----------|-------------------|------|--------------------------|
 | version | `TaskUpdateRequest.version` | `int`、必須 | 取得時のレスポンス値をそのまま保持して送信 |
 | title | `TaskUpdateRequest.title` | 指定時 `min_length=1, max_length=150` | 同一制約 |
-| description | `TaskUpdateRequest.description` | `str \| None` | 同左 |
+| description | `TaskUpdateRequest.description` | `str \| None`、0〜2,000文字 | 同左 |
 | status | `TaskUpdateRequest.status` | `Literal["todo","in_progress","done"]` | セレクト/D&D列と一致 |
 | assignee_id | `TaskUpdateRequest.assignee_id` | `UUID \| None` | メンバー検証はサービス層 |
 | position | `TaskUpdateRequest.position` | `int`、`ge=0` | D&Dのドロップ先インデックス |

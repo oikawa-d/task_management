@@ -145,10 +145,12 @@ flowchart TB
 | `JWT_SECRET_KEY` | *** | JWT署名鍵（**Secret**） |
 | `JWT_ALGORITHM` | `HS256` | |
 | `COOKIE_NAME_SESSION` / `COOKIE_NAME_CSRF` / `COOKIE_NAME_REFRESH` / `COOKIE_NAME_OAUTH_STATE` | `cerberus_sid` / `cerberus_csrf` / `cerberus_rt` / `cerberus_oauth_state` | Cookie名 |
-| `COOKIE_SECURE` | `false`（ローカルHTTP） | 本番相当では `true` |
+| `COOKIE_SECURE` | `false`（ローカルHTTP） | `APP_ENV=production`では `true` 必須 |
 | `COOKIE_SAMESITE` / `COOKIE_SAMESITE_REFRESH` | `lax` / `strict` | session/CSRFはLax、jwt refreshはStrict。別オリジン構成ではSecure + 明示CSRF/Origin検証を必須 |
 | `COOKIE_DOMAIN` | 空 | 必要時のみ設定 |
 | `ARGON2_TIME_COST` / `ARGON2_MEMORY_COST` / `ARGON2_PARALLELISM` | `3` / `65536` / `4` | パスワードハッシュのコスト |
+| `PASSWORD_MAX_LENGTH` | `128` | パスワード入力の最大文字数（Unicodeコードポイント数）。Argon2処理前に検証 |
+| `AUTH_TOKEN_MAX_LENGTH` | `512` | メール認証・リセットtoken、OAuth code/stateの最大文字数（Unicodeコードポイント数） |
 | `LOGIN_MAX_ATTEMPTS` / `LOGIN_LOCK_WINDOW_SECONDS` | `5` / `900` | ログイン失敗のレート制限 |
 | `RATE_LIMIT_REGISTER_MAX_REQUESTS` / `RATE_LIMIT_REGISTER_WINDOW_SECONDS` | `5` / `900` | 会員登録のIP単位Rate Limit |
 | `RATE_LIMIT_EMAIL_VERIFY_MAX_REQUESTS` / `RATE_LIMIT_EMAIL_VERIFY_RESEND_MAX_REQUESTS` | `10` / `5` | メール認証・再送のIP単位Rate Limit |
@@ -162,7 +164,7 @@ flowchart TB
 | `CORS_ALLOW_METHODS` | `GET,POST,PUT,PATCH,DELETE,OPTIONS` | カンマ区切り。CORSミドルウェアが許可するHTTPメソッド |
 | `CORS_ALLOW_HEADERS` | `Content-Type,X-CSRF-Token,Authorization` | カンマ区切り。CORSミドルウェアが許可するリクエストヘッダー |
 | `CORS_MAX_AGE_SECONDS` | `600` | プリフライト(OPTIONS)応答のキャッシュ秒数 |
-| `ENABLE_API_DOCS` | `true` | `/api/docs` の有効化 |
+| `ENABLE_API_DOCS` | `true` | `/api/docs` の有効化。`APP_ENV=production`では `false` 必須 |
 
 ### 4.4 OAuth2 / メール
 
@@ -170,7 +172,7 @@ flowchart TB
 |------|-----|------|
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | *** | Google OAuth2（**Secret**） |
 | `GOOGLE_LOGIN_ENABLED` | `true` | Googleログイン機能の有効/無効 |
-| `GOOGLE_REDIRECT_URI` | `http://localhost:5173/api/auth/oauth/google/callback` | frontendのsame-origin `/api` proxyを経由。外部公開時はfrontendのHTTPS URL |
+| `GOOGLE_REDIRECT_URI` | `http://localhost:5173/api/auth/oauth/google/callback` | frontendのsame-origin `/api` proxyを経由。`APP_ENV=production`ではHTTPS必須 |
 | `GOOGLE_AUTHORIZE_ENDPOINT` | `https://accounts.google.com/o/oauth2/v2/auth` | Google認可エンドポイント |
 | `GOOGLE_TOKEN_ENDPOINT` | `https://oauth2.googleapis.com/token` | Google tokenエンドポイント |
 | `GOOGLE_USERINFO_ENDPOINT` | `https://openidconnect.googleapis.com/v1/userinfo` | Google userinfoエンドポイント |
@@ -180,10 +182,10 @@ flowchart TB
 | `OAUTH_HANDOFF_TTL_SECONDS` | `60` | jwtモードのOAuth一時コードTTL |
 | `OAUTH_DEFAULT_REDIRECT_TO` | `/dashboard` | OAuth完了後の既定遷移先 |
 | `OAUTH_REDIRECT_TO_MAX_LENGTH` | `2048` | OAuth `redirect_to` の最大文字数 |
-| `FRONTEND_BASE_URL` | `http://localhost:5173` | メール内リンク・OAuth後のリダイレクト先 |
+| `FRONTEND_BASE_URL` | `http://localhost:5173` | メール内リンク・OAuth後のリダイレクト先。`APP_ENV=production`ではHTTPS必須 |
 | `SMTP_HOST` / `SMTP_PORT` | `mailpit` / `1025` | 開発は Mailpit |
 | `SMTP_USER` / `SMTP_PASSWORD` | 空 | 本番SMTP利用時のみ（**Secret**） |
-| `SMTP_USE_TLS` | `false` | |
+| `SMTP_USE_TLS` | `false` | `APP_ENV=production`では `true` 必須 |
 | `MAIL_FROM` | `no-reply@cerberus.local` | 送信元 |
 | `PASSWORD_RESET_TTL_SECONDS` | `1800` | リセットトークンTTL |
 | `EMAIL_VERIFY_TTL_SECONDS` | `86400` | メール認証トークンTTL（24時間） |
@@ -210,6 +212,8 @@ flowchart TB
 | `VITE_API_BASE_URL` | `/api` | フロントのAPIベースURL（ビルド時埋め込み）。認証モード等は `/auth/config` で実行時取得 |
 | `VITE_USER_NAME_MAX_LENGTH` | `30` | プロフィール姓名・フリガナのzod上限（ビルド時埋め込み） |
 | `VITE_PASSWORD_MIN_LENGTH` | `8` | パスワードのzod最小文字数（ビルド時埋め込み） |
+| `VITE_PASSWORD_MAX_LENGTH` | `128` | パスワードのzod最大文字数（ビルド時埋め込み。`PASSWORD_MAX_LENGTH`と一致させる） |
+| `VITE_AUTH_TOKEN_MAX_LENGTH` | `512` | token/codeのzod最大文字数（ビルド時埋め込み。`AUTH_TOKEN_MAX_LENGTH`と一致させる） |
 | `VITE_APP_TIMEZONE` | `Asia/Tokyo` | 期限日時の表示・入力に使用するタイムゾーン（ビルド時埋め込み） |
 | `VITE_NOTIFICATION_POLL_INTERVAL_MS` | `60000` | 未読通知件数のポーリング間隔（ミリ秒。ビルド時埋め込み） |
 

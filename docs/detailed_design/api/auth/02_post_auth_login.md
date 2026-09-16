@@ -42,7 +42,7 @@ Cookie：なし
 | 名前 | 型 | 必須 | 制約 | 説明 |
 |------|----|------|------|------|
 | identifier | string | ○ | 1〜254文字 | `username` または `email`。`lower()`比較で照合 |
-| password | string | ○ | 1文字以上（上限はパスワードポリシー上限に準拠しないが極端な長さはDoS対策として要検討） | 平文。ログ出力しない |
+| password | string | ○ | 1〜`PASSWORD_MAX_LENGTH`（既定128）文字、Unicodeコードポイント数で判定 | 平文。ログ出力しない |
 
 ### 2.2 レスポンス
 

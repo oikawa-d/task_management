@@ -65,9 +65,9 @@
 | 3-3〜3-4 | 姓カナ・名カナ入力 | text | 同上 | 各1〜30文字、ひらがな/カタカナ/数字のみ | 常時活性 | 同上 |
 | 3-5 | 生年月日 | `input type="date"` | 同上（`null`なら空） | 未来日不可 | 常時活性 | 入力毎にRHF state更新 |
 | 3-6 | 保存ボタン | button | disabled（未変更時） | フォームdirty かつ valid | dirty かつ valid | `PATCH /users/me` 送信 |
-| 3-7 | 現在のパスワード入力 | password | 空 | 必須（`has_password=true`時のみ表示） | `has_password=true`のとき表示・必須 | 目のアイコンで表示切替 |
-| 3-8 | 新パスワード入力 | password | 空 | 8文字以上・2種類以上の文字種 | 常時活性 | 強度インジケータ更新 |
-| 3-9 | 新パスワード確認 | password | 空 | `3-8`と一致 | 常時活性 | - |
+| 3-7 | 現在のパスワード入力 | password | 空 | `VITE_PASSWORD_MAX_LENGTH`（既定128）以内。必須（`has_password=true`時のみ表示） | `has_password=true`のとき表示・必須 | 目のアイコンで表示切替 |
+| 3-8 | 新パスワード入力 | password | 空 | 8〜`VITE_PASSWORD_MAX_LENGTH`（既定128）文字・Unicodeコードポイント数・2種類以上の文字種 | 常時活性 | 強度インジケータ更新 |
+| 3-9 | 新パスワード確認 | password | 空 | `3-8`と一致し、`VITE_PASSWORD_MAX_LENGTH`以内 | 常時活性 | - |
 | 3-10 | 変更ボタン | button | disabled | valid かつ submitting でない | valid | `PUT /users/me/password` 送信 |
 | 3-11 | 文字サイズラジオ | radio×4 | `uiStore.fontScale` に対応する項目 | - | 常時活性 | 選択即時に `uiStore.setFontScale()` |
 | 3-12 | ログイン履歴テーブル | table | - | - | タブ選択時に取得 | 行クリックなし（表示のみ） |

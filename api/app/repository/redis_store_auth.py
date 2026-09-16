@@ -45,6 +45,14 @@ redis.call('DEL', KEYS[1], current_key)
 return data.user_id
 """
 
+_RESTORE_EMAIL_VERIFY_SCRIPT = """
+local current = redis.call('GET', KEYS[1])
+if current and current ~= ARGV[1] then return 0 end
+redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
+redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[3])
+return 1
+"""
+
 
 async def store_refresh_token(client: Redis, prefix: str, token: str, user_id: UUID, family_id: str, ttl: int) -> None:
 	validate_ttl(ttl)
@@ -182,12 +190,12 @@ async def consume_oauth_handoff(client: Redis, prefix: str, code: str) -> OAuthH
 	return OAuthHandoffData(UUID(str(data["user_id"])), str(data["redirect_to"]), parse_datetime(data["created_at"]))
 
 
-async def save_password_reset_token(client: Redis, prefix: str, token: str, user_id: UUID, ttl: int) -> None:
+async def save_password_reset_token(client: Redis, prefix: str, token: str, user_id: UUID, ttl: int) -> bool:
 	validate_ttl(ttl)
 	token_hash_value = token_hash(token)
 	current_key = key("pwreset_current", prefix, user_id)
 	old_hash = await cast(Any, client.get)(current_key) or ""
-	await cast(Any, client.eval)(
+	result = await cast(Any, client.eval)(
 		_SAVE_PASSWORD_RESET_SCRIPT,
 		3,
 		current_key,
@@ -198,6 +206,7 @@ async def save_password_reset_token(client: Redis, prefix: str, token: str, user
 		dump({"user_id": user_id, "requested_at": datetime.now(UTC).isoformat()}),
 		ttl,
 	)
+	return bool(int(result))
 
 
 async def consume_password_reset_token(client: Redis, prefix: str, token: str) -> UUID | None:
@@ -234,3 +243,18 @@ async def replace_email_verify_token(client: Redis, prefix: str, token: str, use
 async def consume_email_verify_token(client: Redis, prefix: str, token: str) -> UUID | None:
 	data = parse_json(await client.getdel(key("emailverify", prefix, token_hash(token))))
 	return UUID(str(data["user_id"])) if data else None
+
+
+async def restore_email_verify_token(client: Redis, prefix: str, token: str, user_id: UUID, ttl: int) -> bool:
+	validate_ttl(ttl)
+	token_hash_value = token_hash(token)
+	result = await cast(Any, client.eval)(
+		_RESTORE_EMAIL_VERIFY_SCRIPT,
+		2,
+		key("emailverify_current", prefix, user_id),
+		key("emailverify", prefix, token_hash_value),
+		token_hash_value,
+		dump({"user_id": user_id, "requested_at": datetime.now(UTC).isoformat()}),
+		ttl,
+	)
+	return bool(int(result))

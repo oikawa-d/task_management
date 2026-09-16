@@ -1,15 +1,18 @@
 const DEFAULT_USER_NAME_MAX_LENGTH = 30;
 const DEFAULT_PASSWORD_MIN_LENGTH = 8;
+const DEFAULT_PASSWORD_MAX_LENGTH = 128;
 
 export interface ValidationConfig {
 	userNameMaxLength: number;
 	passwordMinLength: number;
+	passwordMaxLength: number;
 }
 
 export function getValidationConfig(env: ImportMetaEnv = import.meta.env): ValidationConfig {
 	return {
 		userNameMaxLength: readPositiveInteger(env.VITE_USER_NAME_MAX_LENGTH, DEFAULT_USER_NAME_MAX_LENGTH),
 		passwordMinLength: readPositiveInteger(env.VITE_PASSWORD_MIN_LENGTH, DEFAULT_PASSWORD_MIN_LENGTH),
+		passwordMaxLength: readPositiveInteger(env.VITE_PASSWORD_MAX_LENGTH, DEFAULT_PASSWORD_MAX_LENGTH),
 	};
 }
 

@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import Field, field_validator, model_validator
 
 from app.core.constants import EMAIL_MAX_LENGTH
+from app.core.input_validation import validate_auth_token_max_length, validate_password_max_length
 from app.schemas.base import StrictSchema
 
 USERNAME_PATTERN = r"^[A-Za-z0-9_-]+$"
@@ -50,7 +51,12 @@ class RegisterRequest(StrictSchema):
 	@field_validator("password")
 	@classmethod
 	def validate_password_categories(cls, value: str) -> str:
-		return _validate_password_categories(value)
+		return validate_password_max_length(_validate_password_categories(value))
+
+	@field_validator("password_confirm")
+	@classmethod
+	def validate_password_confirmation_length(cls, value: str) -> str:
+		return validate_password_max_length(value)
 
 	@model_validator(mode="after")
 	def validate_confirmation_and_birth_date(self) -> "RegisterRequest":
@@ -71,6 +77,11 @@ class LoginRequest(StrictSchema):
 	identifier: str = Field(min_length=1, max_length=EMAIL_MAX_LENGTH)
 	password: str = Field(min_length=1)
 
+	@field_validator("password")
+	@classmethod
+	def validate_password_length(cls, value: str) -> str:
+		return validate_password_max_length(value)
+
 
 class LoginResponse(StrictSchema):
 	access_token: str
@@ -86,6 +97,11 @@ class RefreshResponse(StrictSchema):
 
 class VerifyEmailRequest(StrictSchema):
 	token: str = Field(min_length=1)
+
+	@field_validator("token")
+	@classmethod
+	def validate_token_length(cls, value: str) -> str:
+		return validate_auth_token_max_length(value)
 
 
 class ResendVerifyEmailRequest(StrictSchema):
@@ -119,10 +135,20 @@ class PasswordResetRequest(StrictSchema):
 	new_password: str = Field(min_length=8)
 	password_confirm: str
 
+	@field_validator("token")
+	@classmethod
+	def validate_token_length(cls, value: str) -> str:
+		return validate_auth_token_max_length(value)
+
 	@field_validator("new_password")
 	@classmethod
 	def validate_password_categories(cls, value: str) -> str:
-		return _validate_password_categories(value)
+		return validate_password_max_length(_validate_password_categories(value))
+
+	@field_validator("password_confirm")
+	@classmethod
+	def validate_password_confirmation_length(cls, value: str) -> str:
+		return validate_password_max_length(value)
 
 	@model_validator(mode="after")
 	def validate_confirmation(self) -> "PasswordResetRequest":

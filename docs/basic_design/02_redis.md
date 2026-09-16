@@ -149,10 +149,11 @@ stateDiagram-v2
 | `consume_oauth_state` | `state: str` | `OAuthStateData \| None` | `GETDEL oauth_state:{state}`（ワンタイム消費） |
 | `save_oauth_handoff` | `code: str`, `user_id: UUID`, `redirect_to: str`, `ttl: int` | `None` | `SETEX oauth_handoff:{code}` |
 | `consume_oauth_handoff` | `code: str` | `OAuthHandoffData \| None` | `GETDEL oauth_handoff:{code}`（ワンタイム消費） |
-| `save_password_reset_token` | `token: str`, `user_id: UUID`, `ttl: int` | `None` | Luaで旧`pwreset_current:{uid}`と旧tokenを削除し、新tokenとcurrentを原子的に登録 |
+| `save_password_reset_token` | `token: str`, `user_id: UUID`, `ttl: int` | `bool` | Luaで旧`pwreset_current:{uid}`と旧tokenを削除し、新tokenとcurrentを原子的に登録。CAS競合時は`False` |
 | `consume_password_reset_token` | `token: str` | `UUID \| None` | Luaでcurrent一致を確認し、`pwreset:{hash}`とcurrentを原子的に消費 |
 | `replace_email_verify_token` | `token: str`, `user_id: UUID`, `ttl: int` | `None` | Luaまたは同一トランザクション相当の処理で旧 `emailverify:{old_hash}` を削除し、新tokenと `emailverify_current:{uid}` を登録 |
 | `consume_email_verify_token` | `token: str` | `UUID \| None` | `GETDEL emailverify:{hash}` → user_id を返す（ワンタイム消費） |
+| `restore_email_verify_token` | `token: str`, `user_id: UUID`, `ttl: int` | `bool` | DB失敗時にcurrentが別tokenへ変わっていない場合だけ、消費済みtokenとcurrentを原子的に復元 |
 | `mark_email_verify_sent` | `user_id: UUID`, `interval: int` | `bool` | `SET emailverify_sent:{uid} NX EX interval`。`False` なら再送間隔内のため送信しない |
 | `get_login_failure_count` | `identifier: str`, `client_ip: str` | `int` | `GET login_fail:{key_hash}`。キーが存在しない場合は`0` |
 | `get_login_failure_ttl` | `identifier: str`, `client_ip: str` | `int` | `TTL login_fail:{key_hash}`。キーの残り秒数を返し、未存在時はRedisの負値をそのまま返す |

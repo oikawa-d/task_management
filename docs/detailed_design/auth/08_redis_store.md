@@ -175,10 +175,11 @@ stateDiagram-v2
 
 | 関数 | シグネチャ | 処理概要 |
 |------|-----------|----------|
-| `save_password_reset_token` | `async def save_password_reset_token(token: str, user_id: UUID, ttl: int) -> None` | Luaで旧`pwreset_current:{uid}`と実体を置換し、新hashを`pwreset`と`pwreset_current`へ原子的に登録 |
+| `save_password_reset_token` | `async def save_password_reset_token(token: str, user_id: UUID, ttl: int) -> bool` | Luaで旧`pwreset_current:{uid}`と実体を置換し、新hashを`pwreset`と`pwreset_current`へ原子的に登録。CAS競合時は`False` |
 | `consume_password_reset_token` | `async def consume_password_reset_token(token: str) -> UUID \| None` | Luaで`pwreset_current:{uid}`との一致を確認して実体・currentを原子的に消費し、`user_id`を返す |
 | `replace_email_verify_token` | `async def replace_email_verify_token(token: str, user_id: UUID, ttl: int) -> None` | `GET emailverify_current:{uid}`で旧hash取得 → 存在すれば`DEL emailverify:{旧hash}` → `SETEX emailverify:{新hash}` → `SET emailverify_current:{uid} 新hash EX ttl`（パイプラインで実行し、途中失敗時も新旧いずれかは残る想定。厳密なLua原子化は§12で要検討） |
 | `consume_email_verify_token` | `async def consume_email_verify_token(token: str) -> UUID \| None` | `GETDEL emailverify:{hash}` → `user_id`を返す（ワンタイム消費） |
+| `restore_email_verify_token` | `async def restore_email_verify_token(token: str, user_id: UUID, ttl: int) -> bool` | currentが別hashへ変わっていない場合だけ、消費済みtokenとcurrentをLuaで原子的に復元 |
 | `mark_email_verify_sent` | `async def mark_email_verify_sent(user_id: UUID, interval: int) -> bool` | `SET emailverify_sent:{uid} <now> NX EX interval`。`False`なら間隔内につき送信しない |
 
 ### 8.5 レート制限・ヘルスチェック

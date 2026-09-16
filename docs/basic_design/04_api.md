@@ -154,8 +154,8 @@
 |-----------|----|------|------|
 | username | string | ○ | 3〜50文字、`^[A-Za-z0-9_-]+$` |
 | email | string | ○ | 254文字以内、メール形式 |
-| password | string | ○ | 8文字以上、大文字英字/小文字英字/数字/記号のうち2種類以上 |
-| password_confirm | string | ○ | `password` と一致 |
+| password | string | ○ | 8文字以上、`PASSWORD_MAX_LENGTH`（既定128）以内、大文字英字/小文字英字/数字/記号のうち2種類以上。Unicodeコードポイント数で判定 |
+| password_confirm | string | ○ | `password` と一致し、`PASSWORD_MAX_LENGTH`以内 |
 | last_name / first_name | string | ○ | 各30文字以内 |
 | last_name_kana / first_name_kana | string | ○ | 各30文字以内、ひらがな・カタカナ・数字のみ |
 | birth_date | string(date) | ○ | `YYYY-MM-DD`、未来日不可 |
@@ -185,7 +185,7 @@
 | フィールド | 型 | 必須 | 説明 |
 |-----------|----|------|------|
 | identifier | string | ○ | username または email |
-| password | string | ○ | |
+| password | string | ○ | 1〜`PASSWORD_MAX_LENGTH`（既定128）文字。Unicodeコードポイント数で判定 |
 
 レスポンス
 - session モード：`204 No Content` + `Set-Cookie: cerberus_sid, cerberus_csrf`
