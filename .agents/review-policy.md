@@ -44,37 +44,30 @@ PRとIssueのラベルは、レビューの進行状況を並行作業中の他�
 
 ### ラベル操作コマンド
 
-`gh pr edit --add-label` / `--remove-label` は Projects classic 廃止に伴うエラーで失敗するため使用しません（#386）。`gh api` を使います。PRとissueはGitHub上で同じ番号空間のため、いずれも `issues/<番号>/labels` を対象とします。
+`gh pr edit --add-label` / `--remove-label` は Projects classic 廃止に伴うエラーで失敗するため使用しません（#386）。リポジトリ内の共通スクリプトで現在のラベルを取得し、存在する状態ラベルだけを削除してから遷移先を付与します。PRとissueはGitHub上で同じ番号空間のため、いずれも `issues/<番号>/labels` を対象とします。
 
 ```bash
 # Issueをレビュー待ちへ遷移
-gh issue edit <番号> --repo <owner>/<repo> --remove-label in-progress --remove-label review-request --remove-label approve --add-label review-request
+bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <番号> review-request
 
 # PRをレビュー待ちへ遷移
-gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/in-progress
-gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/review-request
-gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/approve
-gh api -X POST repos/<owner>/<repo>/issues/<PR番号>/labels -f "labels[]=review-request"
+bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <PR番号> review-request
 
 # Issueをレビュー中・修正中へ遷移
-gh issue edit <番号> --repo <owner>/<repo> --remove-label review-request --remove-label in-progress --remove-label approve --add-label in-progress
+bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <番号> in-progress
 
 # PRをレビュー中・修正中へ遷移
-gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/review-request
-gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/in-progress
-gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/approve
-gh api -X POST repos/<owner>/<repo>/issues/<PR番号>/labels -f "labels[]=in-progress"
+bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <PR番号> in-progress
 
 # PRをレビュー完了へ遷移
-gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/review-request
-gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/in-progress
-gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/approve
-gh api -X POST repos/<owner>/<repo>/issues/<PR番号>/labels -f "labels[]=approve"
+bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <PR番号> approve
 
 # 現在のラベル確認
 gh pr view <番号> --json labels --jq '[.labels[].name]|join(", ")'
 gh issue view <番号> --json labels --jq '[.labels[].name]|join(", ")'
 ```
+
+`set-review-state-label.sh` は第4の遷移先 `none` を指定すると状態ラベルだけを解除します。ラベル取得・削除・付与のいずれかでAPIエラーが発生した場合は終了し、認証・通信エラーを握りつぶしません。
 
 ## `approve`ラベルの付与
 

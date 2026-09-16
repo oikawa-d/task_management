@@ -69,7 +69,7 @@ description: このtask_managementリポジトリでGitHub issueに対応する�
   gh issue edit <番号> --repo <owner/repo> --add-label in-progress
   ```
 
-- 状態ラベルを削除する場合は、先に `gh label list --repo <owner/repo>` でリポジトリに存在する正式名称を確認する。存在しないラベル名を `--remove-label` に渡すと、対象Issueの更新全体が失敗するため、実際に定義されている状態ラベルだけを指定する。
+- 状態ラベルを削除する場合は、`bash .agents/scripts/set-review-state-label.sh` を使用する。このスクリプトが対象Issue/PRの現在のラベルを取得し、存在する状態ラベルだけを削除するため、未付与ラベルの削除によるHTTP 404で遷移処理が停止しない。
 
 - `state` が `CLOSED` の場合、着手前にユーザーに確認する。ただしレビュー指摘対応など、close済みPRに紐づく再オープン前提の作業であることが明確な場合はこの限りではない。
 
@@ -77,11 +77,8 @@ description: このtask_managementリポジトリでGitHub issueに対応する�
 - PRを作成したら、Issueの`in-progress`を`review-request`へ変更し、PRに`review-request`を付ける(このときIssueの前提ラベルは`in-progress`)。
 
   ```bash
-  gh issue edit <番号> --repo <owner>/<repo> --remove-label in-progress --remove-label review-request --remove-label approve --add-label review-request
-  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/in-progress
-  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/review-request
-  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/approve
-  gh api -X POST repos/<owner>/<repo>/issues/<PR番号>/labels -f "labels[]=review-request"
+  bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <番号> review-request
+  bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <PR番号> review-request
   ```
 
 ### 3. レビューに着手する前
@@ -89,22 +86,15 @@ description: このtask_managementリポジトリでGitHub issueに対応する�
 - レビュー着手時はIssueとPRの既存状態ラベルをすべて外し、`in-progress`を付与する。
 
   ```bash
-  gh issue edit <番号> --repo <owner>/<repo> --remove-label review-request --remove-label in-progress --remove-label approve --add-label in-progress
-  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/review-request
-  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/in-progress
-  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/approve
-  gh api -X POST repos/<owner>/<repo>/issues/<PR番号>/labels -f "labels[]=in-progress"
+  bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <番号> in-progress
+  bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <PR番号> in-progress
   ```
 
 - **変更依頼あり**の場合は、レビューコメントの冒頭に`要修正 (Changes requested)`と明記したうえで、IssueとPRを`in-progress`へ変更する。修正中はこのラベルを維持する。
 - **LGTM → マージ**の場合は、レビューコメントに「レビュー済み / LGTM」と明記し、PRの既存状態ラベルをすべて外してから`approve`を付与し、手順5へ進む。
 
   ```bash
-  gh issue edit <番号> --repo <owner>/<repo> --remove-label review-request --remove-label in-progress --remove-label approve
-  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/review-request
-  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/in-progress
-  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/approve
-  gh api -X POST repos/<owner>/<repo>/issues/<PR番号>/labels -f "labels[]=approve"
+  bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <PR番号> approve
   ```
 
 ### 4. 修正対応への着手前
@@ -119,21 +109,16 @@ description: このtask_managementリポジトリでGitHub issueに対応する�
 - 修正後、再度PRを更新・レビュー依頼したらIssueとPRを`review-request`へ戻す。
 
   ```bash
-  gh issue edit <番号> --repo <owner>/<repo> --remove-label in-progress --remove-label review-request --remove-label approve --add-label review-request
-  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/in-progress
-  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/review-request
-  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/approve
-  gh api -X POST repos/<owner>/<repo>/issues/<PR番号>/labels -f "labels[]=review-request"
+  bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <番号> review-request
+  bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <PR番号> review-request
   ```
 
 ### 5. 完了時(マージ・close)
 - PRがマージされ、issueがcloseされたら状態ラベルを外す(close済みissueに状態ラベルを残さない)。
 
   ```bash
-  gh issue edit <番号> --repo <owner/repo> --remove-label in-progress --remove-label review-request --remove-label approve
-  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/in-progress
-  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/review-request
-  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/approve
+  bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <番号> none
+  bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <PR番号> none
   ```
 
   (状態ラベル以外の恒久ラベルは削除しない。GitHub上で状態ラベルが存在しない場合は、存在するものだけを削除する)
