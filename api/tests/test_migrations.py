@@ -196,22 +196,22 @@ def test_notification_procedure_contract_is_restored_by_0023_downgrade() -> None
 	assert read_count == 2
 
 
-def test_migration_0026_backfills_uppercase_failure_reason_to_lowercase() -> None:
+def test_migration_0027_backfills_uppercase_failure_reason_to_lowercase() -> None:
 	cfg = _alembic_config()
 	command.upgrade(cfg, "0025")
 	_insert_login_history_with_failure_reason("INVALID_CREDENTIALS")
 	_insert_login_history_with_failure_reason("user_inactive")
 
-	command.upgrade(cfg, "head")
+	command.upgrade(cfg, "0027")
 
 	assert sorted(_login_history_failure_reasons()) == ["invalid_credentials", "user_inactive"]
 
 
-def test_migration_0026_downgrade_is_noop_and_keeps_lowercased_value() -> None:
+def test_migration_0027_downgrade_is_noop_and_keeps_lowercased_value() -> None:
 	cfg = _alembic_config()
 	command.upgrade(cfg, "0025")
 	_insert_login_history_with_failure_reason("EMAIL_NOT_VERIFIED")
-	command.upgrade(cfg, "head")
+	command.upgrade(cfg, "0027")
 
 	command.downgrade(cfg, "0025")
 
