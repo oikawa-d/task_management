@@ -1,0 +1,5 @@
+self-hosted-runner:
+  # cd.ymlのdeployジョブが使用する自宅サーバーのself-hosted runnerラベル
+  # (docs/detailed_design/infra/06_cd_workflow.md §2)
+  labels:
+    - cerberus

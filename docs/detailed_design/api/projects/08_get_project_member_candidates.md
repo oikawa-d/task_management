@@ -1,0 +1,248 @@
+# GET /api/projects/{project_id}/member-candidates（招待候補ユーザー検索）
+
+## 0. 関連ドキュメント
+
+| ドキュメント | 内容 |
+|--------------|------|
+| [../../../basic_design/04_api.md](../../../basic_design/04_api.md) | §2.3 エンドポイント一覧（`emailはレスポンスに含めない`）、§4 エラー設計、§5 認可マトリクス |
+| [../../../basic_design/01_database.md](../../../basic_design/01_database.md) | §3.1 `users`（`uq_users_username`） |
+| [../../../basic_design/03_auth.md](../../../basic_design/03_auth.md) | §9.2 `require_project_owner` |
+| [06_get_project_members.md](./06_get_project_members.md) | メンバー一覧取得（既存メンバーの除外に使用） |
+| [07_post_project_members.md](./07_post_project_members.md) | 本APIの検索結果からuser_idを選び追加する |
+
+## 1. 概要
+
+| 項目 | 内容 |
+|------|------|
+| エンドポイント | `GET /api/projects/{project_id}/member-candidates?q=` |
+| 目的 | プロジェクトへの招待対象を選ぶため、username／表示名の前方一致でユーザーを検索する（既存メンバーは除外） |
+| 認証 | session モード：`cerberus_sid` Cookie ／ jwt モード：`Authorization: Bearer {access_token}` |
+| 認可 | オーナー / admin（`require_project_owner`。招待できる者だけが候補を検索できる） |
+| CSRF検証 | 不要（参照系のため） |
+| Origin検証 | 不要 |
+| AUTH_MODE差異 | 差異なし |
+| 冪等性 | あり（GET） |
+| レート制限 | 対象外（ただし過度な連続検索を抑止するため取得件数上限を設ける。§9参照） |
+| トランザクション境界 | 参照のみのため不要 |
+
+## 2. 入出力仕様（全体の出入力）
+
+### 2.1 リクエスト
+
+**パスパラメータ**
+
+| 名前 | 型 | 必須 | 制約 | 説明 |
+|------|----|------|------|------|
+| project_id | string(uuid) | ○ | UUID v4形式 | 対象プロジェクトID |
+
+**クエリパラメータ**
+
+| 名前 | 型 | 必須 | 制約 | 説明 |
+|------|----|------|------|------|
+| q | string | ○ | 1〜50文字 | 検索キーワード。`username` または `display_name`（`last_name`+`first_name`）の前方一致に使用 |
+
+ヘッダ／Cookie／ボディ：なし（認証Cookieを除く）
+
+### 2.2 レスポンス
+
+**`200 OK`**
+
+```json
+{
+  "items": [
+    {
+      "user_id": "9c2e...-abcdef",
+      "username": "hanako",
+      "display_name": "鈴木 花子"
+    }
+  ]
+}
+```
+
+| フィールド | 型 | NULL可否 | 説明 |
+|-----------|----|----------|------|
+| items[].user_id | string(uuid) | 不可 | `users.id` |
+| items[].username | string | 不可 | 前方一致検索対象 |
+| items[].display_name | string \| null | 可 | プロフィール未設定の場合 `null`（この場合usernameのみが検索対象になる） |
+
+**emailを含めない理由（ユーザー列挙対策）**：本APIはオーナー/adminが任意の文字列で全ユーザーを横断検索できる。emailを結果に含めると、総当たり的な `q` の送信によって「どのメールアドレスが登録済みか」を推測できてしまう（ユーザー列挙攻撃）。username自体も推測対象になり得るが、招待機能の実現に必須の識別子であり、`basic_design/04_api.md` が明示的にusername/表示名のみを返す設計としているため、emailはレスポンス・ログの両方で扱わない。
+
+**共通ヘッダ**：`X-Request-ID`。`Cache-Control: no-store` を付与し、候補一覧のブラウザキャッシュを防止する（ユーザー一覧の陳腐化・情報残留を避けるため）。
+
+## 3. エラー仕様
+
+| HTTP | code | 発生条件 | メッセージ | 備考 |
+|------|------|----------|-----------|------|
+| 401 | `UNAUTHENTICATED` / `SESSION_EXPIRED` / `TOKEN_EXPIRED` / `TOKEN_INVALID` | 認証情報なし・失効 | 認証が必要です | |
+| 403 | `USER_INACTIVE` | リクエスト元が無効化済み | アカウントが無効化されています | |
+| 403 | `FORBIDDEN` | 所属memberだがオーナーでもadminでもない | このプロジェクトを操作する権限がありません | |
+| 404 | `NOT_FOUND` | プロジェクト不存在・非所属member | 指定されたプロジェクトが見つかりません | |
+| 422 | `VALIDATION_ERROR` | `q` が空文字・51文字以上・未指定 | 入力内容に誤りがあります | |
+| 500 | `INTERNAL_ERROR` | 未捕捉例外 | 予期しないエラーが発生しました | |
+| 503 | `SERVICE_UNAVAILABLE` | DB接続不能 | 一時的に利用できません | fail-close |
+
+## 4. 処理シーケンス
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant FE as "React SPA"
+    participant R as "projects_router"
+    participant D as "deps.require_project_owner"
+    participant S as "member_service"
+    participant PR as "project_member_repository"
+    participant PG as "PostgreSQL"
+
+    FE->>R: "GET /api/projects/{pid}/member-candidates?q=han"
+    R->>D: 認証 + オーナー/admin判定
+    D-->>R: Project
+    R->>S: search_candidates(project, query.q, db)
+    S->>PR: search_candidates(db, project.id, q, limit, 0)
+    PR->>PG: "SELECT * FROM fn_search_member_candidates(:project_id, :query, :limit, :offset)"
+    PG-->>PR: users行集合
+    PR-->>S: list[User]
+    S-->>R: CandidateListResponse
+    R-->>FE: "200 {items}（Cache-Control: no-store）"
+```
+
+## 5. 処理フロー・分岐
+
+```mermaid
+flowchart TB
+    A["リクエスト受信"] --> B{"project_idはUUID形式か / qは1〜50文字か"}
+    B -->|No| E1["422 VALIDATION_ERROR"]
+    B -->|Yes| C{"認証情報は有効か"}
+    C -->|No| E2["401系"]
+    C -->|is_active=false| E3["403 USER_INACTIVE"]
+    C -->|Yes| D{"require_project_owner"}
+    D -->|非所属 or 不存在| E4["404 NOT_FOUND"]
+    D -->|所属だが権限不足| E5["403 FORBIDDEN"]
+    D -->|Yes| F["member_service.search_candidates実行<br/>既存メンバー除外・is_active=trueのみ・LIMIT付き"]
+    F --> G["CandidateListResponseへ変換<br/>emailを含めない"]
+    G --> H["200 レスポンス返却"]
+```
+
+## 6. 関数詳細
+
+### 6.1 `api/routers/projects_router.py :: search_member_candidates`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `async def search_member_candidates(query: CandidateSearchQuery = Depends(), project: Project = Depends(require_project_owner), db: AsyncSession = Depends(get_db_session)) -> CandidateListResponse` |
+| 引数 | query：`q`を保持する検索クエリ、project：検証済みプロジェクト、db：DBセッション |
+| 戻り値 | `CandidateListResponse` |
+| 送出例外 | なし |
+| 処理内容 | 1. `member_service.search_candidates(project, query.q, db)`を呼び出す 2. 結果をそのまま返す |
+| 副作用 | なし |
+
+### 6.2 `service/member_service.py :: search_candidates`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `async def search_candidates(project: Project, query: str, db: AsyncSession) -> CandidateListResponse` |
+| 引数 | project、query（候補検索文字列）、db：DBセッション |
+| 戻り値 | `CandidateListResponse`（emailを含まない） |
+| 送出例外 | なし |
+| 処理内容 | 1. `get_backend_settings().pagination_default_per_page`を取得 2. `project_member_repository.search_candidates(db, project.id, query, limit, 0)`を呼び出す 3. 各`User`を`CandidateSummary`（user_id/username/display_name）へ変換 |
+| 副作用 | なし |
+
+### 6.3 `repository/project_member_repository.py :: search_candidates`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `async def search_candidates(db: AsyncSession, project_id: UUID, query: str \| None, limit: int, offset: int) -> list[User]` |
+| 引数 | db、project_id：既存メンバーを除外する対象、query：検索文字列、limit：設定値から渡す上限件数、offset：開始位置 |
+| 戻り値 | `fn_search_member_candidates` の結果を写像した`User`リスト |
+| 送出例外 | なし |
+| 処理内容 | `SELECT * FROM fn_search_member_candidates(:project_id, :query, :limit, :offset)` のみを発行する。前方一致、既存メンバー除外、`is_active=true`、順序、上限はFN内部で処理する |
+| 副作用 | なし |
+
+## 7. 関数相関図
+
+```mermaid
+flowchart LR
+    R["projects_router.search_member_candidates"] --> D["deps.require_project_owner"]
+    R --> S["member_service.search_candidates"]
+    S --> RP["project_member_repository.search_candidates"]
+    RP --> PG[("PostgreSQL<br/>fn_search_member_candidates")]
+```
+
+## 8. データ遷移図
+
+読み取りのみで状態遷移なし。参照範囲は以下の通り。
+
+```mermaid
+flowchart LR
+    subgraph PG["PostgreSQL"]
+        U["users<br/>WHERE username/display_name 前方一致<br/>AND is_active=true"]
+        PM["project_members<br/>既存メンバー除外用サブクエリ"]
+        P["projects<br/>所属チェック用に1行参照"]
+    end
+    API["GET /member-candidates"] -->|"FN SELECT"| U
+    API -->|"SELECT（サブクエリ）"| PM
+    API -->|"SELECT"| P
+```
+
+## 9. SP/FNデータアクセス一覧
+
+### 9.1 正式なDBアクセス契約
+
+本APIのrepositoryは、次のSP/FN呼び出しとDTO写像だけを行う。
+
+| 種別 | 契約 | 説明 |
+|------|------|------|
+| fn_search_member_candidates | `fn_search_member_candidates(p_project_id, p_query, p_limit, p_offset)` | `project_member_repository.search_candidates`から呼び出し、結果をレスポンスへ写像する |
+
+repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。 直下の従来のテーブルI/O表はSP/FN内部SQLの補足であり、repositoryの発行契約ではない。更新系の整合性制御、version検証、advisory lock、通知、SQLSTATE P0xxxはSP/FN層の責務である。存在・所属の事実判定はFNの空集合/falseを受け、404/403への変換はAPI層が行う。
+
+| ストア | テーブル／キー | 操作 | 条件・TTL | 備考 |
+|--------|----------------|------|-----------|------|
+| PostgreSQL | `users` | SELECT（`fn_search_member_candidates`内部） | `username`/`last_name+first_name` 前方一致、`is_active=true`、`LIMIT pagination_default_per_page` | `uq_users_username` の関数インデックス（`lower(username)`）は前方一致では使用されないため、本クエリは全表走査になり得る。学習規模のデータ量では許容し、要検討事項に記載 |
+| PostgreSQL | `project_members` | SELECT（サブクエリ） | `WHERE project_id = :pid` の `user_id` を除外 | |
+| PostgreSQL | `projects` | SELECT | `require_project_owner` 内での所属・権限確認用に1行 | |
+| Redis | ー | ー | ー | 本APIはRedisを使用しない |
+
+## 10. バリデーション規則
+
+| スキーマ | フィールド | 制約 | フロント(zod)整合 |
+|----------|-----------|------|-------------------|
+| `CandidateSearchQuery`（pydantic） | q | 1〜50文字、必須 | `z.string().min(1).max(50)` |
+| パスパラメータ | project_id | `UUID4`、必須 | `z.string().uuid()` |
+
+`pagination_default_per_page`（`core/config.py`の設定値、既定値20）を検索結果の上限件数として使用し、コード内にハードコードしない。
+
+## 11. 非機能・セキュリティ考慮
+
+| 観点 | 内容 |
+|------|------|
+| 監査ログ | 検索キーワード自体はINFOログに出力しない（`q` の内容を記録すると個人情報探索の痕跡が監査ログに残り目的外利用のリスクがあるため）。呼び出し回数のみをアクセスログで確認する |
+| ユーザー列挙対策 | emailを一切返さない（本設計の主目的）。加えて `LIMIT` を設けることで全件走査による属性推測を抑制する |
+| タイミング攻撃対策 | 対象外（存在有無で応答時間が有意に変わらないよう常に同一クエリ経路を通る） |
+| レート制限 | 明示のレート制限は設けない（オーナー/admin限定のため）が、`LIMIT` により大量データ取得は抑止される |
+| fail-close方針 | DB接続不能時は `503 SERVICE_UNAVAILABLE` |
+| 無効化ユーザーの除外 | `is_active=false` のユーザーは候補から除外し、招待できないようにする（`07` の追加APIでは制限しない方針としたため、本APIでの事前フィルタが実質的な防御になる） |
+
+## 12. テスト設計
+
+| No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
+|----|------|--------|------|----------|----------------|
+| T1 | 結合 | usernameの前方一致検索 | `q="han"`、`username="hanako"`が存在 | 200、該当ユーザーを含む | `test_fn_search_member_candidates_username_prefix` |
+| T2 | 結合 | 表示名の前方一致検索 | `q="鈴木"`、`last_name="鈴木"` | 200、該当ユーザーを含む | `test_fn_search_member_candidates_display_name_prefix` |
+| T3 | 結合 | 既存メンバーは除外される | 対象ユーザーが既にproject_membersに存在 | 200、items に含まれない | `test_fn_search_member_candidates_excludes_existing_members` |
+| T4 | 結合 | 無効化ユーザーは除外される | `is_active=false` | 200、items に含まれない | `test_fn_search_member_candidates_excludes_inactive_users` |
+| T5 | 結合 | レスポンスにemailが含まれない | 任意の検索結果 | レスポンスJSONに `email` キーが存在しない | `test_fn_search_member_candidates_response_excludes_email` |
+| T6 | 結合 | qが空文字 | `q=""` | 422 VALIDATION_ERROR | `test_fn_search_member_candidates_empty_q_422` |
+| T7 | 結合 | qが51文字以上 | 51文字の文字列 | 422 VALIDATION_ERROR | `test_fn_search_member_candidates_too_long_q_422` |
+| T8 | 結合 | 所属memberだがオーナーでない | 一般memberが実行 | 403 FORBIDDEN | `test_fn_search_member_candidates_forbidden_403` |
+| T9 | 結合 | 非所属memberが実行 | project_membersに未登録 | 404 NOT_FOUND | `test_fn_search_member_candidates_non_member_404` |
+| T10 | 結合 | 該当ユーザーなし | `q="zzz999"` | 200、items=[] | `test_fn_search_member_candidates_no_match_empty_list` |
+| T11 | 結合 | 結果件数がLIMITを超える | 該当ユーザーが上限超過数存在 | items.length == pagination_default_per_page | `test_search_member_candidates_limit_applied` |
+| T12 | 結合（実DB・実FN） | 候補検索の呼び出し | 実DB・実FNで検証 | project_id/query/limit/offsetが正しく渡る | `test_project_member_lifecycle_uses_database_contract` |
+
+## 13. 不明点・要検討事項
+
+| 区分 | 内容 | 影響 |
+|------|------|------|
+| 確定 | 検索結果上限は`core/config.py`の`pagination_default_per_page`（既定値20）を使用する | ページング共通設定の変更時は候補検索の上限も変わる |
+| 確定 | `q` の前方一致検索はissue #40で維持を確定した。管理者検索（`/admin/users`等）を部分一致へ統一する際も、本APIはパフォーマンスを優先し前方一致のまま据え置く（[`basic_design/04_api.md` §2.5](../../../basic_design/04_api.md#25-管理者apiadmin)に例外として明記）。データ量が学習用途を超える場合の`pg_trgm`拡張検討は将来課題とする | パフォーマンス。現状のユーザー数規模では許容範囲と判断 |
+| 要検討 | 検索対象を「オーナー/adminのみ」に限定する認可（`require_project_owner`）は `basic_design/04_api.md` §2.3 の記載どおりだが、一般memberが「このプロジェクトに誰を招待できそうか」を確認するユースケースは提供されない。必要であれば別途権限緩和の検討が要る | 現状は基本設計に従い制限を維持 |

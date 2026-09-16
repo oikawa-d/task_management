@@ -1,0 +1,454 @@
+# GET /api/auth/oauth/google/callback（Google OAuth2 コールバック）
+
+## 0. 関連ドキュメント
+
+| ドキュメント | 内容 |
+|--------------|------|
+| [../../../basic_design/03_auth.md](../../../basic_design/03_auth.md) | §5 Google OAuth2 全体設計、§5.3 アカウント紐付けルール、§5.4 jwtモードのトークン受け渡し |
+| [../../../basic_design/02_redis.md](../../../basic_design/02_redis.md) | §2 キー一覧（`oauth_state` / `oauth_handoff`）、§4.3 state遷移 |
+| [../../../basic_design/01_database.md](../../../basic_design/01_database.md) | `users` / `oauth_accounts` テーブル定義 |
+| [../../../basic_design/04_api.md](../../../basic_design/04_api.md) | §1 共通仕様、§4 エラー設計 |
+| [./11_get_auth_oauth_google.md](./11_get_auth_oauth_google.md) | 認可開始（state発行元） |
+| [./13_post_auth_oauth_exchange.md](./13_post_auth_oauth_exchange.md) | jwtモードのハンドオフ交換（本APIの後続） |
+| [../../auth/04_google_oauth.md](../../auth/04_google_oauth.md) | GoogleOAuthProvider詳細（認証領域担当が作成） |
+| [../../database/02_table_oauth_accounts.md](../../database/02_table_oauth_accounts.md) | `oauth_accounts` テーブル詳細（DB領域担当が作成） |
+| [../../screen/11_oauth_callback.md](../../screen/11_oauth_callback.md) | フロント側コールバック中継画面 |
+
+## 1. 概要
+
+| 項目 | 内容 |
+|------|------|
+| エンドポイント | `GET /api/auth/oauth/google/callback` |
+| 実装ファイル | `api/app/api/routers/oauth_router.py` |
+| 目的 | Googleからの認可コードを受け取り、state/PKCE/id_tokenを検証してユーザーを解決・作成し、`AUTH_MODE` に応じてログイン状態を確立する |
+| ルーター責務 | OAuthの3 endpointを `oauth_router.py` に分離する。通常の認証endpointは `api/app/api/routers/auth_router.py` が担当する |
+| 認証 | 不要（Googleからのリダイレクトを直接受ける） |
+| 認可 | 未認証可（ただしGoogleログイン有効時のみ） |
+| CSRF検証 | 不要（GETかつstate/Cookie一致検証が同等の役割を果たす） |
+| Origin検証 | 不要（Googleからのブラウザリダイレクトのため、通常Originヘッダは付与されない） |
+| AUTH_MODE差異 | **あり**。sessionモードはここで`SessionAuthStrategy.login()`を完了させCookieを発行する。jwtモードはログインを完了させず、`oauth_handoff:{code}` を発行してフロントの`/oauth/exchange`呼び出しを待つ |
+| 冪等性 | 冪等ではない（`state`はワンタイム消費。同一codeでの再実行はGoogle側で失敗する） |
+| レート制限 | `oauth callback` はIP単位で10回/900秒。超過時は429 `TOO_MANY_ATTEMPTS` と残り秒数の`Retry-After`を返し、Redis障害時は503 `SERVICE_UNAVAILABLE` として認可を成立させない。その他の検証失敗は302で`/login`へ遷移する |
+| トランザクション境界 | ユーザー解決/作成（`users` INSERT または `oauth_accounts` INSERT）は1トランザクション。session モードでは同トランザクション確定後に `login_history` を別途INSERTする |
+
+OAuth callback失敗（`oauth_denied`、`oauth_failed`、`oauth_email_unverified`等）は`login_history`へ記録しない。`login_history`はOAuthログイン成功時のみ、sessionモードではcallback成功後に記録する。
+
+OAuth routerの配置方針と通常の認証routerとの責務境界は、11番ファイル §1.1の決定に従う。
+
+## 2. 入出力仕様
+
+### 2.1 リクエスト
+
+パスパラメータ：なし
+
+クエリパラメータ（Googleが付与）
+
+| 名前 | 型 | 必須 | 制約 | 説明 |
+|------|----|----|------|------|
+| `code` | string | ○（同意時） | - | 認可コード |
+| `state` | string | ○ | - | 認可開始時に発行した`state` |
+| `error` | string | 任意 | 例：`access_denied` | ユーザーが同意画面で拒否した場合等にGoogleが付与 |
+
+ヘッダ：なし（認証ヘッダ不要）
+
+Cookie
+
+| Cookie名 | 必須 | 説明 |
+|----------|------|------|
+| `cerberus_oauth_state`（`COOKIE_NAME_OAUTH_STATE`） | ○ | 認可開始時に発行したCookie。クエリの`state`と一致することを検証 |
+
+ボディ：なし
+
+### 2.2 レスポンス
+
+本APIの正常系・通常の検証失敗はリダイレクト（302）で応答する。レート制限超過・Redis障害は共通エラー形式の429/503 JSONを返す。
+
+**正常系（session モード）**
+
+| ヘッダ | 内容 |
+|--------|------|
+| `Location` | `{FRONTEND_BASE_URL}/oauth/callback#redirect_to=<正規化済みパス>` |
+| `Set-Cookie` | `cerberus_sid` / `cerberus_csrf`（`SessionAuthStrategy.login()`が発行。`../../auth/01_session_auth.md`参照）、および`cerberus_oauth_state`の削除（`Max-Age=0`） |
+
+**正常系（jwt モード）**
+
+| ヘッダ | 内容 |
+|--------|------|
+| `Location` | `{FRONTEND_BASE_URL}/oauth/callback#code=<handoff_code>&redirect_to=<正規化済みパス>` |
+| `Set-Cookie` | `cerberus_oauth_state`の削除（`Max-Age=0`）のみ。refresh/CSRF Cookieはこの時点では発行しない（13番ファイルで発行） |
+
+`redirect_to`・`code`はいずれもURLフラグメント（`#`以降）に含め、クエリ文字列には含めない（アクセスログ・Refererへの残留を避けるため。`basic_design/03_auth.md` §5.4準拠）。
+
+**異常系（state不一致・期限切れ・Google側エラー等）**
+
+| ヘッダ | 内容 |
+|--------|------|
+| `Location` | `{FRONTEND_BASE_URL}/login?error=<エラー種別>` |
+
+| エラー種別（クエリ値） | 発生条件 |
+|------------------------|----------|
+| `invalid_state` | state不一致・期限切れ・Cookie欠落 |
+| `oauth_denied` | Googleからの`error`パラメータあり（ユーザーが同意拒否等） |
+| `oauth_email_unverified` | Google側`email_verified=false` |
+| `oauth_failed` | 上記以外の検証失敗（id_token署名不正、userinfo.sub不一致、code交換失敗等） |
+| `oauth_disabled` | `GOOGLE_LOGIN_ENABLED=false`、またはGoogleクライアント設定が不足 |
+
+本APIはブラウザの直接ナビゲーションを受けるため、通常の検証エラーはJSON形式のエラーボディではなく`/login`へのリダイレクトで通知する。一方、レート制限超過・Redis障害は要件に従い429/503の共通JSONエラーを返す（`basic_design/04_api.md` §4のエラーコード体系を使用する）。
+
+## 3. エラー仕様
+
+| HTTP | code（内部判定用） | 発生条件 | フロント側`error`値 | 備考 |
+|------|------|----------|------------------------|------|
+| 302 | `INVALID_STATE` | state不一致・期限切れ・Cookie欠落 | `invalid_state` | `redis_store.consume_oauth_state`が`None`を返す、またはCookie値とクエリ値が不一致 |
+| 302 | - | Googleが`error`クエリを付与（同意拒否等） | `oauth_denied` | `code`が存在しない |
+| 302 | `OAUTH_EMAIL_UNVERIFIED` | `userinfo.email_verified=false`かつ新規/未紐付け | `oauth_email_unverified` | 既存ユーザーへの乗っ取り防止のため紐付けを行わない（`basic_design/03_auth.md` §5.3） |
+| 302 | - | id_token署名・aud・iss・exp・nonce検証失敗 | `oauth_failed` | JWKS取得失敗を含む |
+| 302 | - | `userinfo.sub`と`id_token.sub`の不一致 | `oauth_failed` | なりすまし対策 |
+| 302 | - | Googleとのtoken交換（`POST /token`）失敗 | `oauth_failed` | ネットワークエラー・4xx/5xx |
+| 429 | `TOO_MANY_ATTEMPTS` | callbackのレート制限超過 | - | `Retry-After`に残り秒数を設定し、認証処理を行わない |
+| 503 | `SERVICE_UNAVAILABLE` | Redis接続不能（レート制限判定・`consume_oauth_state`・`save_oauth_handoff`） | - | fail-close。認証処理を行わない |
+| 302 | - | 未捕捉例外 | `oauth_failed` | ログにのみ詳細を出力。`event=oauth_callback_failed`、`failure_reason=<例外クラス名>`をWARNで出力する |
+| 302 | `OAUTH_DISABLED` | Googleログイン無効時（開始済みのstateを含む） | `oauth_disabled` | callback・進行中フローも完了させず、ログイン画面へ戻す。state消費やGoogle API呼び出しは行わない |
+
+`basic_design/04_api.md` §4.2のコード体系（`INVALID_STATE`/`OAUTH_EMAIL_UNVERIFIED`）はサーバー内部の例外クラス・ログ記録に用い、ブラウザへの応答は上表の`error`クエリ値に変換する。
+
+## 4. 処理シーケンス
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as ユーザー
+    participant FE as React SPA
+    participant R as "api/app/api/routers/oauth_router.py"
+    participant S as oauth_service.oauth_callback
+    participant OA as GoogleOAuthProvider
+    participant RS as redis_store
+    participant RD as Redis
+    participant UR as user_repository
+    participant PG as PostgreSQL
+    participant G as Google
+
+    alt Googleで同意拒否
+        G-->>R: GET /api/auth/oauth/google/callback?error&state
+        R->>R: cerberus_oauth_state Cookie取得
+        R->>S: oauth_callback_denied(state, state_cookie, request, response)
+        S->>S: callbackレート制限・state/Cookie一致確認
+        S->>RS: consume_oauth_state(state)
+        RS->>RD: GETDEL oauth_state:{state}
+        S-->>R: 成功またはInvalidStateError/ServiceUnavailableError
+        R-->>FE: 302 /login?error=oauth_denied またはエラー値
+    else Googleで同意
+        U->>G: 同意画面で許可
+        G-->>R: GET /api/auth/oauth/google/callback?code&state
+        R->>R: cerberus_oauth_state Cookie取得
+        R->>S: oauth_callback(code, state, state_cookie, request, response)
+        S->>S: stateとCookieの一致確認
+    alt state不一致/Cookie欠落
+        S-->>R: InvalidStateError
+        R-->>FE: 302 /login?error=invalid_state
+    else state一致
+        S->>RS: consume_oauth_state(state)
+        RS->>RD: GETDEL oauth_state:{state}
+        alt 期限切れ/消費済み
+            RD-->>RS: nil
+            RS-->>S: None
+            S-->>R: InvalidStateError
+            R-->>FE: 302 /login?error=invalid_state
+        else Redis値あり
+            RD-->>RS: {redirect_to, code_verifier, nonce}
+            RS-->>S: OAuthStateData
+            S->>OA: exchange_code(code, code_verifier)
+            OA->>G: POST /token
+            alt code交換失敗
+                G-->>OA: 4xx/5xx
+                OA-->>S: OAuthFailedError
+                S-->>R: OAuthFailedError
+                R-->>FE: 302 /login?error=oauth_failed
+            else 成功
+            G-->>OA: id_token / access_token
+            OA-->>S: OAuthTokenResponse
+            S->>S: id_token検証（署名/aud/iss/exp/nonce, JWKS）
+            S->>OA: fetch_userinfo(access_token)
+            OA->>G: GET /userinfo
+            G-->>OA: GoogleUserInfo
+            OA-->>S: GoogleUserInfo
+            S->>S: userinfo.sub == id_token.sub 確認
+            alt 検証失敗
+                S-->>R: OAuthFailedError
+                R-->>FE: 302 /login?error=oauth_failed
+            else 検証OK
+                S->>UR: get_by_provider_identity(db, provider='google', sub)
+                UR->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
+                alt 紐付け済み
+                    PG-->>UR: user
+                else 未紐付け かつ email一致ユーザーあり
+                    alt email_verified=false
+                        S-->>R: OAuthEmailUnverifiedError
+                        R-->>FE: 302 /login?error=oauth_email_unverified
+                    else email_verified=true
+                        S->>UR: upsert(db, user.id, provider='google', sub)
+                        UR->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
+                        PG-->>UR: user
+                    end
+                else 完全な新規
+                    S->>UR: user_repository.create / oauth_account_repository.upsert
+                    UR->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
+                    PG-->>UR: user
+                end
+                alt AUTH_MODE=session
+                    S->>S: SessionAuthStrategy.login(user, request, response)
+                    S->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
+                    S-->>R: OAuthCallbackResult(mode='session', redirect_to)
+                    R-->>FE: 302 /oauth/callback#redirect_to=...<br/>Set-Cookie(sid, csrf)
+                else AUTH_MODE=jwt
+                    S->>S: handoff_code = token_urlsafe(32)
+                    S->>RS: save_oauth_handoff(handoff_code, user.id, redirect_to, ttl=60)
+                    RS->>RD: SETEX oauth_handoff:{code} TTL=60
+                    S-->>R: OAuthCallbackResult(mode='jwt', handoff_code, redirect_to)
+                    R-->>FE: 302 /oauth/callback#code=...&redirect_to=...
+                end
+            end
+            end
+        end
+        end
+    end
+```
+
+## 5. 処理フロー・分岐
+
+```mermaid
+flowchart TB
+    A["GET /api/auth/oauth/google/callback"] --> B{"error クエリあり?"}
+    B -->|Yes| C["oauth_callback_denied<br/>レート制限・state検証・state GETDEL・Cookie削除"]
+    C -->|state不正| Z1["302 /login?error=invalid_state"]
+    C -->|Redis障害| Z2["503 SERVICE_UNAVAILABLE"]
+    C -->|制限超過| Z2R["429 TOO_MANY_ATTEMPTS<br/>Retry-After: 残り秒数"]
+    C -->|成功| ZD["302 /login?error=oauth_denied"]
+    B -->|No| D{"stateとCookieが一致?"}
+    D -->|No| Z3["302 /login?error=invalid_state"]
+    D -->|Yes| E["consume_oauth_state(state)"]
+    E --> F{"Redis値あり?"}
+    F -->|No| Z4["302 /login?error=invalid_state"]
+    F -->|Yes| G{"codeあり?"}
+    G -->|No| Z5["302 /login?error=oauth_failed"]
+    G -->|Yes| H["exchange_code(code, code_verifier)"]
+    H --> I{"交換成功?"}
+    I -->|No| Z5
+    I -->|Yes| J["id_token検証(署名/aud/iss/exp/nonce)"]
+    J --> K{"検証OK?"}
+    K -->|No| Z5
+    K -->|Yes| L["fetch_userinfo → sub一致確認"]
+    L --> M{"sub一致?"}
+    M -->|No| Z5
+    M -->|Yes| Q{"oauth_accountsに<br/>紐付け済み?"}
+    Q -->|Yes| U["既存ユーザーを採用"]
+    Q -->|No| N{"同一emailの<br/>既存ユーザーあり?"}
+    N -->|Yes| O{"email_verified=true?"}
+    O -->|No| Z6["302 /login?error=oauth_email_unverified<br/>400 OAUTH_EMAIL_UNVERIFIED相当"]
+    O -->|Yes| V["oauth_accounts追加紐付け<br/>email_verified_at更新"]
+    N -->|No| R["users + oauth_accounts 新規作成"]
+    U --> T["ログイン対象ユーザー"]
+    V --> T
+    R --> T
+    T --> X{"AUTH_MODE"}
+    X -->|session| R1["SessionAuthStrategy.login()<br/>login_history INSERT<br/>302 #redirect_to"]
+    X -->|jwt| R2["oauth_handoff発行<br/>302 #code&redirect_to"]
+```
+
+## 6. 関数詳細
+
+### 6.1 `api/app/api/routers/oauth_router.py :: oauth_google_callback`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `async def oauth_google_callback(request: Request, response: Response, code: str | None = Query(default=None), state: str | None = Query(default=None), error: str | None = Query(default=None), db: AsyncSession = Depends(get_db_session), settings: BackendSettings = Depends(get_backend_settings)) -> RedirectResponse` |
+| 引数 | `code`/`state`/`error`：クエリパラメータ。`request`：Cookie読み取り用 |
+| 戻り値 | `RedirectResponse`（正常系・通常失敗時は302） |
+| 送出例外 | `TooManyAttemptsError`（429、`Retry-After`付与）、`ServiceUnavailableError`（503）以外は対応する`/login?error=...`への302リダイレクトに変換する |
+| 処理内容 | 1. Googleログインの有効性を確認し、無効なら`oauth_disabled`へ 2. `error`クエリがあれば`oauth_service.oauth_callback_denied`へstate・Cookie・request・responseを渡す 3. serviceがstateを検証・消費し、callbackレート制限を適用してstate Cookieを削除する 4. 通常の失敗は例外の種別に応じ`error`クエリ値をマッピングし、レート制限超過・Redis障害は共通429/503ハンドラへ送出する 5. 通常callbackでは`oauth_service.oauth_callback`を呼ぶ 6. 成功時は`OAuthCallbackResult`の`auth_mode`とhandoff codeの整合性を確認しfragment付きURLを組み立てる |
+| 副作用 | Cookie発行（sessionモード時）、Cookie削除（`cerberus_oauth_state`。Google拒否時も含む） |
+
+### 6.1.1 `api/app/service/oauth_service.py :: oauth_callback_denied`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `async def oauth_callback_denied(state: str | None, state_cookie: str | None, request: Request, response: Response, *, settings: BackendSettings | None = None) -> None` |
+| 処理内容 | callbackと同じIP単位レート制限を適用し、stateとCookieの一致およびRedisのGETDELを検証する。成功・失敗にかかわらずstate Cookieを削除する |
+| 送出例外 | `InvalidStateError`、`TooManyAttemptsError`、`ServiceUnavailableError` |
+
+### 6.2 `api/app/service/oauth_service.py :: oauth_callback`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `async def oauth_callback(code: str | None, state: str | None, state_cookie: str | None, request: Request, response: Response, db: AsyncSession | None = None, *, settings: BackendSettings | None = None, provider: GoogleOAuthProvider | None = None, strategy: Any | None = None) -> OAuthCallbackResult` |
+| 引数 | `code`/`state`/`state_cookie`：表6.1参照。`request`/`response`：Strategy.loginへ引き渡す |
+| 戻り値 | `OAuthCallbackResult`（`auth_mode`, `redirect_to`, `handoff_code: str | None`） |
+| 送出例外 | `InvalidStateError`（400/302マッピングは`invalid_state`）、`OAuthFailedError`（`oauth_failed`）、`OAuthEmailUnverifiedError`（400/`oauth_email_unverified`）、`TooManyAttemptsError`（レート制限超過）、`UserInactiveError`（無効ユーザー）、`ServiceUnavailableError`（Redis接続不能） |
+| 処理内容 | 1. callbackレート制限を確認 2. `state is None or state_cookie is None or state != state_cookie` なら`InvalidStateError` 3. `redis_store.consume_oauth_state(state)`を呼び`None`なら`InvalidStateError` 4. `oauth_provider.exchange_code(code, data.code_verifier)`を呼ぶ 5. id_tokenをJWKSで検証（署名・`aud==GOOGLE_CLIENT_ID`・`iss`・`exp`・`nonce==data.nonce`） 6. `oauth_provider.fetch_userinfo(access_token)`を呼ぶ 7. `userinfo.sub == id_token.sub`を確認 8. `_resolve_or_create_user(db, userinfo)`を呼ぶ 9. `AUTH_MODE`により分岐し、sessionなら`strategy.login()`＋`login_history(login_identifier=user.email)`記録、jwtなら`handoff_code`発行 |
+| 副作用 | PostgreSQL：`users`/`oauth_accounts`のINSERT/UPDATE、`login_history`INSERT（sessionモードのみ）。Redis：`oauth_state`削除（consume時点）、`oauth_handoff`新規作成（jwtモードのみ）。Cookie：sessionモードは`login()`内で発行 |
+
+### 6.3 `api/app/service/oauth_service.py :: _resolve_or_create_user`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `async def _resolve_or_create_user(db: AsyncSession, userinfo: GoogleUserInfo) -> User` |
+| 引数 | `userinfo`：`sub`, `email`, `email_verified`, `given_name`, `family_name`を含む |
+| 戻り値 | `User`（解決または新規作成されたエンティティ） |
+| 送出例外 | `OAuthEmailUnverifiedError`（未紐付けかつ`email_verified=false`） |
+| 処理内容 | 1. `SELECT fn_find_oauth_account('google', userinfo.sub)`で紐付け済みか確認し、あれば返す 2. 無ければ`SELECT fn_find_user_by_email(userinfo.email)`で既存ユーザーを検索 3. 既存ユーザーがあり`userinfo.email_verified=false`なら`OAuthEmailUnverifiedError`を送出 4. `CALL sp_upsert_oauth_account(...)`で既存ユーザーの検証日時・OAuth紐付け、または新規ユーザー作成を同一トランザクションで実行する |
+| 副作用 | PostgreSQL：`users`/`oauth_accounts`のINSERTまたはUPDATE（同一トランザクション） |
+
+### 6.4 `api/app/auth/oauth.py :: GoogleOAuthProvider.exchange_code`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `async def exchange_code(self, code: str, code_verifier: str) -> OAuthTokenResponse` |
+| 引数 | `code`：Googleからの認可コード。`code_verifier`：state発行時に保存したPKCE検証値 |
+| 戻り値 | `OAuthTokenResponse`（`id_token`, `access_token`） |
+| 送出例外 | `OAuthFailedError`（HTTPエラー・タイムアウト） |
+| 処理内容 | 1. Googleの`/token`エンドポイントへ`code`/`code_verifier`/`client_id`/`client_secret`/`redirect_uri`/`grant_type=authorization_code`をPOST 2. レスポンスをパースし返す |
+| 副作用 | 外部HTTP通信 |
+
+### 6.5 `api/app/auth/oauth.py :: GoogleOAuthProvider.fetch_userinfo` / `verify_id_token`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `async def fetch_userinfo(self, access_token: str) -> GoogleUserInfo` / `async def verify_id_token(self, id_token: str, nonce: str) -> IdTokenClaims` |
+| 引数 | `access_token`：交換で得たトークン。`id_token`/`nonce`：署名・nonce検証用 |
+| 戻り値 | `GoogleUserInfo` / `IdTokenClaims` |
+| 送出例外 | `OAuthFailedError`（署名不正・aud/iss不一致・exp切れ・nonce不一致・userinfo取得失敗） |
+| 処理内容 | JWKS（Googleの公開鍵）をキャッシュ付きで取得し署名検証。`aud`/`iss`/`exp`/`nonce`を確認。`fetch_userinfo`はGoogleの`/userinfo`エンドポイントへGETしパースする |
+| 副作用 | 外部HTTP通信（JWKS取得はキャッシュにより頻度を抑制。キャッシュTTLは`GOOGLE_JWKS_CACHE_TTL_SECONDS`） |
+
+## 7. 関数相関図
+
+```mermaid
+flowchart LR
+    R["api/app/api/routers/oauth_router.py<br/>oauth_google_callback"] --> S["oauth_service.oauth_callback"]
+    S --> RS1["redis_store.consume_oauth_state"]
+    S --> OA1["GoogleOAuthProvider.exchange_code"]
+    S --> OA2["GoogleOAuthProvider.verify_id_token"]
+    S --> OA3["GoogleOAuthProvider.fetch_userinfo"]
+    S --> RES["_resolve_or_create_user"]
+    RES --> URP1["oauth_account_repository.get_by_provider_identity"]
+    RES --> URP2["user_repository.get_by_email"]
+    RES --> URP3["oauth_account_repository.upsert"]
+    RES --> URP4["user_repository.create"]
+    S --> SESS["SessionAuthStrategy.login"]
+    S --> RS2["redis_store.save_oauth_handoff"]
+    S --> LRP["login_history_repository.create"]
+    RS1 --> RD[("Redis")]
+    RS2 --> RD
+    URP1 --> PG[("PostgreSQL")]
+    URP2 --> PG
+    URP3 --> PG
+    URP4 --> PG
+    LRP --> PG
+    SESS --> RS3["redis_store.create_session"]
+    RS3 --> RD
+```
+
+## 8. データ遷移図
+
+```mermaid
+stateDiagram-v2
+    [*] --> state発行済み: 11番ファイルで発行
+
+    state発行済み --> state消費済み: GETDEL oauth_state:{state}
+    state消費済み --> [*]: 不正なら即エラー応答
+
+    state消費済み --> ユーザー未存在
+    state消費済み --> ユーザー紐付け済み
+    state消費済み --> ユーザー未紐付けemail一致
+
+    ユーザー未存在 --> users_oauth_accounts作成: INSERT users + oauth_accounts
+    ユーザー未紐付けemail一致 --> oauth_accounts追加: INSERT oauth_accounts<br/>UPDATE users.email_verified_at
+
+    users_oauth_accounts作成 --> ログイン確立
+    oauth_accounts追加 --> ログイン確立
+    ユーザー紐付け済み --> ログイン確立
+
+    ログイン確立 --> session確立: AUTH_MODE=session<br/>SETEX session/csrf + INSERT login_history
+    ログイン確立 --> handoff発行: AUTH_MODE=jwt<br/>SETEX oauth_handoff:{code} TTL=60
+    handoff発行 --> [*]: 13番ファイルへ継続
+    session確立 --> [*]
+```
+
+## 9. データアクセス一覧
+
+| ストア | テーブル／キー | 操作 | 条件・TTL | 備考 |
+|--------|----------------|------|-----------|------|
+| Redis | `oauth_state:{state}` | `GETDEL`（ワンタイム消費） | - | 存在しなければ`InvalidStateError` |
+| Redis | `session:{sid}` / `csrf:{sid}` / `user_sessions:{uid}` | `SETEX` / `SADD`（新規作成） | TTL=`SESSION_TTL_SECONDS` | sessionモードのみ（`SessionAuthStrategy.login`内） |
+| Redis | `oauth_handoff:{code}` | `SETEX`（新規作成） | TTL=60秒固定 | jwtモードのみ |
+| PostgreSQL | `oauth_accounts` | `SELECT`（`provider`+`provider_user_id`）／`INSERT`（新規紐付け時） | - | 紐付け確認・新規紐付け |
+| PostgreSQL | `users` | `SELECT`（`email`）／`INSERT`／`UPDATE(email_verified_at)` | - | 新規作成・既存紐付け・メール検証更新 |
+| PostgreSQL | `login_history` | `INSERT`（`method='oauth_google'`, `login_identifier=user.email`） | - | sessionモードはここで検証済みGoogle emailを記録。jwtモードは13番ファイルで記録 |
+
+## 10. バリデーション規則
+
+| スキーマ／項目 | フィールド | 制約 | フロント（zod）との整合 |
+|-----------------|-----------|------|--------------------------|
+| クエリパラメータ | `code` | pydantic `str | None`。`error`クエリがある場合は拒否処理、それ以外で存在しなければ`oauth_failed`扱い | フロントは本APIを直接呼ばない（ブラウザ遷移のため） |
+| クエリパラメータ | `state` | pydantic `str | None`。`state_cookie`との一致を必須とする | 同上 |
+| id_token検証 | `aud` | `GOOGLE_CLIENT_ID`と完全一致 | - |
+| id_token検証 | `iss` | `https://accounts.google.com` または `accounts.google.com` | - |
+| id_token検証 | `nonce` | Redis保存値と完全一致（`secrets.compare_digest`） | - |
+| userinfo | `sub` | id_tokenの`sub`と完全一致 | - |
+| userinfo | `email_verified` | `true`でなければ未紐付けユーザーの紐付け・新規作成を行わない | - |
+
+## 11. 非機能・セキュリティ考慮
+
+| 観点 | 内容 |
+|------|------|
+| ログ出力 | INFO：OAuthログイン成功（`user_id`, `provider_user_id`のハッシュ化値, `method='oauth_google'`）。WARN：state不一致・id_token検証失敗・sub不一致・email未検証拒否。個人情報（生のemail・氏名）を平文でログへ出力しない方針とする（要検討：具体的なマスキング方式は`core/logger.py`側で規定） |
+| ユーザー列挙対策 | 該当なし（本APIはGoogleとの検証結果に基づく処理であり、ユーザー入力に応じたエラー分岐をブラウザに露出しない） |
+| タイミング攻撃対策 | `state`・`nonce`の比較は`secrets.compare_digest`を使用 |
+| オープンリダイレクト対策 | `redirect_to`は11番ファイルで正規化済みの値をRedisから取得するのみで、本APIでは再検証しない（改ざん不可能なRedis保存値のため） |
+| アカウント乗っ取り対策 | `email_verified=false`の場合は既存ユーザーへの紐付けを行わず、service内部では400 `OAuthEmailUnverifiedError`、callback外部では302 `/login?error=oauth_email_unverified`とする（`basic_design/03_auth.md` §5.3） |
+| CSRF対策 | state + Cookie一致検証により、第三者が発行したcodeを被害者のブラウザに注入する攻撃を防ぐ |
+| レート制限 | `oauth callback` はIP単位10回/900秒。Google認可コードの高エントロピー性に依存せず汎用IP制限を適用する |
+| fail-close方針 | Redis接続不能時は503 `SERVICE_UNAVAILABLE`として共通エラーハンドラへ送出し、認可を成立させない |
+
+## 12. テスト設計
+
+| No | 区分 | ケース | 前提 | 期待結果 | pytest関数名案 |
+|----|------|--------|------|----------|-----------------|
+| 1 | 単体 | `_resolve_or_create_user`：紐付け済み | モック repository | 既存ユーザーを返す | `test_resolve_user_already_linked` |
+| 2 | 単体 | `_resolve_or_create_user`：未紐付け・email一致・verified | モック repository | `oauth_accounts`追加、`email_verified_at`更新 | `test_resolve_user_links_existing_by_email` |
+| 3 | 単体 | `_resolve_or_create_user`：未紐付け・email一致・未verified | モック repository | `OAuthEmailUnverifiedError`送出 | `test_resolve_user_rejects_unverified_email_link` |
+| 4 | 単体 | `_resolve_or_create_user`：完全新規 | モック repository | `users`/`oauth_accounts`作成、`username`が`google_`プレフィックス | `test_resolve_user_creates_new_oauth_user` |
+| 5 | 結合 | 正常系・sessionモード | `respx`でGoogle token/userinfoモック、実PostgreSQL/Redis | 302 `#redirect_to`、Set-Cookie(sid, csrf)、`login_history`に`method='oauth_google'`かつ`login_identifier=user.email`が記録される | `test_oauth_callback_session_mode_success` |
+| 6 | 結合 | 正常系・jwtモード | 同上 | 302 `#code=...&redirect_to=...`、`oauth_handoff:{code}`がRedisに存在、Set-Cookieは`cerberus_oauth_state`削除のみ | `test_oauth_callback_jwt_mode_issues_handoff` |
+| 7 | 結合 | state Cookie不一致 / state期限切れ | クエリstateとCookie値を変える／Redisから事前削除 | いずれも302 `/login?error=invalid_state` | `test_oauth_callback_rejects_invalid_state` |
+| 8 | 結合 | nonce不一致 / userinfo.sub不一致 | id_tokenのnonceを改ざん／userinfoモックのsubを変更 | いずれも302 `/login?error=oauth_failed` | `test_oauth_callback_rejects_token_tampering` |
+| 9 | 結合 | 外部`redirect_to`の正規化確認 | 11番ファイルで`redirect_to=https://evil.com`を試行→保存値`/dashboard`を確認した上でcallback | fragmentの`redirect_to`が`/dashboard`になる | `test_oauth_callback_uses_normalized_redirect_to` |
+| 10 | 結合 | Googleの`error=access_denied` | クエリに`error`を付与 | 302 `/login?error=oauth_denied` | `test_oauth_callback_handles_google_denied` |
+| 11 | 結合 | email未検証の新規紐付け試行 | `userinfo.email_verified=false` | 302 `/login?error=oauth_email_unverified` | `test_oauth_callback_rejects_unverified_email` |
+| 12 | 結合 | OAuth新規ユーザーのプロフィール状態 | 完全新規作成 | `profile_completed=false`、`last_name`/`first_name`がGoogle値、フリガナ・生年月日が`NULL` | `test_oauth_callback_new_user_profile_incomplete` |
+| 13 | 結合 | sessionモードのルートから認証確立まで | Google/Redis/DB境界を差し替え | 302 `#redirect_to`、session/CSRF Cookie、state Cookie削除 | `test_callback_session_route_establishes_authentication` |
+| 14 | 結合 | jwtモードのexchangeルートから認証確立まで | Redis/DB/Strategy境界を差し替え | 200 token response、refresh/CSRF Cookie、`Cache-Control: no-store` | `test_exchange_route_establishes_jwt_authentication` |
+| 15 | 結合 | 通常callbackのサービス失敗時 | Google/Redis境界を差し替え | 302 `/login?error=oauth_failed`、state Cookie削除 | `test_callback_route_deletes_state_cookie_on_service_failure` |
+| 16 | 結合 | callbackレート制限超過 | `TooManyAttemptsError(retry_after=42)`を差し替え | 429 `TOO_MANY_ATTEMPTS`、`Retry-After: 42` | `test_callback_preserves_rate_limit_and_redis_errors` |
+| 17 | 結合 | callbackのRedis障害 | `ServiceUnavailableError`を差し替え | 503 `SERVICE_UNAVAILABLE` | `test_callback_preserves_rate_limit_and_redis_errors` |
+| 18 | 結合 | callbackレート制限超過（ルートからservice経由） | Redisレート制限判定を超過値、TTLを42秒へ差し替え | 429 `TOO_MANY_ATTEMPTS`、`Retry-After: 42` | `test_callback_service_rate_limit_returns_429` |
+| 19 | 結合 | callbackのRedis障害（ルートからservice経由） | レート制限Redis操作を例外へ差し替え | 503 `SERVICE_UNAVAILABLE` | `test_callback_service_redis_failure_returns_503` |
+
+網羅できない範囲：Google実サーバーとの実通信（JWKS取得含む）は`respx`でモックし、実際のGoogleアカウントでの手動確認を別途行う。
+
+## 13. 不明点・要検討事項
+
+| 区分 | 内容 | 影響 |
+|------|------|------|
+| 要検討 | `GOOGLE_JWKS_CACHE_TTL_SECONDS`の既定値が基本設計に明記されていない | JWKSキャッシュの鮮度と外部通信頻度のトレードオフに影響。実装時に確定が必要 |
+| 不明 | Googleの`family_name`/`given_name`が未提供（スコープ上取得できない場合）だった場合の`last_name`/`first_name`の扱いが基本設計に記載がない | 新規ユーザー作成時にNULL許容とするか空文字にするか要確認 |
+
+## DBアクセス契約
+
+本APIのDBアクセスは、下記のFN/SP呼び出しをrepositoryの薄いラッパーから実行する。テーブルへの直接CRUD、認証業務の判定、履歴のINSERTはrepositoryに実装しない。healthの `SELECT 1` だけは本契約の対象外である。
+
+| 正式な呼び出し | 契約 |
+|----------------|------|
+| fn_find_oauth_account(p_provider, p_provider_user_id), fn_find_user_by_email(p_email), sp_upsert_oauth_account(p_user_id, p_provider, p_provider_user_id) | `detailed_design/database/08_db_functions.md` のシグネチャに従う |
+
+SQLSTATE P0xxxは同文書 §4 の対応表でAPIエラーへ変換し、Redis・メール・JWTの処理はAPI/service層に残す。

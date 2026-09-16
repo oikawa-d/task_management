@@ -1,0 +1,311 @@
+from datetime import date, timedelta
+from uuid import uuid4
+
+import pytest
+from app.schemas.auth import (
+	AuthConfigResponse,
+	CurrentUser,
+	LoginRequest,
+	LoginResponse,
+	MeResponse,
+	PasswordForgotRequest,
+	PasswordForgotResponse,
+	PasswordResetRequest,
+	RefreshResponse,
+	RegisterRequest,
+	RegisterResponse,
+	ResendVerifyEmailRequest,
+	ResendVerifyEmailResponse,
+	VerifyEmailRequest,
+)
+from app.schemas.base import StrictSchema
+from pydantic import ValidationError
+
+
+def _register_payload(**overrides: object) -> dict[str, object]:
+	payload: dict[str, object] = {
+		"username": "taro_01",
+		"email": "taro@example.com",
+		"password": "Password1!",
+		"password_confirm": "Password1!",
+		"last_name": "山田",
+		"first_name": "太郎",
+		"last_name_kana": "ヤマダ",
+		"first_name_kana": "タロウ",
+		"birth_date": date(1995, 4, 1),
+	}
+	payload.update(overrides)
+	return payload
+
+
+def _email_of_length(length: int) -> str:
+	local_part = "a" * 64
+	domain_middle_length = length - 197
+	return f"{local_part}@{'a' * 63}.{'b' * 63}.{'c' * domain_middle_length}.com"
+
+
+def test_register_request_accepts_valid_payload() -> None:
+	payload = RegisterRequest(**_register_payload())
+
+	assert payload.username == "taro_01"
+	assert payload.birth_date == date(1995, 4, 1)
+
+
+@pytest.mark.parametrize("model", [RegisterRequest, ResendVerifyEmailRequest, PasswordForgotRequest])
+def test_email_requests_accept_254_characters(model: type[object]) -> None:
+	email = _email_of_length(254)
+	if model is RegisterRequest:
+		request = model(**_register_payload(email=email))
+	else:
+		request = model(email=email)
+
+	assert len(request.email) == 254
+
+
+@pytest.mark.parametrize("model", [RegisterRequest, ResendVerifyEmailRequest, PasswordForgotRequest])
+def test_email_requests_reject_255_characters(model: type[object]) -> None:
+	email = _email_of_length(255)
+	if model is RegisterRequest:
+		payload = _register_payload(email=email)
+	else:
+		payload = {"email": email}
+
+	with pytest.raises(ValidationError):
+		model(**payload)
+
+
+def test_login_request_accepts_254_character_email() -> None:
+	request = LoginRequest(identifier=_email_of_length(254), password="password")
+
+	assert len(request.identifier) == 254
+
+
+def test_login_request_rejects_255_character_email() -> None:
+	with pytest.raises(ValidationError):
+		LoginRequest(identifier=_email_of_length(255), password="password")
+
+
+@pytest.mark.parametrize(
+	"field,value",
+	[
+		("username", "ab"),
+		("username", "a" * 51),
+		("username", "taro@example.com"),
+		("email", "not-an-email"),
+		("email", _email_of_length(255)),
+		("last_name", ""),
+		("last_name", "a" * 31),
+		("first_name", ""),
+		("first_name_kana", "タロa"),
+	],
+)
+def test_register_request_rejects_invalid_field(field: str, value: object) -> None:
+	with pytest.raises(ValidationError):
+		RegisterRequest(**_register_payload(**{field: value}))
+
+
+@pytest.mark.parametrize("password", ["password", "PASSWORD", "12345678", "!!!!!!!!"])
+def test_register_request_requires_two_password_character_categories(password: str) -> None:
+	with pytest.raises(ValidationError):
+		RegisterRequest(**_register_payload(password=password, password_confirm=password))
+
+
+def test_register_request_rejects_password_mismatch() -> None:
+	with pytest.raises(ValidationError):
+		RegisterRequest(**_register_payload(password_confirm="Password2!"))
+
+
+def test_register_request_rejects_future_birth_date() -> None:
+	with pytest.raises(ValidationError):
+		RegisterRequest(**_register_payload(birth_date=date.today() + timedelta(days=1)))
+
+
+def test_register_response_has_uuid_email_and_message() -> None:
+	response = RegisterResponse(id=uuid4(), email="taro@example.com", message="確認メールを送信しました。")
+
+	assert response.email == "taro@example.com"
+
+
+def test_login_request_accepts_identifier_and_password() -> None:
+	request = LoginRequest(identifier="taro_01", password="old-password")
+
+	assert request.identifier == "taro_01"
+
+
+@pytest.mark.parametrize("field,value", [("identifier", ""), ("identifier", _email_of_length(255)), ("password", "")])
+def test_login_request_rejects_invalid_field(field: str, value: object) -> None:
+	payload: dict[str, object] = {"identifier": "taro", "password": "password"}
+	payload[field] = value
+
+	with pytest.raises(ValidationError):
+		LoginRequest(**payload)
+
+
+def test_login_response_accepts_bearer_response() -> None:
+	response = LoginResponse(access_token="signed-token", token_type="bearer", expires_in=900)
+
+	assert response.token_type == "bearer"
+
+
+def test_login_response_rejects_non_bearer_token_type() -> None:
+	with pytest.raises(ValidationError):
+		LoginResponse(access_token="signed-token", token_type="basic", expires_in=900)
+
+
+def test_me_response_accepts_optional_profile_and_restricted_literals() -> None:
+	response = MeResponse(
+		id=uuid4(),
+		username="taro_01",
+		email="taro@example.com",
+		last_name=None,
+		first_name=None,
+		last_name_kana=None,
+		first_name_kana=None,
+		birth_date=None,
+		profile_completed=False,
+		role="member",
+		has_password=False,
+		oauth_providers=[],
+		auth_mode="jwt",
+	)
+
+	assert response.profile_completed is False
+
+
+def test_auth_config_response_accepts_supported_auth_mode() -> None:
+	response = AuthConfigResponse(auth_mode="session", google_login_enabled=True, csrf_cookie_name="cerberus_csrf")
+
+	assert response.auth_mode == "session"
+
+
+def test_auth_config_response_rejects_unknown_auth_mode() -> None:
+	with pytest.raises(ValidationError):
+		AuthConfigResponse(auth_mode="cookie", google_login_enabled=False, csrf_cookie_name="csrf")
+
+
+def test_refresh_response_accepts_bearer_response() -> None:
+	response = RefreshResponse(access_token="rotated-token", token_type="bearer", expires_in=900)
+
+	assert response.access_token == "rotated-token"
+
+
+def test_refresh_response_rejects_non_bearer_token_type() -> None:
+	with pytest.raises(ValidationError):
+		RefreshResponse(access_token="rotated-token", token_type="basic", expires_in=900)
+
+
+def test_verify_email_request_accepts_token() -> None:
+	request = VerifyEmailRequest(token="email-verification-token")
+
+	assert request.token == "email-verification-token"
+
+
+@pytest.mark.parametrize("payload", [{}, {"token": ""}])
+def test_verify_email_request_rejects_missing_or_empty_token(payload: dict[str, object]) -> None:
+	with pytest.raises(ValidationError):
+		VerifyEmailRequest(**payload)
+
+
+def test_resend_verify_email_request_and_response_accept_valid_values() -> None:
+	request = ResendVerifyEmailRequest(email="taro@example.com")
+	response = ResendVerifyEmailResponse(message="確認メールを送信しました。")
+
+	assert request.email == "taro@example.com"
+	assert response.message == "確認メールを送信しました。"
+
+
+@pytest.mark.parametrize("email", ["", "not-an-email", _email_of_length(255)])
+def test_resend_verify_email_request_rejects_invalid_email(email: str) -> None:
+	with pytest.raises(ValidationError):
+		ResendVerifyEmailRequest(email=email)
+
+
+def test_password_forgot_request_and_response_accept_valid_values() -> None:
+	request = PasswordForgotRequest(email="taro@example.com")
+	response = PasswordForgotResponse(message="再設定用メールを送信しました。")
+
+	assert request.email == "taro@example.com"
+	assert response.message == "再設定用メールを送信しました。"
+
+
+@pytest.mark.parametrize("email", ["", "not-an-email", _email_of_length(255)])
+def test_password_forgot_request_rejects_invalid_email(email: str) -> None:
+	with pytest.raises(ValidationError):
+		PasswordForgotRequest(email=email)
+
+
+def _password_reset_payload(**overrides: object) -> dict[str, object]:
+	payload: dict[str, object] = {
+		"token": "password-reset-token",
+		"new_password": "NewPassword1!",
+		"password_confirm": "NewPassword1!",
+	}
+	payload.update(overrides)
+	return payload
+
+
+def test_password_reset_request_accepts_valid_payload() -> None:
+	request = PasswordResetRequest(**_password_reset_payload())
+
+	assert request.token == "password-reset-token"
+
+
+@pytest.mark.parametrize(
+	"payload",
+	[
+		{"token": ""},
+		{"new_password": "password", "password_confirm": "password"},
+		{"new_password": "PASSWORD", "password_confirm": "PASSWORD"},
+		{"new_password": "12345678", "password_confirm": "12345678"},
+		{"new_password": "!!!!!!!!", "password_confirm": "!!!!!!!!"},
+	],
+)
+def test_password_reset_request_rejects_invalid_values(payload: dict[str, object]) -> None:
+	with pytest.raises(ValidationError):
+		PasswordResetRequest(**_password_reset_payload(**payload))
+
+
+def test_password_reset_request_rejects_password_mismatch() -> None:
+	with pytest.raises(ValidationError):
+		PasswordResetRequest(**_password_reset_payload(password_confirm="OtherPassword1!"))
+
+
+def test_register_request_rejects_undefined_field() -> None:
+	"""想定外の入力フィールドを拒否する（extra="forbid"）。"""
+	with pytest.raises(ValidationError):
+		RegisterRequest(**_register_payload(is_admin=True))
+
+
+def test_login_request_rejects_undefined_field() -> None:
+	with pytest.raises(ValidationError):
+		LoginRequest(login_identifier="user", password="Password1!", role="admin")
+
+
+def test_password_reset_request_rejects_undefined_field() -> None:
+	with pytest.raises(ValidationError):
+		PasswordResetRequest(**_password_reset_payload(user_id=str(uuid4())))
+
+
+@pytest.mark.parametrize(
+	"model",
+	[
+		AuthConfigResponse,
+		CurrentUser,
+		LoginRequest,
+		LoginResponse,
+		MeResponse,
+		PasswordForgotRequest,
+		PasswordForgotResponse,
+		PasswordResetRequest,
+		RefreshResponse,
+		RegisterRequest,
+		RegisterResponse,
+		ResendVerifyEmailRequest,
+		ResendVerifyEmailResponse,
+		VerifyEmailRequest,
+	],
+)
+def test_auth_schemas_forbid_extra_fields(model: type[StrictSchema]) -> None:
+	"""auth系DTOが漏れなく共通基底を継承し、extra="forbid" が効いていること。"""
+	assert issubclass(model, StrictSchema)
+	assert model.model_config.get("extra") == "forbid"

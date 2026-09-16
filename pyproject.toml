@@ -1,0 +1,19 @@
+[tool.ruff]
+line-length = 120
+target-version = "py314"
+
+[tool.ruff.format]
+indent-style = "tab"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+# フォーマッタがタブインデントを強制するため、タブ使用を警告するW191はlintから除外する
+ignore = ["W191"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

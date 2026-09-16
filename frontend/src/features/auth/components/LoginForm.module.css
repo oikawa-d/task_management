@@ -1,0 +1,39 @@
+.form {
+	display: grid;
+	gap: 1rem;
+	max-width: 24rem;
+}
+
+.field {
+	display: grid;
+	gap: 0.35rem;
+}
+
+.input {
+	border: 1px solid #9ca3af;
+	border-radius: 0.25rem;
+	font: inherit;
+	padding: 0.5rem;
+}
+
+.input[aria-invalid="true"] {
+	border-color: #b91c1c;
+}
+
+.error {
+	color: #b91c1c;
+}
+
+.banner {
+	display: grid;
+	gap: 0.5rem;
+	padding: 0.75rem;
+	border: 1px solid #b91c1c;
+	border-radius: 0.25rem;
+	color: #b91c1c;
+}
+
+.button {
+	justify-self: start;
+	padding: 0.5rem 1rem;
+}

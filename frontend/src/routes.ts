@@ -1,0 +1,16 @@
+export const ROUTES = {
+	ROOT: "/",
+	LOGIN: "/login",
+	REGISTER: "/register",
+	PASSWORD_FORGOT: "/password/forgot",
+	PASSWORD_RESET: "/password/reset",
+	VERIFY_EMAIL: "/verify-email",
+	OAUTH_CALLBACK: "/oauth/callback",
+	DASHBOARD: "/dashboard",
+	SETTINGS: "/settings",
+	ADMIN_USERS: "/admin/users",
+	PROJECT_PATTERN: "/projects/:projectId",
+	TASK_PATTERN: "/projects/:projectId/tasks/:taskId",
+	PROJECT: (projectId: string) => `/projects/${projectId}`,
+	TASK: (projectId: string, taskId: string) => `/projects/${projectId}/tasks/${taskId}`,
+} as const;

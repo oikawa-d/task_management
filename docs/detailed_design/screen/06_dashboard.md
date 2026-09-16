@@ -1,0 +1,411 @@
+# ダッシュボード詳細設計（`/dashboard`）
+
+## 0. 関連ドキュメント
+
+| ドキュメント | 内容 |
+|--------------|------|
+| [../../basic_design/05_frontend.md](../../basic_design/05_frontend.md) | §3 共通レイアウト、§3.1 通知ベル・通知パネル、§5 状態管理、§7.4 ダッシュボード仕様、§7.8 通知 |
+| [../../basic_design/04_api.md](../../basic_design/04_api.md) | §2.3 プロジェクトAPI、§2.6 通知API、§3.2 `GET /projects` レスポンス、§3.3 通知スキーマ |
+| [../api/projects/01_get_projects.md](../api/projects/01_get_projects.md) | `GET /api/projects` 詳細設計 |
+| [../api/projects/02_post_projects.md](../api/projects/02_post_projects.md) | `POST /api/projects` 詳細設計 |
+| [../api/notifications/01_get_notifications.md](../api/notifications/01_get_notifications.md) | `GET /api/notifications` 詳細設計 |
+| [../api/notifications/02_get_notifications_unread_count.md](../api/notifications/02_get_notifications_unread_count.md) | `GET /api/notifications/unread-count` 詳細設計 |
+| [../api/notifications/03_patch_notification_read.md](../api/notifications/03_patch_notification_read.md) | `PATCH /api/notifications/{id}/read` 詳細設計 |
+| [../api/notifications/04_post_notifications_read_all.md](../api/notifications/04_post_notifications_read_all.md) | `POST /api/notifications/read-all` 詳細設計 |
+| [./07_project_board.md](./07_project_board.md) | カード選択後の遷移先。通知行クリック時の遷移先でもある |
+
+## 1. 概要
+
+| 項目 | 内容 |
+|------|------|
+| 画面名 / パス | ダッシュボード `/dashboard`（`/` は `/login` へのリダイレクト専用パス。[05_frontend.md 2.1](../../basic_design/05_frontend.md#21-ルートパス--の扱い)） |
+| レイアウト | AppLayout（左サイドバー + ヘッダー。詳細は本書§2、共通仕様は [05_frontend.md §3](../../basic_design/05_frontend.md#3-共通レイアウト)） |
+| ガード | 認証必須（`RequireAuth`）。未認証は `/login` へリダイレクト |
+| 対応要件 | 要件書§2-3 |
+| 主なユースケース | 自分が所属するプロジェクトを一覧し、カードから `/projects/:projectId` へ遷移する。新規プロジェクトを作成する |
+| 現行実装ファイル | `frontend/src/features/dashboard/pages/DashboardPage.tsx`、`frontend/src/features/dashboard/components/ProjectList.tsx`、`frontend/src/features/dashboard/components/ProjectCreateForm.tsx`、`frontend/src/features/dashboard/components/Calendar.tsx`、`frontend/src/features/dashboard/hooks/useDashboard.ts`、`frontend/src/features/dashboard/hooks/useProjects.ts`、`frontend/src/features/dashboard/hooks/useCreateProject.ts`、`frontend/src/features/dashboard/hooks/useCalendarTasks.ts`、`frontend/src/features/dashboard/api/projectsApi.ts`、`frontend/src/features/dashboard/errors.ts`、`frontend/src/stores/projectStore.ts` |
+
+> プロジェクト一覧・作成・カレンダー・ボードへの遷移を`features/dashboard`配下の実装で提供する。選択中プロジェクトIDは`stores/projectStore.ts`（Zustand）が保持し、プロジェクト本体を含む一覧データはTanStack Queryが保持する。`useDashboard`が`useProjects` / `useCreateProject` / `useCalendarTasks`と選択stateを集約し、`DashboardPage`へ公開する。
+>
+> §2以降のUI・処理仕様は現行実装を示す。作成UIは`ProjectCreateForm`として表示され、カレンダーは`Calendar`で期限タスクを表示する。
+>
+> 409はプロジェクトAPI（[01_get_projects.md](../api/projects/01_get_projects.md)、[02_post_projects.md](../api/projects/02_post_projects.md)）に発生契機・エラーコードの定義がないため、本画面では扱わない。Issue #159の受入条件はこのAPI契約に合わせて訂正し、判断根拠をIssueコメントへ記録する。
+
+## 2. 画面レイアウト
+
+```
+┌────────────────────────────────────────────────────────────┐
+│①≡│                  Cerberus                              │ ← Header
+├──┴────────────────────────────────────────────────────────┤
+│┌────────┐ ┌──────────────────────────────────────────────┐│
+││②Sidebar│ │③見出し「プロジェクト」    ④[+ 新規プロジェクト]││
+││ home   │ │┌────────┐┌────────┐┌────────┐               ││
+││ 管理(*)│ ││⑤Card   ││ Card   ││ Card   │  …グリッド配置 ││
+││ 設定   │ ││ 名称    ││        ││        │               ││
+││        │ ││⑥人数   ││        ││        │               ││
+││ログアウト││⑦todo/ip/││        ││        │               ││
+││        │ ││  done   ││        ││        │               ││
+││        │ │└────────┘└────────┘└────────┘               ││
+││        │ │⑧空状態（0件時）：カード領域の代わりに          ││
+││        │ │  「まだプロジェクトがありません」+ 作成導線    ││
+││        │ │⑬ページネーション（2ページ以上で表示）         ││
+│└────────┘ └──────────────────────────────────────────────┘│
+└────────────────────────────────────────────────────────────┘
+```
+
+- ①ハンバーガー：サイドバー開閉（`uiStore.sidebarOpen`、localStorage永続）
+- ②Sidebar：`home` / `管理`（`role==='admin'` のみ描画） / `設定` / `ログアウト`。共通仕様は [05_frontend.md §3](../../basic_design/05_frontend.md#3-共通レイアウト)
+- ③④ヘッダー行：見出しと新規作成ボタン
+- ⑤カード：プロジェクト名、説明の先頭、オーナー表示名
+- ⑥メンバー数バッジ、⑦ステータス別タスク件数バッジ（todo/in_progress/done）
+- ⑧空状態：`items.length === 0` のとき表示
+
+レスポンシブ：カードグリッドは `grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr))` とし、幅に応じて列数が自動で変わる。狭幅ではサイドバーは既定で閉じ、ハンバーガーで開閉する（開閉判定は `uiStore` の値をそのまま使い、画面幅による自動制御は行わない。要検討：初期表示時のブレークポイント別デフォルト値は基本設計に定めがなく未定義）。
+
+## 3. UI要素仕様
+
+| No | 要素 | 種別 | 初期値 | 入力制約 | 活性条件 | イベント／遷移 |
+|----|------|------|--------|----------|----------|----------------|
+| ① | ハンバーガー | button | `uiStore.sidebarOpen` | - | 常時 | クリックで `uiStore.toggleSidebar()` |
+| ② | Sidebar項目 | nav link | - | - | 「管理」は `role==='admin'` のみ表示 | クリックで各パスへ`navigate` |
+| ③ | 見出し | text | 「プロジェクト」固定 | - | - | - |
+| ④ | 新規プロジェクトボタン | button | - | - | 常時活性 | クリックで `ProjectCreateForm` を開く（`isCreateOpen=true`） |
+| ⑤ | ProjectCard | card (button相当) | `useProjects()` の1件 | - | 常時活性 | クリックで `navigate('/projects/' + id)` |
+| ⑥ | メンバー数バッジ | badge | `member_count` | - | - | - |
+| ⑦ | タスク件数バッジ | badge×3 | `task_counts.{todo,in_progress,done}` | - | - | - |
+| ⑧ | 空状態メッセージ | text + button | - | - | `items.length===0` の時のみ表示 | 「作成する」ボタンは④と同じモーダルを開く |
+| ⑨ | ProjectCreateForm / name | text input | `""` | 1〜100文字必須（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） | - | 入力毎に `react-hook-form` へ反映 |
+| ⑩ | ProjectCreateForm / description | textarea | `""` | 任意、0〜2000文字（issue #40で確定。[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） | - | 入力毎に反映 |
+| ⑪ | ProjectCreateForm / 作成ボタン | button | - | - | `isValid && !isSubmitting` | クリックで `createProjectMutation.mutate()` |
+| ⑫ | ProjectCreateForm / キャンセル | button | - | - | 常時 | フォームを閉じ `reset()` |
+| ⑬ | ページネーション | pagination | `meta.page`等 | - | `meta.total_pages > 1` | ページ番号クリックで該当ページを再取得 |
+| ⑭ | NotificationBell | button + badge | `unread_count` | - | 常時 | クリックで通知パネルを開き、未読件数を表示 |
+| ⑮ | NotificationPanel | dialog/list | 通知一覧 | - | ⑭クリック時 | 行クリックで既読化・対象タスクへ遷移、「すべて既読」で一括既読化 |
+
+## 4. 使用API
+
+| No | 呼び出しタイミング | メソッド／パス | 送信内容 | 成功時処理 | 失敗時処理 | queryKey / mutationKey |
+|----|--------------------|-----------------|----------|------------|------------|--------------------------|
+| 1 | マウント時／⑬ページ切替 | `GET /api/projects?page={page}&per_page={perPage}` | ページ番号・件数 | `items` をカード描画し、`meta.page` / `meta.total_pages` を⑬へ反映 | 401はAuthAdapterが処理、その他はエラー表示領域にリトライボタン | `queryKey: ['projects', { page, perPage }]` |
+| 2 | 「新規プロジェクトの作成」送信 | `POST /api/projects` | `{ name, description }` | `201` → モーダルを閉じ `invalidateQueries(['projects'])` → 作成された `projects.name` をトーストで通知 | 422はフィールドエラー表示、それ以外はトーストでエラー表示 | `mutationKey: ['createProject']` |
+| 3 | ヘッダー表示・ポーリング | `GET /api/notifications/unread-count` | なし | `unread_count` を⑬へ反映 | 401はAuthAdapter、503は次回ポーリングで再試行 | `queryKey: ['notifications', 'unread-count']` |
+| 4 | ⑭を開く | `GET /api/notifications?page=1&per_page=20` | クエリのみ | 通知一覧と未読件数を描画 | 401はAuthAdapter、その他はパネル内エラー | `queryKey: ['notifications', 1]` |
+| 5 | 通知行クリック | `PATCH /api/notifications/{notification_id}/read` | なし | 成功後に`read_at`と未読件数をキャッシュへ反映し、パネルを閉じる。taskがあればボードへ遷移 | パネルを維持し、エラーと再試行ボタンを表示。成功するまで遷移しない | `mutationKey: ['notification-read']` |
+| 6 | 「すべて既読」クリック | `POST /api/notifications/read-all` | なし | 成功後に`updated_count` / `unread_count`を反映し、パネルを閉じる | パネルを維持し、エラーと再試行ボタンを表示 | `mutationKey: ['notifications-read-all']` |
+| 7 | カレンダー表示・月送り | `GET /api/tasks/calendar?from={from}&to={to}&scope=me` | 6週分の日付範囲 | `CalendarTaskItem[]`を`due_date`で42セルへ割り当て | 401はAuthAdapter、その他はカレンダー内にエラーと再試行ボタン | `queryKey: ['tasks-calendar', scope, projectId, from, to]` |
+
+## 5. 状態管理
+
+| 区分 | 名称 | 型 | 初期値 | 更新契機 | 永続化 |
+|------|------|----|--------|----------|--------|
+| ローカルstate | `isCreateModalOpen` | `boolean` | `false` | ④⑧クリックで`true`、作成成功/キャンセルで`false` | なし |
+| ローカルstate | `page` / `perPage` | `number` | `1` / `20` | ⑬操作。作成成功時は`page=1`へ戻して再取得 | なし |
+| React Hook Form | `ProjectCreateForm`（`name`, `description`） | `zod` スキーマ由来 | `{name:'', description:''}` | 入力・送信・リセット | なし |
+| Zustand（`projectStore`） | `selectedProjectId` | `string \| null` | `null` | カードクリック、作成成功（201）時に作成したプロジェクトIDを選択。ログアウト時にクリア | メモリのみ |
+| Zustand（`uiStore`） | `sidebarOpen`, `fontScale` | `boolean` / `number` | localStorage復元値、無ければ `true` / `1.0` | ①操作、設定画面での変更 | localStorage |
+| Zustand（`authStore`） | `user.role` | `'member'\|'admin'` | `/auth/me` 由来 | ログイン/ログアウト | メモリのみ |
+| TanStack Query | `['projects', {page, perPage}]` | `Page<ProjectSummary>` | 未取得 | `page` / `perPage`変更時fetch、`createProject`成功時に`invalidate` | しない（[05_frontend.md §5](../../basic_design/05_frontend.md#5-状態管理)） |
+| TanStack Query | `['notifications', 'unread-count']` / `['notifications', page]` | 件数 / `NotificationListResponse` | 未取得 | ポーリング、パネル開閉、既読操作時 | しない |
+| ローカルstate | `mutationError` / `retryAction` | `string \| null` / `() => Promise<void> \| null` | `null` | 既読操作の失敗・再試行・成功時 | しない |
+
+## 6. 画面状態遷移図
+
+```mermaid
+stateDiagram-v2
+    [*] --> Loading: マウント / GET /projects
+    Loading --> Empty: 200 かつ items.length===0
+    Loading --> Loaded: 200 かつ items.length>0
+    Loading --> Error: 4xx/5xx
+    Error --> Loading: 再試行ボタン（403は再試行導線なし）
+    Empty --> CreateOpen: 「新規プロジェクトの作成」
+    Loaded --> CreateOpen: 「新規プロジェクトの作成」
+    CreateOpen --> Submitting: フォーム送信
+    Submitting --> Loaded: 201 成功
+    Submitting --> CreateOpen: 422/5xx（エラー表示のまま留まる）
+    CreateOpen --> Loaded: キャンセル
+    CreateOpen --> Empty: キャンセル（0件のまま）
+    Loaded --> [*]: カードクリック（ボード画面へ遷移）
+```
+
+## 7. 処理シーケンス
+
+### 7.1 初期表示
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as ユーザー
+    participant DP as DashboardPage
+    participant Q as TanStack Query
+    participant EP as features/dashboard/api/projectsApi.ts
+    participant AA as AuthAdapter
+    participant API as FastAPI
+
+    U->>DP: `/dashboard` にアクセス（AppLayoutマウント済み）
+    DP->>DS: useDashboard({calendarParams})
+    DS->>Q: useProjects()
+    Q->>EP: getProjects({page:1, per_page:20})
+    EP->>AA: attach(config)
+    AA-->>EP: Cookie/Bearer付与済みconfig
+    EP->>API: GET /api/projects?page=1&per_page=20
+    alt 成功
+        API-->>EP: 200 {items, meta}
+        EP-->>Q: data
+        Q-->>DS: items
+        DS-->>DP: projectsQuery
+        DP-->>U: カード一覧 or 空状態を描画
+    else 401
+        API-->>EP: 401 UNAUTHENTICATED
+        EP->>AA: onUnauthorized()
+        AA-->>DP: /login へリダイレクト
+    else 5xx
+        API-->>EP: 500 INTERNAL_ERROR
+        EP-->>Q: error
+        Q-->>DP: isError
+        DP-->>U: エラー表示 + 再試行ボタン
+    end
+```
+
+### 7.2 新規プロジェクト作成
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as ユーザー
+    participant PCF as ProjectCreateForm
+    participant RHF as react-hook-form + zod
+    participant Q as TanStack Query
+    participant EP as features/dashboard/api/projectsApi.ts
+    participant PS as stores/projectStore.ts
+    participant API as FastAPI
+
+    U->>PCF: 「新規プロジェクトの作成」クリック
+    PCF->>PCF: isCreateOpen=true
+    U->>RHF: name / description 入力
+    U->>PCF: 「作成」クリック
+    RHF->>RHF: zod検証（name 1〜100文字）
+    alt バリデーションNG
+        RHF-->>U: フィールドエラー表示（送信しない）
+    else バリデーションOK
+        PCF->>Q: createProjectMutation.mutate({name, description})
+        Q->>EP: createProject(payload)
+        EP->>API: POST /api/projects
+        alt 201
+            API-->>EP: {project}
+            EP-->>Q: data
+            Q->>PS: selectProject(created.id)
+            Q->>Q: invalidateQueries(['projects'])
+            Q-->>PCF: onSuccess
+            PCF->>PCF: isCreateOpen=false
+            PCF-->>U: 作成完了後にフォームを閉じる
+        else 422
+            API-->>EP: 422 VALIDATION_ERROR
+            EP-->>Q: error
+            Q-->>RHF: setError(details.field)
+            RHF-->>U: フィールドエラー表示（モーダルは開いたまま）
+        else 403
+            API-->>EP: 403 USER_INACTIVE / CSRF_INVALID
+            EP-->>Q: error
+            Q-->>RHF: setError('root', resolveForbiddenMessage(error))
+            RHF-->>U: 個別メッセージ表示（フォームは開いたまま）
+        else 5xx
+            API-->>EP: 500 INTERNAL_ERROR
+            EP-->>Q: error
+            Q-->>PCF: onError
+            PCF-->>U: エラー表示（フォームは開いたまま）
+        end
+    end
+```
+
+## 8. コンポーネント構成・相関図
+
+```mermaid
+flowchart TB
+    APL["AppLayout"] --> HD["Header<br/>props: onToggleSidebar"]
+    APL --> SB["Sidebar<br/>props: role, activePath"]
+    APL --> OUT["Outlet"]
+    OUT --> DP["DashboardPage"]
+
+    DP -->|"useDashboard"| DS["useDashboard"]
+    DS -->|"useProjects / useCreateProject / useCalendarTasks"| Q["TanStack Query Cache"]
+    DS -->|"useProjectStore"| PS["Zustand projectStore<br/>selectedProjectId"]
+    DP --> PCL["ProjectList<br/>props: projects, selectedProjectId, error, onSelect, onRetry, onCreateClick"]
+    PCL --> PC["project button × N<br/>props: project, onSelect"]
+    DP --> EMP["ProjectListのEmptyState<br/>props: onCreateClick"]
+    DP --> PCM["ProjectCreateForm<br/>props: onSubmit, onCancel"]
+    PCM --> RHF["useForm(projectCreateSchema)"]
+    DP --> CAL["Calendar<br/>props: month, tasks, onPreviousMonth, onNextMonth"]
+    DS --> CT["useCalendarTasks"]
+    PCM --> BTN["Button（送信/キャンセル）"]
+
+    PC -->|"onClick"| SEL["projectStore.selectProject(project.id)"]
+    SEL --> NAV["router.navigate(/projects/:id)"]
+    PCM -->|"mutate"| EP["features/dashboard/api/projectsApi.ts :: createProject"]
+```
+
+## 9. 関数・カスタムフック詳細
+
+### 9.1 `features/dashboard/hooks/useDashboard.ts :: useDashboard`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `function useDashboard(options?: { projectsParams?: ProjectListParams; calendarParams?: CalendarTaskParams }): DashboardState` |
+| 引数 | 一覧のページング、カレンダーの日付範囲・scope（いずれも任意） |
+| 戻り値 | 一覧Query、作成mutation、カレンダーQuery、選択中プロジェクトIDと更新関数。`selectedProject`は一覧Queryから導出する |
+| 処理内容 | `useProjects` / `useCreateProject` / `useCalendarTasks`を呼び出し、`projectStore`の選択stateを画面へ集約する。サーバーデータはStoreへ保存しない |
+| 副作用 | 各下位フック経由で`GET /api/projects`、`GET /api/tasks/calendar`、`POST /api/projects`を呼び出す |
+
+### 9.2 `features/dashboard/hooks/useProjects.ts :: useProjects` / `useCreateProject` / `useCalendarTasks`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `useProjects(params?)`、`useCreateProject()`、`useCalendarTasks(params?, enabled?)` |
+| 引数 | 一覧・カレンダーのページングまたは日付範囲、表示可否 |
+| 戻り値 | TanStack Queryの一覧・作成mutation・カレンダー取得結果 |
+| 処理内容 | `useProjects`が一覧、`useCalendarTasks`がカレンダーを取得し、`useCreateProject`成功時に一覧を無効化して作成プロジェクトIDをStoreへ反映する |
+| 副作用 | `GET /api/projects`、`GET /api/tasks/calendar`、`POST /api/projects`呼び出し |
+
+### 9.3 `features/dashboard/api/projectsApi.ts :: getProjects / createProject / getCalendarTasks`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `getProjects(params?, client?)`、`createProject(payload, client?)`、`getCalendarTasks(params, client?)` |
+| 引数 | 一覧取得条件、作成入力、カレンダー取得条件。HTTP clientは共通`getApiClient()`を既定値とする |
+| 戻り値 | APIレスポンスの型付きPromise |
+| 処理内容 | 共通API clientを使用してプロジェクト一覧取得、作成、カレンダータスク取得を行う |
+| 副作用 | `GET /api/projects`、`POST /api/projects`、`GET /api/tasks/calendar`呼び出し |
+
+`getCalendarTasks(params)`は`GET /api/tasks/calendar`を呼び出し、`CalendarTaskItem[]`を返す。`CalendarTaskItem.due_date`はサーバーが`APP_TIMEZONE`で算出した日付キーであり、`Calendar`は`due_at`のブラウザ側変換を行わず、この値でタスクをセルへ割り当てる。
+
+### 9.4 `features/dashboard/components/ProjectCreateForm.tsx :: ProjectCreateForm`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `function ProjectCreateForm(props: { onSubmit: (payload: ProjectCreateRequest) => Promise<void>; onCancel: () => void }): JSX.Element` |
+| 引数 | `onSubmit`：作成API呼び出し、`onCancel`：フォームを閉じるコールバック |
+| 戻り値 | JSX |
+| 処理内容 | 1. `useForm(zodResolver(projectCreateSchema))` でフォーム初期化 2. `onSubmit`へ入力値を渡す 3. 403時は`errors.root`へ`resolveForbiddenMessage`の個別メッセージを表示 4. 422時は`setError`でフィールドへ反映 5. その他の失敗はフォーム内へ表示 |
+| 副作用 | `POST /api/projects` 呼び出し、入力エラー表示 |
+
+### 9.5 `stores/projectStore.ts :: useProjectStore`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `useProjectStore(selector)`。stateは`{ selectedProjectId, selectProject, clearSelectedProject }` |
+| 引数 | `selectProject(projectId: string)`、`clearSelectedProject()` |
+| 戻り値 | セレクタが返す選択state、または更新関数 |
+| 処理内容 | 選択中プロジェクトのIDだけを保持する。プロジェクト本体はTanStack Queryの一覧から`useDashboard`が導出する |
+| 副作用 | なし（メモリのみ。永続化しない） |
+
+一覧データそのものはTanStack Queryが保持するため、本storeはサーバーデータを複製せず「どれを選択したか」だけを持つ。
+
+### 9.6 `features/dashboard/errors.ts :: resolveForbiddenMessage`
+
+| 項目 | 内容 |
+|------|------|
+| シグネチャ | `function resolveForbiddenMessage(error: unknown): string \| null` |
+| 引数 | API呼び出しで得た例外 |
+| 戻り値 | 403のときはerror codeに対応する表示メッセージ、403以外は`null` |
+| 処理内容 | `ApiError`かつ`status===403`の場合に`FORBIDDEN_MESSAGES`（`config/dashboardConfig.ts`）を引き、未定義のcodeは`FORBIDDEN_FALLBACK_MESSAGE`を返す |
+| 副作用 | なし |
+
+`ProjectCreateModal`は設計上の予定であり、現行の作成UIは`ProjectCreateForm`である。
+
+## 10. バリデーション
+
+| フィールド | zodルール | エラーメッセージ | バックエンド対応 |
+|-----------|-----------|-------------------|-------------------|
+| `name` | `z.string().min(1).max(100)` | 「プロジェクト名を1〜100文字で入力してください」 | `POST /projects` name（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） |
+| `description` | `z.string().max(2000).optional()` | 「説明は2000文字以内で入力してください」 | `POST/PATCH /projects` description（issue #40で確定。[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） |
+
+## 11. エラーハンドリング
+
+| APIエラーコード / HTTP | 画面表示 | 遷移 | 再試行導線 |
+|------------------------|----------|------|------------|
+| 401 `UNAUTHENTICATED` | なし（AuthAdapterが処理） | `/login` | - |
+| 403 `USER_INACTIVE` | 一覧取得時：「アカウントが無効化されています。管理者にお問い合わせください」／作成時：フォーム内に同メッセージ | 遷移なし | なし（再試行しても解消しないため再試行導線を出さない） |
+| 403 `CSRF_INVALID` | 作成時：フォーム内に「セッションの検証に失敗しました。再度ログインしてからお試しください」 | 遷移なし（フォーム開いたまま） | 再ログイン後に再送信 |
+| 422 `VALIDATION_ERROR` | モーダル内フィールドにエラー表示 | 遷移なし（モーダル開いたまま） | 修正して再送信 |
+| 5xx `INTERNAL_ERROR` / `SERVICE_UNAVAILABLE` | 一覧取得時：画面中央にエラーメッセージ＋再試行ボタン／作成時：トースト | 遷移なし | 一覧は再試行ボタン、作成はモーダル開いたまま再送信 |
+
+## 12. データ遷移図
+
+```mermaid
+flowchart LR
+    A["ProjectCreateForm入力<br/>name, description"] --> B["react-hook-form state"]
+    B -->|"zod検証OK"| C["POST /api/projects リクエスト"]
+    C --> D["APIレスポンス 201 {project}"]
+    D --> S["projectStore<br/>selectedProjectId = created.id"]
+    D --> E["TanStack Query<br/>invalidateQueries(['projects'])"]
+    S --> G
+    E --> F["GET /api/projects 再取得"]
+    F --> G["ProjectList 再描画"]
+
+    H["マウント"] --> I["GET /api/projects"]
+    I --> J["queryCache['projects']"]
+    J --> G
+
+    H2["NotificationBellポーリング"] --> I2["GET /api/notifications/unread-count"]
+    I2 --> J2["unread_count cache"]
+    J2 --> K2["NotificationBell badge"]
+    L2["NotificationPanelを開く"] --> M2["GET /api/notifications"]
+    M2 --> N2["通知一覧 cache"]
+    N2 --> O2["行クリック / すべて既読"]
+    O2 --> P2["PATCH read / POST read-all"]
+    P2 --> J2
+
+    H3["カレンダー月表示"] --> I3["GET /api/tasks/calendar"]
+    I3 --> J3["CalendarTaskItem[]<br/>due_date = APP_TIMEZONEの日付"]
+    J3 --> K3["due_dateでCalendarの42セルへ割当"]
+```
+
+## 13. アクセシビリティ・表示設定
+
+| 項目 | 内容 |
+|------|------|
+| 文字サイズ | `--font-scale` に追従（`rem`指定。[05_frontend.md §8](../../basic_design/05_frontend.md#8-アクセシビリティ設定文字サイズ)） |
+| キーボード操作 | カードは `role="button" tabIndex=0`、Enter/Spaceで遷移。モーダルはフォーカストラップ、Escで閉じる |
+| `aria-*` | モーダルに `role="dialog" aria-modal="true" aria-labelledby="create-project-title"`。空状態バナーは `role="status"` |
+| フォーカス管理 | モーダルオープン時に `name` 入力へ自動フォーカス、閉じたら開いたトリガー要素へフォーカスを戻す |
+
+## 14. テスト設計
+
+| No | 区分 | ケース | 前提（MSWのモック応答等） | 期待結果 | テスト名案 |
+|----|------|--------|---------------------------|----------|------------|
+| 1 | 単体（zod） | `name` が101文字 | - | バリデーションエラー | `projectCreateSchema rejects name over 100 chars` |
+| 2 | 単体（zod） | `name` が空文字 | - | 必須エラー | `projectCreateSchema requires name` |
+| 3 | コンポーネント | 0件時の描画 | `GET /projects` → `{items:[], meta:{total:0}}` | 空状態メッセージと作成導線を表示 | `DashboardPage shows empty state when no projects` |
+| 4 | コンポーネント | 複数件時の描画 | `GET /projects` → 2件 | メンバー数・タスク件数バッジを含むカードが2枚描画 | `DashboardPage renders project cards with badges` |
+| 5 | コンポーネント | 作成成功 | `POST /projects` → 201 | フォームが閉じ、一覧が再取得される | `ProjectCreateForm closes and refetches list on success` |
+| 6 | コンポーネント | 作成422 | `POST /projects` → 422 `{field:'name'}` | フィールドにエラー表示、フォームは開いたまま | `ProjectCreateForm shows field error on 422` |
+| 7 | コンポーネント | カレンダーの期限タスク表示 | `GET /tasks/calendar` → `CalendarTaskItem[]`（`due_date`付き） | `due_date`の期限日セルにタスク名を表示 | `Calendar renders tasks on due dates` |
+| 8 | コンポーネント | カレンダーの月送り | 前月/次月ボタンを操作 | 6週グリッドと取得範囲が切り替わる | `DashboardPage changes calendar month and query range` |
+| 9 | 境界 | UTC 16:00の期限タスク | `due_at=2026-09-09T16:00:00Z`、`due_date=2026-09-10` | ブラウザTZに依存せずJSTの10日セルへ表示 | `Calendar assigns task by server APP_TIMEZONE date` |
+| 10 | 結合 | 未認証アクセス | authStore=`unauthenticated` | `/login` にリダイレクト | `RequireAuth redirects unauthenticated user from dashboard` |
+| 11 | 単体（store） | 選択stateの更新 | `selectProject` / `clearSelectedProject`を呼ぶ | 選択IDが期待どおり更新・消去される | `projectStore keeps and clears selected project ID` |
+| 12 | コンポーネント | カード選択時の選択state反映 | `GET /projects` → 1件 | `projectStore.selectedProjectId`が選択IDになる | `DashboardPage stores selected project on card click` |
+| 13 | コンポーネント | 作成成功時の選択state反映 | `POST /projects` → 201 | 作成したプロジェクトIDが選択stateへ入り、一覧で`aria-current`が付く | `DashboardPage selects created project ID` |
+| 14 | コンポーネント | 一覧403 | `GET /projects` → 403 `USER_INACTIVE` | 個別メッセージを表示し、再試行ボタンを出さない | `ProjectList shows inactive message on 403` |
+| 15 | コンポーネント | 作成403 | `POST /projects` → 403 `CSRF_INVALID` | フォーム内にメッセージを表示し、フォームは開いたまま | `ProjectCreateForm shows csrf message on 403` |
+| 16 | 結合 | ログアウト | 選択IDがStoreに保持されている | 認証状態とともに選択IDをクリアする | `AppLayout clears selected project on logout` |
+| 17 | 単体 | `useDashboard`の集約 | 一覧・作成・カレンダーAPIをモック | 3つのQuery/mutationと選択IDを公開する | `useDashboard aggregates dashboard state` |
+| 18 | 結合 | 認証喪失時のキャッシュ破棄 | 通常ログアウトまたは復帰不能な401 | Query cacheと選択stateを破棄し、前ユーザーの一覧を再表示しない | `logout clears user-scoped query cache and project selection` |
+| 19 | 網羅できない範囲 | 実際のカードグリッドのレスポンシブ折返し | - | - | ピクセル単位のレイアウト崩れはCSSの視覚回帰テスト対象外のため手動確認とする |
+
+## 15. 日付境界方針（Issue #396）
+
+案A（サーバーが`APP_TIMEZONE`の日付キーを返す）を採用する。`GET /tasks/calendar`の既存の期間抽出はすでに`APP_TIMEZONE`で日境界をUTCへ変換しており、その同じ境界計算から`due_date`を生成する。フロントは日時を再解釈せず、日付のみの`due_date`でセルへ割り当てる。
+
+案B（`GET /auth/config`へ`app_timezone`を追加してフロントで再計算）を採用しない理由は、認証起動設定のレスポンス契約と起動時stateへ不要な責務を追加し、バックエンドとフロントで日付計算を二重管理するためである。案AはカレンダーAPIの専用レスポンス型だけを拡張し、既存の認証設定APIおよび他のタスクAPIの契約を変更しない。
+
+`due_date`はサーバーが返すため、ブラウザのローカルタイムゾーンに関係なく`APP_TIMEZONE`の日境界と一致する。将来ユーザー単位のタイムゾーン設定を導入する場合は、対象APIの契約とこの方針を再検討する。
+
+## 16. 不明点・要検討事項
+
+| 区分 | 内容 | 影響 |
+|------|------|------|
+| なし | ページングは`meta.page` / `meta.total_pages`を⑬として定義済み | - |
+| 確定 | 409はプロジェクトAPIに発生契機・エラーコードの定義がないため本画面では扱わない。Issue #159の受入条件をAPI契約に合わせて訂正する | - |
+| 確定 | `description` の文字数上限はissue #40で0〜2000文字に確定（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） | - |
+| 要検討 | サイドバー開閉の画面幅によるデフォルト値切り替え（狭幅時の自動折りたたみ等）の要否が [05_frontend.md](../../basic_design/05_frontend.md) に明記されていない | レスポンシブ挙動の実装方針 |
+| 要検討 | ユーザー単位のタイムゾーン設定を将来導入する場合のカレンダー日付キー | `due_date`の算出元とAPI契約の再設計 |

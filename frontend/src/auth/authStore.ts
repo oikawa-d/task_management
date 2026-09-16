@@ -1,0 +1,63 @@
+import { create } from "zustand";
+
+import type { AuthAdapter, TokenStore } from "../api/authAdapter";
+
+export type AuthUserRole = "member" | "admin";
+
+export type AuthUser = {
+	id: string;
+	role: AuthUserRole;
+	display_name?: string;
+};
+
+export type AuthStatus = "loading" | "authenticated" | "unauthenticated";
+
+export type AuthState = {
+	user: AuthUser | null;
+	status: AuthStatus;
+	accessToken: string | null;
+	authAdapter: AuthAdapter | null;
+	/** GET /auth/config の google_login_enabled。AuthProvider起動時（authBootstrap）に設定される */
+	googleLoginEnabled: boolean;
+};
+
+const initialAuthState: AuthState = {
+	user: null,
+	status: "loading",
+	accessToken: null,
+	authAdapter: null,
+	googleLoginEnabled: false,
+};
+
+export type AuthStore = AuthState & {
+	setLoading: () => void;
+	setAuthenticated: (user: AuthUser) => void;
+	setUnauthenticated: () => void;
+	setAccessToken: (accessToken: string | null) => void;
+	updateUser: (user: Partial<AuthUser>) => void;
+	clear: () => void;
+	setAuthAdapter: (authAdapter: AuthAdapter) => void;
+	setGoogleLoginEnabled: (enabled: boolean) => void;
+	reset: () => void;
+};
+
+export const useAuthStore = create<AuthStore>((set, get) => ({
+	...initialAuthState,
+	setLoading: () => set({ ...initialAuthState }),
+	setAuthenticated: (user) => set({ user, status: "authenticated" }),
+	setUnauthenticated: () => set({ user: null, status: "unauthenticated", accessToken: null }),
+	setAccessToken: (accessToken) => set({ accessToken }),
+	updateUser: (user) => set((state) => ({ user: state.user ? { ...state.user, ...user } : state.user })),
+	clear: () => {
+		get().authAdapter?.onLogout();
+		set({ user: null, status: "unauthenticated", accessToken: null });
+	},
+	setAuthAdapter: (authAdapter) => set({ authAdapter }),
+	setGoogleLoginEnabled: (googleLoginEnabled) => set({ googleLoginEnabled }),
+	reset: () => set(initialAuthState),
+}));
+
+export const authTokenStore: TokenStore = {
+	getAccessToken: () => useAuthStore.getState().accessToken,
+	setAccessToken: (accessToken) => useAuthStore.getState().setAccessToken(accessToken),
+};

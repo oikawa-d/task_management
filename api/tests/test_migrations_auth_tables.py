@@ -1,0 +1,204 @@
+import re
+from pathlib import Path
+
+import pytest
+from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+_LOGIN_HISTORY_DESIGN = Path(__file__).resolve().parents[2] / "docs/detailed_design/database/03_table_login_history.md"
+
+
+def _email_of_length(length: int) -> str:
+	local_part = "a" * 64
+	domain_middle_length = length - 197
+	return f"{local_part}@{'a' * 63}.{'b' * 63}.{'c' * domain_middle_length}.com"
+
+
+def _login_history_design_comments() -> tuple[str, dict[str, str]]:
+	design = _LOGIN_HISTORY_DESIGN.read_text(encoding="utf-8")
+	table_comment = re.search(r"COMMENT ON TABLE login_history IS '([^']*)';", design)
+	column_comments = dict(re.findall(r"COMMENT ON COLUMN login_history\.([a-z_]+) IS '([^']*)';", design))
+	assert table_comment is not None
+	return table_comment.group(1), column_comments
+
+
+async def test_users_table_created_with_default_role_and_active(db_session: AsyncSession) -> None:
+	result = await db_session.execute(
+		text(
+			"INSERT INTO users (username, email, password_hash) "
+			"VALUES ('alice', 'alice@example.com', 'hash') RETURNING role, is_active, email_verified_at"
+		)
+	)
+	row = result.mappings().one()
+
+	assert row["role"] == "member"
+	assert row["is_active"] is True
+	assert row["email_verified_at"] is None
+
+
+async def test_users_email_accepts_254_characters_and_rejects_255(db_session: AsyncSession) -> None:
+	"""RFC 5321の配送経路制約を考慮した254文字境界をDBで検証する。"""
+	user_id = (
+		await db_session.execute(
+			text(
+				"INSERT INTO users (username, email, password_hash) VALUES ('email-limit', :email, 'hash') RETURNING id"
+			),
+			{"email": _email_of_length(254)},
+		)
+	).scalar_one()
+	await db_session.execute(
+		text(
+			"INSERT INTO login_history (user_id, login_identifier, login_method, success) "
+			"VALUES (:user_id, :identifier, 'oauth_google', true)"
+		),
+		{"user_id": user_id, "identifier": _email_of_length(254)},
+	)
+
+	with pytest.raises(DBAPIError):
+		async with db_session.begin_nested():
+			await db_session.execute(
+				text("INSERT INTO users (username, email, password_hash) VALUES ('email-over', :email, 'hash')"),
+				{"email": _email_of_length(255)},
+			)
+	with pytest.raises(DBAPIError):
+		async with db_session.begin_nested():
+			await db_session.execute(
+				text(
+					"INSERT INTO login_history (user_id, login_identifier, login_method, success) "
+					"VALUES (:user_id, :identifier, 'oauth_google', true)"
+				),
+				{"user_id": user_id, "identifier": _email_of_length(255)},
+			)
+	await db_session.rollback()
+
+
+async def test_users_username_uniqueness_is_case_insensitive(db_session: AsyncSession) -> None:
+	await db_session.execute(
+		text("INSERT INTO users (username, email, password_hash) VALUES ('Bob', 'b1@example.com', 'h')")
+	)
+
+	with pytest.raises(DBAPIError):
+		await db_session.execute(
+			text("INSERT INTO users (username, email, password_hash) VALUES ('bob', 'b2@example.com', 'h')")
+		)
+
+
+async def test_users_role_check_constraint_rejects_invalid_value(db_session: AsyncSession) -> None:
+	with pytest.raises(DBAPIError):
+		await db_session.execute(
+			text(
+				"INSERT INTO users (username, email, password_hash, role) "
+				"VALUES ('carol', 'carol@example.com', 'h', 'superadmin')"
+			)
+		)
+
+
+async def test_oauth_accounts_cascade_delete_on_user_delete(db_session: AsyncSession) -> None:
+	user_id = (
+		await db_session.execute(
+			text(
+				"INSERT INTO users (username, email, password_hash) "
+				"VALUES ('dave', 'dave@example.com', 'h') RETURNING id"
+			)
+		)
+	).scalar_one()
+	await db_session.execute(
+		text("INSERT INTO oauth_accounts (user_id, provider, provider_user_id) VALUES (:user_id, 'google', 'sub-1')"),
+		{"user_id": user_id},
+	)
+
+	await db_session.execute(text("DELETE FROM users WHERE id = :user_id"), {"user_id": user_id})
+
+	count = (
+		await db_session.execute(
+			text("SELECT count(*) FROM oauth_accounts WHERE user_id = :user_id"), {"user_id": user_id}
+		)
+	).scalar_one()
+	assert count == 0
+
+
+async def test_login_history_user_id_set_null_on_user_delete(db_session: AsyncSession) -> None:
+	user_id = (
+		await db_session.execute(
+			text(
+				"INSERT INTO users (username, email, password_hash) "
+				"VALUES ('erin', 'erin@example.com', 'h') RETURNING id"
+			)
+		)
+	).scalar_one()
+	history_id = (
+		await db_session.execute(
+			text(
+				"INSERT INTO login_history (user_id, login_identifier, login_method, success) "
+				"VALUES (:user_id, 'erin', 'session', true) RETURNING id"
+			),
+			{"user_id": user_id},
+		)
+	).scalar_one()
+
+	await db_session.execute(text("DELETE FROM users WHERE id = :user_id"), {"user_id": user_id})
+
+	remaining_user_id = (
+		await db_session.execute(text("SELECT user_id FROM login_history WHERE id = :id"), {"id": history_id})
+	).scalar_one()
+	assert remaining_user_id is None
+
+
+async def test_users_updated_at_trigger_updates_timestamp(db_session: AsyncSession) -> None:
+	created = (
+		(
+			await db_session.execute(
+				text(
+					"INSERT INTO users (username, email, password_hash) "
+					"VALUES ('frank', 'frank@example.com', 'h') RETURNING id, updated_at"
+				)
+			)
+		)
+		.mappings()
+		.one()
+	)
+	# now()はトランザクション開始時刻を返すため、INSERTとUPDATEを別トランザクションに分けて検証する
+	await db_session.commit()
+
+	updated = (
+		(
+			await db_session.execute(
+				text("UPDATE users SET last_name = 'X' WHERE id = :id RETURNING updated_at"),
+				{"id": created["id"]},
+			)
+		)
+		.mappings()
+		.one()
+	)
+
+	assert updated["updated_at"] > created["updated_at"]
+
+
+async def test_login_history_failure_reason_consistency_check(db_session: AsyncSession) -> None:
+	with pytest.raises(DBAPIError):
+		await db_session.execute(
+			text(
+				"INSERT INTO login_history (login_identifier, login_method, success, failure_reason) "
+				"VALUES ('ghost', 'session', true, 'invalid_credentials')"
+			)
+		)
+
+
+async def test_login_history_column_comments_match_design(db_session: AsyncSession) -> None:
+	expected_table_comment, expected_column_comments = _login_history_design_comments()
+	table_comment = (
+		await db_session.execute(text("SELECT obj_description('login_history'::regclass, 'pg_class')"))
+	).scalar_one()
+	result = await db_session.execute(
+		text(
+			"SELECT attname, col_description(attrelid, attnum) AS comment "
+			"FROM pg_catalog.pg_attribute "
+			"WHERE attrelid = 'login_history'::regclass "
+			"AND attnum > 0 AND NOT attisdropped ORDER BY attnum"
+		)
+	)
+
+	actual_column_comments = {row.attname: row.comment for row in result}
+	assert table_comment == expected_table_comment
+	assert actual_column_comments == {column: expected_column_comments.get(column) for column in actual_column_comments}
