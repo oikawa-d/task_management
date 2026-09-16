@@ -554,7 +554,7 @@ flowchart LR
 
 | 項目 | 方針 |
 |------|------|
-| 適用タイミング | ローカル/CD では backend コンテナ起動時のエントリポイントで `alembic upgrade head` |
+| 適用タイミング | ローカルComposeでは backend コンテナ起動時のエントリポイントで `alembic upgrade head`。CIではジョブステップで明示実行 |
 | 初期リビジョン | 拡張有効化（`CREATE EXTENSION IF NOT EXISTS pgcrypto`）→ テーブル作成 → 関数・トリガ適用の順 |
 | ダウングレード | 学習目的のため `downgrade()` も必ず記述する |
 | 初期データ | 管理者アカウントを seed する（メール・初期パスワードは `.env` から取得。ハードコードしない） |

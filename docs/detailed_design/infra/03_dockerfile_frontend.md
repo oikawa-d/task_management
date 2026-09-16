@@ -11,7 +11,7 @@
 |------|------|
 | 対象 | `frontend/Dockerfile`（frontendイメージ） |
 | 責務 | ReactアプリをViteでビルドし、静的成果物をNginxで配信する。`/api` を backend へリバースプロキシする |
-| 適用条件 | `docker compose build frontend` / CI `docker-build` ジョブ / CD `build-and-push` ジョブで使用 |
+| 適用条件 | `docker compose build frontend` / CI `docker-build` ジョブで使用 |
 | 依存先 | `node:26-alpine`（builder）、`nginx:alpine`（runtime）、backend（`/api` proxy先） |
 | 実装ファイル | `frontend/Dockerfile`、`frontend/nginx.conf`、`frontend/package.json` |
 
@@ -41,8 +41,8 @@
 
 | 区分 | 内容 |
 |------|------|
-| 入力 | ビルドコンテキスト（`frontend/` 一式）、ビルド引数 `VITE_*`（Composeの`build.args`またはCDの`build-args`経由で供給） |
-| 出力 | frontendイメージ（`ghcr.io/{owner}/cerberus-frontend:{tag}`）、起動後は `0.0.0.0:80` でHTTPを待ち受け |
+| 入力 | ビルドコンテキスト（`frontend/` 一式）、ビルド引数 `VITE_*`（Composeの`build.args`またはCIの`build-args`経由で供給） |
+| 出力 | frontendイメージ（ローカルComposeでは`IMAGE_NAME_FRONTEND:FRONTEND_IMAGE_TAG`）、起動後は `0.0.0.0:80` でHTTPを待ち受け |
 | 副作用 | なし（静的配信のみ。永続化状態を持たない） |
 
 ## 5. シーケンス図
@@ -187,7 +187,7 @@ flowchart LR
 | 2 | 結合 | SPAの深いパスへ直接アクセスして200が返る | frontendコンテナ起動済み | `GET /projects/abc` が `index.html` を返す（404にならない） | `test_frontend_spa_fallback` |
 | 3 | 結合 | `/api/*` がbackendへ中継される | backend/frontend起動済み | `GET /api/health` がbackendの応答をそのまま返す | `test_frontend_api_proxy` |
 | 4 | 結合 | ビルド時に指定した`VITE_API_BASE_URL`が成果物に反映される | `--build-arg VITE_API_BASE_URL=/api` でビルド | バンドル中の文字列に`/api`が含まれる | `test_frontend_build_arg_embedded` |
-| 5 | 静的 | Dockerfileの全`VITE_*` ARGがCompose/CDから渡される | frontend Dockerfileと各workflowの設定を比較 | build時の設定値がDockerfile既定値へ意図せず固定されない | `test_cd_frontend_build_passes_every_dockerfile_arg` |
+| 5 | 静的 | Dockerfileの全`VITE_*` ARGがCompose/CIから渡される | frontend DockerfileとCompose・CIの設定を比較 | build時の設定値がDockerfile既定値へ意図せず固定されない | `test_ci_frontend_build_passes_every_dockerfile_arg` |
 | 6 | 単体 | ハッシュ付き静的アセットにキャッシュヘッダが付く | frontendコンテナ起動済み | `GET /assets/xxx.hash.js` のレスポンスヘッダに`Cache-Control`が含まれる | `test_frontend_static_cache_headers` |
 | 網羅できない範囲 | 実ブラウザでのCookie送受信（Same-Origin挙動）の目視確認 | - | 自動テストはAPIレベルに留め、実ブラウザでのCookie付与は手動確認とする | - |
 

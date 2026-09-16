@@ -22,7 +22,7 @@
 |------|------|------|------|
 | `detect` | ジョブ | 実装ディレクトリとDockerfileの有無を判定し、後続ジョブの条件へ出力 | 依存なし。`api` / `batch` / `frontend` / `docker`を出力 |
 | `docs-check` | ジョブ | 変更差分の空白エラーを検証 | 依存なし。pushまたはpull_requestの差分を検査 |
-| `workflow-lint` | ジョブ | `ci.yml`の構成テストを実行 | 依存なし。`tests/ci/test_ci_workflow.py`を実行 |
+| `workflow-lint` | ジョブ | `ci.yml`の構成テストとCD廃止方針の回帰検知を実行 | 依存なし。`python -m pytest tests/ci/test_ci_workflow.py tests/workflows/test_cd_removed.py -q`を実行し、CI構成、CD workflow、およびCD専用環境変数の再導入を検知 |
 | `hook-test` | ジョブ | GitHub破壊操作hookのシェルテストを実行 | 依存なし。`.agents/hooks/*.test.sh`を実行 |
 | `backend-lint` | ジョブ | `ruff check` / `ruff format --check` / `mypy app` | `needs: detect`。`detect.api == 'true'`のとき実行。Python 3.14 |
 | `backend-test` | ジョブ | `services`でPostgreSQL/Redis起動 → `alembic upgrade head` → `pytest --cov` | `needs: detect`、`detect.api == 'true'`。`AUTH_MODE`をmatrix化（`session`/`jwt`） |
@@ -197,7 +197,7 @@ CIジョブは実行のたびに使い捨てのGitHub-hosted runner上で完結�
 | 引数 / 入力 | GitHubイベントペイロード（`push`/`pull_request`）、GitHub Secrets |
 | 戻り値 / 出力 | 各ジョブのconclusion（`success`/`failure`） |
 | 送出例外 / 失敗条件 | いずれかのステップが非ゼロ終了した場合、そのジョブはfailureとなる |
-| 処理内容 | baseブランチを限定せずPRを受け付け、`push`は`develop`/`main`だけを受け付ける。`detect`がcheckout済みツリーの実装ディレクトリ有無を判定し、該当する品質検証ジョブを起動する。`docker-build`は品質検証ジョブに`needs`で依存し、`batch-container-integration`はCompose上の実コンテナ検証を独立して行う。Docker buildでは`api`/`frontend`/`batch`の3イメージを作成する。同一PR（または同一push対象ブランチ）への新しい実行が始まると、同じconcurrency groupの実行中ジョブをキャンセルする |
+| 処理内容 | baseブランチを限定せずPRを受け付け、`push`は`develop`/`main`だけを受け付ける。`detect`がcheckout済みツリーの実装ディレクトリ有無を判定し、該当する品質検証ジョブを起動する。`workflow-lint`は`python -m pytest tests/ci/test_ci_workflow.py tests/workflows/test_cd_removed.py -q`を実行し、CI構成とCD廃止方針を検証する。`docker-build`は品質検証ジョブに`needs`で依存し、`batch-container-integration`はCompose上の実コンテナ検証を独立して行う。Docker buildでは`api`/`frontend`/`batch`の3イメージを作成する。同一PR（または同一push対象ブランチ）への新しい実行が始まると、同じconcurrency groupの実行中ジョブをキャンセルする |
 | 副作用 | なし（ワークフロー定義自体はGitHub側の実行指示） |
 
 ### 8.2 `backend-lint` ジョブ
@@ -314,7 +314,7 @@ flowchart LR
 | イメージのpush禁止 | `docker-build`ジョブは`push: false`固定とし、CI実行だけでGHCRに意図しないイメージが公開されないようにする | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §5.2 |
 | 依存キャッシュの汚染防止 | `cache-dependency-path`を`requirements*.txt`/`package-lock.json`に限定し、キャッシュキーがロックファイルのハッシュに連動するようにする（`actions/setup-python`/`actions/setup-node`標準機能） | GitHub Actions標準機能 |
 | ブランチ保護 | `docs-check`/`workflow-lint`/`hook-test`/`backend-lint`/`backend-test`（両matrix）/`frontend-lint`/`frontend-test`/`batch-test`/`batch-container-integration`/`docker-build`をrequired status checksに設定し、いずれか未成功のPRは保護対象ブランチへマージ不可とする。baseがfeatureブランチのスタックPRにも同じCI結果を表示する | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §5.4 |
-| CI用ダミーSecrets | `CI_JWT_SECRET_KEY`/`CI_INITIAL_ADMIN_PASSWORD`等は本番用の値と別管理し、CI専用のGitHub Secretsとして登録する | 一般的なCI/CD運用指針 |
+| CI用ダミーSecrets | `CI_JWT_SECRET_KEY`/`CI_INITIAL_ADMIN_PASSWORD`等は実環境用の値と別管理し、CI専用のGitHub Secretsとして登録する | CI運用指針 |
 
 ## 11. テスト設計
 
@@ -330,7 +330,8 @@ flowchart LR
 | 8 | 結合 | 依存キャッシュが効くこと | 同一ロックファイルで2回目のCI実行 | 2回目の`pip install`/`npm ci`が短時間で完了（キャッシュhit） | `test_ci_cache_hit_reduces_install_time` |
 | 9 | 設定 | baseがfeatureブランチのスタックPR | `pull_request`にbaseブランチ指定がないworkflow | `detect`を含むCI workflowが起動し、各ジョブの結果がPRへ報告される | `test_pull_request_trigger_has_no_base_branch_filter` |
 | 10 | 設定 | 同一PRへ短時間に連続push | 同じPR番号で複数の`pull_request`実行が発生 | 後続実行が先行実行をキャンセルし、古い実行のrunner消費を抑制する | `test_concurrency_cancels_previous_run_for_same_pr` |
-| 11 | 受入 | feature-base PRの実イベントとチェック表示 | PR #424（base=`feature/issue-412-stacked-pr-ci`） | `gh pr checks 424`でdetect、docs-check、workflow-lint、hook-test、backend-lint、backend-test（session/jwt）、frontend-lint、frontend-test、batch-test、batch-container-integration、docker-buildの全チェックが`pass` | [PR #424](https://github.com/oikawa-d/task_management/pull/424)、Actions run [34811431199](https://github.com/oikawa-d/task_management/actions/runs/34811431199) |
+| 11 | 設定 | `workflow-lint`：CI構成とCD廃止方針の回帰検知 | `tests/ci/test_ci_workflow.py`と`tests/workflows/test_cd_removed.py`が存在する | CI構成、CD workflow、およびCD専用環境変数の再導入を検知する2テストがsuccess | `test_ci_workflow_lint_and_cd_removal_regression` |
+| 12 | 受入 | feature-base PRの実イベントとチェック表示 | PR #424（base=`feature/issue-412-stacked-pr-ci`） | `gh pr checks 424`でdetect、docs-check、workflow-lint、hook-test、backend-lint、backend-test（session/jwt）、frontend-lint、frontend-test、batch-test、batch-container-integration、docker-buildの全チェックが`pass` | [PR #424](https://github.com/oikawa-d/task_management/pull/424)、Actions run [34811431199](https://github.com/oikawa-d/task_management/actions/runs/34811431199) |
 | 網羅できない範囲 | フォークPRでSecretsが渡されないことの実挙動確認 | - | GitHub側のプラットフォーム仕様であり自動テスト不可。ドキュメント記載の前提として扱う | - |
 
 ## 12. 不明点・要検討事項

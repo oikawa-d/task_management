@@ -3,7 +3,7 @@
 ## 0. 関連ドキュメント
 
 - 基本設計：[../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md)（§8 運用時の確認事項）、[../../basic_design/02_redis.md](../../basic_design/02_redis.md)（§6 障害・運用時の挙動）
-- 詳細設計：[01_docker_compose.md](./01_docker_compose.md)、[04_env_config.md](./04_env_config.md)、[06_cd_workflow.md](./06_cd_workflow.md)、[../log/00_history.md](../log/00_history.md)、[../database/11_table_api_history.md](../database/11_table_api_history.md)、[../database/12_table_batch_history.md](../database/12_table_batch_history.md)、[../batch/02_due_notification_job.md](../batch/02_due_notification_job.md)、[../api/system/01_get_health.md](../api/system/01_get_health.md)、[../database/08_db_functions.md](../database/08_db_functions.md)（`sp_purge_*`）、[../database/09_migration.md](../database/09_migration.md)、[../auth/00_strategy_base.md](../auth/00_strategy_base.md)（`AUTH_MODE`切替）
+- 詳細設計：[01_docker_compose.md](./01_docker_compose.md)、[04_env_config.md](./04_env_config.md)、[09_self_hosted_runner.md](./09_self_hosted_runner.md)、[../log/00_history.md](../log/00_history.md)、[../database/11_table_api_history.md](../database/11_table_api_history.md)、[../database/12_table_batch_history.md](../database/12_table_batch_history.md)、[../batch/02_due_notification_job.md](../batch/02_due_notification_job.md)、[../api/system/01_get_health.md](../api/system/01_get_health.md)、[../database/08_db_functions.md](../database/08_db_functions.md)（`sp_purge_*`）、[../database/09_migration.md](../database/09_migration.md)、[../auth/00_strategy_base.md](../auth/00_strategy_base.md)（`AUTH_MODE`切替）
 
 ## 1. 概要
 
@@ -11,7 +11,7 @@
 |------|------|
 | 対象 | 稼働中システムの監視・ログ・バックアップ・障害対応・`AUTH_MODE`切替に関する運用手順 |
 | 責務 | 要件書§11でスコープ外とされた自動監視・アラートを除き、手動で実施可能な運用作業を定義する |
-| 適用条件 | ローカル/自宅サーバーでの本番相当稼働時（CD後） |
+| 適用条件 | ローカルDocker Composeでの開発・学習時 |
 | 依存先 | `GET /api/health`、`docker compose logs`、`pg_dump`、`sp_purge_*`、`api_history`、`batch_history`、batch、Redis（永続化なし） |
 | 実装ファイル | 運用手順書のため実装ファイルなし（`docker compose`コマンド・`psql`コマンドの実行手順として記載） |
 
@@ -243,7 +243,7 @@ stateDiagram-v2
 | 入力 | `GET /api/health`の応答、`docker compose logs`、`docker compose ps` |
 | 出力 | 障害箇所の特定結果（DB/Redis/backend起動失敗のいずれか） |
 | 失敗条件 | 該当なし（切り分け手順自体） |
-| 処理内容 | 1. `/api/health`を確認し`degraded`の場合は`components`で原因系統を特定 2. 応答なしの場合は`docker compose logs backend`で起動時エラー（`alembic upgrade head`失敗等）を確認 3. DB起因なら`docker compose exec postgres pg_isready`、Redis起因なら`docker compose exec redis redis-cli ping`で単体疎通を再確認 4. 原因修正後`docker compose up -d`で対象サービスのみ再作成し、再度ヘルスチェックする 5. 復旧しない場合はDBバックアップ確認・ログ精査を行い、必要に応じて[06_cd_workflow.md](./06_cd_workflow.md)のロールバック手順に従う |
+| 処理内容 | 1. `/api/health`を確認し`degraded`の場合は`components`で原因系統を特定 2. 応答なしの場合は`docker compose logs backend`で起動時エラー（`alembic upgrade head`失敗等）を確認 3. DB起因なら`docker compose exec postgres pg_isready`、Redis起因なら`docker compose exec redis redis-cli ping`で単体疎通を再確認 4. 原因修正後`docker compose up -d`で対象サービスのみ再作成し、再度ヘルスチェックする 5. 復旧しない場合はDBバックアップ確認とログ精査を行う |
 | 副作用 | なし（調査手順自体）。復旧操作（再起動等）は対象サービスへ副作用を及ぼす |
 
 ### 8.8 `AUTH_MODE`切り替え手順

@@ -5,6 +5,9 @@ tmp/
 .claude/worktrees/
 .claude/scheduled_tasks.lock
 
+# GitHub Actions runner
+actions-runner/
+
 # 環境変数
 .env
 .env.local

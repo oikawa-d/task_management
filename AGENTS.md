@@ -49,7 +49,7 @@ grep -rn "実装ファイル" docs/detailed_design/<領域>/*.md
 
 ```bash
 docker compose up -d
-docker compose -f docker-compose.yml -f compose.dev.yml up
+docker compose -f docker-compose.yml -f compose.dev.yml --profile dev up
 ```
 
 CIでは、`api/`・`batch/`それぞれに対して`ruff check`、`ruff format --check`（タブインデント強制）、`mypy app`、`pytest --cov`を実行し、フロントエンドのESLint・TypeScriptチェック・Vitestカバレッジ、`api/frontend/batch`各Dockerfileのイメージビルドを実施します。CI定義は`.github/workflows/ci.yml`、Ruff設定は`pyproject.toml`の`[tool.ruff.format]`（`indent-style = "tab"`）を参照してください。

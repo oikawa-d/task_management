@@ -166,7 +166,7 @@ flowchart LR
 | [07_password_security.md](./auth/07_password_security.md) | argon2idハッシュ・ログイン失敗レート制限 |
 | [08_redis_store.md](./auth/08_redis_store.md) | Redisキー操作層とTTL設計（全キー網羅） |
 
-## 7. インフラ・CI/CD `infra/`
+## 7. インフラ・CI `infra/`
 
 | ファイル | 対象 |
 |----------|------|
@@ -175,9 +175,10 @@ flowchart LR
 | [03_dockerfile_frontend.md](./infra/03_dockerfile_frontend.md) | frontend Dockerfile（Node v26 + Nginx） |
 | [04_env_config.md](./infra/04_env_config.md) | **環境変数の全一覧**・config.py設計・Secrets管理 |
 | [05_ci_workflow.md](./infra/05_ci_workflow.md) | ci.yml（Lint・型チェック・テスト・buildのみ） |
-| [06_cd_workflow.md](./infra/06_cd_workflow.md) | cd.yml（GHCR push・self-hosted runner） |
+| [06_cd_workflow.md](./infra/06_cd_workflow.md) | CD廃止方針とローカル開発運用 |
 | [07_operation.md](./infra/07_operation.md) | 運用（監視・ログ・バックアップ・障害切り分け） |
 | [08_dockerfile_batch.md](./infra/08_dockerfile_batch.md) | batch Dockerfile（常駐スケジューラ） |
+| [09_self_hosted_runner.md](./infra/09_self_hosted_runner.md) | 将来CDを再導入する場合のself-hosted runner登録手順 |
 
 ## 8. 基本設計へのフィードバック（実装着手前に確定が必要な事項）
 

@@ -200,7 +200,7 @@ erDiagram
 
 ## 10. マイグレーション運用との関係
 
-DDLの実適用（Alembicリビジョンの構成・初期データseed・CI/CDでの `alembic upgrade head` 実行タイミング）は `09_migration.md`（別担当）で扱う。本書および `01_table_*.md` 〜 `03_table_*.md` に記載するDDLは、Alembicリビジョンに落とし込む際の設計上の正として参照される。
+DDLの実適用（Alembicリビジョンの構成・初期データseed・ローカルCompose/CIでの `alembic upgrade head` 実行タイミング）は `09_migration.md`（別担当）で扱う。本書および `01_table_*.md` 〜 `03_table_*.md` に記載するDDLは、Alembicリビジョンに落とし込む際の設計上の正として参照される。
 
 ## 11. 不明点・要検討事項
 

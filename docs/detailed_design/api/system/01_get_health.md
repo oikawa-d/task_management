@@ -6,7 +6,7 @@
 |--------------|------|
 | API基本設計 | `../../../basic_design/04_api.md`（§2.6 その他） |
 | Redis基本設計 | `../../../basic_design/02_redis.md`（§5.3 `ping`、§6 障害・運用時の挙動） |
-| インフラ基本設計 | `../../../basic_design/06_infra_cicd.md`（§2 Docker Compose構成、§6.1 CDフロー） |
+| インフラ基本設計 | `../../../basic_design/06_infra_cicd.md`（§2 Docker Compose構成、§6 開発運用） |
 | 認証基本設計 | `../../../basic_design/03_auth.md`（§2.2 ファクトリ：`AUTH_MODE`の起動時評価） |
 
 ## 1. 概要
@@ -14,7 +14,7 @@
 | 項目 | 内容 |
 |------|------|
 | エンドポイント | `GET /api/health` |
-| 目的 | DB（PostgreSQL）・Redisの接続状態と現在の`AUTH_MODE`を返す。Docker Composeのコンテナヘルスチェック、CDのデプロイ後疎通確認、運用者の手動確認から利用される（`06_infra_cicd.md`§2・§6.1・§8） |
+| 目的 | DB（PostgreSQL）・Redisの接続状態と現在の`AUTH_MODE`を返す。Docker Composeのコンテナヘルスチェック、開発者の手動確認、CIでの起動確認から利用される（`06_infra_cicd.md`§2・§6） |
 | 認証 | 不要 |
 | 認可 | 未認証可 |
 | CSRF検証 | 不要（参照系・Cookie発行/利用なし） |
@@ -239,7 +239,7 @@ flowchart LR
 | 監査ログ | 記録しない。異常検知時（`status=degraded`）のみアプリログにWARNINGレベルで出力し、どちらのコンポーネントが異常かを記録する（接続文字列やエラーの詳細スタックはログにも出力するが、レスポンスボディには含めない） |
 | 秘密情報の非露出 | `DATABASE_URL`・`REDIS_URL`・接続エラーの詳細メッセージ（ホスト名等を含み得る）はレスポンスに含めない。`status: error`とだけ返す |
 | fail-close方針との関係 | 本APIは認証必須APIの`SERVICE_UNAVAILABLE`（`04_api.md`§4.2）とは異なる専用レスポンス形式を用いる。ただしDB/Redis異常時に503を返す点は認証必須APIのfail-close方針（`02_redis.md`§6）と整合する |
-| 認証を要求しない理由 | Docker Composeの`healthcheck`（コンテナ内部からの疎通）、CDのデプロイ後ポーリング（`06_infra_cicd.md`§6.1）、CIでの`backend-test`起動確認など、認証情報を持たない仕組みから呼ばれるため。外部への情報漏洩は上記の秘密情報非露出方針で抑止する |
+| 認証を要求しない理由 | Docker Composeの`healthcheck`（コンテナ内部からの疎通）、開発者の手動確認、CIでの`backend-test`起動確認など、認証情報を持たない仕組みから呼ばれるため。外部への情報漏洩は上記の秘密情報非露出方針で抑止する |
 | レート制限を設けない理由 | Docker/CIのヘルスチェックは数秒〜数十秒間隔で継続的に呼ばれる想定であり、レート制限を課すと死活監視自体が機能しなくなるため対象外とする |
 | タイムアウト値 | DB・Redisとも共通の`HEALTH_CHECK_TIMEOUT_SECONDS`（環境変数化。既定値は基本設計に明記がないため`2`秒を仮値として提案。§13参照）を用い、ハードコードしない |
 

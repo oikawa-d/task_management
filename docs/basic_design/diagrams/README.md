@@ -7,7 +7,7 @@
 
 | ファイル | 図 | 対応する設計書 |
 |----------|-----|----------------|
-| [01_system_architecture.drawio](./01_system_architecture.drawio) | システム構成図（Docker Compose 6サービス、公開ポート、外部サービス、CI/CD経路） | [00_overview.md §2](../00_overview.md#2-システム構成) / [06_infra_cicd.md §2](../06_infra_cicd.md#2-docker-compose-構成) |
+| [01_system_architecture.drawio](./01_system_architecture.drawio) | システム構成図（Docker Compose 6サービス、公開ポート、外部サービス、CI経路） | [00_overview.md §2](../00_overview.md#2-システム構成) / [06_infra_cicd.md §2](../06_infra_cicd.md#2-docker-compose-構成) |
 | [02_backend_layers.drawio](./02_backend_layers.drawio) | バックエンドのレイヤ / モジュール構成図（api → service → repository → models、認証Strategy、core、通知） | [00_overview.md §3](../00_overview.md#3-バックエンドのレイヤ構成) / [03_auth.md §2](../03_auth.md#2-strategyパターン設計) |
 | [03_er_diagram.drawio](./03_er_diagram.drawio) | ER図（PostgreSQL 8テーブル）＋ Redisキー一覧・主要インデックス・DB関数 | [01_database.md §2](../01_database.md#2-er図) / [02_redis.md §2](../02_redis.md#2-キー一覧) |
 | [04_screen_flow.drawio](./04_screen_flow.drawio) | 画面遷移図（11画面、認証ガード、モーダル、OAuth・メール認証/パスワードリセットのメール経路、ヘッダーの通知パネル） | [05_frontend.md §2](../05_frontend.md#2-画面一覧とルーティング) |
@@ -32,8 +32,8 @@
   - 赤：揮発データ（Redis）・管理者専用
   - 黄：認証 Strategy・OAuth2 関連
   - 紫：メール（SMTP / Mailpit）
-  - 灰：CI/CD・横断的基盤（core）
-- 破線の枠はグループ（論理的な括り）またはモーダル、破線の矢印はリダイレクト・生成・継承・デプロイ経路を表す
+  - 灰：CI・横断的基盤（core）
+- 破線の枠はグループ（論理的な括り）またはモーダル、破線の矢印はリダイレクト・生成・継承経路を表す
 
 ## エクスポート
 

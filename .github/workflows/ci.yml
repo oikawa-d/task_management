@@ -57,7 +57,7 @@ jobs:
       - name: ci.ymlの構成を検証
         run: |
           python -m pip install pytest pyyaml
-          python -m pytest tests/ci/test_ci_workflow.py -q
+          python -m pytest tests/ci/test_ci_workflow.py tests/workflows/test_cd_removed.py -q
 
   hook-test:
     runs-on: ubuntu-latest
