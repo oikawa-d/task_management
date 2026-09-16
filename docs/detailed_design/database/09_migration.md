@@ -3,7 +3,7 @@
 ## 関連ドキュメント
 
 - [../../basic_design/01_database.md](../../basic_design/01_database.md)（§1 マイグレーション方針、§6 マイグレーション方針図）
-- [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md)（§4 環境変数、§5 CI設計、§6 CD設計、§8 運用時の確認事項）
+- [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md)（§4 環境変数、§5 CI設計、§6 開発運用、§8 運用時の確認事項）
 - [08_db_functions.md](./08_db_functions.md)（本ファイルが適用するDB関数・プロシージャ）
 - [00_policy.md](./00_policy.md)（命名規約・共通カラム方針）
 - [../infra/05_ci_workflow.md](../infra/05_ci_workflow.md)（CIでのマイグレーション適用手順）
@@ -114,7 +114,7 @@ flowchart LR
 | `0026` | `users`, `login_history` | `users.email`と`login_history.login_identifier`をVARCHAR(50)からVARCHAR(254)へ拡張 |
 | `0027` | `login_history` | `failure_reason`の既存値を`lower()`で小文字へ正規化。downgradeは値を復元せずno-op |
 
-関数・プロシージャのDROPは依存するAPIが停止している環境でのみ行う。production CDではdowngradeを実行しない。
+関数・プロシージャのDROPは依存するAPIが停止している環境でのみ行う。ローカル開発ではdowngradeを必要に応じて手動実行する。
 
 ### 2.3 各リビジョンの構造（例：`0009_create_functions_and_triggers.py`）
 
@@ -200,7 +200,7 @@ def downgrade() -> None:
     op.drop_column("tasks", "due_at")
 ```
 
-`downgrade()`は通知履歴と期限日時を削除するため、本番CDのロールバックでは実行しない（§5）。
+`downgrade()`は通知履歴と期限日時を削除するため、ローカル開発でも自動ロールバックには使用せず、影響を確認してから手動実行する（§5）。
 
 ### 2.5 `0012_create_history_tables.py`（API・batch履歴）
 
@@ -317,7 +317,7 @@ flowchart LR
     A["ORMモデル変更<br/>api/app/models/*.py"] --> B["alembic revision<br/>--autogenerate"]
     B --> C["生成versionをレビュー<br/>CHECK制約・関数適用を手動追記"]
     C --> D{"適用先環境"}
-    D -->|"ローカル/CD"| E["backendコンテナ<br/>エントリポイントで自動実行"]
+    D -->|"ローカルCompose"| E["backendコンテナ<br/>エントリポイントで自動実行"]
     D -->|"CI"| F["services起動後に<br/>ジョブステップで明示実行"]
     E --> G["alembic upgrade head"]
     F --> G
@@ -330,7 +330,6 @@ flowchart LR
 |------|-----------|--------|------|
 | ローカル開発 | `docker compose up` 時、backendコンテナのエントリポイント | Docker Compose | `basic_design/06_infra_cicd.md` §3.1「エントリポイント：`alembic upgrade head` → `uvicorn ...`」 |
 | CI（`backend-test`） | ジョブステップとして明示実行 | GitHub Actions | `services` で `postgres:17` / `redis:8` を起動後、`alembic upgrade head` → `pytest --cov=app --cov-report=xml`（`basic_design/06_infra_cicd.md` §5.2/5.3） |
-| CD（本番相当） | `docker compose pull && docker compose up -d` 後、backendコンテナ起動時に自動実行 | self-hosted runner | 失敗時はbackendコンテナが起動失敗となり、deployジョブは失敗扱い（§5.2参照） |
 
 ### 4.3 CIでの適用コマンド例（`ci.yml` 抜粋、参考）
 

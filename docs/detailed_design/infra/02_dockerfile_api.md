@@ -11,7 +11,7 @@
 |------|------|
 | 対象 | `api/Dockerfile`（backendイメージ） |
 | 責務 | FastAPIアプリを実行するランタイムイメージを作成し、起動時にAlembicマイグレーションを適用してからUvicornを起動する |
-| 適用条件 | `docker compose build backend` / CI `docker-build` ジョブ / CD `build-and-push` ジョブで使用 |
+| 適用条件 | `docker compose build backend` / CI `docker-build` ジョブで使用 |
 | 依存先 | `python:3.14-slim`（ベースイメージ）、`requirements.txt`、PostgreSQL（マイグレーション適用先） |
 | 実装ファイル | `api/Dockerfile`、`api/requirements.txt`、`api/alembic.ini`、`api/entrypoint.sh` |
 
@@ -42,7 +42,7 @@
 | 区分 | 内容 |
 |------|------|
 | 入力 | ビルドコンテキスト（リポジトリルート）、実行時環境変数（`.env` 経由でCompose注入） |
-| 出力 | backendイメージ（`ghcr.io/{owner}/cerberus-backend:{tag}`）、起動後は `0.0.0.0:8000` でHTTPを待ち受け |
+| 出力 | backendイメージ（ローカルComposeでは`IMAGE_NAME_BACKEND:BACKEND_IMAGE_TAG`）、起動後は `0.0.0.0:8000` でHTTPを待ち受け |
 | 副作用 | 起動時に `DATABASE_URL` 先のPostgreSQLへ `alembic upgrade head` を適用（スキーマ変更） |
 
 ## 5. シーケンス図
@@ -196,7 +196,7 @@ flowchart LR
 | 3 | 結合 | マイグレーション成功時にUvicornが起動する | postgres起動済み、`DATABASE_URL`正しい | `/api/health` が200を返す | `test_entrypoint_migration_success_starts_app` |
 | 4 | 結合 | マイグレーション失敗時にアプリが起動しない | `DATABASE_URL`を不正な値に設定 | コンテナが非ゼロで終了し、Uvicornが起動しない | `test_entrypoint_migration_failure_blocks_app` |
 | 5 | 結合 | `requirements.txt`未変更時にDockerキャッシュが効く | 2回連続ビルド | 2回目の `pip install` レイヤがキャッシュ利用（ビルドログで確認） | `test_backend_build_cache_effective`（手動/CIログ確認） |
-| 網羅できない範囲 | 実運用のself-hosted runner上でのビルド時間計測 | - | ハードウェア依存のため定量テスト対象外。CIログで定性確認 | - |
+| 網羅できない範囲 | 開発者の実Dockerホスト上でのビルド時間計測 | - | ハードウェア依存のため定量テスト対象外。CIログで定性確認 | - |
 
 ## 12. 不明点・要検討事項
 

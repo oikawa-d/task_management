@@ -12,7 +12,7 @@
 | 03 | [03_auth.md](./03_auth.md) | 認証・認可 | Strategyパターン設計、session/jwt/OAuth2、パスワードリセット、CSRF、RBAC |
 | 04 | [04_api.md](./04_api.md) | API | エンドポイント定義、リクエスト/レスポンススキーマ、エラー体系、認可マトリクス |
 | 05 | [05_frontend.md](./05_frontend.md) | フロントエンド | 画面設計、コンポーネント構成、状態管理、APIクライアント層、ルーティング |
-| 06 | [06_infra_cicd.md](./06_infra_cicd.md) | インフラ/CI・CD | Docker Compose構成、環境変数一覧、CI/CDワークフロー設計 |
+| 06 | [06_infra_cicd.md](./06_infra_cicd.md) | インフラ/CI | Docker Compose構成、環境変数一覧、CIワークフロー設計 |
 | 07 | [07_batch.md](./07_batch.md) | batch | 期限通知バッチの責務、スケジュール、処理方式、障害時挙動、テスト方針 |
 | - | [diagrams/](./diagrams/README.md) | 構成図（drawio） | システム構成図・レイヤ構成図・ER図・画面遷移図（`.drawio` 形式・編集可能） |
 
@@ -26,7 +26,7 @@ flowchart LR
     C --> D
     D --> E[04 API]
     E --> F[05 Front]
-    A --> G[06 インフラ/CICD]
+    A --> G[06 インフラ/CI]
     A --> H[07 batch]
     G --> H
 ```

@@ -60,7 +60,7 @@
 | 区分 | 内容 |
 |------|------|
 | 入力 | `.env`（Compose変数展開）、各サービスのビルドコンテキスト（backend/batchはリポジトリルート、frontendは`frontend/`）、ホストの `docker compose up` コマンド |
-| 出力 | 起動済みコンテナ群、`pgdata` volume（永続データ）、`cerberus_net` 経由の内部通信、ホストへ公開される `${FRONTEND_PORT}`（本番/CD）および開発時追加ポート |
+| 出力 | 起動済みコンテナ群、`pgdata` volume（永続データ）、`cerberus_net` 経由の内部通信、ホストへ公開される `${FRONTEND_PORT}`および開発時追加ポート |
 | 副作用 | `backend` 起動時の `alembic upgrade head` によるDBスキーマ変更 |
 
 ## 5. シーケンス図
@@ -70,7 +70,7 @@
 ```mermaid
 sequenceDiagram
     autonumber
-    actor DEV as 開発者/CD
+    actor DEV as 開発者
     participant DC as Docker Compose
     participant PG as postgres
     participant RD as redis
@@ -187,7 +187,7 @@ stateDiagram-v2
 | 入力 | `docker compose -f docker-compose.yml -f compose.dev.yml up` |
 | 出力 | `backend`/`frontend`のバインドマウント有効化、`${BACKEND_PORT}`/`${POSTGRES_PORT}`/`${REDIS_PORT}`/`${MAILPIT_SMTP_PORT}`/`${MAILPIT_UI_PORT}` を `127.0.0.1` に限定公開 |
 | 処理内容 | 1. `backend.volumes` に `./api:/app/api` と `./db:/app/db:ro` を追加 2. `backend.command` を `uvicorn app.main:app --reload` に上書き 3. `postgres`/`redis`/`mailpit` の `ports` を `127.0.0.1:${PORT}:内部固定ポート` で追加 |
-| 副作用 | 本番/CD構成（`docker-compose.yml`単体）には影響しない（オーバーレイのみに閉じる） |
+| 副作用 | 基本Compose（`docker-compose.yml`単体）には影響しない（開発オーバーレイのみに閉じる） |
 
 ## 9. 関数・要素相関図
 
@@ -219,7 +219,7 @@ flowchart LR
 | 観点 | 方針 | 根拠 |
 |------|------|------|
 | ポート露出 | `backend`/`postgres`/`redis`/`mailpit` は本体Composeで `ports` を持たない。開発時のみ `compose.dev.yml` で `127.0.0.1` 限定公開 | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §1 |
-| 秘匿情報 | `POSTGRES_PASSWORD`/`DATABASE_URL`/`JWT_SECRET_KEY`等は `.env`（コミット禁止）およびCI/CD時はGitHub Secrets経由 | [04_env_config.md](./04_env_config.md) |
+| 秘匿情報 | `POSTGRES_PASSWORD`/`DATABASE_URL`/`JWT_SECRET_KEY`等は `.env`（コミット禁止）およびCI実行時はGitHub Secrets経由 | [04_env_config.md](./04_env_config.md) |
 | Redis永続化 | `--save "" --appendonly no --maxmemory-policy noeviction`、volumeを割り当てない。再起動で全ログアウトになる挙動を意図的に許容 | 要件書§4、[../../basic_design/00_overview.md](../../basic_design/00_overview.md) §8 |
 | 起動順序 | `depends_on.condition: service_healthy` を用い、DB/Redis未準備状態でのAPI起動（＝マイグレーション失敗の温床）を防ぐ | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §2 |
 | イメージ最小化 | `-alpine` 系イメージを使用し攻撃対象面を縮小 | 同上 |
@@ -242,5 +242,5 @@ flowchart LR
 | 区分 | 内容 | 影響 |
 |------|------|------|
 | 確定 | backendはPython標準ライブラリ、frontendはnginx:alpineのBusyBox `wget`、batchはPythonでPID 1を確認する。追加のOSパッケージは導入しない | [02_dockerfile_api.md](./02_dockerfile_api.md)、[03_dockerfile_frontend.md](./03_dockerfile_frontend.md)、[08_dockerfile_batch.md](./08_dockerfile_batch.md) |
-| 要検討 | `mailpit` を `production`/CD環境で誤って起動しない保証は `profiles: [dev]` 運用に依存しており、CDワークフロー側で `--profile` を明示的に付与しない運用ルールが必要 | [06_cd_workflow.md](./06_cd_workflow.md) |
+| 要検討 | `mailpit` を開発用profile以外で誤って起動しない保証は `profiles: [dev]` 運用に依存するため、開発時以外のCompose実行ではprofile指定を確認する | [04_env_config.md](./04_env_config.md) |
 | 不明 | `pgdata` volumeのバックアップ自動化はスコープ外（要件書§11、[../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §8）のため、本書では手動 `pg_dump` のみを前提とする | 運用手順（[07_operation.md](./07_operation.md)） |

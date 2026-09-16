@@ -314,7 +314,7 @@ flowchart LR
 | イメージのpush禁止 | `docker-build`ジョブは`push: false`固定とし、CI実行だけでGHCRに意図しないイメージが公開されないようにする | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §5.2 |
 | 依存キャッシュの汚染防止 | `cache-dependency-path`を`requirements*.txt`/`package-lock.json`に限定し、キャッシュキーがロックファイルのハッシュに連動するようにする（`actions/setup-python`/`actions/setup-node`標準機能） | GitHub Actions標準機能 |
 | ブランチ保護 | `docs-check`/`workflow-lint`/`hook-test`/`backend-lint`/`backend-test`（両matrix）/`frontend-lint`/`frontend-test`/`batch-test`/`batch-container-integration`/`docker-build`をrequired status checksに設定し、いずれか未成功のPRは保護対象ブランチへマージ不可とする。baseがfeatureブランチのスタックPRにも同じCI結果を表示する | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §5.4 |
-| CI用ダミーSecrets | `CI_JWT_SECRET_KEY`/`CI_INITIAL_ADMIN_PASSWORD`等は本番用の値と別管理し、CI専用のGitHub Secretsとして登録する | 一般的なCI/CD運用指針 |
+| CI用ダミーSecrets | `CI_JWT_SECRET_KEY`/`CI_INITIAL_ADMIN_PASSWORD`等は実環境用の値と別管理し、CI専用のGitHub Secretsとして登録する | CI運用指針 |
 
 ## 11. テスト設計
 

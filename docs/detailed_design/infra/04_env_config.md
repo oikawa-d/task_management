@@ -23,7 +23,7 @@
 | `get_settings()` | 関数（`@lru_cache`） | 各設定モデルのシングルトン取得 | 起動時に1度だけ評価し、以後はキャッシュ返却 |
 | `.env` | ファイル | ローカル/自宅サーバーでの実値（**コミット禁止**） | `.gitignore` に登録済み |
 | `.env.example` | ファイル | 変数名と無害な例のみを記載した雛形（コミット対象） | 秘匿値は`***`等のダミー |
-| GitHub Secrets | CI/CD | CI: ダミー値注入、CD: `.env`をヒアドキュメント生成 | ワークフローログへ出力しない |
+| GitHub Secrets | CI | CI専用のダミー値をジョブへ注入 | ワークフローログへ出力しない |
 
 ### 2.1 backend / batch の設定境界
 
@@ -189,15 +189,14 @@
 | `NOTIFICATION_RETENTION_DAYS` | int | `90` | 通知保持期間。`sp_purge_notifications`へ渡す | 平文可 |
 | `BATCH_ENABLED` | bool | `true` | 定期ジョブ登録の有効/無効。`--run-once`はこの値に関係なく実行 | 平文可 |
 
-### 3.11 デプロイ・イメージ管理
+### 3.11 ローカルイメージ管理
 
 | 変数名 | 型 | 既定値 | 用途 | 秘匿 |
 |--------|-----|--------|------|------|
-| `BACKEND_IMAGE_TAG` / `FRONTEND_IMAGE_TAG` / `BATCH_IMAGE_TAG` | str | `latest`（ローカル） | Composeが参照する各アプリイメージのタグ。CDの通常デプロイでは同じ`sha-{短縮SHA}`を設定し、ロールバックでは直前成功値を設定 | 平文可 |
-| `IMAGE_RETENTION_DAYS` | int | `30` | self-hosted runner上で保持対象外のmanagedイメージを削除するまでの日数 | 平文可 |
-| `DEPLOY_STATE_FILE` | str | `/var/lib/cerberus/last-successful-deploy.env` | backend/frontend/batchの直前成功タグを保存するrunner専用ファイル | 平文可 |
+| `IMAGE_NAME_BACKEND` / `IMAGE_NAME_FRONTEND` / `IMAGE_NAME_BATCH` | str | `cerberus-*` | ローカルComposeが使用するbackend、frontend、batchのイメージ名 | 平文可 |
+| `BACKEND_IMAGE_TAG` / `FRONTEND_IMAGE_TAG` / `BATCH_IMAGE_TAG` | str | `latest` | ローカルComposeが使用する各アプリイメージのタグ | 平文可 |
 
-### 3.12 認証・ヘルスチェック・CI/CDで使用する追加項目
+### 3.12 認証・ヘルスチェック・CIで使用する追加項目
 
 | 変数名 | 型 | 既定値・例 | 用途 | 所有者・秘匿 |
 |--------|-----|------------|------|-------------|
@@ -205,12 +204,7 @@
 | `GOOGLE_OAUTH_PROMPT` | str | `select_account` | Google認可画面のアカウント選択指定 | backend・平文可 |
 | `HEALTH_CHECK_TIMEOUT_SECONDS` | float | `2` | DB/Redisヘルスチェックのタイムアウト | backend・平文可 |
 | `LOGIN_HISTORY_LIST_LIMIT` | int | `50` | `/api/users/me/login-history` の最大返却件数 | backend・平文可 |
-| `IMAGE_NAME_BACKEND` / `IMAGE_NAME_FRONTEND` / `IMAGE_NAME_BATCH` | str | `ghcr.io/{owner}/cerberus-*` | CDで扱う各イメージ名 | CI/CD・平文可 |
-| `BACKEND_IMAGE_TAG` / `FRONTEND_IMAGE_TAG` | str | `latest` | CDの通常デプロイ・ロールバック時のイメージタグ | CI/CD・平文可 |
-| `DEPLOY_HOST_HEALTHCHECK_URL` | str | `http://localhost/api/health` | CDのデプロイ後ヘルスチェック先 | CI/CD・平文可 |
-| `DEPLOY_HEALTHCHECK_RETRIES` | int | `10` | CDのヘルスチェック最大試行回数 | CI/CD・平文可 |
-| `DEPLOY_HEALTHCHECK_INTERVAL_SECONDS` | int | `5` | CDのヘルスチェック試行間隔 | CI/CD・平文可 |
-| `CI_JWT_SECRET_KEY` / `CI_INITIAL_ADMIN_PASSWORD` | GitHub Secret | CI専用値 | CIのJWT署名鍵・初期adminパスワード。実行時は `JWT_SECRET_KEY` / `INITIAL_ADMIN_PASSWORD` へ渡す | CI/CD・Secret |
+| `CI_JWT_SECRET_KEY` / `CI_INITIAL_ADMIN_PASSWORD` | GitHub Secret | CI専用値 | CIのJWT署名鍵・初期adminパスワード。実行時は `JWT_SECRET_KEY` / `INITIAL_ADMIN_PASSWORD` へ渡す | CI・Secret |
 
 `INITIAL_ADMIN_EMAIL`、`INITIAL_ADMIN_USERNAME`、`INITIAL_ADMIN_PASSWORD` は3項目すべて起動時に検証する。いずれかが未設定または空文字の場合、seedをスキップせずbackendをHTTP受付前に終了させる。CIでは専用のダミーSecretを注入する。
 
@@ -218,7 +212,7 @@
 
 | 区分 | 内容 |
 |------|------|
-| 入力 | `.env`（ローカル/自宅サーバー）、CI: `env:`ブロックとダミーSecrets、CD: GitHub Secretsから生成した`.env` |
+| 入力 | `.env`（ローカル）、CI: `env:`ブロックとダミーSecrets |
 | 出力 | `Settings`インスタンス（型付き設定値）。起動時バリデーション失敗時は例外を送出しプロセスを起動させない |
 | 副作用 | なし（読み取り専用の設定解決。ただし失敗時はプロセス終了という副作用を持つ） |
 
@@ -295,7 +289,7 @@ flowchart TB
 flowchart LR
     ENVFILE[".env"] --> BACKEND["BackendSettings"]
     ENVFILE --> BATCH["BatchSettings"]
-    SECRETS["GitHub Secrets<br/>(CI/CD)"] --> BACKEND
+    SECRETS["GitHub Secrets<br/>(CI)"] --> BACKEND
     SECRETS --> BATCH
     BACKEND --> GETBACKEND["get_backend_settings()<br/>@lru_cache"]
     BATCH --> GETBATCH["get_batch_settings()<br/>@lru_cache"]
@@ -313,7 +307,7 @@ flowchart LR
 | 観点 | 方針 | 根拠 |
 |------|------|------|
 | 秘匿情報のコミット防止 | `.env`は`.gitignore`対象。`.env.example`はダミー値のみ | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §4 |
-| Secretsの受け渡し | CI: `secrets.*`をジョブ内`env:`へ、CD: deployジョブ内でヒアドキュメントにより`.env`を生成しログ出力しない | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §5.3・6.2 |
+| Secretsの受け渡し | CI: `secrets.*`をジョブ内`env:`へ渡す。ローカルの`.env`は開発者が管理し、ログへ出力しない | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §5.3・6 |
 | 起動時バリデーション失敗方針 | fail-close。必須項目欠落時はプロセスを起動させず、Compose上でbackendがunhealthy/起動失敗となり後続（frontend起動）も止まる | [01_docker_compose.md](./01_docker_compose.md) |
 | ハードコーディング禁止 | URL・TTL・上限値・Cookie名等はすべて本章の環境変数経由とし、コード内リテラルを禁止する | 共通執筆ルール |
 | シークレットローテーション | `JWT_SECRET_KEY`変更時は既発行アクセストークンが全て無効化される（リフレッシュはRedis管理のため生存） | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §8 |
@@ -329,7 +323,7 @@ flowchart LR
 | 4 | 単体 | `CORS_ALLOW_ORIGINS`のカンマ区切り文字列が`list[str]`へ変換される | `CORS_ALLOW_ORIGINS=http://a,http://b` | `["http://a","http://b"]`になる | `test_settings_cors_origins_parsed` |
 | 5 | 単体 | `COOKIE_SECURE`等のbool文字列（`"true"`/`"false"`）が正しく変換される | 環境変数に文字列`"false"`を設定 | `Settings.cookie_secure is False` | `test_settings_bool_parsing` |
 | 6 | 結合 | CIの`backend-test`ジョブが`AUTH_MODE`のmatrix（session/jwt）双方で起動できる | CI環境変数一式 | 両方のジョブでSettings生成に成功しテストが実行される | `test_settings_ci_matrix_both_modes`（CIログで確認） |
-| 網羅できない範囲 | 実際のGitHub SecretsからCD環境で`.env`が正しく生成されるかの実運用確認 | - | self-hosted runnerの実機依存のため自動テスト対象外。デプロイ後のヘルスチェック結果で代替確認する | - |
+| 網羅できない範囲 | 実際の開発者環境で`.env`を設定し、Composeが全サービスへ値を渡す実運用確認 | - | ホスト固有のDocker環境に依存するため自動テスト対象外。ローカル起動時のヘルスチェックで確認する | - |
 
 ## 12. 不明点・要検討事項
 

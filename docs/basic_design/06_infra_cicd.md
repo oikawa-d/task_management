@@ -1,13 +1,13 @@
-# 06 インフラ / CI・CD設計
+# 06 インフラ / CI設計
 
 ## 1. 構成方針
 
 | 項目 | 方針 |
 |------|------|
-| 実行環境 | ローカル（または自宅サーバー）の Docker Compose。クラウドは使用しない（要件書§0） |
-| サービス構成 | `backend` / `frontend` / `postgres` / `redis`。`mailpit` は開発Compose profileだけで有効化し、デプロイ環境は外部SMTPを使う |
-| イメージ配布 | GHCR（GitHub Container Registry） |
-| デプロイ | self-hosted runner から `docker compose pull && docker compose up -d` |
+| 実行環境 | 開発者のローカル Docker Compose。クラウド・自動デプロイは使用しない（要件書§0） |
+| サービス構成 | `backend` / `frontend` / `postgres` / `redis`。`mailpit` は開発Compose profileで有効化する |
+| イメージ配布 | ローカルDockerイメージ。CIではビルド確認のみでpushしない |
+| デプロイ | 対象外。開発者がローカルで `docker compose up` を手動実行する |
 | ポート | 通常は `frontend` のみをloopbackまたは必要な公開IFへ公開。backend / PostgreSQL / Redis / SMTPはComposeネットワーク内に閉じ、開発用の追加ポートも `127.0.0.1` に限定 |
 | コマンド | `docker compose`（ハイフン付き `docker-compose` は使用しない） |
 
@@ -48,9 +48,9 @@ flowchart TB
 
 - `redis` に volume を割り当てないことで、要件書§4の「再起動で全ログアウト」という挙動を意図的に再現する
 - `depends_on` は `condition: service_healthy` を用い、起動順序の競合を避ける。backendはmailpitを使う開発profileでのみmailpitにも依存する
-- 開発時はソースをバインドマウントしてホットリロード（`uvicorn --reload` / `vite dev`）、CD時はイメージ内の成果物を使う構成を `docker-compose.override.yml` で切り替える
+- 開発時はソースをバインドマウントしてホットリロード（`uvicorn --reload` / `vite dev`）する構成を `compose.dev.yml` で切り替える
 - 基本Composeは `frontend` の `/api` proxyを経由する。`backend` / `postgres` / `redis` は `ports` を持たず、開発者が直接接続する場合だけ `compose.dev.yml` で `127.0.0.1:${...}` を追加する
-- `mailpit` は `profiles: [dev]` とし、production/CDでは起動しない。productionの `SMTP_HOST` は外部SMTPを指定する
+- `mailpit` は `profiles: [dev]` とし、ローカル開発時だけ起動する
 - `batch` は `backend` に依存させない（HTTP APIを呼ばずDB/Redisへ直接アクセスするため）。ただしスキーマは backend 起動時の `alembic upgrade head` に依存するため、`restart: unless-stopped` とし、スキーマ未適用で起動に失敗した場合は再起動で回復させる
 - `batch` を1レプリカに限定する（`deploy.replicas` を指定しない）。複数起動しても Redis の実行ロックと `UNIQUE (user_id, dedupe_key)` により通知は重複しないが、無駄なDB走査を避けるため
 
@@ -98,7 +98,7 @@ flowchart TB
 
 ## 4. 環境変数一覧（`.env.example`）
 
-`.env` はリポジトリにコミットせず、`.env.example` を雛形として配布する。CI/CD では GitHub Secrets から供給する。
+`.env` はリポジトリにコミットせず、`.env.example` を雛形として配布する。CIでは GitHub Secrets から供給する。
 
 ### 4.1 共通・ポート
 
@@ -109,7 +109,7 @@ flowchart TB
 | `LOG_LEVEL` | `INFO` | ログレベル |
 | `APP_TIMEZONE` | `Asia/Tokyo` | 業務上の日次境界（「当日」「10時・17時」）の判定に使うタイムゾーン。DBはUTC保存のまま。backend / batch の両方に渡す |
 | `FRONTEND_PORT` | `5173` | フロントの外部公開ポート |
-| `BACKEND_PORT` | `8000` | 開発時にbackendへ接続する場合だけ `127.0.0.1` に公開。通常のCompose/CDでは未公開 |
+| `BACKEND_PORT` | `8000` | 開発時にbackendへ接続する場合だけ `127.0.0.1` に公開。通常のComposeでは未公開 |
 | `POSTGRES_PORT` | `5432` | 開発用DB接続が必要な場合だけ `127.0.0.1` に公開 |
 | `REDIS_PORT` | `6379` | 開発用Redis接続が必要な場合だけ `127.0.0.1` に公開 |
 | `MAILPIT_SMTP_PORT` | `1025` | Mailpitを使う開発時だけ `127.0.0.1` に公開 |
@@ -291,85 +291,26 @@ strategy:
 | フロントカバレッジ | 70% 以上（UI描画部分を含むため緩める） |
 | PRマージ条件 | 上記全ジョブの成功を required status checks に設定 |
 
-## 6. CD設計（`.github/workflows/cd.yml`）
-
-### 6.1 フロー
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor DEV as 開発者
-    participant GH as GitHub
-    participant RUN as GitHub-hosted runner
-    participant GHCR as GHCR
-    participant SELF as self-hosted runner<br/>(自宅サーバー/PC)
-    participant DC as Docker Compose
-
-    DEV->>GH: main へマージ
-    GH->>RUN: build-and-push ジョブ開始
-    RUN->>RUN: docker build（backend / frontend / batch）
-    RUN->>GHCR: docker push<br/>tag: latest, sha-{短縮SHA}
-    RUN-->>GH: 成功
-    GH->>SELF: deploy ジョブ開始（needs: build-and-push）
-    SELF->>SELF: .env を配置（GitHub Secrets から生成）
-    SELF->>GHCR: docker compose pull
-    SELF->>DC: docker compose up -d --remove-orphans
-    DC->>DC: alembic upgrade head（backend起動時）
-    SELF->>SELF: frontend経由の /api/health をポーリングして疎通確認
-    alt ヘルスチェック失敗
-        SELF->>DC: backend/frontend/batchを直前成功タグへ戻して再起動（DB downgradeなし）
-        SELF-->>GH: ジョブ失敗
-    else 成功
-        SELF->>SELF: Cerberus管理ラベル付きイメージだけprune
-        SELF-->>GH: ジョブ成功
-    end
-```
-
-### 6.2 ジョブ定義の要点
+## 6. 開発運用
 
 | 項目 | 内容 |
 |------|------|
-| トリガ | `on: push: branches: [main]` および `workflow_dispatch`（手動再実行） |
-| イメージ名 | `ghcr.io/{owner}/cerberus-backend`、`ghcr.io/{owner}/cerberus-frontend`、`ghcr.io/{owner}/cerberus-batch` |
-| タグ | 3イメージそれぞれに`latest`と`sha-{短縮SHA}`を付与。Composeの`BACKEND_IMAGE_TAG`/`FRONTEND_IMAGE_TAG`/`BATCH_IMAGE_TAG`は通常デプロイで同じSHAタグを参照する |
-| 認証 | `docker/login-action` + `GITHUB_TOKEN`（`permissions: packages: write`） |
-| deploy ジョブ | `runs-on: self-hosted`。`needs: build-and-push` |
-| Secrets の受け渡し | deploy ジョブ内で `.env` をヒアドキュメント生成（`${{ secrets.* }}` を展開）。ワークフローログに出力しない |
-| 環境 | GitHub Environments（`production`）を使い、必要に応じて承認を必須化 |
-| 同時実行制御 | `concurrency: group: deploy-main, cancel-in-progress: false`（デプロイの競合を防ぐ） |
-| イメージ削除 | `com.cerberus.managed=true`、未使用、現在・直前成功の保持対象外、かつ`IMAGE_RETENTION_DAYS`超過のイメージだけを削除する。共有ホスト上の他プロジェクトを削除しない |
-
-### 6.3 イメージ保持とロールバック
-
-| 項目 | 方針 |
-|------|------|
-| 新規デプロイ | `${GITHUB_SHA}`の先頭12文字から`sha-{短縮SHA}`を作り、backend/frontend/batchの3イメージを同じタグでpushする。`latest`も同時に更新する |
-| ロールバック対象 | backend/frontend/batchのアプリイメージのみ。DBのAlembic migrationはdowngradeしない |
-| 直前成功値 | self-hosted runnerの`DEPLOY_STATE_FILE`（既定`/var/lib/cerberus/last-successful-deploy.env`）に3つの`*_IMAGE_TAG`を保存する。デプロイ後ヘルスチェック成功時だけ更新する |
-| 保持条件 | 現在稼働中の3イメージと、状態ファイルに記録された直前成功の3イメージは常に保持する |
-| 削除条件 | `com.cerberus.managed=true`のイメージのうち、未使用・保持対象外・`IMAGE_RETENTION_DAYS`（既定30日）超過のものだけを削除する |
-| 初回デプロイ | 直前成功値がないため自動ロールバックせず、手動対応が必要なfailureとして終了する |
-
-### 6.4 self-hosted runner のセットアップ
-
-| 手順 | 内容 |
-|------|------|
-| 1 | リポジトリ Settings → Actions → Runners → New self-hosted runner |
-| 2 | 対象マシンで配布スクリプトを実行し、`./config.sh --url ... --token ...` で登録 |
-| 3 | `./svc.sh install && ./svc.sh start` でサービス常駐化（再起動後も動作） |
-| 4 | runner 実行ユーザーを `docker` グループに追加 |
-| 5 | ラベル（例：`self-hosted, linux, cerberus`）を付与し、ワークフローの `runs-on` で指定 |
-| 注意 | self-hosted runner ではワークスペースが再利用されるため、`actions/checkout` の `clean: true` を明示する。またパブリックリポジトリでの利用は第三者PRからの任意コード実行リスクがあるため避ける |
+| 起動 | `docker compose -f docker-compose.yml -f compose.dev.yml up` |
+| 停止 | `docker compose -f docker-compose.yml -f compose.dev.yml down` |
+| ヘルスチェック | `GET http://localhost:${FRONTEND_PORT}/api/health` |
+| イメージ確認 | CIの`docker-build`ジョブでbackend/frontend/batchのビルドだけを確認し、レジストリへpushしない |
+| 自動デプロイ | 対象外。self-hosted runner、GHCR、GitHub Environment `production`、ロールバック機構は使用しない |
+| 将来の再導入 | [self-hosted runner手順](../detailed_design/infra/09_self_hosted_runner.md)を参照し、要件・設計・workflowを別途更新する |
 
 ## 7. 学習ポイント（要件書§8.3対応）
 
 | 項目 | 本設計での該当箇所 |
 |------|-------------------|
-| ワークフロー構文（`on` / `jobs` / `steps`） | 5.1、6.2 |
-| Secrets の利用方法 | 4章（**Secret** 表記の変数）、6.2 |
+| ワークフロー構文（`on` / `jobs` / `steps`） | 5.1、6 |
+| Secrets の利用方法 | 4章（**Secret** 表記の変数）、6 |
 | 依存関係キャッシュ | 5.2（pip / npm / GHA build cache） |
-| self-hosted runner | 6.4 |
-| CI/CDのファイル分割 | `ci.yml`（品質検証）と `cd.yml`（配布・反映）に責務分離 |
+| Docker Compose | 1、2、6 |
+| CI workflow | 5.1、5.2 |
 | matrix ビルド | 5.3（`AUTH_MODE` の両方式検証） |
 
 ## 8. 運用時の確認事項
