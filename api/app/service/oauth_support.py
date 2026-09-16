@@ -109,8 +109,6 @@ async def check_oauth_rate_limit(request: Request, scope: str, route: str, setti
 
 
 async def record_oauth_login(db: Any, user: User, request: Request, client_info: ClientIpInfo | None = None) -> None:
-	from app.core.client_ip import resolve_client_ip
-
 	resolved_ip = client_info or resolve_client_ip(request, get_backend_settings().trusted_proxy_cidrs)
 	await login_history_repository.create(
 		db,
