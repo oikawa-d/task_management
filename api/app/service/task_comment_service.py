@@ -68,6 +68,9 @@ async def add_comment(
 	except DBAPIError as exc:
 		await db.rollback()
 		raise_database_error(exc)
+	except Exception:
+		await db.rollback()
+		raise
 
 
 async def update_comment(
@@ -91,6 +94,9 @@ async def update_comment(
 	except DBAPIError as exc:
 		await db.rollback()
 		raise_database_error(exc)
+	except Exception:
+		await db.rollback()
+		raise
 
 
 async def delete_comment(task: Task, comment: TaskComment, user: CurrentUser, db: AsyncSession) -> None:
@@ -102,3 +108,6 @@ async def delete_comment(task: Task, comment: TaskComment, user: CurrentUser, db
 	except DBAPIError as exc:
 		await db.rollback()
 		raise_database_error(exc)
+	except Exception:
+		await db.rollback()
+		raise

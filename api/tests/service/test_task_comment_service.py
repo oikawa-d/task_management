@@ -8,7 +8,7 @@ from app.core.exceptions import ForbiddenError, NotFoundError, ServiceUnavailabl
 from app.schemas.auth import CurrentUser
 from app.schemas.comment import CommentCreateRequest
 from app.service import authorization_service, task_comment_service
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import MultipleResultsFound, OperationalError
 
 
 def _user(*, role: str = "member") -> CurrentUser:
@@ -155,6 +155,26 @@ async def test_add_comment_converts_database_connection_failure_and_rolls_back(m
 
 
 @pytest.mark.asyncio
+async def test_add_comment_rolls_back_when_response_construction_fails(monkeypatch) -> None:
+	user = _user()
+	task = _task(user.id)
+	comment = _comment(user.id, task.id)
+	db = AsyncMock()
+	monkeypatch.setattr(task_comment_service.task_comment_repository, "create", AsyncMock(return_value=comment.id))
+	monkeypatch.setattr(task_comment_service.task_comment_repository, "get_by_id", AsyncMock(return_value=comment))
+
+	def raise_response_error(*_args):
+		raise RuntimeError("response failed")
+
+	monkeypatch.setattr(task_comment_service, "_comment_response", raise_response_error)
+
+	with pytest.raises(RuntimeError, match="response failed"):
+		await task_comment_service.add_comment(task, CommentCreateRequest(body="本文"), user, db)
+
+	db.rollback.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
 async def test_update_comment_rejects_inactive_task(monkeypatch) -> None:
 	user = _user()
 	task = _task(user.id, is_active=False)
@@ -165,6 +185,25 @@ async def test_update_comment_rejects_inactive_task(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_update_comment_rolls_back_when_refetch_returns_multiple_rows(monkeypatch) -> None:
+	user = _user()
+	task = _task(user.id)
+	comment = _comment(user.id, task.id)
+	db = AsyncMock()
+	monkeypatch.setattr(task_comment_service.task_comment_repository, "update", AsyncMock())
+	monkeypatch.setattr(
+		task_comment_service.task_comment_repository,
+		"get_by_id",
+		AsyncMock(side_effect=MultipleResultsFound()),
+	)
+
+	with pytest.raises(MultipleResultsFound):
+		await task_comment_service.update_comment(task, comment, CommentCreateRequest(body="更新"), user, db)
+
+	db.rollback.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
 async def test_delete_comment_rejects_inactive_task(monkeypatch) -> None:
 	user = _user()
 	task = _task(user.id, is_active=False)
@@ -172,3 +211,18 @@ async def test_delete_comment_rejects_inactive_task(monkeypatch) -> None:
 
 	with pytest.raises(NotFoundError):
 		await task_comment_service.delete_comment(task, comment, user, AsyncMock())
+
+
+@pytest.mark.asyncio
+async def test_delete_comment_rolls_back_when_commit_raises_non_database_error(monkeypatch) -> None:
+	user = _user()
+	task = _task(user.id)
+	comment = _comment(user.id, task.id)
+	db = AsyncMock()
+	db.commit.side_effect = RuntimeError("commit failed")
+	monkeypatch.setattr(task_comment_service.task_comment_repository, "delete", AsyncMock())
+
+	with pytest.raises(RuntimeError, match="commit failed"):
+		await task_comment_service.delete_comment(task, comment, user, db)
+
+	db.rollback.assert_awaited_once_with()
