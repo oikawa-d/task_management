@@ -89,10 +89,10 @@ flowchart LR
     R23 --> R24["0024<br/>カレンダーFN"]
     R24 --> R25["0025<br/>未所属フィルタ"]
     R25 --> R26["0026<br/>メール長拡張"]
-    R25 -.-> RN
+    R26 --> R27["0027<br/>failure_reason<br/>バックフィル"]
 ```
 
-追加リビジョンは、`0020`を起点に `#374（0021）→ #377（0022）→ #379（0023、0024）→ #445（0025）→ #451（0026）` の順で統合する。後続PRは先行PRのリビジョンを`down_revision`として参照するため、先行PRの統合後に最新`develop`へ追従してからマージする。
+追加リビジョンは、`0020`を起点に `#374（0021）→ #377（0022）→ #379（0023、0024）→ #445（0025）→ #451（0026）→ #459（0027）` の順で統合する。後続PRは先行PRのリビジョンを`down_revision`として参照するため、先行PRの統合後に最新`develop`へ追従してからマージする。
 
 ### 2.7 SP/FN適用順序
 
@@ -112,6 +112,7 @@ flowchart LR
 | `0024` | `projects`, `tasks` | `fn_list_calendar_tasks`を追加し、APP_TIMEZONEから変換したUTC範囲・scope・有効状態で期限タスクを抽出 |
 | `0025` | `tasks`関数 | `fn_list_tasks`に未所属タスク絞り込み引数を追加 |
 | `0026` | `users`, `login_history` | `users.email`と`login_history.login_identifier`をVARCHAR(50)からVARCHAR(254)へ拡張 |
+| `0027` | `login_history` | `failure_reason`の既存値を`lower()`で小文字へ正規化。downgradeは値を復元せずno-op |
 
 関数・プロシージャのDROPは依存するAPIが停止している環境でのみ行う。production CDではdowngradeを実行しない。
 
@@ -420,6 +421,7 @@ flowchart LR
 | 14 | 正常系 | 未所属タスクが存在しない状態で`0013`のupgrade→downgrade→upgradeを実行する | 最終的なスキーマが初回`upgrade head`と一致する | `test_migration_0013_roundtrip_without_unassigned_tasks` |
 | 15 | 正常系 | `api/alembic/versions/`の全リビジョンファイルを検査する | ファイル名接頭辞と`revision` IDが一致し、リビジョンIDが重複しない | `test_migration_filename_prefix_matches_revision_id` |
 | 16 | 正常系 | `api/alembic/versions/`のリビジョンチェーンを検査する | `0001 -> None` から始まり、各`down_revision`が直前IDを指す単一チェーンである | `test_migration_history_is_a_contiguous_single_chain` |
+| 17 | 正常系 | `0025`適用後に大文字の`failure_reason`を投入して`0027`を適用する | 既存の`failure_reason`が小文字へ正規化され、`0027`のdowngrade後も小文字値が維持される | `test_migration_0027_backfills_uppercase_failure_reason_to_lowercase` / `test_migration_0027_downgrade_is_noop_and_keeps_lowercased_value` |
 
 ## 9. 不明点・要検討事項
 

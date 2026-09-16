@@ -35,7 +35,7 @@
 | IPアドレス | `ip_address` | INET | YES | - | - | `TRUSTED_PROXY_CIDRS`に含まれる直近ProxyからのXFFだけを解決して取得。未信頼時は接続元IP |
 | ユーザーエージェント | `user_agent` | TEXT | YES | - | - | |
 | 成否 | `success` | BOOLEAN | NO | - | - | |
-| 失敗理由 | `failure_reason` | VARCHAR(50) | YES | - | - | `invalid_credentials` / `user_inactive` 等 |
+| 失敗理由 | `failure_reason` | VARCHAR(50) | YES | - | - | `invalid_credentials` / `user_inactive` / `oauth_denied` 等。小文字snake_caseに統一する（§13参照） |
 | 作成日時 | `created_at` | TIMESTAMPTZ | NO | `now()` | - | |
 
 パスワードリセットの実行履歴は本テーブルに含めない（`login_method` のCHECK制約を汚さないため。基本設計スコープでは `security_events` テーブルも追加しない）。
@@ -267,4 +267,4 @@ flowchart LR
 - `purge_expired` の実行中に新規ログイン試行のINSERTと競合した場合の挙動（ロック待ち等）は、PostgreSQLの標準的なMVCCに委ねる前提とし、advisory lockは使用しない方針としたが、運用上問題ないか要検討。
 - `failure_reason` の許容値一覧（`invalid_credentials` / `user_inactive` 等）はCHECK制約化せず基本設計の「等」表記のまま自由記述としたが、値のガバナンスをDB側でも制約すべきか要検討。
 - `login_history_repository.list_all`は設けず、本人向け取得と管理者向け絞り込み取得を分離する。将来の共通一覧化はAPI・認可・DB関数の責務を含めて要検討。
-- issue #444（本対応）で `failure_reason` の保存値を大文字から小文字snake_caseへ統一したが、既に大文字値でINSERT済みの既存 `login_history` レコードは本対応では移行しないため、大文字・小文字が混在した状態が残る。既存データのバックフィル方針は未決であり、issue #459 で決定する（要検討）。
+- issue #444（PR #455）で `failure_reason` の保存値を大文字から小文字snake_caseへ統一した。値の正規化方針は「常に小文字snake_case（`invalid_credentials` / `user_inactive` / `email_not_verified` 等）で統一し、大文字・小文字の混在を許容しない」とする。issue #459 でこの方針を確定し、マイグレーション `0027_backfill_login_history_failure_reason_case`（`UPDATE login_history SET failure_reason = lower(failure_reason) WHERE failure_reason <> lower(failure_reason)`）により既存の大文字値レコードをバックフィル済み。`downgrade`は、変換前の値（元が大文字だったか）を特定する手がかりが残っていないため、値の復元を行わずno-opとした。
