@@ -190,7 +190,7 @@ stateDiagram-v2
 | 項目 | 内容 |
 |------|------|
 | シグネチャ / 定義 | `name: cd`。`on: { push: { branches: [main] }, workflow_dispatch: {} }`。`concurrency: { group: deploy-main, cancel-in-progress: false }` |
-| 引数 / 入力 | `push`イベント（main）、`workflow_dispatch`手動起動、GitHub Environment `production`のSecrets |
+| 引数 / 入力 | `push`イベント（main）、`workflow_dispatch`手動起動、GitHub Environment `production`のSecrets/Variables |
 | 戻り値 / 出力 | `build-and-push`/`deploy`各ジョブのconclusion |
 | 送出例外 / 失敗条件 | いずれかのジョブ内ステップが非ゼロ終了 |
 | 処理内容 | `build-and-push`→`deploy`の2ジョブを`needs`で直列化する |
@@ -204,7 +204,7 @@ stateDiagram-v2
 | 引数 / 入力 | context`.` + `api/Dockerfile`（[02_dockerfile_api.md](./02_dockerfile_api.md)）、context`frontend` + `frontend/Dockerfile`（[03_dockerfile_frontend.md](./03_dockerfile_frontend.md)）、context`.` + `batch/Dockerfile`（[08_dockerfile_batch.md](./08_dockerfile_batch.md)）、`${{ github.sha }}` |
 | 戻り値 / 出力 | GHCR上のイメージ3種（各`latest`/`sha-{短縮SHA}`タグ） |
 | 送出例外 / 失敗条件 | `docker/login-action`の認証失敗、`docker build`のビルドエラー、`docker push`の権限エラー |
-| 処理内容 | 1. チェックアウト 2. `docker/setup-buildx-action@v3` 3. `docker/login-action@v3`（`registry: ghcr.io`, `username: ${{ github.actor }}`, `password: ${{ secrets.GITHUB_TOKEN }}`） 4. `GITHUB_SHA`の先頭12文字から`IMAGE_TAG=sha-{短縮SHA}`を生成 5. `docker/build-push-action@v6`をbackend（context`.`）、frontend（context`frontend`）、batch（context`.`）用に3回実行し、各イメージへ`latest`と`IMAGE_TAG`を付け、`com.cerberus.managed=true`とcomponentラベルを付けてpush 6. `VITE_API_BASE_URL`をfrontendのビルド`ARG`として本番相当値で渡す |
+| 処理内容 | 1. チェックアウト 2. `docker/setup-buildx-action@v3` 3. `docker/login-action@v3`（`registry: ghcr.io`, `username: ${{ github.actor }}`, `password: ${{ secrets.GITHUB_TOKEN }}`） 4. `GITHUB_SHA`の先頭12文字から`IMAGE_TAG=sha-{短縮SHA}`を生成 5. `docker/build-push-action@v6`をbackend（context`.`）、frontend（context`frontend`）、batch（context`.`）用に3回実行し、各イメージへ`latest`と`IMAGE_TAG`を付け、`com.cerberus.managed=true`とcomponentラベルを付けてpush 6. frontendの全`VITE_*` Dockerfile ARG（`VITE_API_BASE_URL` / `VITE_USER_NAME_MAX_LENGTH` / `VITE_PASSWORD_MIN_LENGTH` / `VITE_APP_TIMEZONE`）をGitHub Variablesまたは既定値からbuild-argで渡す |
 | 副作用 | GHCR上に新規イメージタグが公開される |
 
 ### 8.3 `deploy` ジョブ
@@ -212,10 +212,10 @@ stateDiagram-v2
 | 項目 | 内容 |
 |------|------|
 | シグネチャ / 定義 | `runs-on: [self-hosted, linux, cerberus]`。`needs: build-and-push`。`if: github.ref == 'refs/heads/main'`（`workflow_dispatch`をmain以外のブランチから実行してもproductionへデプロイしないためのガード）。`environment: production`。`permissions: { contents: read, packages: read }`（GHCRからのpullに必要） |
-| 引数 / 入力 | GitHub Environment `production`のSecrets（[04_env_config.md](./04_env_config.md)全一覧）、`${{ github.sha }}` |
+| 引数 / 入力 | GitHub Environment `production`のSecrets/Variables（[04_env_config.md](./04_env_config.md)全一覧）、`${{ github.sha }}` |
 | 戻り値 / 出力 | デプロイ成功可否、ヘルスチェック結果 |
 | 送出例外 / 失敗条件 | GHCR認証失敗、`.env`生成失敗（Secrets未設定）、`docker compose pull`失敗、ヘルスチェック未達（リトライ上限到達） |
-| 処理内容 | 1. `actions/checkout@v4`（`clean: true`を明示、self-hostedのワークスペース再利用対策） 2. デプロイ開始前に`DEPLOY_STATE_FILE`から直前成功の3タグを読み込む 2.5. `docker/login-action@v3`でGHCRへログイン（self-hosted runnerに永続的な認証情報を前提とせず、ジョブ内で認証する） 3. `.env`をヒアドキュメントで生成（`cat <<EOF > .env` 形式、`${{ secrets.* }}`を展開しログ出力しない）。`IMAGE_NAME_BACKEND`/`IMAGE_NAME_FRONTEND`/`IMAGE_NAME_BATCH`は`ghcr.io/{owner}/cerberus-*`をこのステップで組み立てて書き出す 4. `BACKEND_IMAGE_TAG`/`FRONTEND_IMAGE_TAG`/`BATCH_IMAGE_TAG`へ新規`IMAGE_TAG`を設定 5. `docker compose pull` 6. `docker compose up -d --remove-orphans` 7. `GET ${DEPLOY_HOST_HEALTHCHECK_URL}` を`DEPLOY_HEALTHCHECK_RETRIES`回まで`DEPLOY_HEALTHCHECK_INTERVAL_SECONDS`間隔でポーリング 8. 失敗時は「8.4 ロールバック手順」を実行 9. 成功時は3タグを状態ファイルへ原子的に保存し、保持対象外のmanagedイメージだけを削除する |
+| 処理内容 | 1. `actions/checkout@v4`（`clean: true`を明示、self-hostedのワークスペース再利用対策） 2. デプロイ開始前に`DEPLOY_STATE_FILE`から直前成功の3タグを読み込む 2.5. `docker/login-action@v3`でGHCRへログイン（self-hosted runnerに永続的な認証情報を前提とせず、ジョブ内で認証する） 3. `.env`をヒアドキュメントで生成（`cat <<EOF > .env` 形式、`${{ secrets.* }}`を展開しログ出力しない）。`IMAGE_NAME_BACKEND`/`IMAGE_NAME_FRONTEND`/`IMAGE_NAME_BATCH`は`ghcr.io/{owner}/cerberus-*`をこのステップで組み立てて書き出す 4. `BACKEND_IMAGE_TAG`/`FRONTEND_IMAGE_TAG`/`BATCH_IMAGE_TAG`へ新規`IMAGE_TAG`を設定 5. `docker compose pull` 6. `docker compose up -d --remove-orphans` 7. `GET ${DEPLOY_HOST_HEALTHCHECK_URL}` を`DEPLOY_HEALTHCHECK_RETRIES`回まで`DEPLOY_HEALTHCHECK_INTERVAL_SECONDS`間隔でポーリング 8. 失敗時は「8.4 ロールバック手順」を実行 9. 成功時は3タグを状態ファイルへ原子的に保存し、保持対象外のmanagedイメージだけを削除する。`DEPLOY_STATE_FILE`/`IMAGE_RETENTION_DAYS`はdeployジョブの環境変数として扱い、`.env`へは重複出力しない |
 | 副作用 | self-hosted runnerホスト上のコンテナ・イメージ・`.env`ファイルを変更する |
 
 ### 8.4 ロールバック手順（`deploy`ジョブ内の失敗時ステップ）
@@ -241,7 +241,7 @@ flowchart LR
     PUSH --> GHCR[("GHCR")]
     BAP --> DEPLOY["deploy<br/>(needs: build-and-push)"]
     GHCR --> DEPLOY
-    DEPLOY --> ENVGEN[".env生成<br/>（Secretsから）"]
+    DEPLOY --> ENVGEN[".env生成<br/>（Secrets/Variablesから）"]
     ENVGEN --> PULL["docker compose pull"]
     PULL --> UP["docker compose up -d"]
     UP --> MIG["alembic upgrade head"]
@@ -275,6 +275,7 @@ flowchart LR
 | 5 | 結合 | `deploy`：`.env`の内容がログに出力されない | 任意のデプロイ実行 | Actionsログに`POSTGRES_PASSWORD`等の値文字列が出現しない | `test_cd_env_generation_no_secret_leak_in_log` |
 | 6 | 結合 | 同時デプロイの競合防止 | mainへ短時間に2回連続push | 2回目のジョブは1回目の完了を待って実行される（`cancel-in-progress: false`） | `test_cd_concurrency_group_serializes_deploys` |
 | 7 | 結合 | イメージpruneの対象限定 | `com.cerberus.managed`ラベルなしの他プロジェクトイメージが同一ホストに存在する状態 | pruneの対象にならず残存する | `test_cd_prune_only_managed_images` |
+| 8 | 静的 | `.env.example`とfrontend Dockerfile ARGのCD反映漏れ | `.env.example`、`frontend/Dockerfile`、`cd.yml`を読み込む | 本番用`.env`項目と全frontend ARGがCD設定へ反映され、deployジョブ専用値は重複出力されない | `test_cd_env_generation_covers_production_env_example` / `test_cd_frontend_build_passes_every_dockerfile_arg` |
 | 網羅できない範囲 | 実際のself-hosted runner実機（自宅サーバー/PC）でのネットワーク・ファイアウォール・ディスク容量起因の障害 | - | 実機依存のため自動テスト対象外。手動確認とする | - |
 | 網羅できない範囲 | `environment: production`の手動承認フロー自体の動作確認 | - | GitHub側のUI操作を伴うため自動テスト対象外。設定手順の目視確認に留める | - |
 
@@ -284,5 +285,7 @@ flowchart LR
 |------|------|------|
 | 確定 | `DEPLOY_HEALTHCHECK_RETRIES`/`DEPLOY_HEALTHCHECK_INTERVAL_SECONDS`はデプロイジョブのポーリング設定、`HEALTH_CHECK_TIMEOUT_SECONDS`はAPI内部のDB/Redis確認設定として分離する | ワークフロー内の`env:`定義 |
 | 確定 | 直前成功タグは`DEPLOY_STATE_FILE`にbackend/frontend/batchの3値を保存し、ヘルスチェック成功後だけ更新する | `deploy`ジョブのロールバックステップ実装 |
+| 確定 | `.env.example`のdev/test専用項目はCDの`.env`生成対象から除外し、frontend Dockerfileの全`VITE_*` ARGはbuild-argの静的検証で漏れを検出する | `tests/workflows/test_cd_env_contract.py` |
+| 確定 | `DEPLOY_STATE_FILE`/`IMAGE_RETENTION_DAYS`はdeployジョブの環境変数・シェル処理で使用するため、`.env`生成へ重複追加しない | `deploy.env`、`.env`生成ステップ |
 | 要検討 | `environment: production`の手動承認（reviewers）を必須にするかは基本設計に明記がなく、学習用途では省略も許容されるため要検討 | GitHub Environmentsの設定 |
 | 不明 | self-hosted runnerが単一ホストのみか、複数環境（開発者ごとの自宅サーバー等）を想定するかは基本設計に明記がなく、本書は単一`production`環境を前提とした |`runs-on`ラベル設計、GitHub Environments構成数 |
