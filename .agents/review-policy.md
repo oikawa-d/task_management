@@ -26,40 +26,49 @@ PRとIssueのラベルは、レビューの進行状況を並行作業中の他�
 | タイミング | 対象 | 付与するラベル | 外すラベル |
 |------------|------|----------------|------------|
 | issueへ着手（worktree作成・実装開始） | Issue | `in-progress` | - |
-| PR作成・レビュー依頼 | Issue | `review-request` | `in-progress` |
-| PR作成・レビュー依頼 | PR | `review-request` | `in-progress` |
-| レビュー着手 | Issue | `in-progress` | `review-request` |
-| レビュー着手 | PR | `in-progress` | `review-request` |
+| PR作成・レビュー依頼 | Issue | `review-request` | `in-progress`／`review-request`／`approve` |
+| PR作成・レビュー依頼 | PR | `review-request` | `in-progress`／`review-request`／`approve` |
+| レビュー着手 | Issue | `in-progress` | `review-request`／`approve` |
+| レビュー着手 | PR | `in-progress` | `review-request`／`approve` |
 | レビューで修正要求後の修正着手 | Issue/PR | `in-progress`を維持 | なし |
 | 修正push後・再レビュー依頼 | Issue | `review-request` | `in-progress` |
 | 修正push後・再レビュー依頼 | PR | `review-request` | `in-progress` |
-| 「受入可」コメント投稿後（レビュー主体のみ） | PR | `approve` | `review-request`／`in-progress` |
+| 「受入可」コメント投稿後（レビュー主体のみ） | PR | `approve` | `review-request`／`in-progress`／`approve` |
 
 - `in-progress`は実装・レビュー・修正の作業中、`review-request`はレビュー待ち・修正後の再レビュー待ちに使用します。
 - `approve`はレビュー結果に問題がないPRにのみ付与します。
 - IssueとPRは同じ状態ラベル遷移を行い、`approve`だけはPRに付与します。
 - レビューで指摘があった場合は、レビューコメントの冒頭に`要修正 (Changes requested)`と明記します。レビュー中・修正中はIssueとPRを`in-progress`にし、修正担当はこのラベルを前提に着手します。
 - 指摘の修正をpushして再レビューを依頼するときは、IssueとPRを`review-request`へ戻します。
+- 状態ラベルは常に1つだけとし、各遷移では`review-request`/`in-progress`/`approve`をすべて外してから遷移先を付与します。Issueの恒久ラベルは削除しません。
 
 ### ラベル操作コマンド
 
 `gh pr edit --add-label` / `--remove-label` は Projects classic 廃止に伴うエラーで失敗するため使用しません（#386）。`gh api` を使います。PRとissueはGitHub上で同じ番号空間のため、いずれも `issues/<番号>/labels` を対象とします。
 
 ```bash
-# Issueへの付与
-gh api -X POST repos/<owner>/<repo>/issues/<番号>/labels -f "labels[]=review-request"
+# Issueをレビュー待ちへ遷移
+gh issue edit <番号> --repo <owner>/<repo> --remove-label in-progress --remove-label review-request --remove-label approve --add-label review-request
 
-# Issueからの削除
-gh api -X DELETE repos/<owner>/<repo>/issues/<番号>/labels/review-request
-
-# PRのレビュー待ちラベル
+# PRをレビュー待ちへ遷移
+gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/in-progress
+gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/review-request
+gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/approve
 gh api -X POST repos/<owner>/<repo>/issues/<PR番号>/labels -f "labels[]=review-request"
 
-# PRのレビュー中・修正中ラベル
-gh api -X POST repos/<owner>/<repo>/issues/<PR番号>/labels -f "labels[]=in-progress"
-gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/review-request
+# Issueをレビュー中・修正中へ遷移
+gh issue edit <番号> --repo <owner>/<repo> --remove-label review-request --remove-label in-progress --remove-label approve --add-label in-progress
 
-# PRのレビュー完了ラベル
+# PRをレビュー中・修正中へ遷移
+gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/review-request
+gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/in-progress
+gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/approve
+gh api -X POST repos/<owner>/<repo>/issues/<PR番号>/labels -f "labels[]=in-progress"
+
+# PRをレビュー完了へ遷移
+gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/review-request
+gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/in-progress
+gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/approve
 gh api -X POST repos/<owner>/<repo>/issues/<PR番号>/labels -f "labels[]=approve"
 
 # 現在のラベル確認

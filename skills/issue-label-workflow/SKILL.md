@@ -13,7 +13,7 @@ description: このtask_managementリポジトリでGitHub issueに対応する�
 - `in-progress` : 実装・レビュー・修正作業中
 - `approve` : レビュー完了。PR側に付与する
 
-**状態ラベルを複数同時に付けない。** ラベルを付ける際は、付与対象以外の状態ラベルが付いていれば必ず外す。
+**状態ラベルを複数同時に付けない。** ラベルを付ける際は、付与対象以外の状態ラベルが付いていれば必ず外す。各遷移では、付与前に`review-request`/`in-progress`/`approve`をすべて外してから、遷移先だけを付与する。
 
 ## フェーズごとの前提ラベル(共通ルール)
 
@@ -77,14 +77,35 @@ description: このtask_managementリポジトリでGitHub issueに対応する�
 - PRを作成したら、Issueの`in-progress`を`review-request`へ変更し、PRに`review-request`を付ける(このときIssueの前提ラベルは`in-progress`)。
 
   ```bash
-  gh issue edit <番号> --repo <owner>/<repo> --remove-label in-progress --add-label review-request
+  gh issue edit <番号> --repo <owner>/<repo> --remove-label in-progress --remove-label review-request --remove-label approve --add-label review-request
+  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/in-progress
+  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/review-request
+  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/approve
   gh api -X POST repos/<owner>/<repo>/issues/<PR番号>/labels -f "labels[]=review-request"
   ```
 
 ### 3. レビューに着手する前
 - レビューを依頼された/レビュー作業を始める前にも、必ず現在のラベルを確認する。前提ラベルは `review-request`。付いていない場合、まだ実装中・レビュー対象外・フェーズ不一致の可能性があるため、着手前にユーザーに確認する。
+- レビュー着手時はIssueとPRの既存状態ラベルをすべて外し、`in-progress`を付与する。
+
+  ```bash
+  gh issue edit <番号> --repo <owner>/<repo> --remove-label review-request --remove-label in-progress --remove-label approve --add-label in-progress
+  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/review-request
+  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/in-progress
+  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/approve
+  gh api -X POST repos/<owner>/<repo>/issues/<PR番号>/labels -f "labels[]=in-progress"
+  ```
+
 - **変更依頼あり**の場合は、レビューコメントの冒頭に`要修正 (Changes requested)`と明記したうえで、IssueとPRを`in-progress`へ変更する。修正中はこのラベルを維持する。
-- **LGTM → マージ**の場合は、レビューコメントに「レビュー済み / LGTM」と明記し、PRに`approve`を付与してから手順5へ進む。
+- **LGTM → マージ**の場合は、レビューコメントに「レビュー済み / LGTM」と明記し、PRの既存状態ラベルをすべて外してから`approve`を付与し、手順5へ進む。
+
+  ```bash
+  gh issue edit <番号> --repo <owner>/<repo> --remove-label review-request --remove-label in-progress --remove-label approve
+  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/review-request
+  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/in-progress
+  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/approve
+  gh api -X POST repos/<owner>/<repo>/issues/<PR番号>/labels -f "labels[]=approve"
+  ```
 
 ### 4. 修正対応への着手前
 - 前提ラベルは `in-progress`。レビューで変更要求が記録された後、IssueとPRがこのラベルであることを確認してから修正する。
@@ -98,8 +119,10 @@ description: このtask_managementリポジトリでGitHub issueに対応する�
 - 修正後、再度PRを更新・レビュー依頼したらIssueとPRを`review-request`へ戻す。
 
   ```bash
-  gh issue edit <番号> --repo <owner>/<repo> --remove-label in-progress --add-label review-request
+  gh issue edit <番号> --repo <owner>/<repo> --remove-label in-progress --remove-label review-request --remove-label approve --add-label review-request
   gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/in-progress
+  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/review-request
+  gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/approve
   gh api -X POST repos/<owner>/<repo>/issues/<PR番号>/labels -f "labels[]=review-request"
   ```
 
@@ -107,13 +130,13 @@ description: このtask_managementリポジトリでGitHub issueに対応する�
 - PRがマージされ、issueがcloseされたら状態ラベルを外す(close済みissueに状態ラベルを残さない)。
 
   ```bash
-  gh issue edit <番号> --repo <owner/repo> --remove-label in-progress --remove-label review-request
+  gh issue edit <番号> --repo <owner/repo> --remove-label in-progress --remove-label review-request --remove-label approve
   gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/in-progress
   gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/review-request
   gh api -X DELETE repos/<owner>/<repo>/issues/<PR番号>/labels/approve
   ```
 
-  (実際に付いているラベルのみ指定すればよく、付いていないラベルを指定してもエラーにはならない)
+  (状態ラベル以外の恒久ラベルは削除しない。GitHub上で状態ラベルが存在しない場合は、存在するものだけを削除する)
 
 ## 注意
 
