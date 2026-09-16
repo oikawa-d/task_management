@@ -278,9 +278,9 @@ export GH_STUB_EXIT="0"
 # issue自身のラベルでは判定しないため、issueにapproveが付いていても許可してはならない。
 linked_approve_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"number":362,"labels":{"nodes":[{"name":"approve"}]}}]}}}}}'
 linked_legacy_reviewed_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"number":363,"labels":{"nodes":[{"name":"reviewed"}]}}]}}}}}'
-linked_unreviewed_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"number":374,"labels":{"nodes":[{"name":"review"}]}}]}}}}}'
+linked_unreviewed_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"number":374,"labels":{"nodes":[{"name":"review-request"}]}}]}}}}}'
 linked_none_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}'
-linked_page_one_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"},"nodes":[{"number":374,"labels":{"nodes":[{"name":"review"}]}}]}}}}}'
+linked_page_one_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"},"nodes":[{"number":374,"labels":{"nodes":[{"name":"review-request"}]}}]}}}}}'
 linked_page_two_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"number":375,"labels":{"nodes":[{"name":"approve"}]}}]}}}}}'
 linked_partial_error_json='{"data":{"repository":{"issue":{"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"number":376,"labels":{"nodes":[{"name":"reviewed"}]}}]}}}},"errors":[{"message":"partial failure"}]}'
 

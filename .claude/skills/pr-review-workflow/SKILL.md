@@ -1,122 +1,158 @@
 ---
 name: pr-review-workflow
-description: 「PRをレビューして」「PRを全件レビュー」のように複数PRのレビューを依頼されたときに使う。レビュー→指摘のコメント投稿→修正の委任→独立した再レビュー、までを一貫した手順で行う。
+description: このtask_managementリポジトリでPRをレビューし、指摘対応からマージまで進めるときに必ず使う。gh CLIの認証が単一アカウント(oikawa-d)であるためGitHubの`Request changes`が自分のPRに付けられないという制約を前提に、レビュー結果の記録方法・修正エージェントへの委任・再レビューのループ・マージとissue closeまでの手順を定める。issueのラベル遷移は`issue-label-workflow`と併用する。
 ---
 
-# 複数PRのレビュー運用
+# PRレビューからマージまでの運用
 
-`.agents/review-policy.md` を必ず併読すること。本skillはその手順を複数PRへ適用する際の進め方を定める。
+## 大前提: 自分のPRには `Request changes` も `Approve` も付けられない
 
-## 手順
-
-### 1. 対象の把握と横断分析（レビュー本体より先に行う）
-
-個別PRを読む前に、**PR間の関係**を先に調べる。個別レビューでは見えない問題がここで出る。
+このリポジトリのPRはすべて `oikawa-d` が作成しており、gh CLIも同じアカウントで認証されている。GitHubは**自分自身のPRに対するレビュー提出を拒否する**ため、以下は必ず失敗する。
 
 ```bash
-gh pr list --state open --limit 50 --json number,title,author,headRefName,isDraft,additions,deletions,changedFiles
+gh pr review <番号> --request-changes --body-file <file>
+# => failed to create review: GraphQL: Review Can not request changes on your own pull request (addPullRequestReview)
 
-# マージ可否（CONFLICTING/DIRTY を検出）
-for n in <PR番号...>; do printf "#%s " $n; gh pr view $n --json mergeable,mergeStateStatus -q '"\(.mergeable)/\(.mergeStateStatus)"'; done
-
-# 変更ファイルの重複（競合の原因を特定）
-for n in <PR番号...>; do gh pr view $n --json files -q ".files[].path" | sed "s|^|$n |"; done \
-  | awk '{print $2}' | sort | uniq -c | sort -rn | awk '$1>1'
-
-# CI状況
-for n in <PR番号...>; do gh pr view $n --json statusCheckRollup \
-  -q '[.statusCheckRollup[]?|select((.conclusion // .state)!="SUCCESS")]|length'; done
+gh pr review <番号> --approve
+# => 同様に拒否される
 ```
 
-`mergeable` が `UNKNOWN` を返す場合はGitHub側の計算待ちなので、少し待って再取得する。
-
-CIがグリーンでも `BEHIND` なら**mainの最新を取り込んだ状態では未検証**である。その旨を必ず報告に含める。
-
-### 2. 個別レビューの委任
-
-- PR数が多い場合、**読み取り専用のサブエージェントに並行して**レビューさせる。読み取り専用なのでworktree分離は不要
-- サブエージェントには基本的にSonnetを使う
-- 各エージェントに渡す指示に必ず含めること:
-  - 読み取り専用の厳守（変更・コミット・push・コメント投稿の禁止）
-  - 関連issueを `gh issue view` で読み、要件との整合を確認すること
-  - 関連する設計書と実装の整合を確認すること
-  - `.agents/review-policy.md` と `AGENTS.md` の規約適合を確認すること
-  - 出力形式（総合判定 / 指摘事項＋重要度 / 良い点 / 未確認範囲）
-
-### 3. 重要な指摘の自己検証
-
-**サブエージェントの報告を鵜呑みにしない。** high/medium の指摘は自分でコマンドを叩いて裏を取る。
+**したがってレビュー結果は `gh pr comment` で本文コメントとして記録する。** 最初から `gh pr review` を試さず、`gh pr comment` を使う。
 
 ```bash
-# 例: 「環境変数が.env.exampleに未定義」の検証
-grep -rn "<変数名>" --include=".env*" .
-# 例: 「共通基盤が使われていない」の検証
-grep -rn "<シンボル>" src --include='*.ts' | grep -v '\.test\.'
-# 例: 「設計書と型が不一致」の検証
-grep -n -A30 "<型名>" docs/detailed_design/api/.../<file>.md
+gh pr comment <番号> --body-file <file>
 ```
 
-エージェントが見落とした問題が自己検証で見つかることがある。逆に、エージェントの指摘が誤っていることもある。
+コメント冒頭に判定を明記し、GitHubのレビューステータスの代わりとする。
 
-### 4. 指摘のコメント投稿
+- `## レビュー結果: 要修正 (Changes requested)`
+- `## レビュー結果: レビュー済み / LGTM`
 
-- 本文をファイルに書き出し `gh pr comment <n> -F <file>` で投稿する
-- **自分が作者のPRには `gh pr review --approve` が使えない**ため、`gh pr comment` を使う
-- 本文に必ず含めること: 総合判定、指摘事項（重要度・ファイル:行・根拠・修正方針）、良い点、未確認範囲
-- 根拠は**実行したコマンドとその出力**で示す。「〜と思われる」で終わらせない
+`.agents/review-policy.md` が「レビュー結果は問題がない場合も『レビュー済み』と明記する」と定めているため、**LGTMの場合もマージ前に必ずコメントを残す**。
 
-### 5. 修正の委任
+レビューで指摘がある場合は、`要修正 (Changes requested)`のコメントを投稿して変更要求を記録します。レビュー中・修正中はIssueとPRを`in-progress`にし、修正担当はこのラベルを前提に着手します。修正着手時・再レビュー依頼時のラベル遷移は`issue-label-workflow`に従います。
 
-- **ファイルを変更するエージェントは必ず独立したgit worktreeに分離する**（`isolation: "worktree"`）
-- 対象PRの選定は、コンフリクトが無く指摘が明確なものを優先する
-- 各エージェントに渡す指示に必ず含めること:
-  - 対象ブランチのcheckout手順
-  - 修正すべき指摘と、**対応しないもの（スコープ外）の明示**
-  - テスト追加の要求（テスト駆動開発）
-  - lint / 型チェック / テストの実行と、**失敗を隠さず報告すること**
-  - コミット規約（`<type>: <description>`、Co-Authored-By）
-  - **マージとissue closeの禁止**
-  - `.env` 本体の読み取り・変更禁止（`.env.example` への追加は可）
-  - 最終報告に含める内容（変更ファイル、判断した設計上の選択とその理由、追加テスト、検証結果、pushしたコミットハッシュ、未対応の指摘）
+## レビューの実施単位
 
-### 6. 独立した再レビュー
+- 複数のPRを一度にレビューする場合、**PRごとに独立したサブエージェント**を起動する。レビューは読み取り専用なのでworktree分離は不要。
+- レビュー用エージェントには「ファイル変更・コミット・push・`git checkout`・worktree作成・GitHubへのコメント投稿を禁止し、結果を報告するだけ」と明示する。差分は `gh pr diff <番号>`、ファイル全体は `git show origin/<branch>:<path>` で読ませる（作業ツリーを触らせない）。
+- コメント投稿とマージは親エージェントが行う。委任先に判断と実行を同時に持たせない。
 
-修正エージェントの自己申告で完了扱いにしない。**別のエージェントに独立して検証させる。**
+## レビューで見る観点
 
-再レビューで特に見るべきは、**指摘を直す過程で新たに持ち込まれた判断**である。実際に次のパターンが繰り返し起きている。
+`.agents/review-policy.md` と `AGENTS.md` を必ず読んだうえで、PRの性質に応じた重点観点を指示する。
 
-- 「値をハードコードするな」の修正で、設計書に無い環境変数を追加した
-- 「共通基盤を使え」の修正で、別の値をハードコードした
-- テスト名と実際のアサーションが乖離していた（名前は検証を謳うが中身は別のことを見ている）
+| PRの種類 | 重点観点 |
+| --- | --- |
+| GitHub Actions (CI/CD) | secrets の扱い、`pull_request_target` 等の危険トリガ、`permissions` の最小化、ロールバック条件、action のバージョン固定。self-hosted runner を使うワークフロー（`cd.yml`）ではさらに fork PR からの実行可否、レジストリ認証、ワークスペースの残留 |
+| 認証・認可 | トークン/Cookie/CSRF/OAuthリダイレクト、保存先、失効処理、エラーコードの一貫性、機密情報のログ出力、後方互換性 |
+| フロントエンド(ポーリング/非同期) | `useEffect` のクリーンアップ、依存配列、リクエストの重複発火とレース、`AbortSignal` の伝搬、リトライ/バックオフ方針 |
+| 管理者向け画面 | ルートガード(認証必須/ロール必須)の有無、個人情報の表示・ログ出力、破壊的操作の確認導線 |
+| ドキュメント整合 | 同一の関数・エンドポイント・エラーコードが**他のドキュメントにも重複記載されていないか** grep で横断確認する |
 
-再レビューエージェントへ渡す指示に必ず含めること:
+### 見落としやすい確認
 
-- **前任のレビュー結論と修正エージェントの自己申告を鵜呑みにせず、自分でコードと設計書を読んで判断すること**
-- 修正過程で入った設計判断を名指しで挙げ、それぞれの妥当性を検証させる
-- 追加テストが**修正前のコードに対して実際に失敗するか**（バグを検出できるテストか）をロジックから判断させる
-- 出力に「前任レビューの誤り・見落とし」「未解決のまま残っている点」の欄を設ける
+- **削除行が異常に多いPR**: `package-lock.json` の再生成なのか、意図しないソース削除なのかを必ず切り分ける。
+- **PR本文とdiffの不一致**: 「〜を削除した」と書かれているのに実際は移設されている等。本文がstaleなままマージするとレビュワー・後続作業者を誤解させるので、本文の修正まで含めて対応する。
+- **`gh pr checks` が "no checks reported" のケース**: チェックが無いのではなく紐づいていないだけのことがある。`gh run list` / `gh run view <id>` で実ワークフロー結果まで確認する。
+- **同一プロシージャ/関数の記述漏れ**: 「他の対象の網羅的棚卸し」はスコープ外にできるが、**そのPRが対象としたもの自体の記述漏れはスコープ外にできない**。
 
-### 7. 横断的問題のissue化
+## 要修正だった場合の進め方
 
-個別PRの修正では解消しない問題は、レビューコメントで終わらせずissueに起票する。起票は `create-issues` skillに従い、既存のroadmap/phase階層の配下に置く。
+自分のPRであっても、レビュー担当と修正担当は分ける。
 
-該当するのは例えば次のような問題である。
+1. **親エージェント**がレビュー結果を `gh pr comment` で投稿する（指摘ごとに「なぜ問題か」「推奨対応」を書く）。
+2. `issue-label-workflow` に従い、レビュー中・修正中は対応するIssueとPRの `in-progress` を維持する。
+3. **修正用サブエージェントを起動する。** 複数PRを並行修正する場合は、Agentツールの `isolation: "worktree"` を必ず指定して各エージェントを独立worktreeに分離する（同一チェックアウトを共有すると `git checkout`/`add`/`commit` が競合する）。起動前に「作業前のworktree清掃」（末尾）を済ませておくこと — 過去のworktreeがブランチを掴んでいると分離worktreeを作れない。
+   修正エージェントへの指示に必ず含める:
+   - 対象ブランチ名と `git fetch && git checkout <branch> && git pull --ff-only`
+   - レビュー指摘の全文（どのファイルの何行目を、なぜ、どう直すか）
+   - テストを実行し**実測結果を報告**すること
+   - コミット・push・`gh pr comment` での修正報告まで行うこと
+   - **PR作成もしくはコード修正を行ったエージェント自身による`gh pr merge`とissueのcloseは禁止**。それ以外のエージェントは、受入可のレビュー・`approve`ラベル・CI全pass・mergeableを確認後に実施してよい
+   - 自分のworktree外のファイルを変更しないこと
+   - `.env` の読み取り・変更禁止（`.env.example` への追記は可）
+4. 修正完了後、**別のサブエージェント**に再レビューさせる。修正した本人に合否判定させない。
+5. マージ可能になるまで 1〜4 を繰り返す。
 
-- 共通基盤が誰にも使われていない
-- 複数PRが同一ファイルを二重実装している
-- 設計書と実装の乖離が複数箇所にある
-- ドキュメントの参照パスが壊れている
+## マージとclose
 
-### 8. 報告
+**PR作成もしくはコード修正を行ったエージェントはmerge・issue closeを実施しない。** それ以外のエージェントは、レビューで「受入可」を記録し、`approve`ラベルとCI全pass・mergeableを確認した場合、追加のユーザー承認なしにsquash mergeとIssue closeを実施してよい。同一GitHubアカウントを使用する場合も、PR作成またはコード修正を行ったエージェントでなければこの運用の対象とする。`.agents/hooks/block-github-destructive-actions.sh`（Claude Codeは`.claude/hooks/`、Codexは`.codex/hooks/`のラッパー経由で呼び出される）は`approve`ラベルの有無を検証するが、PR作成・コード修正を行ったエージェントの識別は行わない。
 
-- PR単位の判定を一覧で示す（判定・マージ可否・最重要の指摘）
-- 横断的問題は個別PRの指摘と分けて示す
-- **推測と検証済みの事実を区別して書く**。裏を取ったものは、取ったコマンドを添える
-- 未確認範囲（実行できなかったテスト、未検証の環境）を必ず明記する
+PR作成もしくはコード修正を行ったエージェントはここまでで作業を止め、「CI全pass・mergeable」であることと未解決の指摘の有無をユーザーに報告する。
 
-## 禁止事項
+以降はユーザー承認後の操作主体向けの手順。マージ前に必ず確認する。
 
-- ユーザーの承認なくPRをマージすること
-- ユーザーの承認なくissueをcloseすること
-- レビュー結果の投稿前にユーザーの承認を得ないこと（外向きの操作である）
-- 自己検証をせずサブエージェントの報告をそのまま報告に転記すること
+```bash
+gh pr view <番号> --json mergeable,mergeStateStatus --jq '"\(.mergeable) \(.mergeStateStatus)"'
+gh pr checks <番号>
+```
+
+- `MERGEABLE` / `CLEAN` かつ全チェックpassであること。`UNKNOWN` はGitHub側の判定待ちなので、数秒おいて再取得する。
+- squash mergeし、マージ後にリモート・ローカルの作業ブランチを削除する。
+
+```bash
+gh pr merge <番号> --squash
+git push origin --delete <branch>
+```
+
+### ブランチ保護でマージが `BLOCKED` になったとき
+
+`gh pr merge` が「To have the pull request merged after all the requirements have been met」と言って失敗したら、**先に保護設定を確認する**。
+
+```bash
+gh api repos/<owner>/<repo>/branches/<base>/protection \
+  --jq '{strict:.required_status_checks.strict, reviews:.required_pull_request_reviews.required_approving_review_count, admins:.enforce_admins.enabled}'
+```
+
+- `reviews: 1` かつ全PRが同一アカウント作成の場合、**誰も承認できずマージが恒久的に不可能**になる（自分のPRはApproveできない）。`admins: true` なら管理者バイパスも効かない。この状態はユーザーの判断事項なので、勝手に保護を緩めず必ず確認を取る。
+- `strict: true`（base追従必須）の場合、**PRを1件マージするたびに残りのPRが `BEHIND` になる**。次のPRは追従させてからでないとマージできない。
+
+```bash
+gh api -X PUT repos/<owner>/<repo>/pulls/<番号>/update-branch
+```
+
+追従させるとCIが再実行されるので、完了を待ってからマージする。複数PRを連続でマージする場合は「追従 → CI待ち → マージ」を1件ずつ繰り返す。
+
+### `--delete-branch` は使わない
+
+`gh pr merge --squash --delete-branch` は、ローカルのブランチ切り替えに失敗すると以下で止まり、**リモートブランチが消えないまま終わる**ことがある。
+
+```
+failed to run git: fatal: 'develop' is already used by worktree at '...'
+```
+
+マージ自体は成功しているので、`gh pr view <番号> --json state` で `MERGED` を確認したうえで、`git push origin --delete <branch>` で明示的に削除する。
+
+**ブランチ削除は必ず `MERGED` を確認してから行う。** マージが失敗しているのにブランチを消すと、**PRが自動でCLOSEされる**。復旧は次の手順（ローカルにコミットが残っていることが前提）。
+
+```bash
+git -C <worktree> push origin HEAD:refs/heads/<branch>   # ブランチを復元
+gh pr reopen <番号>                                        # PRを再オープン
+```
+
+### close時の申し送り
+
+マージ後、関連issueを `gh issue close <番号> -c "..."` でコメント付きにcloseする。スコープ外とした指摘・後続タスクへの申し送りは、closeコメントと**引き継ぎ先issueの両方**にコメントとして残す（片方だけだと追跡が切れる）。
+
+`Closes #<番号>` がPR本文にあってもGitHubが自動closeしない場合があるので、マージ後に `gh issue view` でstateを必ず確認する。逆に自動closeされていた場合は `gh issue close` がエラーになるため、申し送りは `gh issue comment` で別途残す。
+
+close後は `issue-label-workflow` の手順5に従い、IssueとPRから状態ラベル（`in-progress` / `review-request`）を、PRから`approve`も外す。
+
+## 作業前のworktree清掃
+
+過去のエージェントが残したworktreeがブランチを掴んでいると、修正エージェントの分離worktreeが作れない。作業開始前に確認する。
+
+```bash
+git worktree list
+```
+
+不要なものがあれば、**未コミットの変更が無いかを確認し、ユーザーの許可を得てから**削除する。
+
+```bash
+git -C <worktree> status --porcelain   # 先に中身を確認
+git worktree remove --force <worktree>
+git worktree prune
+```
+
+`node_modules` が残っていてディレクトリを物理削除できない場合でも、`git worktree remove` / `prune` が通っていればブランチは解放されているので作業を続行できる。

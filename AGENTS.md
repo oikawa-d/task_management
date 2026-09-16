@@ -72,7 +72,7 @@ APIエンドポイントの結合テストは`api/tests/integration/`に配置�
 
 PR作成後は作成した時点で作業完了とせず、PR作成もしくはコード修正を行ったエージェント以外が[共通レビュー方針](./.agents/review-policy.md)に沿ったレビューを行い「受入可」のコメントを投稿したうえで`approve`ラベルを付与してください。`approve`ラベルが付与済みかつCIの全チェックが成功したPRは、PR作成もしくはコード修正を行ったエージェント以外が都度のユーザー承認を得ることなくsquash mergeを実施してよく、Issue closeも同様です。PR作成もしくはコード修正を行ったエージェント本人は、自身が作成または修正したPRへの`approve`ラベル付与・merge・Issue closeを行ってはいけません。ここでの判定はGitHubアカウントではなく、PR作成またはコード修正を行ったエージェントかどうかで行います。同一GitHubアカウントを使用する別エージェントがレビューする場合、GitHubの承認レビューではなく`gh pr comment`で「受入可」を記録し、REST APIでラベルを付与してください。`gh pr merge`・`gh issue close`は`.agents/hooks/block-github-destructive-actions.sh`（Claude Codeは`.claude/hooks/`、Codexは`.codex/hooks/`のラッパー経由で呼び出します）によりブロックされます（判定条件は[共通レビュー方針](./.agents/review-policy.md)を参照）。hookを変更した場合は`bash .agents/hooks/block-github-destructive-actions.test.sh`と`bash .agents/hooks/hook-config.test.sh`を実行してください。マージ後はリモート・ローカルの作業ブランチを削除します。CIが失敗した場合はmergeせず、原因を修正してから再度確認してください。
 
-レビューで指摘がある場合は、`gh pr comment`の冒頭に「要修正 (Changes requested)」と明記して変更要求を記録してください。Issueの`review`とPRの`in-progress`は維持し、修正着手時のラベル遷移は[issue-label-workflow](./skills/issue-label-workflow/SKILL.md)に従ってください。
+レビューで指摘がある場合は、`gh pr comment`の冒頭に「要修正 (Changes requested)」と明記して変更要求を記録してください。指摘後のレビュー中・修正中はIssueとPRの`in-progress`を維持し、修正push後に再レビューを依頼するときはIssueとPRを`review-request`へ戻します。詳細は[issue-label-workflow](./skills/issue-label-workflow/SKILL.md)に従ってください。
 
 ## セキュリティ・設定
 

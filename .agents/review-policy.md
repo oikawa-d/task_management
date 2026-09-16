@@ -21,43 +21,57 @@
 
 ## レビューラベルの遷移
 
-PRとissueのラベルは、レビューの進行状況を並行作業中の他エージェントへ伝える手段です。状態が変わるたびに更新します。IssueとPRは役割が異なるため同じラベルに揃えず、Issueは`in-progress`／`review`、PRはレビュー中に`in-progress`、レビュー完了後に`approve`を使用します。
+PRとIssueのラベルは、レビューの進行状況を並行作業中の他エージェントへ伝える手段です。状態が変わるたびに更新します。レビュー待ち・修正後の再レビュー待ちは`review-request`、レビュー中・修正中は`in-progress`、レビュー結果に問題がない場合はPRへ`approve`を使用します。
 
 | タイミング | 対象 | 付与するラベル | 外すラベル |
 |------------|------|----------------|------------|
 | issueへ着手（worktree作成・実装開始） | Issue | `in-progress` | - |
-| PR作成・レビュー依頼 | Issue | `review` | `in-progress` |
-| PR作成・レビュー依頼 | PR | `in-progress` | - |
-| レビュー中・変更依頼あり・再レビュー依頼 | Issue | `review` | - |
-| レビュー中・変更依頼あり・再レビュー依頼 | PR | `in-progress` | - |
-| 「受入可」コメント投稿後（レビュー主体のみ） | PR | `approve` | `in-progress` |
+| PR作成・レビュー依頼 | Issue | `review-request` | `in-progress`／`review-request`／`approve` |
+| PR作成・レビュー依頼 | PR | `review-request` | `in-progress`／`review-request`／`approve` |
+| レビュー着手 | Issue | `in-progress` | `review-request`／`approve` |
+| レビュー着手 | PR | `in-progress` | `review-request`／`approve` |
+| レビューで修正要求後の修正着手 | Issue/PR | `in-progress`を維持 | なし |
+| 修正push後・再レビュー依頼 | Issue | `review-request` | `in-progress` |
+| 修正push後・再レビュー依頼 | PR | `review-request` | `in-progress` |
+| 「受入可」コメント投稿後（レビュー主体のみ） | PR | `approve` | `review-request`／`in-progress`／`approve` |
 
-- Issueの`in-progress`は重複着手防止用、Issueの`review`はレビュー中であることの表示に使用します。
-- PRの`in-progress`はレビュー中・変更依頼後の修正中を含むレビュー工程全体を表します。レビュー待ちと変更依頼後を別ラベルへ分類しません。
-- レビューで指摘があった場合は、レビューコメントの冒頭に`要修正 (Changes requested)`と明記します。これはレビュー結果の判定であり、専用の状態ラベルは追加しません。
-- 指摘の修正に着手するときはIssueの`review`を`in-progress`へ変更し、修正をpushして再レビューを依頼するときにIssueを`review`へ戻します。PRは工程中`in-progress`を維持します。
+- `in-progress`は実装・レビュー・修正の作業中、`review-request`はレビュー待ち・修正後の再レビュー待ちに使用します。
+- `approve`はレビュー結果に問題がないPRにのみ付与します。
+- IssueとPRは同じ状態ラベル遷移を行い、`approve`だけはPRに付与します。
+- レビューで指摘があった場合は、レビューコメントの冒頭に`要修正 (Changes requested)`と明記します。レビュー中・修正中はIssueとPRを`in-progress`にし、修正担当はこのラベルを前提に着手します。
+- 指摘の修正をpushして再レビューを依頼するときは、IssueとPRを`review-request`へ戻します。
+- 状態ラベルは常に1つだけとし、各遷移では`review-request`/`in-progress`/`approve`をすべて外してから遷移先を付与します。Issueの恒久ラベルは削除しません。
 
 ### ラベル操作コマンド
 
-`gh pr edit --add-label` / `--remove-label` は Projects classic 廃止に伴うエラーで失敗するため使用しません（#386）。`gh api` を使います。PRとissueはGitHub上で同じ番号空間のため、いずれも `issues/<番号>/labels` を対象とします。
+`gh pr edit --add-label` / `--remove-label` は Projects classic 廃止に伴うエラーで失敗するため使用しません（#386）。リポジトリ内の共通スクリプトで現在のラベルを取得し、存在する状態ラベルだけを削除してから遷移先を付与します。削除直前の競合によるHTTP 404は無視しますが、認証・通信エラーなど404以外の失敗は握りつぶしません。遷移後は状態ラベルが指定した1つだけ（`none`の場合は0個）であることを検証します。PRとissueはGitHub上で同じ番号空間のため、いずれも `issues/<番号>/labels` を対象とします。
 
 ```bash
-# Issueへの付与
-gh api -X POST repos/<owner>/<repo>/issues/<番号>/labels -f "labels[]=review"
+# Issueをレビュー待ちへ遷移
+bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <番号> review-request
 
-# Issueからの削除
-gh api -X DELETE repos/<owner>/<repo>/issues/<番号>/labels/review
+# PRをレビュー待ちへ遷移
+bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <PR番号> review-request
 
-# PRのレビュー中ラベル
-gh api -X POST repos/<owner>/<repo>/issues/<PR番号>/labels -f "labels[]=in-progress"
+# Issueをレビュー中・修正中へ遷移
+bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <番号> in-progress
 
-# PRのレビュー完了ラベル
-gh api -X POST repos/<owner>/<repo>/issues/<PR番号>/labels -f "labels[]=approve"
+# PRをレビュー中・修正中へ遷移
+bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <PR番号> in-progress
+
+# PRをレビュー完了へ遷移
+bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <PR番号> approve
+
+# IssueとPRの状態ラベルを完了後に解除
+bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <番号> none
+bash .agents/scripts/set-review-state-label.sh <owner>/<repo> <PR番号> none
 
 # 現在のラベル確認
 gh pr view <番号> --json labels --jq '[.labels[].name]|join(", ")'
 gh issue view <番号> --json labels --jq '[.labels[].name]|join(", ")'
 ```
+
+`set-review-state-label.sh` は第4の遷移先 `none` を指定すると状態ラベルだけを解除します。状態ラベル以外の恒久ラベルは削除しません。ラベル取得・削除・付与・遷移後検証のいずれかでAPIエラーが発生した場合は終了し、認証・通信エラーを握りつぶしません。
 
 ## `approve`ラベルの付与
 
