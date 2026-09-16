@@ -285,10 +285,11 @@ async def oauth_exchange(
 		except Exception as rollback_exc:
 			raise ServiceUnavailableError() from rollback_exc
 		raise OAuthFailedError()
+	login_user_id = str(user.id)
 	try:
 		await _record_oauth_login(db, user, request, client_info)
 	except Exception as exc:
-		log_login_history_write_failed(request, user, client_info)
+		log_login_history_write_failed(request, user, client_info, user_id=login_user_id)
 		try:
 			await rollback_oauth_login(
 				configured_strategy,

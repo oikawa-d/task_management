@@ -64,6 +64,7 @@ def log_login_history_write_failed(
 	user: User | None,
 	client_info: ClientIpInfo,
 	*,
+	user_id: str | None = None,
 	operation: str = "oauth_login",
 	login_method: str = "oauth_google",
 	failure_reason: str = SERVICE_UNAVAILABLE_FAILURE_REASON,
@@ -73,7 +74,7 @@ def log_login_history_write_failed(
 		extra={
 			"operation": operation,
 			"event": "login_history_write_failed",
-			"user_id": str(user.id) if user is not None else None,
+			"user_id": user_id if user_id is not None else (str(user.id) if user is not None else None),
 			"login_method": login_method,
 			"failure_reason": failure_reason,
 			"client_ip": client_info.client_ip,
@@ -89,13 +90,15 @@ def log_auth_state_revoke_failed(
 	user: User,
 	operation: str,
 	client_info: ClientIpInfo,
+	*,
+	user_id: str | None = None,
 ) -> None:
 	logger.error(
 		"Authentication state revoke failed",
 		extra={
 			"operation": operation,
 			"event": "auth_state_revoke_failed",
-			"user_id": str(user.id),
+			"user_id": user_id if user_id is not None else str(user.id),
 			"deleted_session_count": None,
 			"deleted_refresh_count": None,
 			"client_ip": client_info.client_ip,

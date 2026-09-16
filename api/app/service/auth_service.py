@@ -176,6 +176,7 @@ async def login(
 	stored_hash = user.password_hash if user is not None and user.password_hash is not None else None
 	password_matched = verify_password(password, stored_hash or get_dummy_password_hash())
 	if user is None or stored_hash is None or not password_matched:
+		login_user_id = str(user.id) if user is not None else None
 		try:
 			await record_login_failure(identifier, client_ip, settings)
 		except Exception as exc:
@@ -195,7 +196,14 @@ async def login(
 				failure_reason=_LOGIN_FAILURE_INVALID_CREDENTIALS,
 			)
 		except Exception as exc:
-			log_login_history_write_failed(request, user, client_info, operation="login", login_method=strategy.mode)
+			log_login_history_write_failed(
+				request,
+				user,
+				client_info,
+				user_id=login_user_id,
+				operation="login",
+				login_method=strategy.mode,
+			)
 			raise ServiceUnavailableError() from exc
 		log_login_attempt(
 			request, user, client_info, identifier, strategy.mode, False, _LOGIN_FAILURE_INVALID_CREDENTIALS
@@ -229,16 +237,24 @@ async def login(
 			request, user, client_info, identifier, strategy.mode, False, SERVICE_UNAVAILABLE_FAILURE_REASON
 		)
 		raise ServiceUnavailableError() from exc
+	login_user_id = str(user.id)
 	try:
 		await _record_login_attempt(
 			db, user, identifier, request, strategy.mode, client_ip, success=True, failure_reason=None
 		)
 	except Exception as exc:
-		log_login_history_write_failed(request, user, client_info, operation="login", login_method=strategy.mode)
+		log_login_history_write_failed(
+			request,
+			user,
+			client_info,
+			user_id=login_user_id,
+			operation="login",
+			login_method=strategy.mode,
+		)
 		try:
 			await strategy.rollback_login(user, login_result, response)
 		except Exception as rollback_exc:
-			log_auth_state_revoke_failed(request, user, "login_rollback", client_info)
+			log_auth_state_revoke_failed(request, user, "login_rollback", client_info, user_id=login_user_id)
 			raise ServiceUnavailableError() from rollback_exc
 		raise ServiceUnavailableError() from exc
 	log_login_attempt(request, user, client_info, identifier, strategy.mode, True, None)
@@ -255,6 +271,7 @@ async def _record_login_failure_or_unavailable(
 	client_ip: str,
 	reason: str,
 ) -> None:
+	login_user_id = str(user.id)
 	try:
 		await _record_login_attempt(
 			db, user, identifier, request, login_method, client_ip, success=False, failure_reason=reason
@@ -264,6 +281,7 @@ async def _record_login_failure_or_unavailable(
 			request,
 			user,
 			client_info,
+			user_id=login_user_id,
 			operation="login",
 			login_method=login_method,
 			failure_reason=SERVICE_UNAVAILABLE_FAILURE_REASON,

@@ -141,13 +141,14 @@ async def rollback_oauth_login(
 	operation: str,
 ) -> None:
 	# ここでのrollback_loginは認証状態の補償処理であり、DBトランザクションとは別責務。
+	login_user_id = str(user.id)
 	try:
 		rollback = getattr(strategy, "rollback_login", None)
 		if rollback is None:
 			raise RuntimeError("auth strategy does not support login rollback")
 		await rollback(user, login_result, response)
 	except Exception:
-		log_auth_state_revoke_failed(request, user, operation, client_info)
+		log_auth_state_revoke_failed(request, user, operation, client_info, user_id=login_user_id)
 		raise
 	finally:
 		if clear_state_cookie:
@@ -165,10 +166,11 @@ async def complete_oauth_session_login(
 	login_result: Any,
 	record_login: Any,
 ) -> None:
+	login_user_id = str(user.id)
 	try:
 		await record_login(db, user, request, client_info)
 	except Exception as exc:
-		log_login_history_write_failed(request, user, client_info)
+		log_login_history_write_failed(request, user, client_info, user_id=login_user_id)
 		try:
 			await rollback_oauth_login(
 				strategy,
