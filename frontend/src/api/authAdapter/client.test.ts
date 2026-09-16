@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createAuthAdapter } from "./index";
+import { authTokenStore } from "../../auth/tokenStore";
 import { CSRF_HEADER_NAME } from "./constants";
 import { clearAuthAdapter, fetchWithAuth, resolveAuthAdapter, setAuthAccessToken, setAuthAdapter } from "./client";
 
@@ -89,6 +90,38 @@ describe("fetchWithAuth", () => {
 		expect(new Headers(requestInit.headers).has(CSRF_HEADER_NAME)).toBe(false);
 	});
 
+	it("401時はAuthAdapterの復帰処理が成功した場合だけ1回再送する", async () => {
+		const adapter = createAuthAdapter("session");
+		const unauthorized = vi.spyOn(adapter, "onUnauthorized").mockResolvedValue(true);
+		setAuthAdapter(adapter);
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(response({ error: { code: "SESSION_EXPIRED" } }, { ok: false, status: 401 }))
+			.mockResolvedValueOnce(response({ ok: true }, { ok: true, status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		const result = await fetchWithAuth("/api/projects", { method: "GET" }, "/api");
+
+		expect(result.ok).toBe(true);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(unauthorized).toHaveBeenCalledOnce();
+	});
+
+	it("復帰できない401はadapterをログアウトし、登録済みの終了処理を呼ぶ", async () => {
+		const adapter = createAuthAdapter("session");
+		const onLogout = vi.spyOn(adapter, "onLogout");
+		const logoutHandler = vi.fn();
+		setAuthAdapter(adapter, logoutHandler);
+		const fetchMock = vi.fn().mockResolvedValue(response({ error: { code: "UNAUTHENTICATED" } }, { ok: false, status: 401 }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await fetchWithAuth("/api/projects", { method: "GET" }, "/api");
+
+		expect(onLogout).toHaveBeenCalledOnce();
+		expect(logoutHandler).toHaveBeenCalledOnce();
+		expect(fetchMock).toHaveBeenCalledOnce();
+	});
+
 	it("resolveAuthAdapter開始後にbootstrapAuthが先に共有アダプタを登録した場合、先行/auth/configの完了で上書きされない", async () => {
 		let resolveConfigRequest!: (value: unknown) => void;
 		const configRequestPromise = new Promise((resolve) => {
@@ -130,19 +163,10 @@ describe("fetchWithAuth", () => {
 		expect(new Headers(requestInit.headers).get("Authorization")).toBe("Bearer bootstrap-token");
 	});
 
-	it("アダプタ未登録時にsetAuthAccessTokenを呼んでも破棄されず、setAuthAdapterでの登録時に反映される", async () => {
-		// アダプタ未登録（OAuthハンドオフ交換がbootstrapAuth()完了より先に成功するケース）
+	it("共有TokenStoreを注入したアダプタはsetAuthAccessTokenのトークンを利用する", async () => {
 		setAuthAccessToken("oauth-token");
 
-		let accessToken: string | null = null;
-		const adapter = createAuthAdapter("jwt", {
-			tokenStore: {
-				getAccessToken: () => accessToken,
-				setAccessToken: (token) => {
-					accessToken = token;
-				},
-			},
-		});
+		const adapter = createAuthAdapter("jwt", { tokenStore: authTokenStore });
 		setAuthAdapter(adapter);
 
 		const fetchMock = vi.fn().mockResolvedValue(response({ columns: {} }, { ok: true, status: 200 }));
@@ -178,7 +202,7 @@ describe("fetchWithAuth", () => {
 		expect(new Headers(requestInit.headers).has("Authorization")).toBe(false);
 	});
 
-	it("アダプタ未登録時にnullを渡した場合は持ち越しトークンをクリアし、後続のアダプタ登録に影響しない", async () => {
+	it("setAuthAccessTokenにnullを渡すと共有TokenStoreをクリアする", async () => {
 		setAuthAccessToken("stale-token");
 		setAuthAccessToken(null);
 

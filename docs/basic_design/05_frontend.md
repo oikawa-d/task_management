@@ -8,7 +8,7 @@
 | ビルド | Vite 7 |
 | ルーティング | React Router v7（`createBrowserRouter`） |
 | 状態管理 | Zustand（認証状態・UI設定）＋ TanStack Query（サーバー状態のキャッシュ） |
-| HTTPクライアント | axios（インスタンス + interceptor） |
+| HTTPクライアント | `fetchWithAuth`（AuthAdapter経由の共通fetchクライアント） |
 | ドラッグ＆ドロップ | `@dnd-kit/core`（カンバンのカード移動） |
 | フォーム | React Hook Form + zod（バックエンドと同一のバリデーション規則を再現）。既存フォームの移行は各画面Issueで行う |
 | スタイル | CSS Modules + CSS変数（文字サイズ設定のため `rem` ベースで設計） |
@@ -25,7 +25,7 @@ frontend/
 │   ├── router.tsx                  # ルート定義・認証ガード
 │   ├── routes.ts                   # 画面パス定数（ROUTES）。パスの直書きを禁止し、遷移先はすべてここを参照する
 │   ├── api/
-│   │   ├── client.ts               # axiosインスタンス生成（認証方式を吸収）
+│   │   ├── http.ts                 # feature APIの共通JSON要求（fetchWithAuth経由）
 │   │   ├── authAdapter/            # 認証方式ごとの差異を閉じ込める層
 │   │   │   ├── types.ts            # AuthAdapter インターフェース
 │   │   │   ├── sessionAdapter.ts
@@ -343,7 +343,7 @@ classDiagram
     class AuthAdapter {
         <<interface>>
         +mode AuthMode
-        +attach(config) AxiosRequestConfig
+        +attach(config) RetryableRequestConfig
         +onLoginSuccess(res) void
         +onUnauthorized(error) Promise~boolean~
         +restoreSession() Promise~boolean~
@@ -352,14 +352,14 @@ classDiagram
     }
     class SessionAdapter {
         +mode "session"
-        +attach(config) AxiosRequestConfig
+        +attach(config) RetryableRequestConfig
         +onUnauthorized(error) Promise~boolean~
         +restoreSession() Promise~boolean~
     }
     class JwtAdapter {
         -refreshPromise Promise
         +mode "jwt"
-        +attach(config) AxiosRequestConfig
+        +attach(config) RetryableRequestConfig
         +onUnauthorized(error) Promise~boolean~
         +restoreSession() Promise~boolean~
     }
@@ -371,33 +371,31 @@ classDiagram
 |------|----------|------------------|------------------|------------------|------------|------------|
 | `SessionAdapter` | `withCredentials = true`、更新系には `X-CSRF-Token`（Cookieから読む）を付与 | 何もしない（Cookieはブラウザが保持） | `false`（リトライしない） | 追加処理なしで `true` | authStoreを破棄。Cookie破棄はbackendのlogoutに任せる | `POST /api/auth/logout`をCookie・CSRF付きで実行 |
 | `JwtAdapter` | 通常APIには `Authorization: Bearer {accessToken}`、refresh/logoutには `withCredentials=true` と `X-CSRF-Token` を付与 | 注入された`TokenStore`にaccessTokenを保存。Cookieはbackendが発行 | `/auth/refresh` を1回だけ試行し、成功なら `true` | `/auth/refresh` を実行し、成功時にaccessTokenを保持 | `TokenStore`のaccessTokenをメモリから破棄。Cookie破棄はbackendのlogoutに任せる | `POST /api/auth/logout`をCookie・CSRF付きで実行 |
-| 実装 | `attach` | `onLoginSuccess` | `onUnauthorized` | `onLogout` |
-|------|----------|------------------|------------------|------------|
-
 | メソッド | 引数 | 戻り値 | 責務 |
 |----------|------|--------|------|
-| `attach` | `AxiosRequestConfig` | `AxiosRequestConfig` | リクエスト直前の認証情報付与（Cookie送信設定 / CSRFヘッダ / Bearerヘッダ）。CSRF Cookie名は `/auth/config` から取得 |
+| `attach` | `RetryableRequestConfig` | `RetryableRequestConfig` | リクエスト直前の認証情報付与（Cookie送信設定 / CSRFヘッダ / Bearerヘッダ）。CSRF Cookie名は `/auth/config` から取得 |
 | `onLoginSuccess` | `LoginResponse` | `void` | ログインレスポンスから必要な情報を保持 |
 | `onUnauthorized` | `AxiosError` | `Promise<boolean>` | 401 時の復帰処理。`true` を返した場合のみ元リクエストを再送 |
 | `restoreSession` | なし | `Promise<boolean>` | アプリ起動時に既存Cookieから認証状態を復元。jwtではrefreshを実行 |
 | `onLogout` | なし | `void` | クライアント側の後片付け |
 | `logout` | なし | `Promise<void>` | `POST /api/auth/logout`を認証方式固有の設定で実行 |
 
-### 6.1 interceptor の流れ
+feature APIの公開経路は`requestJson`→`fetchWithAuth`に統一する。`AuthAdapter`へ注入する`httpClient`はJWTのrefreshやlogoutなど認証アダプタ内部のHTTP境界に限り、feature endpointから直接利用しない。
+
+### 6.1 fetchWithAuth の流れ
 
 ```mermaid
 flowchart TB
-    A["endpoints/*.ts が client.request()"] --> B["request interceptor<br/>adapter.attach()"]
-    B --> C["送信"]
-    C --> D{"レスポンス"}
-    D -->|"2xx"| E["データを返す"]
-    D -->|"401"| F["adapter.onUnauthorized()"]
-    F -->|"true（リフレッシュ成功）"| G["同一リクエストを1回だけ再送"]
-    F -->|"false"| H["authStore を unauthenticated に<br/>→ /login へリダイレクト"]
-    D -->|"403 CSRF_INVALID"| I["認証Cookie不整合を通知し<br/>ログインへ誘導"]
-    D -->|"422"| J["フィールドエラーをフォームへ反映"]
-    D -->|"その他4xx/5xx"| K["ApiError に変換してトースト表示"]
-    G -->|"再度401"| H
+    A["features/*/api/*.ts が requestJson()"] --> B["fetchWithAuth()"]
+    B --> C["adapter.attach()"]
+    C --> D["送信"]
+    D --> E{"レスポンス"}
+    E -->|"2xx"| F["responseを返す"]
+    E -->|"401"| G["adapter.onUnauthorized()"]
+    G -->|"true（リフレッシュ成功）"| H["同一リクエストを1回だけ再送"]
+    G -->|"false"| I["adapter.onLogout() / authStoreをunauthenticated"]
+    E -->|"403/422/その他4xx/5xx"| J["requestJsonがApiErrorへ変換"]
+    H -->|"再度401"| I
 ```
 
 | ルール | 内容 |

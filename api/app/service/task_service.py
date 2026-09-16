@@ -9,7 +9,13 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_backend_settings
-from app.core.exceptions import AssigneeInactiveError, NotFoundError, TaskConflictError, raise_database_error
+from app.core.exceptions import (
+	AssigneeInactiveError,
+	ForbiddenError,
+	NotFoundError,
+	TaskConflictError,
+	raise_database_error,
+)
 from app.models.task import Task
 from app.repository import project_repository, task_repository
 from app.schemas.auth import CurrentUser
@@ -54,7 +60,7 @@ def _creator(task: Task, current_user: CurrentUser) -> TaskCreator:
 	return TaskCreator(id=creator.id, username=creator.username, display_name=_display_name(creator))
 
 
-def _summary(task: Task) -> TaskSummary:
+def _summary(task: Task, comment_count: int = 0) -> TaskSummary:
 	return TaskSummary(
 		id=task.id,
 		title=task.title,
@@ -64,7 +70,7 @@ def _summary(task: Task) -> TaskSummary:
 		position=task.position,
 		version=task.version,
 		is_active=task.is_active,
-		comment_count=0,
+		comment_count=comment_count,
 		created_at=task.created_at,
 		updated_at=task.updated_at,
 	)
@@ -87,7 +93,7 @@ def _response(item: task_repository.TaskWithProjectStatus, current_user: Current
 		due_at=task.due_at,
 		created_at=task.created_at,
 		updated_at=task.updated_at,
-		comment_count=0,
+		comment_count=item.comment_count,
 	)
 
 
@@ -96,7 +102,7 @@ async def get_board(project_id: UUID, include_inactive: bool, db: AsyncSession) 
 	columns: dict[str, list[TaskSummary]] = {"todo": [], "in_progress": [], "done": []}
 	for item in items:
 		if item.task.status in columns:
-			columns[item.task.status].append(_summary(item.task))
+			columns[item.task.status].append(_summary(item.task, item.comment_count))
 	return BoardResponse(
 		project_id=project_id,
 		project_is_active=all(item.project_is_active is not False for item in items),
@@ -114,9 +120,13 @@ async def list_tasks(
 	db: AsyncSession,
 ) -> TaskListResponse:
 	project_id = project_id_filter if isinstance(project_id_filter, UUID) else None
-	if isinstance(project_id_filter, UUID) and not await project_repository.is_member(db, project_id_filter, user.id):
+	if (
+		user.role != "admin"
+		and isinstance(project_id_filter, UUID)
+		and not await project_repository.is_member(db, project_id_filter, user.id)
+	):
 		raise NotFoundError()
-	items = await task_repository.list_for_user(
+	items, total = await task_repository.list_for_user_with_total(
 		db,
 		user.id,
 		project_id,
@@ -129,7 +139,7 @@ async def list_tasks(
 	responses = [TaskListItem(**_response(item, user).model_dump()) for item in items]
 	return TaskListResponse(
 		items=responses,
-		meta=TaskListMeta(page=page, per_page=per_page, total=len(responses), total_pages=1 if responses else 0),
+		meta=TaskListMeta(page=page, per_page=per_page, total=total, total_pages=(total + per_page - 1) // per_page),
 	)
 
 
@@ -191,7 +201,13 @@ async def update_task(task_id: UUID, payload: TaskUpdateRequest, user: CurrentUs
 	if item is None:
 		raise NotFoundError()
 	task = item.task
-	await require_task_access(task, user, db)
+	if task.is_active or payload.is_active is not True:
+		await require_task_access(task, user, db)
+	if payload.is_active is not None and user.role != "admin":
+		is_creator = task.created_by == user.id
+		project = await project_repository.get_by_id(db, task.project_id) if task.project_id else None
+		if not is_creator and (project is None or project.owner_id != user.id):
+			raise ForbiddenError()
 	try:
 		try:
 			await task_repository.update(
@@ -205,6 +221,7 @@ async def update_task(task_id: UUID, payload: TaskUpdateRequest, user: CurrentUs
 				payload.assignee_id if "assignee_id" in payload.model_fields_set else task.assignee_id,
 				payload.due_at if "due_at" in payload.model_fields_set else task.due_at,
 				payload.position if payload.position is not None else task.position,
+				payload.is_active,
 			)
 		except _TASK_WRITE_CONSTRAINT_ERRORS:
 			await db.rollback()

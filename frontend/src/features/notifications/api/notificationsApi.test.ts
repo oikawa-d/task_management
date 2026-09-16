@@ -53,10 +53,10 @@ describe("notificationsApi", () => {
 		});
 		expect(fetchWithAuthMock).toHaveBeenCalledWith(
 			`/api/notifications?page=2&per_page=${NOTIFICATION_LIST_DEFAULT_PER_PAGE}`,
-			{
-				headers: { Accept: "application/json" },
-			},
+			expect.objectContaining({ headers: expect.any(Headers) }),
 			"/api",
 		);
+		const requestInit = fetchWithAuthMock.mock.calls[0]?.[1] as RequestInit;
+		expect(new Headers(requestInit.headers).get("accept")).toBe("application/json");
 	});
 });

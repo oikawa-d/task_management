@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
-import type { AuthAdapter, TokenStore } from "../api/authAdapter";
+import type { AuthAdapter } from "../api/authAdapter";
+import { authTokenStore } from "./tokenStore";
 
 export type AuthUserRole = "member" | "admin";
 
@@ -15,7 +16,6 @@ export type AuthStatus = "loading" | "authenticated" | "unauthenticated";
 export type AuthState = {
 	user: AuthUser | null;
 	status: AuthStatus;
-	accessToken: string | null;
 	authAdapter: AuthAdapter | null;
 	/** GET /auth/config の google_login_enabled。AuthProvider起動時（authBootstrap）に設定される */
 	googleLoginEnabled: boolean;
@@ -24,7 +24,6 @@ export type AuthState = {
 const initialAuthState: AuthState = {
 	user: null,
 	status: "loading",
-	accessToken: null,
 	authAdapter: null,
 	googleLoginEnabled: false,
 };
@@ -33,7 +32,6 @@ export type AuthStore = AuthState & {
 	setLoading: () => void;
 	setAuthenticated: (user: AuthUser) => void;
 	setUnauthenticated: () => void;
-	setAccessToken: (accessToken: string | null) => void;
 	updateUser: (user: Partial<AuthUser>) => void;
 	clear: () => void;
 	setAuthAdapter: (authAdapter: AuthAdapter) => void;
@@ -43,21 +41,28 @@ export type AuthStore = AuthState & {
 
 export const useAuthStore = create<AuthStore>((set, get) => ({
 	...initialAuthState,
-	setLoading: () => set({ ...initialAuthState }),
+	setLoading: () => {
+		authTokenStore.setAccessToken(null);
+		set({ ...initialAuthState });
+	},
 	setAuthenticated: (user) => set({ user, status: "authenticated" }),
-	setUnauthenticated: () => set({ user: null, status: "unauthenticated", accessToken: null }),
-	setAccessToken: (accessToken) => set({ accessToken }),
+	setUnauthenticated: () => {
+		get().authAdapter?.onLogout();
+		authTokenStore.setAccessToken(null);
+		set({ user: null, status: "unauthenticated" });
+	},
 	updateUser: (user) => set((state) => ({ user: state.user ? { ...state.user, ...user } : state.user })),
 	clear: () => {
 		get().authAdapter?.onLogout();
-		set({ user: null, status: "unauthenticated", accessToken: null });
+		authTokenStore.setAccessToken(null);
+		set({ user: null, status: "unauthenticated" });
 	},
 	setAuthAdapter: (authAdapter) => set({ authAdapter }),
 	setGoogleLoginEnabled: (googleLoginEnabled) => set({ googleLoginEnabled }),
-	reset: () => set(initialAuthState),
+	reset: () => {
+		authTokenStore.setAccessToken(null);
+		set(initialAuthState);
+	},
 }));
 
-export const authTokenStore: TokenStore = {
-	getAccessToken: () => useAuthStore.getState().accessToken,
-	setAccessToken: (accessToken) => useAuthStore.getState().setAccessToken(accessToken),
-};
+export { authTokenStore } from "./tokenStore";

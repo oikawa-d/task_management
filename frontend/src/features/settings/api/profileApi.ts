@@ -1,24 +1,18 @@
-import type { AxiosInstance } from "axios";
-
-import { getApiClient } from "../../../api/client";
+import { requestJson } from "../../../api/http";
 import type { PasswordChangeInput, ProfilePatchInput, UserProfile } from "../types";
 
-export async function getMyProfile(client: AxiosInstance = getApiClient()): Promise<UserProfile> {
-	const { data } = await client.get<UserProfile>("/users/me");
-	return data;
+export function getMyProfile(): Promise<UserProfile> {
+	return requestJson("/users/me");
 }
 
 export async function updateMyProfile(
 	payload: ProfilePatchInput,
-	client: AxiosInstance = getApiClient(),
 ): Promise<UserProfile> {
-	const { data } = await client.patch<UserProfile>("/users/me", payload);
-	return data;
+	return requestJson("/users/me", { method: "PATCH", body: JSON.stringify(payload), headers: { "Content-Type": "application/json" } });
 }
 
 export async function changeMyPassword(
 	payload: PasswordChangeInput,
-	client: AxiosInstance = getApiClient(),
 ): Promise<void> {
-	await client.put("/users/me/password", payload);
+	await requestJson("/users/me/password", { method: "PUT", body: JSON.stringify(payload), headers: { "Content-Type": "application/json" } });
 }

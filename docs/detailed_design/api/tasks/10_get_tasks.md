@@ -143,11 +143,14 @@ sequenceDiagram
             R-->>FE: "404 NOT_FOUND"
         end
     end
-    S->>TR: "count(user, filters) / list(user, filters, unassigned)"
+    S->>TR: "list_for_user_with_total(user, filters, unassigned)"
     TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-    PG-->>TR: "tasks行 + COUNT(task_comments)相関サブクエリ"
-    TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-    PG-->>TR: "users行 / projects行"
+    PG-->>TR: "tasks行 + task_comments集約JOINのcomment_count"
+    alt "該当ページが空"
+        TR->>PG: "fn_count_tasks（同一条件の総件数）"
+        PG-->>TR: "total"
+    end
+    TR->>TR: "users / projectsをFN結果から一括マッピング"
     TR-->>S: "list[TaskWithRelations], total"
     S-->>R: "Page[TaskSummary]"
     R-->>FE: "200 {items, meta}"
@@ -213,10 +216,8 @@ flowchart TB
 flowchart LR
     R["tasks_router.list_tasks"] --> S["task_service.list_tasks"]
     S --> PR["project_repository.fn_is_project_member"]
-    S --> C["task_repository.count"]
     S --> L["task_repository.list"]
     L --> DB[("PostgreSQL<br/>tasks / users / projects")]
-    C --> DB
     PR --> DBM[("PostgreSQL<br/>project_members")]
 ```
 
@@ -231,7 +232,7 @@ flowchart LR
         U["users<br/>assignee / created_by（FN結果の一括マッピング）"]
         P["projects<br/>project_is_active算出（project_id非NULL分のみFN結果の一括マッピング）"]
         PM["project_members<br/>認可範囲の算出・project_idフィルタ時の所属確認"]
-        C["task_comments<br/>COUNT（相関サブクエリ）"]
+        C["task_comments<br/>GROUP BY task_id（集約JOIN）"]
     end
     T -->|"assignee_id / created_by"| U
     T -->|"project_id"| P
@@ -257,10 +258,10 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 |----------|------|-----------|------|
 | project_members | SELECT | `user_id=:uid`（認可範囲の所属project_id集合の算出）、`project_id`指定時の所属確認 | admin時は省略 |
 | tasks | SELECT | 認可範囲 ∩ `project_id`/`status`/`is_active`フィルタ、`ORDER BY :sort :order` | 主クエリ |
-| tasks | SELECT COUNT | 同上の条件 | `meta.total`算出用 |
+| tasks | `fn_count_tasks`（空ページ時のみ） | 同上の条件 | `meta.total`算出用。通常は`fn_list_tasks`の`total_count`を使用 |
 | users | SELECT（`FN結果の一括マッピング`の追加SELECT） | `assignee_id` / `created_by` | 表示用情報 |
 | projects | SELECT（`FN結果の一括マッピング`の追加SELECT） | `tasks.project_id`（非NULLのみ） | `project_is_active`算出用 |
-| task_comments | SELECT（相関サブクエリ COUNT） | `task_id = tasks.id` | `comment_count`算出 |
+| task_comments | SELECT（`GROUP BY task_id`の集約JOIN） | `task_id = tasks.id` | `comment_count`算出 |
 
 **Redis**：使用なし。
 
@@ -285,7 +286,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | タイミング攻撃対策 | 対象外 |
 | レート制限 | なし |
 | fail-close方針 | DB接続不能時は503 |
-| N+1対策・クエリ回数 | 認可範囲の算出（`project_members`）、主クエリ（COUNT＋一覧の計2回）、`users`/`projects`の`FN結果の一括マッピング`追加SELECT各1回の計5回程度。ページサイズに比例しない |
+| N+1対策・クエリ回数 | 認可範囲の算出（`project_members`）、一覧・total・comment_countをまとめた主FN 1回、`users`/`projects`の`FN結果の一括マッピング`追加SELECT各1回の計4回程度。空ページ時のみ`fn_count_tasks`を追加し、ページサイズには比例しない |
 | 大量データ時の性能 | `project_id IN (サブクエリ)` は所属プロジェクト数に比例したインデックス参照になる。学習規模のデータ量では許容し、要検討事項に記載 |
 
 ## 12. テスト設計

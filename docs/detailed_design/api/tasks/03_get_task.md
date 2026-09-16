@@ -113,17 +113,15 @@ sequenceDiagram
     R->>D: "認証（get_current_user）"
     D-->>R: "CurrentUser"
     R->>S: "get_task_detail(task_id, current_user)"
-    S->>TR: "get_with_project(task_id)"
+    S->>TR: "get_by_id(task_id)"
     TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-    PG-->>TR: "task行 + project_id"
-    TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-    PG-->>TR: "users行"
+    PG-->>TR: "task行 + project_is_active + comment_count（集約JOIN）"
     alt "タスクが存在しない"
         TR-->>S: "None"
         S-->>R: "NotFoundError"
         R-->>FE: "404 NOT_FOUND"
     else "存在する"
-        TR-->>S: "TaskWithProject"
+        TR-->>S: "TaskWithProjectStatus"
         alt "project_id が NULL"
             S->>S: "current_user.id == task.created_by or adminか確認"
         else "project_id が非NULL"
@@ -133,10 +131,6 @@ sequenceDiagram
             S-->>R: "NotFoundError"
             R-->>FE: "404 NOT_FOUND"
         else "所属 または 作成者本人 または admin"
-            S->>TR: "count_comments(task_id)"
-            TR->>PG: "SP/FN内部処理（正式呼び出しは§9.1参照）"
-            PG-->>TR: "comment_count"
-            TR-->>S: "comment_count"
             S-->>R: "TaskDetailResponse"
             R-->>FE: "200 {task}"
         end
@@ -185,15 +179,15 @@ flowchart TB
 | 処理内容 | `SELECT fn_get_task(:task_id)` を1回呼び出す。タスクの存在、admin/所属/未所属作成者の認可、コメント件数、プロジェクト有効状態はFN結果またはFN内部で処理し、空集合はAPIで404へ変換する |
 | 副作用 | なし |
 
-### 6.3 `repository/task_repository.py :: get_with_project`
+### 6.3 `repository/task_repository.py :: get_by_id`
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def get_with_project(db: AsyncSession, task_id: UUID) -> TaskWithProject \| None` |
+| シグネチャ | `async def get_by_id(db: AsyncSession, task_id: UUID) -> TaskWithProjectStatus \| None` |
 | 引数 | db: DBセッション／task_id: 対象タスクID |
-| 戻り値 | `TaskWithProject`（`Task` に `assignee` / `created_by` をEager Loadしたもの）または `None` |
+| 戻り値 | `TaskWithProjectStatus`（`Task`、`project_is_active`、`comment_count`のDTO）または `None` |
 | 送出例外 | `OperationalError`（503へ変換） |
-| 処理内容 | 1. `tasks` を `id = task_id` で1回取得 2. `assignee` / `created_by` の各 `FN結果の一括マッピング` に加え、`project_id` が非NULLの場合のみ `project`（`is_active` 参照用）を `FN結果の一括マッピング` で追加SELECT（最大4クエリ。対象行がない場合は主クエリのみ、`project_id=NULL`なら`project`分のSELECTは発行しない）<br/>3. 存在しない場合は `None` を返す（例外は投げない。所属確認前の存在チェックはサービス層で行う） |
+| 処理内容 | `SELECT (task).*, project_is_active, comment_count FROM fn_get_task(:task_id)`を1回実行する。担当者・作成者の表示情報、コメント件数、プロジェクト有効状態はFN結果またはORM写像で取得し、存在しない場合は`None`を返す |
 | 副作用 | なし |
 
 ## 7. 関数相関図
@@ -201,12 +195,10 @@ flowchart TB
 ```mermaid
 flowchart LR
     R["tasks_router.get_task"] --> S["task_service.get_task_detail"]
-    S --> TR["task_repository.get_with_project"]
+    S --> TR["task_repository.get_by_id"]
     S --> PR["project_repository.fn_is_project_member"]
-    S --> CC["task_repository.count_comments"]
-    TR --> DB[("PostgreSQL<br/>tasks / users / projects")]
+    TR --> DB[("PostgreSQL<br/>tasks / users / projects / task_comments")]
     PR --> DBM[("PostgreSQL<br/>project_members")]
-    CC --> DBC[("PostgreSQL<br/>task_comments")]
 ```
 
 ## 8. データ遷移図
@@ -216,16 +208,12 @@ flowchart LR
 ```mermaid
 flowchart LR
     subgraph read["参照範囲（PostgreSQL）"]
-        T["tasks<br/>WHERE id = :task_id"]
+        F["fn_get_task<br/>tasks + projects + task_comments COUNT"]
         U["users<br/>assignee / created_by（FN結果の一括マッピング追加SELECT）"]
-        P["projects<br/>is_active取得（project_id非NULL時のみFN結果の一括マッピング）"]
         PM["project_members<br/>所属確認（project_id非NULL・非adminのみ）"]
-        C["task_comments<br/>COUNT（別クエリ）"]
     end
-    T -->|"project_id（非NULLのみ）"| PM
-    T -->|"project_id（非NULLのみ）"| P
-    T -->|"assignee_id / created_by"| U
-    T -->|"id"| C
+    F -->|"project_id（非NULLのみ）"| PM
+    F -->|"assignee_id / created_by"| U
 ```
 
 ## 9. SP/FNデータアクセス一覧
@@ -248,7 +236,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | users | SELECT（`FN結果の一括マッピング`の追加SELECT各1回） | `assignee_id` / `created_by` | 表示用情報のEager Load。主クエリとは別ラウンドトリップ |
 | projects | SELECT（`FN結果の一括マッピング`の追加SELECT） | `id = tasks.project_id`（`project_id`が非NULLの場合のみ実行） | `project_is_active` 算出用 |
 | project_members | SELECT | `project_id`, `user_id`（`project_id`が非NULLの場合のみ） | admin以外の所属確認 |
-| task_comments | SELECT（COUNT） | `task_id = :task_id` | `comment_count` 算出。一覧取得（[01](./01_get_project_tasks.md)）とは別クエリでN+1にならない（対象が1件のため） |
+| task_comments | FN内部の`GROUP BY task_id`集約JOIN | `task_id = tasks.id` | `comment_count`算出。`fn_get_task`の主クエリへ集約結果をJOINし、repositoryから追加SELECTを発行しない |
 
 **Redis**：使用なし。
 

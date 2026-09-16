@@ -1,8 +1,6 @@
-import { fetchWithAuth } from "../../../api/authAdapter/client";
+import { requestJson } from "../../../api/http";
 import { NOTIFICATION_LIST_DEFAULT_PER_PAGE } from "../config/notificationsConfig";
 import type { NotificationItemData } from "../types";
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api";
 
 interface NotificationResponse {
 	id: string;
@@ -35,12 +33,7 @@ function toItem(item: NotificationResponse): NotificationItemData {
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-	const response = await fetchWithAuth(`${API_BASE_URL}${path}`, {
-		...init,
-		headers: { Accept: "application/json", ...init.headers },
-	}, API_BASE_URL);
-	if (!response.ok) throw new Error(`通知APIエラー: ${response.status}`);
-	return (await response.json()) as T;
+	return requestJson<T>(path, init);
 }
 
 export async function getNotifications(page: number): Promise<{ items: NotificationItemData[]; totalPages: number }> {

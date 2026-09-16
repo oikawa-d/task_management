@@ -269,10 +269,10 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `getProjects(params?, client?)`、`createProject(payload, client?)`、`getCalendarTasks(params, client?)` |
-| 引数 | 一覧取得条件、作成入力、カレンダー取得条件。HTTP clientは共通`getApiClient()`を既定値とする |
+| シグネチャ | `getProjects(params?)`、`createProject(payload)`、`getCalendarTasks(params)` |
+| 引数 | 一覧取得条件、作成入力、カレンダー取得条件。共通`fetchWithAuth`を経由する |
 | 戻り値 | APIレスポンスの型付きPromise |
-| 処理内容 | 共通API clientを使用してプロジェクト一覧取得、作成、カレンダータスク取得を行う |
+| 処理内容 | `fetchWithAuth`を経由してプロジェクト一覧取得、作成、カレンダータスク取得を行う |
 | 副作用 | `GET /api/projects`、`POST /api/projects`、`GET /api/tasks/calendar`呼び出し |
 
 `getCalendarTasks(params)`は`GET /api/tasks/calendar`を呼び出し、`CalendarTaskItem[]`を返す。`CalendarTaskItem.due_date`はサーバーが`APP_TIMEZONE`で算出した日付キーであり、`Calendar`は`due_at`のブラウザ側変換を行わず、この値でタスクをセルへ割り当てる。

@@ -8,7 +8,6 @@ CREATE OR REPLACE PROCEDURE sp_update_task(
     p_assignee_id UUID,
     p_due_at TIMESTAMPTZ,
     p_position INTEGER,
-    p_is_active BOOLEAN,
     p_day_start_utc TIMESTAMPTZ,
     p_day_end_utc TIMESTAMPTZ
 )
@@ -26,8 +25,6 @@ DECLARE
     v_new_key TEXT;
     v_placeholder CONSTANT TEXT := '00000000-0000-0000-0000-000000000000';
 BEGIN
-    -- Advisory lockは対象行のロックより先に取得する。行ロックを先に取得すると、
-    -- 同じ列を並行更新したトランザクションが互いの行を更新しようとしてdeadlockする。
     SELECT project_id, status, position
       INTO v_project_id, v_old_status, v_old_position
       FROM tasks
@@ -72,8 +69,6 @@ BEGIN
     v_status_changed := (p_status IS DISTINCT FROM v_old_status);
 
     IF v_status_changed THEN
-
-        -- 旧列：移動対象より後続のpositionを-1で詰める
         UPDATE tasks
            SET position = position - 1
          WHERE project_id IS NOT DISTINCT FROM v_project_id
@@ -84,7 +79,6 @@ BEGIN
             v_new_position := fn_next_task_position(v_project_id, p_status);
         ELSE
             v_new_position := p_position;
-            -- 新列：挿入位置以降を+1でずらして空きを作る
             UPDATE tasks
                SET position = position + 1
              WHERE project_id IS NOT DISTINCT FROM v_project_id
@@ -121,7 +115,6 @@ BEGIN
            assignee_id = p_assignee_id,
            due_at = p_due_at,
            position = v_new_position,
-           is_active = COALESCE(p_is_active, is_active),
            version = version + 1
      WHERE id = p_task_id
        AND version = p_version;

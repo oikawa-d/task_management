@@ -247,7 +247,7 @@ def _infrastructure_error_response(exc: Exception) -> tuple[int, str, str]:
 def register_error_handling(app: FastAPI) -> None:
 	@app.middleware("http")
 	async def request_id_middleware(request: Request, call_next: Any) -> Any:
-		request_id = str(uuid.uuid4())
+		request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
 		request.state.request_id = request_id
 		response = await call_next(request)
 		response.headers["X-Request-ID"] = request_id

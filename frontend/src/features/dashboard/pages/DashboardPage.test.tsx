@@ -1,12 +1,13 @@
 import "@testing-library/jest-dom/vitest";
 
-import axios, { type AxiosInstance } from "axios";
+import type { AxiosInstance } from "axios";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resetApiClient } from "../../../api/client";
+import { clearAuthAdapter, setAuthAdapterMode } from "../../../api/authAdapter/client";
 import { useProjectStore } from "../../../stores/projectStore";
 import { ApiError } from "../../../api/errors";
 import type { ProjectSummary } from "../api/types";
@@ -21,6 +22,30 @@ function createMockClient(): AxiosInstance {
 			response: { use: vi.fn() },
 		},
 	} as unknown as AxiosInstance;
+}
+
+function installFetchClient(client: AxiosInstance): void {
+	setAuthAdapterMode("session");
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+		const requestUrl = new URL(String(input), "http://localhost");
+		const path = requestUrl.pathname.replace(/^\/api/, "");
+		const rawParams = Object.fromEntries(requestUrl.searchParams.entries());
+		const params = path === "/projects"
+			? { page: Number(rawParams.page), per_page: Number(rawParams.per_page), include_inactive: rawParams.include_inactive === "true" }
+			: rawParams;
+		try {
+			const method = init?.method?.toUpperCase() ?? "GET";
+			const result = method === "POST"
+				? await client.post(path, JSON.parse(String(init?.body ?? "{}")))
+				: path === "/tasks/calendar"
+					? await client.get(path, { params })
+					: await client.get(path, { params });
+			return new Response(JSON.stringify(result?.data ?? []), { status: 200 });
+		} catch (error) {
+			if (!(error instanceof ApiError)) throw error;
+			return new Response(JSON.stringify({ error: { code: error.code, message: error.message, details: error.details } }), { status: error.status ?? 500 });
+		}
+	}));
 }
 
 function buildProject(overrides: Partial<ProjectSummary> = {}): ProjectSummary {
@@ -63,13 +88,15 @@ describe("DashboardPage", () => {
 
 	afterEach(() => {
 		vi.restoreAllMocks();
+		vi.unstubAllGlobals();
+		clearAuthAdapter();
 		resetApiClient();
 	});
 
 	it("読み込み中はステータス表示を出す", async () => {
 		const client = createMockClient();
 		(client.get as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}));
-		vi.spyOn(axios, "create").mockReturnValue(client);
+		installFetchClient(client);
 
 		renderDashboard();
 
@@ -81,7 +108,7 @@ describe("DashboardPage", () => {
 		(client.get as ReturnType<typeof vi.fn>).mockResolvedValue({
 			data: { items: [], meta: { page: 1, per_page: 20, total: 0, total_pages: 0 } },
 		});
-		vi.spyOn(axios, "create").mockReturnValue(client);
+		installFetchClient(client);
 
 		renderDashboard();
 
@@ -93,7 +120,7 @@ describe("DashboardPage", () => {
 		(client.get as ReturnType<typeof vi.fn>).mockResolvedValue({
 			data: { items: [buildProject()], meta: { page: 1, per_page: 20, total: 1, total_pages: 1 } },
 		});
-		vi.spyOn(axios, "create").mockReturnValue(client);
+		installFetchClient(client);
 
 		renderDashboard();
 
@@ -107,7 +134,7 @@ describe("DashboardPage", () => {
 		(client.get as ReturnType<typeof vi.fn>).mockResolvedValue({
 			data: { items: [buildProject()], meta: { page: 1, per_page: 20, total: 1, total_pages: 1 } },
 		});
-		vi.spyOn(axios, "create").mockReturnValue(client);
+		installFetchClient(client);
 
 		renderDashboard();
 		fireEvent.click(await screen.findByRole("button", { name: "Cerberus開発" }));
@@ -123,7 +150,7 @@ describe("DashboardPage", () => {
 			.mockResolvedValueOnce({
 				data: { items: [buildProject()], meta: { page: 1, per_page: 20, total: 1, total_pages: 1 } },
 			});
-		vi.spyOn(axios, "create").mockReturnValue(client);
+		installFetchClient(client);
 
 		renderDashboard();
 
@@ -144,7 +171,7 @@ describe("DashboardPage", () => {
 				data: { items: [buildProject({ name: "新プロジェクト" })], meta: { page: 1, per_page: 20, total: 1, total_pages: 1 } },
 			});
 		(client.post as ReturnType<typeof vi.fn>).mockResolvedValue({ data: buildProject({ name: "新プロジェクト" }) });
-		vi.spyOn(axios, "create").mockReturnValue(client);
+		installFetchClient(client);
 
 		renderDashboard();
 		await screen.findByText("まだプロジェクトがありません。");
@@ -172,7 +199,7 @@ describe("DashboardPage", () => {
 				details: [{ field: "name", message: "プロジェクト名を1〜100文字で入力してください" }],
 			}),
 		);
-		vi.spyOn(axios, "create").mockReturnValue(client);
+		installFetchClient(client);
 
 		renderDashboard();
 		await screen.findByText("まだプロジェクトがありません。");
@@ -190,7 +217,7 @@ describe("DashboardPage", () => {
 		(client.get as ReturnType<typeof vi.fn>).mockResolvedValue({
 			data: { items: [], meta: { page: 1, per_page: 20, total: 0, total_pages: 0 } },
 		});
-		vi.spyOn(axios, "create").mockReturnValue(client);
+		installFetchClient(client);
 
 		renderDashboard();
 		await screen.findByText("まだプロジェクトがありません。");
@@ -207,7 +234,7 @@ describe("DashboardPage", () => {
 		(client.get as ReturnType<typeof vi.fn>).mockResolvedValue({
 			data: { items: [buildProject()], meta: { page: 1, per_page: 20, total: 1, total_pages: 1 } },
 		});
-		vi.spyOn(axios, "create").mockReturnValue(client);
+		installFetchClient(client);
 
 		renderDashboard();
 		fireEvent.click(await screen.findByRole("button", { name: "Cerberus開発" }));
@@ -223,7 +250,7 @@ describe("DashboardPage", () => {
 			.mockResolvedValueOnce({ data: [] })
 			.mockResolvedValueOnce({ data: { items: [created], meta: { page: 1, per_page: 20, total: 1, total_pages: 1 } } });
 		(client.post as ReturnType<typeof vi.fn>).mockResolvedValue({ data: created });
-		vi.spyOn(axios, "create").mockReturnValue(client);
+		installFetchClient(client);
 
 		renderDashboard();
 		await screen.findByText("まだプロジェクトがありません。");
@@ -243,7 +270,7 @@ describe("DashboardPage", () => {
 				? Promise.reject(new ApiError({ code: "USER_INACTIVE", message: "アカウントが無効化されています", status: 403 }))
 				: Promise.resolve({ data: [] }),
 		);
-		vi.spyOn(axios, "create").mockReturnValue(client);
+		installFetchClient(client);
 
 		renderDashboard();
 
@@ -260,7 +287,7 @@ describe("DashboardPage", () => {
 		(client.post as ReturnType<typeof vi.fn>).mockRejectedValue(
 			new ApiError({ code: "CSRF_INVALID", message: "CSRFトークンが不正です", status: 403 }),
 		);
-		vi.spyOn(axios, "create").mockReturnValue(client);
+		installFetchClient(client);
 
 		renderDashboard();
 		await screen.findByText("まだプロジェクトがありません。");

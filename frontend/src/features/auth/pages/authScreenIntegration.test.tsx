@@ -157,7 +157,7 @@ describe("認証画面 結合テスト（issue #431: phase close要件検証）"
 			useAuthStore.getState().setAuthAdapter(adapter);
 		}
 
-		it("成功時はaccess_tokenをauthStoreへ保持し/dashboardへ遷移する", async () => {
+		it("成功時はaccess_tokenを共有TokenStoreへ保持し/dashboardへ遷移する", async () => {
 			setupJwtAdapter();
 			const fetchMock = vi.fn().mockImplementation((url: string) => {
 				if (url.endsWith("/auth/login")) {
@@ -176,7 +176,7 @@ describe("認証画面 結合テスト（issue #431: phase close要件検証）"
 
 			await waitFor(() => expect(screen.getByRole("heading", { name: "ダッシュボード" })).toBeInTheDocument());
 			expect(useAuthStore.getState().status).toBe("authenticated");
-			expect(useAuthStore.getState().accessToken).toBe("jwt-token-123");
+			expect(authTokenStore.getAccessToken()).toBe("jwt-token-123");
 		});
 
 		it("401 INVALID_CREDENTIALSの場合、accessTokenを保持せずunauthenticatedのままにする", async () => {
@@ -195,7 +195,7 @@ describe("認証画面 結合テスト（issue #431: phase close要件検証）"
 
 			expect(await screen.findByRole("alert")).toHaveTextContent("IDまたはパスワードが正しくありません");
 			expect(useAuthStore.getState().status).not.toBe("authenticated");
-			expect(useAuthStore.getState().accessToken).toBeNull();
+			expect(authTokenStore.getAccessToken()).toBeNull();
 		});
 	});
 

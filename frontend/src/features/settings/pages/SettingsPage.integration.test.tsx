@@ -86,7 +86,25 @@ function renderSettings(mode: AuthMode, plans: TestPlan[], initialEntry: string 
 	resetApiClient();
 	getApiClient({ authAdapter: adapter });
 	document.cookie = "cerberus_csrf=csrf-token";
-	vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ unread_count: 0 }) })));
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+		const url = new URL(String(input), "http://localhost");
+		if (url.pathname.endsWith("/notifications/unread-count")) {
+			return new Response(JSON.stringify({ unread_count: 0 }), { status: 200 });
+		}
+		try {
+			const result = await testClient.client.request({
+				method: init?.method ?? "GET",
+				url: url.pathname.replace(/^\/api/, ""),
+				data: init?.body,
+				headers: Object.fromEntries(new Headers(init?.headers).entries()),
+				withCredentials: init?.credentials === "include",
+			});
+			return new Response(result.data === undefined ? undefined : JSON.stringify(result.data), { status: result.status });
+		} catch (error) {
+			if (!(error instanceof AxiosError) || !error.response) throw error;
+			return new Response(JSON.stringify(error.response.data), { status: error.response.status });
+		}
+	}));
 	render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
 	return { adapter, router, ...testClient };
 }
