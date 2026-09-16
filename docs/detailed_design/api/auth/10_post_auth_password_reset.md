@@ -283,12 +283,17 @@ stateDiagram-v2
 | 2 | 単体（モック） | 無効なトークン | `consume_password_reset_token` が `None` | `InvalidResetTokenError` 送出、以降の処理が呼ばれない | `test_reset_password_service_invalid_token` |
 | 3 | 単体（モック） | Redis失効失敗時にDBパスワードが更新されない | `delete_all_sessions` がRedis例外を送出 | `update_password` / `db.commit` が呼ばれず、Redis例外が伝播する | `test_reset_password_db_not_updated_when_session_revocation_fails` |
 | 4 | 結合（実Redis/PostgreSQL、`AUTH_MODE=session`） | パスワードリセット後にログイン中セッションが失効すること | ログイン済みsession Cookie保持、リセット要求済み | リセット成功後、旧session Cookieでのアクセスが `401 SESSION_EXPIRED` | `test_password_reset_endpoint_session_invalidated` |
-| 5 | 結合（実Redis/PostgreSQL、`AUTH_MODE=jwt`） | パスワードリセット後にリフレッシュトークンが失効すること | ログイン済みrefresh Cookie保持 | リセット成功後、`/auth/refresh` が `401 TOKEN_REVOKED` | `test_password_reset_endpoint_refresh_revoked` |
-| 6 | 結合 | 同一トークンを2回送信 | 1回目成功済み | 2回目は `400 INVALID_RESET_TOKEN` | `test_password_reset_endpoint_reuse_rejected` |
+| 5 | 結合（実Redis/PostgreSQL、`AUTH_MODE=jwt`） | パスワードリセット後にリフレッシュトークンが失効すること | ログイン済みrefresh Cookie保持 | リセット成功後、`/auth/refresh` が `401 TOKEN_REVOKED` | `test_password_forgot_reset_flow_consumes_token_and_revokes_auth_state`（Issue #425） |
+| 6 | 結合 | 同一トークンを2回送信 | 1回目成功済み | 2回目は `400 INVALID_RESET_TOKEN` | `test_password_forgot_reset_flow_consumes_token_and_revokes_auth_state`（Issue #425） |
 | 7 | 結合 | 存在しないトークン | ランダム文字列 | `400 INVALID_RESET_TOKEN` | `test_password_reset_endpoint_unknown_token` |
 | 8 | 結合 | パスワードポリシー違反 | `new_password` が7文字 | `422 VALIDATION_ERROR` | `test_password_reset_endpoint_weak_password` |
 | 9 | 結合 | `password_confirm` 不一致 | `new_password` と異なる値 | `422 VALIDATION_ERROR` | `test_password_reset_endpoint_confirm_mismatch` |
 | 10 | 結合 | 更新後の新パスワードでログイン成功 | リセット完了後 | `POST /auth/login` が新パスワードで成功する | `test_password_reset_then_login_success` |
+
+| 11 | 結合 | TTL満了後のリセットトークン | Redis上の対象キーをテスト用短TTLに変更 | `400 INVALID_RESET_TOKEN` | `test_password_forgot_reset_flow_consumes_token_and_revokes_auth_state`（Issue #425） |
+| 12 | 結合（境界障害） | Redis障害時のfail-close | Redis失効境界で接続例外を注入 | `503 SERVICE_UNAVAILABLE`、DB更新・commitを行わない | `test_password_reset_redis_failure_is_fail_closed`（Issue #425） |
+
+Issue #425 の結合テストは、パスワード再設定の要求・token消費・Redis失効・DB更新・再ログインを実アプリ境界で検証する。Cookieを発行しない reset API の入出力と、jwt/session別の失効結果は本節の仕様に一致する。
 
 このAPIの本体処理は `AUTH_MODE` に依存しないが、失効対象がsession/jwtで異なるため、No.4/5はそれぞれのモードで個別に実施する。
 
