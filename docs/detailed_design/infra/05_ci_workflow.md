@@ -20,12 +20,17 @@
 
 | 要素 | 種別 | 責務 | 備考 |
 |------|------|------|------|
-| `backend-lint` | ジョブ | `ruff check` / `ruff format --check` / `mypy app` | Python 3.14 |
-| `backend-test` | ジョブ | `services`でPostgreSQL/Redis起動 → `alembic upgrade head` → `pytest --cov` | `AUTH_MODE`をmatrix化（`session`/`jwt`） |
-| `frontend-lint` | ジョブ | `eslint .` / `tsc --noEmit` | Node v26 |
-| `frontend-test` | ジョブ | `vitest run --coverage` | |
-| `batch-container-integration` | ジョブ | `compose.integration.yml`でPostgreSQL/Redisを起動し、batchコンテナから直接接続 | `RUN_BATCH_CONTAINER_INTEGRATION=1`で受入テストを有効化 |
-| `docker-build` | ジョブ | backend/frontend/batchイメージのビルド確認（`push: false`） | 4ジョブすべての成功後に実行 |
+| `detect` | ジョブ | 実装ディレクトリとDockerfileの有無を判定し、後続ジョブの条件へ出力 | 依存なし。`api` / `batch` / `frontend` / `docker`を出力 |
+| `docs-check` | ジョブ | 変更差分の空白エラーを検証 | 依存なし。pushまたはpull_requestの差分を検査 |
+| `workflow-lint` | ジョブ | `ci.yml`の構成テストを実行 | 依存なし。`tests/ci/test_ci_workflow.py`を実行 |
+| `hook-test` | ジョブ | GitHub破壊操作hookのシェルテストを実行 | 依存なし。`.agents/hooks/*.test.sh`を実行 |
+| `backend-lint` | ジョブ | `ruff check` / `ruff format --check` / `mypy app` | `needs: detect`。`detect.api == 'true'`のとき実行。Python 3.14 |
+| `backend-test` | ジョブ | `services`でPostgreSQL/Redis起動 → `alembic upgrade head` → `pytest --cov` | `needs: detect`、`detect.api == 'true'`。`AUTH_MODE`をmatrix化（`session`/`jwt`） |
+| `frontend-lint` | ジョブ | `eslint .` / `tsc --noEmit` | `needs: detect`、`detect.frontend == 'true'`。Node v26 |
+| `frontend-test` | ジョブ | `vitest run --coverage` | `needs: detect`、`detect.frontend == 'true'` |
+| `batch-test` | ジョブ | `services`でPostgreSQL/Redis起動 → batchのlint・型チェック・テスト | `needs: detect`、`detect.batch == 'true'` |
+| `batch-container-integration` | ジョブ | `compose.integration.yml`でPostgreSQL/Redisを起動し、batchコンテナから直接接続 | `needs: detect`、`detect.batch == 'true'`。`RUN_BATCH_CONTAINER_INTEGRATION=1`で受入テストを有効化 |
+| `docker-build` | ジョブ | backend/frontend/batchイメージのビルド確認（`push: false`） | `needs: detect`およびbackend/frontend/batchの5検証job。`detect.docker == 'true'`のとき実行 |
 | `postgres` service | GitHub Actions `services` | `backend-test`用の一時PostgreSQLコンテナ | `postgres:17-alpine` |
 | `redis` service | GitHub Actions `services` | `backend-test`用の一時Redisコンテナ | `redis:8-alpine` |
 
@@ -60,32 +65,51 @@ sequenceDiagram
     autonumber
     actor DEV as 開発者
     participant GH as GitHub
+    participant DET as detect
+    participant DOC as docs-check
+    participant WFL as workflow-lint
+    participant HT as hook-test
     participant BL as backend-lint
     participant BT as backend-test
     participant FL as frontend-lint
     participant FT as frontend-test
+    participant BATCHT as batch-test
     participant BI as batch-container-integration
     participant DB as docker-build
 
     DEV->>GH: push（main, develop）/ pull_request（base制限なし）
     GH->>GH: concurrency group単位で旧実行をキャンセル
-    GH->>BL: ジョブ起動
-    GH->>BT: ジョブ起動（matrix: session, jwt）
-    GH->>FL: ジョブ起動
-    GH->>FT: ジョブ起動
-    GH->>BI: ジョブ起動
-    par 5ジョブ並行実行
+    GH->>DET: ジョブ起動
+    GH->>DOC: ジョブ起動
+    GH->>WFL: ジョブ起動
+    GH->>HT: ジョブ起動
+    DET-->>GH: api / batch / frontend / docker の判定結果
+    GH->>BL: `api`出力がtrueなら起動
+    GH->>BT: `api`出力がtrueなら起動（matrix: session, jwt）
+    GH->>FL: `frontend`出力がtrueなら起動
+    GH->>FT: `frontend`出力がtrueなら起動
+    GH->>BATCHT: `batch`出力がtrueなら起動
+    GH->>BI: `batch`出力がtrueなら起動
+    par 10個の検証jobを並行実行
+        DOC->>DOC: git diff --check
+        WFL->>WFL: ci.yml構成テスト
+        HT->>HT: hookテスト
         BL->>BL: ruff check / format --check / mypy app
         BT->>BT: services起動 → alembic upgrade head → pytest --cov
         FL->>FL: eslint . / tsc --noEmit
         FT->>FT: vitest run --coverage
+        BATCHT->>BATCHT: ruff check / format --check / mypy app → pytest --cov
         BI->>BI: Compose起動 → batchコンテナからDB/Redisへ接続
     end
+    DET-->>GH: success
+    DOC-->>GH: success
+    WFL-->>GH: success
+    HT-->>GH: success
     BL-->>GH: success
     BT-->>GH: success（2 matrix jobs）
     FL-->>GH: success
     FT-->>GH: success
-    GH->>DB: ジョブ起動（needs: 上記4ジョブ）
+    GH->>DB: ジョブ起動（needs: detectおよび上記5検証job）
     DB->>DB: docker/build-push-action（push: false）でbackend/frontend/batchをビルド
     DB-->>GH: success
     GH-->>DEV: 全チェックgreen（ブランチ保護の必須チェックを満たす）
@@ -118,7 +142,11 @@ sequenceDiagram
 
 ```mermaid
 flowchart TB
-    A["push（main, develop）/<br/>pull_request（base制限なし）"] --> B["5ジョブを並行起動<br/>backend-lint / backend-test<br/>frontend-lint / frontend-test<br/>batch-container-integration"]
+    A["push（main, develop）/<br/>pull_request（base制限なし）"] --> DET["detect<br/>api / batch / frontend / docker"]
+    A --> DOC["docs-check"]
+    A --> WFL["workflow-lint"]
+    A --> HT["hook-test"]
+    DET --> B["条件を満たす検証jobを並行起動<br/>backend-lint / backend-test<br/>frontend-lint / frontend-test<br/>batch-test / batch-container-integration"]
     B --> C{"backend-lint:<br/>ruff/mypyエラー0?"}
     C -->|No| F1["失敗・以降のdocker-buildへ進まない"]
     C -->|Yes| D["backend-test（matrix: session, jwt）"]
@@ -138,14 +166,17 @@ flowchart TB
     N --> O{"カバレッジ70%以上?"}
     O -->|No| F3["ジョブ失敗"]
     O -->|Yes| P["frontend-test成功"]
+    B --> BTEST["batch-test:<br/>ruff/mypy/pytest成功?"]
+    BTEST -->|No| F4B["batch-test失敗"]
+    BTEST -->|Yes| BTESTOK["batch-test成功"]
     B --> BI["batch-container-integration"]
     BI --> BJ{"batchコンテナから<br/>DB/Redis接続成功?"}
     BJ -->|No| F4["受入検証失敗"]
     BJ -->|Yes| BOK["batch-container-integration成功"]
-    C -->|Yes| Q{"backend-lint/test<br/>frontend-lint/test<br/>すべてsuccess?"}
+    C -->|Yes| Q{"backend-lint/test<br/>frontend-lint/test<br/>batch-testを含む5検証jobがsuccess?"}
     K --> Q
     P --> Q
-    Q -->|Yes| R["docker-build起動<br/>（push: false）"]
+    Q -->|Yes| R["docker-build起動<br/>（needs: detect + 5検証job、push: false）"]
     Q -->|No| S["docker-buildはneeds未達成でskip扱い"]
     R --> T{"backend/frontend/batchとも<br/>ビルド成功?"}
     T -->|No| U["docker-build失敗"]
@@ -217,11 +248,11 @@ CIジョブは実行のたびに使い捨てのGitHub-hosted runner上で完結�
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ / 定義 | `runs-on: ubuntu-latest`。`needs: [backend-lint, backend-test, frontend-lint, frontend-test]` |
+| シグネチャ / 定義 | `runs-on: ubuntu-latest`。`needs: [detect, backend-lint, backend-test, frontend-lint, frontend-test, batch-test]`。`if: needs.detect.outputs.docker == 'true'` |
 | 引数 / 入力 | `api/Dockerfile`（[02_dockerfile_api.md](./02_dockerfile_api.md)）、`frontend/Dockerfile`（[03_dockerfile_frontend.md](./03_dockerfile_frontend.md)）、`batch/Dockerfile`（[08_dockerfile_batch.md](./08_dockerfile_batch.md)） |
 | 戻り値 / 出力 | ビルド成功可否のみ（イメージはレジストリへpushしない） |
 | 送出例外 / 失敗条件 | いずれかのDockerfileのビルドエラー |
-| 処理内容 | 1. チェックアウト 2. `docker/setup-buildx-action@v3` 3. `docker/build-push-action@v6`を3回呼び出し（backendはcontext`.`・`api/Dockerfile`、frontendはcontext`frontend`・`frontend/Dockerfile`、batchはcontext`.`・`batch/Dockerfile`）、いずれも `push: false`、`cache-from: type=gha`、`cache-to: type=gha,mode=max` を指定 4. `VITE_API_BASE_URL`等のビルド時`ARG`はCIダミー値（`/api`）で埋める |
+| 処理内容 | 1. チェックアウト 2. `docker/setup-buildx-action@v3` 3. `docker/build-push-action@v6`を3回呼び出し（backendはcontext`.`・`api/Dockerfile`、frontendはcontext`frontend`・`frontend/Dockerfile`、batchはcontext`.`・`batch/Dockerfile`）、いずれも `push: false`、`cache-from: type=gha`、`cache-to: type=gha,mode=max` を指定 4. `VITE_API_BASE_URL`等のビルド時`ARG`はCIダミー値（`/api`）で埋める。`detect`およびbackend/frontend/batchの5検証jobが成功した後に実行する |
 | 副作用 | runner上に一時イメージが生成されるが、レジストリへは送信されない |
 
 ### 8.7 `batch-container-integration` ジョブ
@@ -241,11 +272,17 @@ CIジョブは実行のたびに使い捨てのGitHub-hosted runner上で完結�
 flowchart LR
     TRIG["push（main, develop）/<br/>pull_request（base制限なし）"] --> WF["ci.yml"]
     WF --> CONC["concurrency<br/>同一PR/ブランチの旧実行をcancel"]
-    WF --> BL["backend-lint"]
+    WF --> DET["detect<br/>実装有無を判定"]
+    WF --> DOC["docs-check<br/>差分の空白検査"]
+    WF --> WFL["workflow-lint<br/>ci.yml構成検査"]
+    WF --> HT["hook-test<br/>hook回帰検査"]
+    DET --> BL["backend-lint<br/>if: api"]
     WF --> BT["backend-test<br/>(matrix: AUTH_MODE)"]
-    WF --> FL["frontend-lint"]
-    WF --> FT["frontend-test"]
-    WF --> BI["batch-container-integration"]
+    DET --> BT
+    DET --> FL["frontend-lint<br/>if: frontend"]
+    DET --> FT["frontend-test<br/>if: frontend"]
+    DET --> BTEST["batch-test<br/>if: batch"]
+    DET --> BI["batch-container-integration<br/>if: batch"]
     BI --> BPG["Compose: postgres"]
     BI --> BRD["Compose: redis"]
     BI --> BATCH["Compose: batch"]
@@ -255,10 +292,12 @@ flowchart LR
     BT --> RDSVC["services: redis:8-alpine"]
     BT --> MIG["alembic upgrade head"]
     MIG --> PGSVC
-    BL --> DB["docker-build<br/>(needs: 4ジョブ)"]
+    DET --> DB["docker-build<br/>(if: docker)"]
+    BL --> DB
     BT --> DB
     FL --> DB
     FT --> DB
+    BTEST --> DB
     DB --> IMGBE["context . + api/Dockerfile ビルド<br/>db/を含む"]
     DB --> IMGFE["frontend/Dockerfile ビルド"]
     DB --> IMGBA["context . + batch/Dockerfile ビルド"]
@@ -274,7 +313,7 @@ flowchart LR
 | フォークPRからの実行 | `pull_request`トリガーではフォークPRに対してSecretsが渡されない挙動（GitHub標準仕様）を前提とし、フォークPR経由での不正なSecrets取得を防ぐ | GitHub Actions標準セキュリティモデル |
 | イメージのpush禁止 | `docker-build`ジョブは`push: false`固定とし、CI実行だけでGHCRに意図しないイメージが公開されないようにする | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §5.2 |
 | 依存キャッシュの汚染防止 | `cache-dependency-path`を`requirements*.txt`/`package-lock.json`に限定し、キャッシュキーがロックファイルのハッシュに連動するようにする（`actions/setup-python`/`actions/setup-node`標準機能） | GitHub Actions標準機能 |
-| ブランチ保護 | `backend-lint`/`backend-test`（両matrix）/`frontend-lint`/`frontend-test`/`batch-container-integration`/`docker-build`をrequired status checksに設定し、いずれか未成功のPRは保護対象ブランチへマージ不可とする。baseがfeatureブランチのスタックPRにも同じCI結果を表示する | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §5.4 |
+| ブランチ保護 | `docs-check`/`workflow-lint`/`hook-test`/`backend-lint`/`backend-test`（両matrix）/`frontend-lint`/`frontend-test`/`batch-test`/`batch-container-integration`/`docker-build`をrequired status checksに設定し、いずれか未成功のPRは保護対象ブランチへマージ不可とする。baseがfeatureブランチのスタックPRにも同じCI結果を表示する | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §5.4 |
 | CI用ダミーSecrets | `CI_JWT_SECRET_KEY`/`CI_INITIAL_ADMIN_PASSWORD`等は本番用の値と別管理し、CI専用のGitHub Secretsとして登録する | 一般的なCI/CD運用指針 |
 
 ## 11. テスト設計
@@ -285,7 +324,7 @@ flowchart LR
 | 2 | 結合 | `backend-test`：session/jwt両matrixでpytestが通る | `services`起動済み、正常なテストコード | 2つのmatrix jobがともにsuccess | `test_ci_backend_test_matrix_both_modes` |
 | 3 | 結合 | `backend-test`：カバレッジ80%未満 | 意図的にテスト数を減らしたブランチ | `--cov-fail-under=80`によりジョブ失敗 | `test_ci_backend_coverage_below_threshold_fails` |
 | 4 | 結合 | `frontend-test`：カバレッジ70%未満 | 意図的にテストを削除したブランチ | `vitest`のカバレッジ閾値未達で失敗 | `test_ci_frontend_coverage_below_threshold_fails` |
-| 5 | 結合 | `docker-build`：4ジョブ成功後にのみ起動 | 4ジョブのいずれかが失敗する状態でpush | `docker-build`が`needs`未達成でskipされる | `test_ci_docker_build_requires_all_jobs_success` |
+| 5 | 結合 | `docker-build`：detectと5品質検証job成功後にのみ起動 | 5品質検証jobのいずれかが失敗する状態でpush | `docker-build`が`needs`未達成でskipされる | `test_ci_docker_build_requires_all_jobs_success` |
 | 6 | 結合 | `docker-build`：GHCRへpushされない | 正常なpush | ビルドログに`push: false`相当（レジストリへの送信なし）が確認できる | `test_ci_docker_build_does_not_push` |
 | 7 | 受入 | `batch-container-integration`：batch専用コンテナからDB/Redisへ接続 | Docker Engine、`.env.example`、`RUN_BATCH_CONTAINER_INTEGRATION=1` | batchコンテナ内のDB `SELECT 1`とRedis `PING`が成功する | `test_batch_container_connects_to_postgres_and_redis` |
 | 8 | 結合 | 依存キャッシュが効くこと | 同一ロックファイルで2回目のCI実行 | 2回目の`pip install`/`npm ci`が短時間で完了（キャッシュhit） | `test_ci_cache_hit_reduces_install_time` |
