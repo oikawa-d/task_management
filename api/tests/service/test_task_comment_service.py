@@ -175,6 +175,20 @@ async def test_add_comment_rolls_back_when_response_construction_fails(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_add_comment_rolls_back_once_when_created_comment_is_missing(monkeypatch) -> None:
+	user = _user()
+	task = _task(user.id)
+	db = AsyncMock()
+	monkeypatch.setattr(task_comment_service.task_comment_repository, "create", AsyncMock(return_value=uuid4()))
+	monkeypatch.setattr(task_comment_service.task_comment_repository, "get_by_id", AsyncMock(return_value=None))
+
+	with pytest.raises(NotFoundError):
+		await task_comment_service.add_comment(task, CommentCreateRequest(body="本文"), user, db)
+
+	db.rollback.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
 async def test_update_comment_rejects_inactive_task(monkeypatch) -> None:
 	user = _user()
 	task = _task(user.id, is_active=False)
@@ -198,6 +212,21 @@ async def test_update_comment_rolls_back_when_refetch_returns_multiple_rows(monk
 	)
 
 	with pytest.raises(MultipleResultsFound):
+		await task_comment_service.update_comment(task, comment, CommentCreateRequest(body="更新"), user, db)
+
+	db.rollback.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_update_comment_rolls_back_once_when_updated_comment_is_missing(monkeypatch) -> None:
+	user = _user()
+	task = _task(user.id)
+	comment = _comment(user.id, task.id)
+	db = AsyncMock()
+	monkeypatch.setattr(task_comment_service.task_comment_repository, "update", AsyncMock())
+	monkeypatch.setattr(task_comment_service.task_comment_repository, "get_by_id", AsyncMock(return_value=None))
+
+	with pytest.raises(NotFoundError):
 		await task_comment_service.update_comment(task, comment, CommentCreateRequest(body="更新"), user, db)
 
 	db.rollback.assert_awaited_once_with()

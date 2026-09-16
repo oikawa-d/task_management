@@ -60,7 +60,6 @@ async def add_comment(
 		comment_id = await task_comment_repository.create(db, task.id, user.id, payload.body)
 		comment = await task_comment_repository.get_by_id(db, comment_id)
 		if comment is None:
-			await db.rollback()
 			raise NotFoundError()
 		response = _comment_response(comment, user)
 		await db.commit()
@@ -86,7 +85,6 @@ async def update_comment(
 		await task_comment_repository.update(db, comment.id, user.id, payload.body)
 		updated = await task_comment_repository.get_by_id(db, comment.id)
 		if updated is None:
-			await db.rollback()
 			raise NotFoundError()
 		response = _comment_response(updated, user)
 		await db.commit()
