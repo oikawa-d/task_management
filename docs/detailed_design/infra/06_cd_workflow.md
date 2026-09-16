@@ -22,7 +22,7 @@ flowchart LR
     CI --> CHECK["Lint / 型チェック / テスト"]
     CI --> BUILD["Dockerイメージのビルド確認<br/>pushなし"]
     DEV["開発者"] --> ENV[".env"]
-    ENV --> COMPOSE["docker compose<br/>-f docker-compose.yml<br/>-f compose.dev.yml up"]
+    ENV --> COMPOSE["docker compose<br/>-f docker-compose.yml<br/>-f compose.dev.yml<br/>--profile dev up"]
     COMPOSE --> APP["ローカル開発環境"]
 ```
 
@@ -38,13 +38,13 @@ flowchart LR
 ## 5. ローカル実行手順
 
 ```bash
-docker compose -f docker-compose.yml -f compose.dev.yml up
+docker compose -f docker-compose.yml -f compose.dev.yml --profile dev up
 ```
 
 停止する場合は次を実行する。
 
 ```bash
-docker compose -f docker-compose.yml -f compose.dev.yml down
+docker compose -f docker-compose.yml -f compose.dev.yml --profile dev down
 ```
 
 環境変数の一覧と型は[04_env_config.md](./04_env_config.md)、Composeの詳細は[01_docker_compose.md](./01_docker_compose.md)を参照する。`.env`はコミットしない。

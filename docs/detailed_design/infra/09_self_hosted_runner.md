@@ -23,9 +23,10 @@
 4. GitHub画面に表示された一時トークンを使い、次の形式で登録する。
 
 ```bash
+RUNNER_REGISTRATION_TOKEN='GitHub画面に表示された登録トークン'
 ./config.sh \
   --url https://github.com/oikawa-d/task_management \
-  --token <GitHub画面に表示された登録トークン> \
+  --token "$RUNNER_REGISTRATION_TOKEN" \
   --name cerberus-development \
   --labels cerberus
 ```
@@ -71,13 +72,14 @@ Runner一覧で次を確認する。
 sudo ./svc.sh stop
 ```
 
-完全に登録解除する場合は、GitHubのRunner一覧から対象runnerを削除し、対象ホストで次を実行する。
+完全に登録解除する場合は、まずrunnerサービスを停止する。次にGitHubのRunner詳細画面にある`Remove instructions`を開き、表示された手順を対象ホストで実行する。登録解除トークンを使う手順の例は次のとおり。GitHub画面の手順・オプションを正とする。
 
 ```bash
-./config.sh remove --token <GitHub画面に表示された削除トークン>
+RUNNER_REMOVAL_TOKEN='GitHub Runner詳細のRemove instructionsに表示された削除トークン'
+./config.sh remove --token "$RUNNER_REMOVAL_TOKEN"
 ```
 
-runnerアプリケーションのディレクトリは、登録解除と利用停止を確認してから管理者が削除する。自動削除は行わない。
+GitHub上で対象runnerの登録解除と利用停止を確認してから、runnerアプリケーションのディレクトリを管理者が削除する。自動削除は行わない。
 
 ## 7. 処理の流れ
 

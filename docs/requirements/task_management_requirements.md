@@ -211,7 +211,7 @@ Issue #8で、ログイン以外のRate Limit、パスワード再設定トー�
 
 ### 8.2 ローカルDocker Compose
 
-開発者が`.env`を用意し、`docker compose`でbackend、frontend、batch、PostgreSQL、Redis、Mailpitを起動する。開発時のソース反映は`compose.dev.yml`によるバインドマウントとホットリロードで行う。
+開発者が`.env`を用意し、`docker compose -f docker-compose.yml -f compose.dev.yml --profile dev up`でbackend、frontend、batch、PostgreSQL、Redis、Mailpitを起動する。停止時は`docker compose -f docker-compose.yml -f compose.dev.yml --profile dev down`を使用する。開発時のソース反映は`compose.dev.yml`によるバインドマウントとホットリロードで行う。
 
 ### 8.3 ポイント
 

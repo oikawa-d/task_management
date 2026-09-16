@@ -27,7 +27,7 @@
 | `mailpit` | サービス | 開発用SMTPモック | イメージ `axllent/mailpit`。`profiles: [dev]` |
 | `cerberus_net` | ネットワーク | bridge。6サービスを内部DNS名（サービス名）で疎通 | 外部公開は `frontend` の1ポートのみが原則 |
 | `pgdata` | volume | PostgreSQLデータ永続化 | named volume |
-| `compose.dev.yml` | オーバーレイファイル | バインドマウント・ホットリロード・追加ポート公開を開発時だけ有効化 | `docker compose -f docker-compose.yml -f compose.dev.yml up` |
+| `compose.dev.yml` | オーバーレイファイル | バインドマウント・ホットリロード・追加ポート公開を開発時だけ有効化 | `docker compose -f docker-compose.yml -f compose.dev.yml --profile dev up` |
 | `compose.integration.yml` | 受入テスト用Compose | `.env.example`を使った最小のPostgreSQL/Redis/batch構成を起動し、実コンテナからの直接接続を検証 | CIの`batch-container-integration`のみで使用 |
 
 ## 3. 設定項目（環境変数）
@@ -59,13 +59,13 @@
 
 | 区分 | 内容 |
 |------|------|
-| 入力 | `.env`（Compose変数展開）、各サービスのビルドコンテキスト（backend/batchはリポジトリルート、frontendは`frontend/`）、ホストの `docker compose up` コマンド |
+| 入力 | `.env`（Compose変数展開）、各サービスのビルドコンテキスト（backend/batchはリポジトリルート、frontendは`frontend/`）、ホストの `docker compose -f docker-compose.yml -f compose.dev.yml --profile dev up` コマンド |
 | 出力 | 起動済みコンテナ群、`pgdata` volume（永続データ）、`cerberus_net` 経由の内部通信、ホストへ公開される `${FRONTEND_PORT}`および開発時追加ポート |
 | 副作用 | `backend` 起動時の `alembic upgrade head` によるDBスキーマ変更 |
 
 ## 5. シーケンス図
 
-### 5.1 `docker compose up -d` 起動シーケンス
+### 5.1 `docker compose ... --profile dev up -d` 起動シーケンス
 
 ```mermaid
 sequenceDiagram
@@ -78,7 +78,7 @@ sequenceDiagram
     participant BA as batch
     participant FE as frontend
 
-    DEV->>DC: docker compose up -d
+    DEV->>DC: docker compose -f docker-compose.yml -f compose.dev.yml --profile dev up -d
     DC->>PG: コンテナ起動
     DC->>RD: コンテナ起動
     par ヘルスチェック待機
@@ -120,7 +120,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart TB
-    A["docker compose up -d"] --> B{"postgres / redis<br/>healthcheck OK?"}
+    A["docker compose<br/>-f docker-compose.yml<br/>-f compose.dev.yml<br/>--profile dev up -d"] --> B{"postgres / redis<br/>healthcheck OK?"}
     B -->|No<br/>タイムアウト| F1["backend起動せず<br/>fail-close"]
     B -->|Yes| C["backend起動<br/>alembic upgrade head"]
     C --> D{"マイグレーション成功?"}
@@ -138,7 +138,7 @@ flowchart TB
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Created: docker compose up
+    [*] --> Created: docker compose ... --profile dev up
     Created --> Starting: コンテナ起動
     Starting --> HealthChecking: healthcheck開始
     HealthChecking --> Healthy: 条件成功
@@ -146,11 +146,11 @@ stateDiagram-v2
     Healthy --> Running: 依存先のservice_healthy充足で下流起動
     Unhealthy --> Restarting: restart policyに従う
     Restarting --> Starting
-    Running --> Stopped: docker compose down
+    Running --> Stopped: docker compose ... --profile dev down
     Stopped --> [*]
 
     note right of Healthy
-      pgdata volumeはdocker compose down単体では消えない
+      pgdata volumeはdocker compose ... --profile dev down単体では消えない
       down -v または volume rm で明示削除が必要
     end note
 ```
@@ -184,7 +184,8 @@ stateDiagram-v2
 | 項目 | 内容 |
 |------|------|
 | 目的 | ソースのバインドマウント、ホットリロード（`uvicorn --reload` / `vite dev`）、開発用ポート公開を本体定義から分離する |
-| 入力 | `docker compose -f docker-compose.yml -f compose.dev.yml up` |
+| 入力 | `docker compose -f docker-compose.yml -f compose.dev.yml --profile dev up` |
+| 停止 | `docker compose -f docker-compose.yml -f compose.dev.yml --profile dev down` |
 | 出力 | `backend`/`frontend`のバインドマウント有効化、`${BACKEND_PORT}`/`${POSTGRES_PORT}`/`${REDIS_PORT}`/`${MAILPIT_SMTP_PORT}`/`${MAILPIT_UI_PORT}` を `127.0.0.1` に限定公開 |
 | 処理内容 | 1. `backend.volumes` に `./api:/app/api` と `./db:/app/db:ro` を追加 2. `backend.command` を `uvicorn app.main:app --reload` に上書き 3. `postgres`/`redis`/`mailpit` の `ports` を `127.0.0.1:${PORT}:内部固定ポート` で追加 |
 | 副作用 | 基本Compose（`docker-compose.yml`単体）には影響しない（開発オーバーレイのみに閉じる） |
@@ -230,7 +231,7 @@ flowchart LR
 | No | 区分 | ケース | 前提 | 期待結果 | テスト名案 |
 |----|------|--------|------|----------|-----------|
 | 1 | 結合 | `docker compose config` で構文検証 | `.env.example` をコピーして `.env` 生成 | エラーなく解決される | `test_compose_config_valid`（CIのシェルステップ） |
-| 2 | 結合 | `docker compose up -d` 後に全サービスhealthy | ローカル/CI環境 | 6サービス（dev profile込み）が `healthy` または起動継続 | `test_compose_up_all_healthy` |
+| 2 | 結合 | `docker compose -f docker-compose.yml -f compose.dev.yml --profile dev up -d` 後に全サービスhealthy | ローカル/CI環境 | 6サービス（dev profile込み）が `healthy` または起動継続 | `test_compose_up_all_healthy` |
 | 3 | 結合 | backend起動時にAlembicマイグレーションが適用される | 空のpostgresボリューム | `alembic_version`テーブルが最新headと一致 | `test_backend_migration_on_start` |
 | 4 | 結合 | redisコンテナ再起動でセッションが消える | session方式でログイン後 `docker compose restart redis` | `/auth/me`が401になる | `test_redis_restart_invalidates_session` |
 | 5 | 結合 | backend/postgres/redisのポートが本体Composeで非公開 | `docker-compose.yml`単体起動 | `docker compose port backend 8000`等が失敗、またはホストから疎通不可 | `test_no_unintended_port_exposure` |

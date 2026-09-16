@@ -7,7 +7,7 @@
 | 実行環境 | 開発者のローカル Docker Compose。クラウド・自動デプロイは使用しない（要件書§0） |
 | サービス構成 | `backend` / `frontend` / `postgres` / `redis`。`mailpit` は開発Compose profileで有効化する |
 | イメージ配布 | ローカルDockerイメージ。CIではビルド確認のみでpushしない |
-| デプロイ | 対象外。開発者がローカルで `docker compose up` を手動実行する |
+| デプロイ | 対象外。開発者がローカルで `docker compose -f docker-compose.yml -f compose.dev.yml --profile dev up` を手動実行する |
 | ポート | 通常は `frontend` のみをloopbackまたは必要な公開IFへ公開。backend / PostgreSQL / Redis / SMTPはComposeネットワーク内に閉じ、開発用の追加ポートも `127.0.0.1` に限定 |
 | コマンド | `docker compose`（ハイフン付き `docker-compose` は使用しない） |
 
@@ -295,12 +295,23 @@ strategy:
 
 | 項目 | 内容 |
 |------|------|
-| 起動 | `docker compose -f docker-compose.yml -f compose.dev.yml up` |
-| 停止 | `docker compose -f docker-compose.yml -f compose.dev.yml down` |
+| 起動 | `docker compose -f docker-compose.yml -f compose.dev.yml --profile dev up` |
+| 停止 | `docker compose -f docker-compose.yml -f compose.dev.yml --profile dev down` |
 | ヘルスチェック | `GET http://localhost:${FRONTEND_PORT}/api/health` |
 | イメージ確認 | CIの`docker-build`ジョブでbackend/frontend/batchのビルドだけを確認し、レジストリへpushしない |
 | 自動デプロイ | 対象外。self-hosted runner、GHCR、GitHub Environment `production`、ロールバック機構は使用しない |
 | 将来の再導入 | [self-hosted runner手順](../detailed_design/infra/09_self_hosted_runner.md)を参照し、要件・設計・workflowを別途更新する |
+
+```mermaid
+sequenceDiagram
+    actor DEV as 開発者
+    participant DC as Docker Compose
+
+    DEV->>DC: docker compose -f docker-compose.yml -f compose.dev.yml --profile dev up
+    DC-->>DEV: Mailpitを含むローカル開発環境を起動
+    DEV->>DC: docker compose -f docker-compose.yml -f compose.dev.yml --profile dev down
+    DC-->>DEV: ローカル開発環境を停止
+```
 
 ## 7. 学習ポイント（要件書§8.3対応）
 
