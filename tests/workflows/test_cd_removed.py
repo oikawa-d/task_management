@@ -14,6 +14,7 @@ DEV_COMPOSE_DOCS = (
 	ROOT / "docs/detailed_design/infra/01_docker_compose.md",
 	ROOT / "docs/detailed_design/infra/06_cd_workflow.md",
 )
+DEV_COMPOSE_START_DOCS = (ROOT / "AGENTS.md",)
 
 
 def _env_example_keys() -> set[str]:
@@ -61,3 +62,6 @@ def test_local_compose_commands_enable_mailpit_profile() -> None:
 		content = document.read_text(encoding="utf-8")
 		assert f"{DEV_COMPOSE_COMMAND} up" in content
 		assert f"{DEV_COMPOSE_COMMAND} down" in content
+	for document in DEV_COMPOSE_START_DOCS:
+		content = document.read_text(encoding="utf-8")
+		assert f"{DEV_COMPOSE_COMMAND} up" in content

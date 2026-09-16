@@ -47,7 +47,7 @@ flowchart TB
 | `mailpit` | `axllent/mailpit` | - | - | SMTP `1025` / Web UI `8025`。`dev` profile専用。UI/SMTPはloopback公開のみ |
 
 - `redis` に volume を割り当てないことで、要件書§4の「再起動で全ログアウト」という挙動を意図的に再現する
-- `depends_on` は `condition: service_healthy` を用い、起動順序の競合を避ける。backendはmailpitを使う開発profileでのみmailpitにも依存する
+- `depends_on` は `condition: service_healthy` を用い、起動順序の競合を避ける。backendは `postgres` と `redis` のみを待機し、`mailpit` は `--profile dev` 指定時に独立して起動する
 - 開発時はソースをバインドマウントしてホットリロード（`uvicorn --reload` / `vite dev`）する構成を `compose.dev.yml` で切り替える
 - 基本Composeは `frontend` の `/api` proxyを経由する。`backend` / `postgres` / `redis` は `ports` を持たず、開発者が直接接続する場合だけ `compose.dev.yml` で `127.0.0.1:${...}` を追加する
 - `mailpit` は `profiles: [dev]` とし、ローカル開発時だけ起動する

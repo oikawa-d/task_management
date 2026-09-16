@@ -35,7 +35,7 @@
 | 変数名 | 型 | 既定値 | 用途 | 秘匿 |
 |--------|-----|--------|------|------|
 | `COMPOSE_PROJECT_NAME` | str | `cerberus` | Composeプロジェクト名（リソース名の接頭辞） | 否 |
-| `APP_ENV` | str | `local` | `local` / `ci` / `production`。`mailpit` profile有効化の判断材料 | 否 |
+| `APP_ENV` | str | `local` | アプリケーションの実行環境（`local` / `ci` / `production`）。`mailpit` profileはCLIの`--profile dev`で有効化 | 否 |
 | `FRONTEND_PORT` | int | `5173` | ホスト公開ポート（`frontend` の80番へ） | 否 |
 | `BACKEND_PORT` | int | `8000` | 開発時のみ`compose.dev.yml`で`127.0.0.1`に公開 | 否 |
 | `POSTGRES_PORT` | int | `5432` | 開発時のみ`compose.dev.yml`で`127.0.0.1`に公開 | 否 |
@@ -129,9 +129,9 @@ flowchart TB
     E --> G{"healthy?"}
     G -->|No| F3["frontend起動待機のまま<br/>（depends_on未充足）"]
     G -->|Yes| H["frontend起動<br/>nginx配信開始"]
-    H --> I{"APP_ENV=local?"}
+    H --> I{"--profile dev?"}
     I -->|Yes| J["mailpit起動（profile: dev）"]
-    I -->|No（ci/production）| K["mailpitは起動しない<br/>外部SMTPを使用"]
+    I -->|No| K["mailpitは起動しない<br/>外部SMTPを使用"]
 ```
 
 ## 7. データ遷移図
@@ -165,7 +165,7 @@ stateDiagram-v2
 | 入力 | `.env` の各変数（`env_file: .env` または `environment:` 個別指定） |
 | 出力 | コンテナ群、named volume `pgdata` |
 | 失敗条件 | 必須環境変数未設定時、`docker compose config` で警告（未定義変数は空文字扱い）。`backend` の `core/config.py` 起動時バリデーションで実質的に失敗させる（[04_env_config.md](./04_env_config.md)参照） |
-| 処理内容 | 1. `postgres`/`redis` を healthcheck 付きで起動 2. `depends_on.condition: service_healthy` で `backend` と `batch` を待機起動 3. `backend` の healthcheck 成功後に `frontend` を起動 4. `APP_ENV=local` かつ `--profile dev` 指定時のみ `mailpit` を起動 |
+| 処理内容 | 1. `postgres`/`redis` を healthcheck 付きで起動 2. `depends_on.condition: service_healthy` で `backend` と `batch` を待機起動 3. `backend` の healthcheck 成功後に `frontend` を起動 4. CLIで `--profile dev` を指定した時のみ `mailpit` を起動 |
 | 副作用 | `pgdata` volumeへの書き込み、`cerberus_net` へのコンテナ参加 |
 
 ### 8.2 各サービスの healthcheck 仕様
