@@ -13,6 +13,20 @@ describe("Calendar", () => {
 		expect(screen.getByText("期限タスク").parentElement).toHaveTextContent("10");
 	});
 
+	it("当日を示し、同日のタスクを全件表示する", () => {
+		vi.setSystemTime(new Date(2026, 8, 10));
+		try {
+			render(<Calendar month={new Date(2026, 8, 1)} tasks={[1, 2, 3].map((id) => ({ id: `task-${id}`, project_id: null, title: `タスク${id}`, due_at: "2026-09-10T03:00:00Z", due_date: "2026-09-10", status: "todo" as const }))} onPreviousMonth={vi.fn()} onNextMonth={vi.fn()} onRetry={vi.fn()} />);
+			expect(document.querySelector('time[aria-current="date"]')).toHaveAttribute("datetime", "2026-09-10");
+			expect(screen.getByText("タスク1")).toBeInTheDocument();
+			expect(screen.getByText("タスク2")).toBeInTheDocument();
+			expect(screen.getByText("タスク3")).toBeInTheDocument();
+			expect(screen.queryByText(/他\d+件/)).not.toBeInTheDocument();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("サーバーのAPP_TIMEZONE日付キーでUTC境界のタスクを割り当てる", () => {
 		vi.stubEnv("TZ", "UTC");
 		try {

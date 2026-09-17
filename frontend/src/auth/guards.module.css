@@ -1,1 +1,1 @@
-.guard { display: grid; min-height: 60vh; place-items: center; }
+.guard { display: grid; min-height: var(--size-guard-min-height); place-items: center; }

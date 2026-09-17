@@ -37,6 +37,7 @@ export function Calendar({ month, tasks, isLoading, isError, onPreviousMonth, on
 		tasksByDate.set(key, grouped);
 	}
 	const days = buildDays(month);
+	const today = dateKey(new Date());
 
 	return (
 		<div className={styles.calendar} aria-label="期限カレンダー">
@@ -54,7 +55,9 @@ export function Calendar({ month, tasks, isLoading, isError, onPreviousMonth, on
 						<tr key={week}>
 							{days.slice(week * 7, week * 7 + 7).map((day) => {
 								const dayTasks = tasksByDate.get(dateKey(day)) ?? [];
-								return <td className={`${day.getMonth() === month.getMonth() ? styles.day : `${styles.day} ${styles.otherMonth}`} ${styles.tasks}`} key={dateKey(day)}><time dateTime={dateKey(day)}>{day.getDate()}</time>{dayTasks.slice(0, 2).map((task) => <span className={styles.task} key={task.id}>{task.title}</span>)}{dayTasks.length > 2 ? <span className={styles.more}>他{dayTasks.length - 2}件</span> : null}</td>;
+								const key = dateKey(day);
+								const dayClass = day.getMonth() === month.getMonth() ? styles.day : `${styles.day} ${styles.otherMonth}`;
+								return <td className={`${dayClass} ${styles.tasks} ${key === today ? styles.today : ""}`} key={key}><time dateTime={key} aria-current={key === today ? "date" : undefined}>{day.getDate()}</time>{dayTasks.map((task) => <span className={styles.task} key={task.id}>{task.title}</span>)}</td>;
 							})}
 						</tr>
 					))}

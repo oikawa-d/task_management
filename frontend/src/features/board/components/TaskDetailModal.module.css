@@ -9,7 +9,7 @@
 }
 
 .modal {
-	width: min(720px, 100%);
+	width: min(var(--size-modal-width), 100%);
 	max-height: var(--size-modal-max-height);
 	overflow-y: auto;
 	padding: var(--space-6);
@@ -31,15 +31,15 @@
 .fields label, .comment-form { display: grid; gap: var(--space-2); }
 .fields input, .fields textarea, .fields select, .comment-form textarea { width: 100%; box-sizing: border-box; padding: var(--space-2); }
 .row > label { flex: 1; }
-.comments { border-top: 1px solid var(--color-border); padding-top: var(--space-4); }
+.comments { border-top: var(--border-width-thin) solid var(--color-border); padding-top: var(--space-4); }
 .comments h2 { margin: 0; font-size: var(--font-size-md); }
-.comment-list { display: grid; gap: var(--space-3); max-height: 220px; overflow-y: auto; padding: 0; margin: 0; list-style: none; }
+.comment-list { display: grid; gap: var(--space-3); max-height: var(--size-comment-list-height); overflow-y: auto; padding: 0; margin: 0; list-style: none; }
 .comment-item { padding: var(--space-3); border-radius: var(--radius-md); background: var(--color-surface-muted); }
 .comment-item p { margin: var(--space-2) 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .comment-meta { justify-content: flex-start; font-size: var(--font-size-sm); }
 .comment-meta time { color: var(--color-text-secondary); }
 .comment-form button, .delete { padding: var(--space-2) var(--space-4); cursor: pointer; }
-.delete { margin-top: var(--space-5); color: var(--color-danger-fg); border: 1px solid var(--color-danger); background: var(--color-surface); }
+.delete { margin-top: var(--space-5); color: var(--color-danger-fg); border: var(--border-width-thin) solid var(--color-danger); background: var(--color-surface); }
 .comment-empty { color: var(--color-text-secondary); }
 .placeholder { color: var(--color-text-secondary); }
 

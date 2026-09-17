@@ -1,4 +1,4 @@
 .fieldset { display: flex; flex-wrap: wrap; gap: var(--space-2); padding: 0; border: 0; }
 .fieldset legend { width: 100%; margin-bottom: var(--space-2); font-weight: var(--font-weight-bold); }
-.option { display: inline-flex; align-items: center; gap: var(--space-1); padding: var(--space-2) var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-pill); cursor: pointer; }
+.option { display: inline-flex; align-items: center; gap: var(--space-1); padding: var(--space-2) var(--space-3); border: var(--border-width-thin) solid var(--color-border); border-radius: var(--radius-pill); cursor: pointer; }
 .option:has(input:checked) { border-color: var(--color-accent); color: var(--color-accent-strong); background: var(--color-accent-surface); }

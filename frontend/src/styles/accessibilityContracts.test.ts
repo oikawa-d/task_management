@@ -26,7 +26,7 @@ function luminance(value: string): number {
 describe("アクセシビリティ契約", () => {
 	it("light/darkの主要な文字色と背景色がWCAG AAを満たす", () => {
 		expect(css.length).toBeGreaterThan(100);
-		const pairs = [["--color-text-primary", "--color-page"], ["--color-text-primary", "--color-surface"], ["--color-text-secondary", "--color-surface"], ["--color-accent-strong", "--color-page"], ["--color-danger-fg", "--color-danger-surface"], ["--color-success", "--color-success-surface"], ["--color-header-fg", "--color-header-bg"]];
+		const pairs = [["--color-text-primary", "--color-page"], ["--color-text-primary", "--color-surface"], ["--color-text-secondary", "--color-surface"], ["--color-text-tertiary", "--color-surface"], ["--color-muted", "--color-surface"], ["--color-accent-strong", "--color-page"], ["--color-accent-strong", "--color-accent-surface"], ["--color-danger-fg", "--color-danger-surface"], ["--color-success", "--color-success-surface"], ["--color-warning", "--color-warning-surface"], ["--color-focus", "--color-surface"], ["--color-header-fg", "--color-header-bg"]];
 		for (const selector of [":root", ':root[data-theme="dark"]']) {
 			const palette = colors(block(selector));
 			for (const [foreground, background] of pairs) {

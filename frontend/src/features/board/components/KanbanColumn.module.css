@@ -10,10 +10,10 @@
 	display: flex;
 	justify-content: space-between;
 	margin: 0;
-	font-size: 1.125rem;
+	font-size: var(--font-size-lg);
 }
 
 .count { color: var(--color-text-secondary); font-size: var(--font-size-sm); font-weight: var(--font-weight-normal); }
-.taskList { display: grid; align-content: start; gap: var(--space-3); min-height: var(--size-list-min-height); padding: var(--space-3); border: 1px dashed var(--color-border-muted); border-radius: var(--radius-lg); background: var(--color-surface-muted); }
+.taskList { display: grid; align-content: start; gap: var(--space-3); min-height: var(--size-list-min-height); padding: var(--space-3); border: var(--border-width-thin) dashed var(--color-border-muted); border-radius: var(--radius-lg); background: var(--color-surface-muted); }
 .taskList.over { border-color: var(--color-focus); background: var(--color-accent-surface); }
 .empty { margin: auto; color: var(--color-text-tertiary); }

@@ -3,9 +3,9 @@
 	top: calc(100% + var(--space-1));
 	right: 0;
 	width: var(--size-panel-width);
-	max-width: calc(100vw - var(--space-4));
+	max-width: calc(var(--size-viewport-width) - var(--space-4));
 	background: var(--color-surface);
-	border: 1px solid var(--color-border);
+	border: var(--border-width-thin) solid var(--color-border);
 	border-radius: var(--radius-md);
 	box-shadow: var(--shadow-md);
 	overflow: hidden;
@@ -17,7 +17,7 @@
 	align-items: center;
 	justify-content: space-between;
 	padding: var(--space-3);
-	border-bottom: 1px solid var(--color-border);
+	border-bottom: var(--border-width-thin) solid var(--color-border);
 	font-weight: 700;
 }
 
@@ -37,5 +37,5 @@
 
 .footer {
 	padding: var(--space-2) var(--space-3);
-	border-top: 1px solid var(--color-border);
+	border-top: var(--border-width-thin) solid var(--color-border);
 }

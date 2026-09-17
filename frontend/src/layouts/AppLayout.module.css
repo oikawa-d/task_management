@@ -1,7 +1,7 @@
-.layout { min-height: 100vh; background: var(--color-page); }
-.header { position: sticky; top: 0; z-index: var(--z-header); display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); min-height: var(--size-header-height); padding: var(--space-3) max(var(--space-4), calc((100vw - var(--size-content-max)) / 2)); color: var(--color-header-fg); background: var(--color-header-bg); }
+.layout { min-height: var(--size-viewport-height); background: var(--color-page); }
+.header { position: sticky; top: 0; z-index: var(--z-header); display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); min-height: var(--size-header-height); padding: var(--space-3) max(var(--space-4), calc((var(--size-viewport-width) - var(--size-content-max)) / 2)); color: var(--color-header-fg); background: var(--color-header-bg); }
 .header strong { font-size: var(--font-size-xl); }
-.nav { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) max(var(--space-4), calc((100vw - var(--size-content-max)) / 2)); border-bottom: 1px solid var(--color-border); background: var(--color-surface); }
+.nav { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) max(var(--space-4), calc((var(--size-viewport-width) - var(--size-content-max)) / 2)); border-bottom: var(--border-width-thin) solid var(--color-border); background: var(--color-surface); }
 .nav a { padding: var(--space-2) var(--space-3); text-decoration: none; }
 .nav button { margin-left: auto; }
 .main { max-width: var(--size-content-max); margin: 0 auto; padding: 0 var(--space-4) var(--space-8); }
