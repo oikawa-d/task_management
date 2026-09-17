@@ -62,7 +62,7 @@
 | ①' | 登録直後メッセージ | Alert(info) | 非表示 | - | `location.state.registeredEmail` が存在する場合のみ表示 | 「確認メールを送信しました（{email}）」 |
 | ①'' | メール未認証エラー | Alert(error) + 再送ボタン | 非表示 | - | 直前のログイン試行が 403 `EMAIL_NOT_VERIFIED` の場合のみ表示 | §7参照 |
 | ② | identifier入力 | text input | `""` | 必須、1〜255文字 | 常時活性 | onChange でstate更新、Enter送信対象 |
-| ③ | パスワード入力 | password/text input | `""` | 必須、1文字以上（バックエンドと重複した強度検証はしない） | 常時活性 | onChange でstate更新、Enter送信対象 |
+| ③ | パスワード入力 | password/text input | `""` | 必須、1〜`VITE_PASSWORD_MAX_LENGTH`（既定128）文字。Unicodeコードポイント数で判定（バックエンドと重複した強度検証はしない） | 常時活性 | onChange でstate更新、Enter送信対象 |
 | ④ | 表示/非表示トグル | icon button | 非表示（`type=password`） | - | 常時活性 | クリックで `type` を `password` ⇔ `text` に切替 |
 | ⑤ | エラーメッセージ | インラインエラー | 非表示 | - | 送信失敗時 | §11参照 |
 | ⑥ | ログインボタン | submit button | 活性 | - | `isSubmitting=false` かつ ②③が非空 | クリック／Enterで送信 |
@@ -237,7 +237,7 @@ flowchart TB
 | フィールド | zodスキーマ | ルール | エラーメッセージ | バックエンド対応 |
 |-----------|-------------|--------|-------------------|-------------------|
 | `identifier` | `loginSchema.identifier` | `z.string().min(1).max(254)` | 「IDまたはメールアドレスを入力してください」 | pydantic `identifier: str`（[04_api.md §3.1](../../basic_design/04_api.md#31-認証)） |
-| `password` | `loginSchema.password` | `z.string().min(1)` | 「パスワードを入力してください」 | pydantic `password: str` |
+| `password` | `loginSchema.password` | `z.string().min(1)` + `VITE_PASSWORD_MAX_LENGTH`以内 | 「パスワードを入力してください」 | pydantic `password: str` |
 
 クライアント側は必須チェックのみ行い、パスワード強度検証はログイン画面では行わない（登録画面のみ）。再送フォーム（identifierがusername形式の場合）の `email` は `z.string().email()`。
 

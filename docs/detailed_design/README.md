@@ -184,7 +184,7 @@ flowchart LR
 
 各詳細設計書の「不明点・要検討事項」節から、**基本設計側の修正・追記が必要**なものを抜粋する。詳細は各リンク先を参照。
 
-Issue #8 の9項目は [security_business_rules.md](../requirements/security_business_rules.md) に正規方針を集約し、各詳細設計へ反映済みである。以下の表では未決定事項として扱わない。
+Issue #8 の10項目は [security_business_rules.md](../requirements/security_business_rules.md) に正規方針を集約し、各詳細設計へ反映済みである。以下の表では未決定事項として扱わない。
 
 | 区分 | 内容 | 該当 |
 |------|------|------|

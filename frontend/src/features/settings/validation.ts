@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { FieldErrors, FieldValues, Resolver } from "react-hook-form";
 
+import { countCodePoints } from "../../lib/validation/stringLength";
 import { getValidationConfig } from "./config/validationConfig";
 import type { ApiFieldError } from "./types";
 
@@ -36,16 +37,19 @@ export const profileSchema = z.object({
 });
 
 export function passwordSchema(hasPassword: boolean) {
-	const minLength = getValidationConfig().passwordMinLength;
+	const { passwordMinLength, passwordMaxLength } = getValidationConfig();
 	return z.object({
 		current_password: hasPassword
-			? z.string().min(1, "現在のパスワードを入力してください")
+			? passwordField("現在のパスワードを入力してください", passwordMaxLength)
 			: z.string().optional(),
 		new_password: z.string().refine(
-			(value) => value.length >= minLength && countCharacterTypes(value) >= 2,
-			`${minLength}文字以上で、2種類以上の文字種を含めてください`,
+			(value) => countCodePoints(value) >= passwordMinLength && countCharacterTypes(value) >= 2,
+			`${passwordMinLength}文字以上で、2種類以上の文字種を含めてください`,
+		).refine(
+			(value) => countCodePoints(value) <= passwordMaxLength,
+			`${passwordMaxLength}文字以内で入力してください`,
 		),
-		password_confirm: z.string(),
+		password_confirm: passwordField(undefined, passwordMaxLength),
 	}).superRefine((values, context) => {
 		if (values.new_password !== values.password_confirm) {
 			context.addIssue({
@@ -78,6 +82,14 @@ export function getToday(): string {
 
 function countCharacterTypes(value: string): number {
 	return [/[A-Z]/, /[a-z]/, /[0-9]/, /[^A-Za-z0-9]/].filter((pattern) => pattern.test(value)).length;
+}
+
+function passwordField(requiredMessage: string | undefined, maxLength: number): z.ZodType<string> {
+	let schema = z.string();
+	if (requiredMessage) {
+		schema = schema.min(1, requiredMessage);
+	}
+	return schema.refine((value) => countCodePoints(value) <= maxLength, `${maxLength}文字以内で入力してください`);
 }
 
 function isApiFieldError(value: unknown): value is ApiFieldError {

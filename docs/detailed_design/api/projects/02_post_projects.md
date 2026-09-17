@@ -34,7 +34,7 @@
 | 名前 | 型 | 必須 | 制約 | 説明 |
 |------|----|------|------|------|
 | name | string | ○ | 1〜100文字 | プロジェクト名 |
-| description | string \| null | 任意 | 上限なし（`TEXT`）。省略時 `null` | 説明 |
+| description | string \| null | 任意 | 0〜2,000文字。省略時 `null` | 説明 |
 | start_at | string(datetime) \| null | 任意 | ISO 8601（`TIMESTAMPTZ`として保存、UTC）。省略時 `null` | プロジェクト開始日時 |
 | end_at | string(datetime) \| null | 任意 | ISO 8601（`TIMESTAMPTZ`として保存、UTC）。省略時 `null` | プロジェクト終了日時 |
 
@@ -253,7 +253,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | pydanticスキーマ | フィールド | 制約 | フロント（zod）との整合 |
 |-------------------|-----------|------|--------------------------|
 | `ProjectCreateRequest` | name | `str, min_length=1, max_length=100` | `zod.string().min(1).max(100)` |
-| `ProjectCreateRequest` | description | `str \| None`, 省略時 `None` | `zod.string().nullable().optional()` |
+| `ProjectCreateRequest` | description | `str \| None`, 0〜2,000文字、省略時 `None` | `zod.string().max(2000).nullable().optional()` |
 | `ProjectCreateRequest` | start_at | `datetime \| None`, 省略時 `None` | `zod.string().datetime().nullable().optional()` |
 | `ProjectCreateRequest` | end_at | `datetime \| None`, 省略時 `None` | `zod.string().datetime().nullable().optional()` |
 | `ProjectCreateRequest` | （モデルバリデータ） | `start_at`と`end_at`が両方とも値を持つ場合、`end_at >= start_at`でなければ422 | `zod.object({...}).refine(end_at >= start_at when both present)` |

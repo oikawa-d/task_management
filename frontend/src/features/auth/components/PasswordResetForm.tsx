@@ -3,7 +3,7 @@ import { useForm } from "react-hook-form";
 
 import { usePasswordReset } from "../hooks/usePasswordReset";
 import type { PasswordResetFormValues } from "../types";
-import { createZodResolver, getFieldErrors, passwordResetSchema } from "../validation";
+import { authTokenSchema, createZodResolver, getFieldErrors, passwordResetSchema } from "../validation";
 
 /** APIのsnake_caseフィールド名 → RHFのcamelCaseフィールド名 */
 const API_FIELD_TO_FORM_FIELD: Record<string, keyof PasswordResetFormValues> = {
@@ -40,6 +40,11 @@ export function PasswordResetForm({ token, onSuccess, onTokenInvalid }: Password
 
 	const submit = async (values: PasswordResetFormValues) => {
 		setSubmitError(null);
+		if (!authTokenSchema().safeParse(token).success) {
+			setTokenInvalid(true);
+			onTokenInvalid?.();
+			return;
+		}
 		try {
 			await mutation.mutateAsync({ token, newPassword: values.newPassword, passwordConfirm: values.passwordConfirm });
 			onSuccess?.();

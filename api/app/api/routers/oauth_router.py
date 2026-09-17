@@ -24,7 +24,7 @@ from app.core.exceptions import (
 	TooManyAttemptsError,
 )
 from app.db import get_db_session
-from app.schemas.oauth import OAuthExchangeRequest, OAuthExchangeResponse
+from app.schemas.oauth import OAuthCallbackQuery, OAuthExchangeRequest, OAuthExchangeResponse
 from app.service import auth_service, oauth_service
 
 logger = logging.getLogger("app.oauth")
@@ -66,12 +66,13 @@ async def oauth_google_start(
 async def oauth_google_callback(
 	request: Request,
 	response: Response,
-	code: str | None = Query(default=None),
-	state: str | None = Query(default=None),
-	error: str | None = Query(default=None),
+	query: OAuthCallbackQuery = Depends(),
 	db: AsyncSession = Depends(get_db_session),
 	settings: BackendSettings = Depends(get_backend_settings),
 ) -> RedirectResponse:
+	code = query.code
+	state = query.state
+	error = query.error
 	if not _is_google_login_enabled(settings):
 		return _login_error_redirect(OAUTH_ERROR_DISABLED, settings, response)
 	if error:

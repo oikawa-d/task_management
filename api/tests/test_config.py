@@ -1,5 +1,6 @@
 import pytest
 from app.core.config import BackendSettings
+from app.core.constants import PASSWORD_MIN_LENGTH, TOKEN_URLSAFE_LENGTH
 from pydantic import ValidationError
 
 
@@ -90,6 +91,71 @@ def test_settings_unknown_auth_mode_raises(monkeypatch: pytest.MonkeyPatch) -> N
 		BackendSettings(_env_file=None)
 
 
+def _production_env(monkeypatch: pytest.MonkeyPatch) -> None:
+	_base_env(monkeypatch)
+	monkeypatch.setenv("APP_ENV", "production")
+	monkeypatch.setenv("COOKIE_SECURE", "true")
+	monkeypatch.setenv("SMTP_USE_TLS", "true")
+	monkeypatch.setenv("FRONTEND_BASE_URL", "https://app.example.com")
+	monkeypatch.setenv("GOOGLE_REDIRECT_URI", "https://app.example.com/api/auth/oauth/google/callback")
+	monkeypatch.setenv("ENABLE_API_DOCS", "false")
+	monkeypatch.setenv("JWT_SECRET_KEY", "a-production-jwt-secret")
+	monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "a-production-google-secret")
+	monkeypatch.setenv("INITIAL_ADMIN_PASSWORD", "A-production-admin-password-1!")
+
+
+def test_settings_production_accepts_safe_security_boundaries(monkeypatch: pytest.MonkeyPatch) -> None:
+	_production_env(monkeypatch)
+
+	settings = BackendSettings(_env_file=None)
+
+	assert settings.app_env == "production"
+
+
+@pytest.mark.parametrize("app_env", ["local", "ci"])
+def test_settings_non_production_allows_development_security_boundaries(
+	monkeypatch: pytest.MonkeyPatch, app_env: str
+) -> None:
+	_base_env(monkeypatch)
+	monkeypatch.setenv("APP_ENV", app_env)
+
+	settings = BackendSettings(_env_file=None)
+
+	assert settings.app_env == app_env
+
+
+@pytest.mark.parametrize(
+	"field,value",
+	[
+		("COOKIE_SECURE", "false"),
+		("SMTP_USE_TLS", "false"),
+		("FRONTEND_BASE_URL", "http://app.example.com"),
+		("GOOGLE_REDIRECT_URI", "http://app.example.com/callback"),
+		("ENABLE_API_DOCS", "true"),
+	],
+)
+def test_settings_production_rejects_insecure_boundaries(
+	monkeypatch: pytest.MonkeyPatch, field: str, value: str
+) -> None:
+	_production_env(monkeypatch)
+	monkeypatch.setenv(field, value)
+
+	with pytest.raises(ValidationError):
+		BackendSettings(_env_file=None)
+
+
+@pytest.mark.parametrize("field", ["JWT_SECRET_KEY", "GOOGLE_CLIENT_SECRET", "INITIAL_ADMIN_PASSWORD"])
+@pytest.mark.parametrize("value", ["", "secret", "password", "changeme", "test-secret"])
+def test_settings_production_rejects_development_placeholders(
+	monkeypatch: pytest.MonkeyPatch, field: str, value: str
+) -> None:
+	_production_env(monkeypatch)
+	monkeypatch.setenv(field, value)
+
+	with pytest.raises(ValidationError):
+		BackendSettings(_env_file=None)
+
+
 TTL_ENV_FIELDS = [
 	"SESSION_TTL_SECONDS",
 	"SESSION_ABSOLUTE_TTL_SECONDS",
@@ -119,3 +185,52 @@ def test_settings_every_ttl_field_is_validated() -> None:
 	covered = {field.lower() for field in TTL_ENV_FIELDS}
 
 	assert ttl_fields == covered
+
+
+@pytest.mark.parametrize("field", ["PASSWORD_MAX_LENGTH", "AUTH_TOKEN_MAX_LENGTH"])
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_settings_input_length_limits_must_be_positive(monkeypatch: pytest.MonkeyPatch, field: str, value: str) -> None:
+	_base_env(monkeypatch)
+	monkeypatch.setenv(field, value)
+
+	with pytest.raises(ValidationError):
+		BackendSettings(_env_file=None)
+
+
+def test_settings_input_length_limits_are_configurable(monkeypatch: pytest.MonkeyPatch) -> None:
+	_base_env(monkeypatch)
+	monkeypatch.setenv("PASSWORD_MAX_LENGTH", "64")
+	monkeypatch.setenv("AUTH_TOKEN_MAX_LENGTH", "256")
+
+	settings = BackendSettings(_env_file=None)
+
+	assert settings.password_max_length == 64
+	assert settings.auth_token_max_length == 256
+
+
+@pytest.mark.parametrize("value", [TOKEN_URLSAFE_LENGTH - 1, TOKEN_URLSAFE_LENGTH])
+def test_settings_auth_token_limit_matches_generated_token_boundary(
+	monkeypatch: pytest.MonkeyPatch, value: int
+) -> None:
+	_base_env(monkeypatch)
+	monkeypatch.setenv("AUTH_TOKEN_MAX_LENGTH", str(value))
+
+	if value == TOKEN_URLSAFE_LENGTH:
+		settings = BackendSettings(_env_file=None)
+		assert settings.auth_token_max_length == TOKEN_URLSAFE_LENGTH
+	else:
+		with pytest.raises(ValidationError):
+			BackendSettings(_env_file=None)
+
+
+@pytest.mark.parametrize("value", [PASSWORD_MIN_LENGTH - 1, PASSWORD_MIN_LENGTH])
+def test_settings_password_limit_matches_schema_minimum_boundary(monkeypatch: pytest.MonkeyPatch, value: int) -> None:
+	_base_env(monkeypatch)
+	monkeypatch.setenv("PASSWORD_MAX_LENGTH", str(value))
+
+	if value == PASSWORD_MIN_LENGTH:
+		settings = BackendSettings(_env_file=None)
+		assert settings.password_max_length == PASSWORD_MIN_LENGTH
+	else:
+		with pytest.raises(ValidationError):
+			BackendSettings(_env_file=None)

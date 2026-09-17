@@ -74,9 +74,9 @@
 | ⑧ | 生年月日：日 | select | 未選択 | 必須、選択中の年月に応じた日数（28〜31） | ⑥⑦選択後に活性 | onChange |
 | ⑨ | メールアドレス | text input(email) | `""` | 必須、254文字以内、メール形式 | 常時活性 | onChange |
 | ⑩ | ユーザー名 | text input | `""` | 必須、3〜50文字、`^[A-Za-z0-9_-]+$` | 常時活性 | onChange |
-| ⑪ | パスワード | password/text input | `""` | 必須、8文字以上、英大文字/英小文字/数字/記号のうち2種類以上 | 常時活性 | onChangeで⑫再計算 |
+| ⑪ | パスワード | password/text input | `""` | 必須、8〜`VITE_PASSWORD_MAX_LENGTH`（既定128）文字、Unicodeコードポイント数で判定、英大文字/英小文字/数字/記号のうち2種類以上 | 常時活性 | onChangeで⑫再計算 |
 | ⑫ | 強度インジケータ | progress bar + ラベル | 「未入力」 | - | ⑪入力中に更新 | §9.1参照 |
-| ⑬ | パスワード確認 | password/text input | `""` | 必須、⑪と一致 | 常時活性 | onChange |
+| ⑬ | パスワード確認 | password/text input | `""` | 必須、`VITE_PASSWORD_MAX_LENGTH`（既定128）以内、Unicodeコードポイント数で判定、⑪と一致 | 常時活性 | onChange |
 | ⑭ | エラー表示 | インラインエラー（フィールド単位）＋バナー | 非表示 | - | 送信失敗時 | §11参照 |
 | ⑮ | 登録するボタン | submit button | 活性 | - | `isSubmitting=false` かつ全必須項目が入力済み | クリックで送信 |
 | ⑯ | Googleで新規登録 | button | 活性 | - | `authConfig.google_login_enabled === true` の場合のみ表示 | `window.location.href = "{VITE_API_BASE_URL}/auth/oauth/google"`（ログイン画面と同一の開始URL） |
@@ -217,8 +217,8 @@ flowchart TB
 |-----------|-------------|--------|-------------------|-------------------------------|
 | `username` | `registerSchema.username` | `z.string().min(3).max(50).regex(/^[A-Za-z0-9_-]+$/)` | 「3〜50文字の英数字・ハイフン・アンダースコアで入力してください」 | `username`（[04_api.md §3.1](../../basic_design/04_api.md#31-認証)） |
 | `email` | `registerSchema.email` | `z.string().max(254).email()` | 「メールアドレスの形式が正しくありません」 | `email` |
-| `password` | `registerSchema.password` | `z.string().min(8).refine(2種類以上の文字種)` | 「8文字以上で、英大文字/英小文字/数字/記号のうち2種類以上を含めてください」 | `password`（同一規則） |
-| `password_confirm` | `registerSchema` の `.refine`（オブジェクト全体） | `password_confirm === password` | 「パスワードが一致しません」 | `password_confirm` |
+| `password` | `registerSchema.password` | 8〜`VITE_PASSWORD_MAX_LENGTH`（既定128）文字、Unicodeコードポイント数で判定、英大文字/英小文字/数字/記号のうち2種類以上 | 「8文字以上で、英大文字/英小文字/数字/記号のうち2種類以上を含めてください」 | `password`（同一規則） |
+| `password_confirm` | `registerSchema` の `.refine`（オブジェクト全体） | `password_confirm === password`、`VITE_PASSWORD_MAX_LENGTH`以内 | 「パスワードが一致しません」 | `password_confirm` |
 | `last_name` / `first_name` | `registerSchema.last_name` / `first_name` | `z.string().min(1).max(30)` | 「30文字以内で入力してください」 | `last_name` / `first_name` |
 | `last_name_kana` / `first_name_kana` | 同上 | `z.string().min(1).max(30).regex(/^[ぁ-んァ-ヶー0-9]+$/)`（ひらがな・カタカナ・数字のみ） | 「ひらがな・カタカナ・数字で入力してください」 | `last_name_kana` / `first_name_kana` |
 | `birth_date`（⑥⑦⑧統合） | `registerSchema.birth_date` | `z.string()`（3プルダウンから合成した `YYYY-MM-DD`）＋未来日不可 | 「正しい生年月日を選択してください」 | `birth_date`（未来日不可） |

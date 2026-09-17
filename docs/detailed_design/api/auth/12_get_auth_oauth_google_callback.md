@@ -45,8 +45,8 @@ OAuth routerの配置方針と通常の認証routerとの責務境界は、11番
 
 | 名前 | 型 | 必須 | 制約 | 説明 |
 |------|----|----|------|------|
-| `code` | string | ○（同意時） | - | 認可コード |
-| `state` | string | ○ | - | 認可開始時に発行した`state` |
+| `code` | string | ○（同意時） | `AUTH_TOKEN_MAX_LENGTH`（既定512）以内、Unicodeコードポイント数で判定 | 認可コード |
+| `state` | string | ○ | `AUTH_TOKEN_MAX_LENGTH`（既定512）以内、Unicodeコードポイント数で判定 | 認可開始時に発行した`state` |
 | `error` | string | 任意 | 例：`access_denied` | ユーザーが同意画面で拒否した場合等にGoogleが付与 |
 
 ヘッダ：なし（認証ヘッダ不要）
@@ -261,7 +261,7 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def oauth_google_callback(request: Request, response: Response, code: str | None = Query(default=None), state: str | None = Query(default=None), error: str | None = Query(default=None), db: AsyncSession = Depends(get_db_session), settings: BackendSettings = Depends(get_backend_settings)) -> RedirectResponse` |
+| シグネチャ | `async def oauth_google_callback(request: Request, response: Response, query: OAuthCallbackQuery = Depends(), db: AsyncSession = Depends(get_db_session), settings: BackendSettings = Depends(get_backend_settings)) -> RedirectResponse`。`OAuthCallbackQuery`の`code`/`state`は`AUTH_TOKEN_MAX_LENGTH`（既定512）以内をUnicodeコードポイント数で検証する |
 | 引数 | `code`/`state`/`error`：クエリパラメータ。`request`：Cookie読み取り用 |
 | 戻り値 | `RedirectResponse`（正常系・通常失敗時は302） |
 | 送出例外 | `TooManyAttemptsError`（429、`Retry-After`付与）、`ServiceUnavailableError`（503）以外は対応する`/login?error=...`への302リダイレクトに変換する |

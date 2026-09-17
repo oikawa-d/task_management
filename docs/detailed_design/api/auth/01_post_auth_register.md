@@ -43,8 +43,8 @@ Cookie：なし
 |------|----|------|------|------|
 | username | string | ○ | 3〜50文字、`^[A-Za-z0-9_-]+$` | ログインID。大文字小文字は区別しない一意制約（`uq_users_username`） |
 | email | string | ○ | 254文字以内、メール形式（`@ - _ . +` を許容） | 大文字小文字を区別しない一意制約（`uq_users_email`） |
-| password | string | ○ | 8文字以上、大文字英字/小文字英字/数字/記号のうち2種類以上 | 平文はログ・DBに保存しない |
-| password_confirm | string | ○ | `password` と一致 | |
+| password | string | ○ | 8〜`PASSWORD_MAX_LENGTH`（既定128）文字、Unicodeコードポイント数で判定、大文字英字/小文字英字/数字/記号のうち2種類以上 | 平文はログ・DBに保存しない |
+| password_confirm | string | ○ | `password` と一致し、`PASSWORD_MAX_LENGTH`（既定128）以内。上限はUnicodeコードポイント数で判定 | |
 | last_name / first_name | string | ○ | 各1〜30文字 | |
 | last_name_kana / first_name_kana | string | ○ | 各1〜30文字、ひらがな・カタカナ・数字のみ | |
 | birth_date | string(date) | ○ | `YYYY-MM-DD`、未来日不可 | プルダウン選択想定。フロントは年/月/日を結合して送信 |
@@ -259,8 +259,8 @@ stateDiagram-v2
 |----------|-----------|------|--------------------|
 | `RegisterRequest` | username | `^[A-Za-z0-9_-]{3,50}$` | `z.string().min(3).max(50).regex(...)` |
 | `RegisterRequest` | email | 254文字以内、`EmailStr`相当 | `z.string().email().max(254)` |
-| `RegisterRequest` | password | 8文字以上、大文字/小文字/数字/記号のうち2種類以上（カスタムバリデータ） | `zod`カスタム`refine`で同一ルールを実装 |
-| `RegisterRequest` | password_confirm | `password`と完全一致（`model_validator`） | `refine`でフィールド間比較 |
+| `RegisterRequest` | password | 8〜`PASSWORD_MAX_LENGTH`（既定128）文字、Unicodeコードポイント数で判定、大文字/小文字/数字/記号のうち2種類以上（カスタムバリデータ） | `zod`カスタム`refine`で同一ルールを実装 |
+| `RegisterRequest` | password_confirm | `password`と完全一致し、`PASSWORD_MAX_LENGTH`（既定128）以内。上限はUnicodeコードポイント数で判定 | `refine`でフィールド間比較と同じ上限を検証 |
 | `RegisterRequest` | last_name / first_name | 1〜30文字 | `z.string().min(1).max(30)` |
 | `RegisterRequest` | last_name_kana / first_name_kana | 1〜30文字、`^[ぁ-んァ-ヶー0-9]+$` | 同一正規表現を共有定数化 |
 | `RegisterRequest` | birth_date | `date`型、未来日不可（`model_validator`で`date.today()`比較） | `zod`で`max: today`検証 |

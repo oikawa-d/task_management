@@ -206,7 +206,7 @@ flowchart TB
 | シグネチャ | `async function runCallback(): Promise<void>` |
 | 引数 | なし（`useEffect`内から1回のみ呼ばれる） |
 | 戻り値 | なし |
-| 処理内容 | 1. `exchangeRanRef.current`が`true`なら即return（`StrictMode`二重実行防止） 2. `exchangeRanRef.current = true` 3. `location.hash`を解析し`code`/`redirect_to`を取得 4. `authConfig.auth_mode === 'jwt'`の場合のみ`useOAuthExchange().mutateAsync({code})`を実行し、成功後の`redirect_to`をレスポンス値で上書き 5. `sessionモード`または`jwt`交換成功後、`history.replaceState(null, '', '/oauth/callback')`でfragmentを除去 6. `getMe()`相当（`useAuthMeQuery`のrefetch）を実行 7. 成功時：`profile_completed`を判定し、`false`なら`/settings?complete_profile=1`、`true`なら検証済み`redirect_to`へ`navigate(..., {replace:true})` 8. いずれかの段階で失敗した場合は`callbackState = 'failed'`とし、fragmentは既に除去済みのため再送は発生しない |
+| 処理内容 | 1. `exchangeRanRef.current`が`true`なら即return（`StrictMode`二重実行防止） 2. `exchangeRanRef.current = true` 3. `location.hash`を解析し`code`/`redirect_to`を取得 4. `authConfig.auth_mode === 'jwt'`の場合は`oauthExchangeSchema`でcodeを`VITE_AUTH_TOKEN_MAX_LENGTH`（既定512）以内のUnicodeコードポイント数として検証し、成功時のみ`useOAuthExchange().mutateAsync({code})`を実行する 5. 成功後の`redirect_to`をレスポンス値で上書き 6. `sessionモード`または`jwt`交換成功後、`history.replaceState(null, '', '/oauth/callback')`でfragmentを除去 7. `getMe()`相当（`useAuthMeQuery`のrefetch）を実行 8. 成功時：`profile_completed`を判定し、`false`なら`/settings?complete_profile=1`、`true`なら検証済み`redirect_to`へ`navigate(..., {replace:true})` 9. いずれかの段階で失敗した場合は`callbackState = 'failed'`とし、fragmentは既に除去済みのため再送は発生しない |
 | 副作用 | API呼び出し（交換・`/auth/me`）、`history.replaceState`、`authStore`更新、ルーティング |
 
 ### 9.3 `utils/url.ts :: isSafeRelativePath`
@@ -221,7 +221,7 @@ flowchart TB
 
 ## 10. バリデーション
 
-zodによるフォーム入力は存在しない（本画面はフォームを持たない）。`redirect_to`の安全性検証は9.3の`isSafeRelativePath`（プレーンなTypeScript関数）で行い、zodスキーマ化はしない。
+zodによるフォーム入力は存在しない（本画面はフォームを持たない）。ただし、jwtのfragment codeは`oauthExchangeSchema`で`VITE_AUTH_TOKEN_MAX_LENGTH`以内かを検証する。`redirect_to`の安全性検証は9.3の`isSafeRelativePath`（プレーンなTypeScript関数）で行い、zodスキーマ化はしない。
 
 `isSafeRelativePath`が`false`を返した場合のフォールバック先は`ROUTES.DASHBOARD`（`/dashboard`）とし、パスは直書きせず`frontend/src/routes.ts`の定数を参照する。`/`は`/login`へのリダイレクト専用パスであり画面を持たないため、フォールバック先には使わない（[05_frontend.md 2.1](../../basic_design/05_frontend.md#21-ルートパス--の扱い)）。
 

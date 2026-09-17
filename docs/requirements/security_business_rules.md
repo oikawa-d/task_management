@@ -1,6 +1,6 @@
 # セキュリティ・業務ルール確定事項
 
-本書は Issue #8 で確定した9項目の正規方針である。要件・基本設計・詳細設計は本書と矛盾しないように記載し、下表の採用案を実装仕様として扱う。
+本書は Issue #8 で確定した10項目の正規方針である。要件・基本設計・詳細設計は本書と矛盾しないように記載し、下表の採用案を実装仕様として扱う。
 
 ## 1. 決定一覧
 
@@ -197,15 +197,19 @@ JWTのjti denylistをRedisへ保持する案は即時失効できるが、揮発
 
 force-logout直後のAccess TokenがTTL内は利用でき、TTL超過後は401になること、refreshは即時失効すること、status無効化ではAccess Tokenも`USER_INACTIVE`で直ちに拒否されることをモード別に検証する。
 
+### 2.10 認証入力の長さ
+
+パスワードの最大長は`PASSWORD_MAX_LENGTH=128`、メール認証・パスワードリセットtokenおよびOAuthのcode/stateの最大長は`AUTH_TOKEN_MAX_LENGTH=512`とする。上限値はbackend設定で管理し、frontendの`VITE_PASSWORD_MAX_LENGTH` / `VITE_AUTH_TOKEN_MAX_LENGTH`へ同じ値をビルド時に渡す。PythonとJavaScriptはいずれもUnicodeコードポイント数で判定し、上限超過は422としてArgon2、Redis、OAuth外部通信を実行しない。
+
 ## 3. 失敗時の共通原則と未決定事項の扱い
 
 認証・Rate Limit・失効・監査記録の判定に必要なDBまたはRedisが利用できない場合は、許可・成功・空データへの置換をせず `503 SERVICE_UNAVAILABLE` とする。RedisやDBの部分処理は監査ERRORへ出し、削除処理は同じ入力で再実行できるようにする。
 
-本書の9項目は採用案を確定済みであり、下位文書に残る「不明」「要検討」はこの9項目の実装判断を示すものではない。下位文書に同じ論点の旧記述がある場合は本書の採用案へ更新し、未決定のまま実装着手しない。
+本書の10項目は採用案を確定済みであり、下位文書に残る「不明」「要検討」はこの10項目の実装判断を示すものではない。下位文書に同じ論点の旧記述がある場合は本書の採用案へ更新し、未決定のまま実装着手しない。
 
 ```mermaid
 flowchart LR
-    A["設計文書"] --> B["security_business_rules.md<br/>9項目の採用案"]
+    A["設計文書"] --> B["security_business_rules.md<br/>10項目の採用案"]
     B --> C["requirements"]
     B --> D["basic_design"]
     B --> E["detailed_design/auth・api・database・infra・log・screen"]

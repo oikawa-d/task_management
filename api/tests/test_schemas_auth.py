@@ -2,6 +2,7 @@ from datetime import date, timedelta
 from uuid import uuid4
 
 import pytest
+from app.core.config import get_backend_settings
 from app.schemas.auth import (
 	AuthConfigResponse,
 	CurrentUser,
@@ -19,6 +20,7 @@ from app.schemas.auth import (
 	VerifyEmailRequest,
 )
 from app.schemas.base import StrictSchema
+from app.schemas.oauth import OAuthCallbackQuery, OAuthExchangeRequest
 from pydantic import ValidationError
 
 
@@ -132,6 +134,27 @@ def test_login_request_accepts_identifier_and_password() -> None:
 	assert request.identifier == "taro_01"
 
 
+def test_password_inputs_accept_128_unicode_code_points_and_reject_129() -> None:
+	password = "A1!" + "あ" * 125
+	assert len(password) == 128
+	assert RegisterRequest(**_register_payload(password=password, password_confirm=password)).password == password
+
+	with pytest.raises(ValidationError):
+		RegisterRequest(**_register_payload(password=password + "あ", password_confirm=password + "あ"))
+
+
+@pytest.mark.parametrize("model,field", [(LoginRequest, "password"), (PasswordResetRequest, "new_password")])
+def test_password_input_limits_apply_before_auth_service(model: type[object], field: str) -> None:
+	password = "A1!" + "a" * 126
+	if model is LoginRequest:
+		payload = {"identifier": "taro", "password": password}
+	else:
+		payload = _password_reset_payload(new_password=password, password_confirm=password)
+
+	with pytest.raises(ValidationError):
+		model(**payload)
+
+
 @pytest.mark.parametrize("field,value", [("identifier", ""), ("identifier", _email_of_length(255)), ("password", "")])
 def test_login_request_rejects_invalid_field(field: str, value: object) -> None:
 	payload: dict[str, object] = {"identifier": "taro", "password": "password"}
@@ -198,6 +221,30 @@ def test_verify_email_request_accepts_token() -> None:
 	request = VerifyEmailRequest(token="email-verification-token")
 
 	assert request.token == "email-verification-token"
+
+
+def test_verify_email_token_accepts_512_code_points_and_rejects_513() -> None:
+	assert VerifyEmailRequest(token="a" * 512).token == "a" * 512
+	with pytest.raises(ValidationError):
+		VerifyEmailRequest(token="a" * 513)
+
+
+def test_schema_limits_follow_backend_environment_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setenv("PASSWORD_MAX_LENGTH", "8")
+	monkeypatch.setenv("AUTH_TOKEN_MAX_LENGTH", "1")
+	get_backend_settings.cache_clear()
+
+	with pytest.raises(ValidationError):
+		LoginRequest(identifier="taro", password="Password1!")
+	with pytest.raises(ValidationError):
+		VerifyEmailRequest(token="ab")
+
+
+def test_oauth_query_and_exchange_code_reject_513_code_points() -> None:
+	with pytest.raises(ValidationError):
+		OAuthCallbackQuery(code="a" * 513)
+	with pytest.raises(ValidationError):
+		OAuthExchangeRequest(code="a" * 513)
 
 
 @pytest.mark.parametrize("payload", [{}, {"token": ""}])

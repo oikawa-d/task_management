@@ -18,15 +18,17 @@
 | 依存先 | Redis（`emailverify:*` / `pwreset:*` 系キー）、PostgreSQL（`users.email_verified_at` / `users.password_hash`）、SMTPサーバー（開発：Mailpit、本番：外部SMTP） |
 | 実装ファイル | `api/app/service/email_verification_service.py`、`api/app/service/mail_service.py`、`api/app/repository/redis_store.py`、`api/app/templates/mail/password_reset.{html,txt}`、`api/app/templates/mail/email_verification.{html,txt}` |
 
+メール認証・パスワードリセットのtokenは`AUTH_TOKEN_MAX_LENGTH`（既定512）文字以内とし、PythonのUnicodeコードポイント数で判定する。パスワード入力は`PASSWORD_MAX_LENGTH`（既定128）文字以内とし、Argon2処理前に検証する。
+
 ## 2. 構成要素
 
 | 要素 | 種別 | 責務 | 備考 |
 |------|------|------|------|
-| `issue_email_verify_token` | 関数（`auth_service`） | 新token生成・旧token失効・Redis登録・送信予約 | 登録時・再送時の両方から呼ばれる共通関数 |
-| `verify_email` | 関数（`auth_service`） | トークン消費・`email_verified_at`更新 | ワンタイム消費（`GETDEL`） |
-| `resend_verification` | 関数（`auth_service`） | 再送レート制限確認 → `issue_email_verify_token`呼び出し | ユーザー不存在・認証済みでも例外を出さない |
-| `request_password_reset` | 関数（`auth_service`） | token生成・Redis登録・送信予約 | ユーザー不存在でも例外を出さず202を維持 |
-| `reset_password` | 関数（`auth_service`） | トークン消費・Redis全失効・パスワード更新 | Redis失効成功後にDB更新 |
+| `issue_email_verify_token` | 関数（`api/app/service/email_verification_service.py`） | 新token生成・旧token失効・Redis登録・送信予約 | 登録時・再送時の両方から呼ばれる共通関数 |
+| `verify_email` | 関数（`api/app/service/email_verification_service.py`） | トークン消費・`email_verified_at`更新 | ワンタイム消費（`GETDEL`） |
+| `resend_verification` | 関数（`api/app/service/email_verification_service.py`） | 再送レート制限確認 → `issue_email_verify_token`呼び出し | ユーザー不存在・認証済みでも例外を出さない |
+| `request_password_reset` | 関数（`api/app/service/email_verification_service.py`） | token生成・Redis登録・送信予約 | ユーザー不存在でも例外を出さず202を維持 |
+| `reset_password` | 関数（`api/app/service/email_verification_service.py`） | トークン消費・Redis全失効・パスワード更新 | Redis失効成功後にDB更新。DB失敗時はトークンを補償復元 |
 | `send_email_verification_mail` | 関数（`mail_service`） | テンプレートレンダリング＋SMTP送信 | `{FRONTEND_BASE_URL}/verify-email#token=...` |
 | `send_password_reset_mail` | 関数（`mail_service`） | 同上 | `{FRONTEND_BASE_URL}/password/reset#token=...` |
 | `BackgroundTasks` | FastAPI標準機能 | レスポンス返却後にSMTP送信を非同期実行 | 送信失敗はログのみ、APIレスポンスへは影響させない |
@@ -57,7 +59,7 @@
 | 入力 | `POST /auth/verify-email` の`token` | `verify_email`が`GETDEL emailverify:{sha256(token)}`で消費 |
 | 入力 | `POST /auth/verify-email/resend` の`email` | `resend_verification`のトリガー |
 | 入力 | `POST /auth/password/forgot` の`email` | `request_password_reset`のトリガー |
-| 入力 | `POST /auth/password/reset` の`token`/`new_password` | `reset_password`がcurrent一致を確認して原子的に消費 |
+| 入力 | `POST /auth/password/reset` の`token`/`new_password`/`password_confirm` | `password_confirm`を含む入力をAPIスキーマで検証し、`reset_password`がtokenを原子的に消費 |
 | 出力 | Redis `emailverify:{hash}` / `emailverify_current:{uid}` / `emailverify_sent:{uid}` | §7参照 |
 | 出力 | Redis `pwreset:{hash}` | ワンタイムトークン |
 | 出力 | SMTP送信（`BackgroundTasks`経由） | 認証メール／リセットメール |
@@ -143,15 +145,19 @@ sequenceDiagram
 
     FE->>API: "POST /api/auth/password/forgot {email}"
     API->>PG: "SELECT users WHERE lower(email)=?"
-    API->>API: "token = secrets.token_urlsafe(32)"
     opt ユーザーが存在
+        API->>API: "token = secrets.token_urlsafe(32)"
         API->>RD: "Luaで旧pwresetとcurrentを削除し新token/currentを原子的にSETEX"
-        API->>SMTP: "BackgroundTasksでメール送信予約<br/>{FRONTEND_BASE_URL}/password/reset#token=..."
+        alt save_password_reset_token=True（CAS成功）
+            API->>SMTP: "BackgroundTasksでメール送信予約<br/>{FRONTEND_BASE_URL}/password/reset#token=..."
+        else save_password_reset_token=False（CAS競合）
+            Note over API: "メール送信を予約しない"
+        end
     end
     API-->>FE: "202 Accepted（存在有無を問わず同一応答）"
 
     U->>FE: "メール内リンクを開く"
-    FE->>API: "POST /api/auth/password/reset {token, new_password}"
+    FE->>API: "POST /api/auth/password/reset {token, new_password, password_confirm}"
     API->>RD: "Luaでcurrent一致を確認しpwreset/currentを原子的に消費"
     alt トークンが無効・期限切れ
         API-->>FE: "400 INVALID_RESET_TOKEN"
@@ -186,9 +192,18 @@ flowchart TB
     P -->|Yes| R{"emailverify_sent:{uid} 存在?"}
     R -->|Yes（間隔内）| Q
     R -->|No（間隔外）| A
+
+    U["request_password_reset(email, background, db)"] --> V["get_by_email(db, email)"]
+    V --> W{"ユーザー存在?"}
+    W -->|No| Z["何もせず202"]
+    W -->|Yes| X["token生成"]
+    X --> Y["save_password_reset_token"]
+    Y -->|False（CAS競合）| Z
+    Y -->|True| AA["BackgroundTasksへメール送信を登録"]
+    AA --> Z
 ```
 
-**fail-close方針**：Redis接続不能時は`issue_email_verify_token`・`verify_email`・`request_password_reset`・`reset_password`いずれも例外を送出し、APIハンドラは`503 SERVICE_UNAVAILABLE`へ変換する（[./08_redis_store.md](./08_redis_store.md) §10）。メール送信自体の失敗（SMTP接続不可）はBackgroundTasks内でログに記録するのみとし、既に返却済みの202/201/204レスポンスには影響させない。
+**fail-close方針**：Redis接続不能時は`issue_email_verify_token`・`verify_email`・`request_password_reset`・`reset_password`いずれも例外を送出し、APIハンドラは`503 SERVICE_UNAVAILABLE`へ変換する（[./08_redis_store.md](./08_redis_store.md) §10）。`request_password_reset`で`save_password_reset_token`が`False`を返すCAS競合は正常な競合として扱い、メール送信を予約せず、APIはユーザー不存在時と同じ`202 Accepted`を返す。メール送信自体の失敗（SMTP接続不可）はBackgroundTasks内でログに記録するのみとし、既に返却済みの202/201/204レスポンスには影響させない。
 
 ## 7. データ遷移図
 
@@ -232,12 +247,12 @@ stateDiagram-v2
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ / 定義 | `async def verify_email(token: str) -> None` |
-| 引数 / 入力 | `token`（クライアントから受け取った平文） |
+| シグネチャ / 定義 | `async def verify_email(token: str, db: AsyncSession) -> None` |
+| 引数 / 入力 | `token`（クライアントから受け取った平文）、`db`（ユーザー更新用DBセッション） |
 | 戻り値 / 出力 | `None` |
-| 送出例外 / 失敗条件 | `InvalidVerifyTokenError`（→400 `INVALID_VERIFY_TOKEN`）：`consume_email_verify_token`が`None`を返した場合 |
-| 処理内容 | 1. `user_id = await redis_store.consume_email_verify_token(token)`（内部で`sha256`化して`GETDEL`） 2. `None`なら例外 3. `user_repository.mark_email_verified(db, user_id)`で`UPDATE users SET email_verified_at = now()` |
-| 副作用 | Redis削除（ワンタイム消費）、PostgreSQL UPDATE |
+| 送出例外 / 失敗条件 | `InvalidVerifyTokenError`（→400 `INVALID_VERIFY_TOKEN`）：`consume_email_verify_token`が`None`を返した場合。DB障害はrollback後にトークンを補償復元し、503 `SERVICE_UNAVAILABLE`へ変換 |
+| 処理内容 | 1. `user_id = await redis_store.consume_email_verify_token(token)`（内部で`sha256`化して`GETDEL`） 2. `None`なら例外 3. `user_repository.mark_email_verified(db, user_id)`で`UPDATE users SET email_verified_at = now()` 4. `db.commit()`を実行 5. DB障害時は`db.rollback()`後に`restore_email_verify_token(token, user_id, ttl)`で消費済みトークンを競合安全に補償復元 |
+| 副作用 | Redis削除（ワンタイム消費）、PostgreSQL UPDATE・commit。DB障害時は`restore_email_verify_token`でRedisトークンを補償復元 |
 
 ### 8.3 `api/app/service/email_verification_service.py :: resend_verification`
 
@@ -254,12 +269,12 @@ stateDiagram-v2
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ / 定義 | `async def request_password_reset(email: str, background: BackgroundTasks) -> None` |
-| 引数 / 入力 | `email`、`background` |
+| シグネチャ / 定義 | `async def request_password_reset(email: str, background: BackgroundTasks, db: AsyncSession) -> None` |
+| 引数 / 入力 | `email`、`background`、`db`（ユーザー検索用DBセッション） |
 | 戻り値 / 出力 | `None`（存在有無によらず呼び出し元は常に202） |
-| 送出例外 / 失敗条件 | なし |
-| 処理内容 | 1. `user_repository.find_by_email(db, email)` 2. `None`なら何もせず終了 3. 存在すれば`token = secrets.token_urlsafe(32)` 4. `redis_store.save_password_reset_token(token, user.id, ttl=PASSWORD_RESET_TTL_SECONDS)` 5. `background.add_task(mail_service.send_password_reset_mail, user.email, token, expires_minutes=PASSWORD_RESET_TTL_SECONDS // 60)` |
-| 副作用 | 条件付きでRedis書き込み・BackgroundTasks登録 |
+| 送出例外 / 失敗条件 | RedisまたはDB接続不能時は例外を送出し、APIで503 `SERVICE_UNAVAILABLE`へ変換する。ユーザー不存在およびCAS競合（`save_password_reset_token=False`）は正常終了とする |
+| 処理内容 | 1. `user_repository.get_by_email(db, email)`でユーザーを検索 2. `None`なら何もせず終了 3. `token = secrets.token_urlsafe(32)`を生成 4. `saved = redis_store.save_password_reset_token(token, user.id, ttl=PASSWORD_RESET_TTL_SECONDS)`を実行 5. `saved=False`（CAS競合）ならメール送信を予約せず終了 6. `saved=True`の場合だけ`background.add_task(mail_service.send_password_reset_mail, user.email, token, PASSWORD_RESET_TTL_SECONDS // 60)`を登録 |
+| 副作用 | ユーザー存在かつCAS成功時のみ、Redisで旧`pwreset`と`pwreset_current`を失効・新token/currentを原子的に登録し、BackgroundTasksへメール送信を登録 |
 
 ### 8.5 `api/app/service/email_verification_service.py :: reset_password`
 
@@ -268,8 +283,8 @@ stateDiagram-v2
 | シグネチャ / 定義 | `async def reset_password(token: str, new_password: str, db: AsyncSession) -> None` |
 | 引数 / 入力 | `token`（平文）、`new_password`（バリデーション済み）、`db` |
 | 戻り値 / 出力 | `None` |
-| 送出例外 / 失敗条件 | `InvalidResetTokenError`（→400 `INVALID_RESET_TOKEN`）：`consume_password_reset_token`が`None`を返した場合。Redis障害またはPostgreSQL接続障害はグローバル例外ハンドラで503 `SERVICE_UNAVAILABLE`へ変換する。Redis失効に失敗した場合はfail-closeとし、DB更新・`commit()`を行わない |
-| 処理内容 | 1. `user_id = await redis_store.consume_password_reset_token(token)` 2. `None`なら例外 3. `hash_password`で新パスワードをハッシュ化 4. `delete_all_sessions`を実行 5. `revoke_all_refresh_tokens`を実行 6. Redis成功後に`user_repository.update_password(db, user_id, password_hash)`を実行 7. `db.commit()`を実行 |
+| 送出例外 / 失敗条件 | `InvalidResetTokenError`（→400 `INVALID_RESET_TOKEN`）：`consume_password_reset_token`が`None`を返した場合。Redis障害またはPostgreSQL接続障害はグローバル例外ハンドラで503 `SERVICE_UNAVAILABLE`へ変換する。Redis失効に失敗した場合はfail-closeとし、DB更新・`commit()`を行わず、消費済みトークンを補償復元する |
+| 処理内容 | 1. `user_id = await redis_store.consume_password_reset_token(token)` 2. `None`なら例外 3. `hash_password`で新パスワードをハッシュ化 4. `delete_all_sessions`を実行 5. `revoke_all_refresh_tokens`を実行 6. Redis失敗時は`restore_password_reset_token`で消費済みトークンを補償復元 7. Redis成功後に`user_repository.update_password(db, user_id, password_hash)`を実行 8. `db.commit()`を実行 9. DB失敗時はrollback後に`restore_password_reset_token`でトークンを復元 |
 | 副作用 | Redis削除（ワンタイム消費＋全失効）、PostgreSQL UPDATE |
 
 ### 8.6 `service/mail_service.py :: send_email_verification_mail` / `send_password_reset_mail`
