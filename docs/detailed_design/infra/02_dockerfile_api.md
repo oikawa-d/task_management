@@ -22,7 +22,8 @@
 | `builder` ステージ | ビルドステージ | `pip install --prefix=/install` で依存関係をビルド | `requirements.txt` のみを先にコピーしレイヤキャッシュを効かせる |
 | `runtime` ステージ | 実行ステージ | `builder` の成果物と `api/app/`・`api/alembic/`・`db/`をコピーし、非rootで実行 | ベースは `python:3.14-slim` |
 | `appuser` | OSユーザー | 非root実行ユーザー | `useradd -m -u 10001 appuser` 相当 |
-| `entrypoint.sh` | シェルスクリプト | `alembic upgrade head` 実行後に `exec uvicorn` へ切り替え | 失敗時は非ゼロで終了しUvicornを起動しない |
+| `entrypoint.sh` | シェルスクリプト | `alembic upgrade head` 実行後に `exec "$@"` でコンテナに渡されたコマンドへ切り替え | 失敗時は非ゼロで終了しコマンドを起動しない |
+| `CMD` | Dockerfile命令 | `command` 未指定時の既定コマンドとして `uvicorn app.main:app --host 0.0.0.0 --port 8000` を `entrypoint.sh` へ渡す | `compose.dev.yml` の `command` で `--reload` 付きに上書きされる |
 | `HEALTHCHECK` | Dockerfile命令 | `GET /api/health` を内部的に確認 | コンテナ内部ポート`8000`固定 |
 
 ## 3. 設定項目（環境変数）
@@ -87,7 +88,7 @@ sequenceDiagram
         Note over DC: frontendはbackendのhealthy待ちのため起動しない
     else 適用成功
         AL-->>EP: exit 0
-        EP->>UV: exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+        EP->>UV: exec "$@"（CMD/commandで渡されたuvicornコマンド）
         UV-->>DC: HEALTHCHECK用 GET /api/health が200を返す
     end
 ```
@@ -148,7 +149,7 @@ stateDiagram-v2
 | 引数/入力 | `builder` の `/install`、`api/app/`、`api/alembic/`、`api/alembic.ini`、`api/entrypoint.sh`、`db/functions/`、`db/procedures/` |
 | 出力 | 実行可能なbackendイメージ |
 | 失敗条件 | `appuser` 作成失敗、`COPY` 対象パス誤り |
-| 処理内容 | 1. `COPY --from=builder /install /usr/local` 2. `RUN useradd -m -u 10001 appuser` 3. `WORKDIR /app/api` 4. `COPY --chown=appuser:appuser api/app ./app`、`api/alembic ./alembic`、`api/alembic.ini ./alembic.ini`、`api/entrypoint.sh ./entrypoint.sh`、`db /app/db` 5. `RUN chmod +x entrypoint.sh` 6. `USER appuser` 7. `EXPOSE 8000` 8. `HEALTHCHECK CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"` 9. `ENTRYPOINT ["./entrypoint.sh"]` |
+| 処理内容 | 1. `COPY --from=builder /install /usr/local` 2. `RUN useradd -m -u 10001 appuser` 3. `WORKDIR /app/api` 4. `COPY --chown=appuser:appuser api/app ./app`、`api/alembic ./alembic`、`api/alembic.ini ./alembic.ini`、`api/entrypoint.sh ./entrypoint.sh`、`db /app/db` 5. `RUN chmod +x entrypoint.sh` 6. `USER appuser` 7. `EXPOSE 8000` 8. `HEALTHCHECK CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"` 9. `ENTRYPOINT ["./entrypoint.sh"]` 10. `CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]` |
 | 副作用 | イメージレイヤに非root実行ユーザーを組み込む |
 
 ### 8.3 `entrypoint.sh` :: メインスクリプト
@@ -156,10 +157,10 @@ stateDiagram-v2
 | 項目 | 内容 |
 |------|------|
 | シグネチャ / 定義 | シェルスクリプト（`#!/bin/sh -e`） |
-| 引数 / 入力 | 環境変数 `DATABASE_URL` 等（`core/config.py` 経由で参照される値と同一） |
-| 戻り値 / 出力 | プロセス終了コード（0=成功してUvicornへ`exec`、非0=起動失敗） |
+| 引数 / 入力 | 位置引数 `$@`（Dockerfileの `CMD`、または `compose.dev.yml` 等の `command` で渡される起動コマンド）、環境変数 `DATABASE_URL` 等（`core/config.py` 経由で参照される値と同一） |
+| 戻り値 / 出力 | プロセス終了コード（0=成功して引数のコマンドへ`exec`、非0=起動失敗） |
 | 送出例外 / 失敗条件 | `alembic upgrade head` の非ゼロ終了 |
-| 処理内容 | 1. `alembic upgrade head` を実行 2. 失敗時は即座に終了（`set -e`によりスクリプト全体が停止） 3. 成功時は `exec uvicorn app.main:app --host 0.0.0.0 --port 8000` に置き換わる（PID 1をUvicornに委譲しシグナル伝播を正しくする） |
+| 処理内容 | 1. `alembic upgrade head` を実行 2. 失敗時は即座に終了（`set -e`によりスクリプト全体が停止） 3. 成功時は `exec "$@"` で渡されたコマンドに置き換わる（PID 1を委譲しシグナル伝播を正しくする）。prodでは `CMD` の `uvicorn app.main:app --host 0.0.0.0 --port 8000`、devでは `compose.dev.yml` の `--reload` 付きコマンドが渡る |
 | 副作用 | DBスキーマ変更（マイグレーション適用） |
 
 ## 9. 関数・要素相関図
@@ -172,7 +173,8 @@ flowchart LR
     RUNTIME --> ENTRY["entrypoint.sh"]
     ENTRY --> ALEMBIC["alembic upgrade head"]
     ALEMBIC --> PG[("PostgreSQL")]
-    ENTRY --> UVICORN["uvicorn app.main:app"]
+    CMDARG["CMD / composeのcommand"] --> ENTRY
+    ENTRY --> UVICORN["exec #quot;$@#quot; で起動<br/>uvicorn app.main:app"]
     UVICORN --> HEALTH["GET /api/health"]
 ```
 
