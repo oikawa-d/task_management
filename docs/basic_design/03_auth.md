@@ -447,8 +447,8 @@ sequenceDiagram
     API-->>FE: 202 Accepted（存在有無を返さない）
     Note over API,FE: ユーザー列挙攻撃を防ぐため、<br/>存在しないメールでも同じ応答を返す
 
-    U->>FE: メール内リンク /reset-password#token=xxx
-    FE->>API: POST /api/auth/password/reset {token, new_password}
+    U->>FE: メール内リンク /password/reset#token=xxx
+    FE->>API: POST /api/auth/password/reset {token, new_password, password_confirm}
     API->>RD: GETDEL pwreset:{sha256(token)}
     alt トークン無効/期限切れ
         API-->>FE: 400 INVALID_RESET_TOKEN

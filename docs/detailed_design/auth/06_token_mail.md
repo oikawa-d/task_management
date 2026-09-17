@@ -59,7 +59,7 @@
 | 入力 | `POST /auth/verify-email` の`token` | `verify_email`が`GETDEL emailverify:{sha256(token)}`で消費 |
 | 入力 | `POST /auth/verify-email/resend` の`email` | `resend_verification`のトリガー |
 | 入力 | `POST /auth/password/forgot` の`email` | `request_password_reset`のトリガー |
-| 入力 | `POST /auth/password/reset` の`token`/`new_password` | `reset_password`がcurrent一致を確認して原子的に消費 |
+| 入力 | `POST /auth/password/reset` の`token`/`new_password`/`password_confirm` | `password_confirm`を含む入力をAPIスキーマで検証し、`reset_password`がtokenを原子的に消費 |
 | 出力 | Redis `emailverify:{hash}` / `emailverify_current:{uid}` / `emailverify_sent:{uid}` | §7参照 |
 | 出力 | Redis `pwreset:{hash}` | ワンタイムトークン |
 | 出力 | SMTP送信（`BackgroundTasks`経由） | 認証メール／リセットメール |
@@ -153,7 +153,7 @@ sequenceDiagram
     API-->>FE: "202 Accepted（存在有無を問わず同一応答）"
 
     U->>FE: "メール内リンクを開く"
-    FE->>API: "POST /api/auth/password/reset {token, new_password}"
+    FE->>API: "POST /api/auth/password/reset {token, new_password, password_confirm}"
     API->>RD: "Luaでcurrent一致を確認しpwreset/currentを原子的に消費"
     alt トークンが無効・期限切れ
         API-->>FE: "400 INVALID_RESET_TOKEN"

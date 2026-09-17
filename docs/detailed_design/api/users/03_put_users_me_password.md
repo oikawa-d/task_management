@@ -52,9 +52,9 @@ Cookie
 
 | フィールド | 型 | 必須 | 制約 | 説明 |
 |-----------|----|------|------|------|
-| current_password | string | 条件付き必須 | `has_password=true`のユーザーは必須。`has_password=false`（Googleのみで登録し未設定）のユーザーは省略可。指定時は`PASSWORD_MAX_LENGTH`（既定128）以内 | 省略時にサーバーは検証をスキップする（値が来た場合は無視ではなく`VALIDATION_ERROR`とする。§13参照） |
+| current_password | string | 条件付き必須 | `has_password=true`のユーザーは必須。`has_password=false`（Googleのみで登録し未設定）のユーザーは省略可。指定時は`PASSWORD_MAX_LENGTH`（既定128）以内、上限はUnicodeコードポイント数で判定 | 省略時にサーバーは検証をスキップする（値が来た場合は無視ではなく`VALIDATION_ERROR`とする。§13参照） |
 | new_password | string | ○ | 8〜`PASSWORD_MAX_LENGTH`（既定128）文字、Unicodeコードポイント数で判定、大文字英字/小文字英字/数字/記号のうち2種類以上（`04_api.md`§3.1の登録時パスワードポリシーと同一） | |
-| password_confirm | string | ○ | `new_password`と一致し、`PASSWORD_MAX_LENGTH`以内 | |
+| password_confirm | string | ○ | `new_password`と一致し、`PASSWORD_MAX_LENGTH`（既定128）以内。上限はUnicodeコードポイント数で判定 | |
 
 ### 2.2 レスポンス
 
@@ -266,8 +266,8 @@ sessionモードの認証解決・CSRF検証自体の`GET`/`EXPIRE`は本APIの�
 | スキーマ | フィールド | 規則 |
 |----------|-----------|------|
 | `PasswordChangeRequest` | new_password | 8〜`PASSWORD_MAX_LENGTH`（既定128）文字、Unicodeコードポイント数で判定、大文字英字/小文字英字/数字/記号のうち2種類以上。フロント（zod）も同一ポリシーを`04_api.md`§3.1の登録時と共通のスキーマ定義で用いる |
-| `PasswordChangeRequest` | password_confirm | `new_password`と一致し、`PASSWORD_MAX_LENGTH`以内 |
-| `PasswordChangeRequest` | current_password | pydanticレベルでは任意（`str \| None`）。指定時は`PASSWORD_MAX_LENGTH`以内。「送信可否」の妥当性判定（`has_password`との整合）はサービス層で行う（DBの現在値を見る必要があるため） |
+| `PasswordChangeRequest` | password_confirm | `new_password`と一致し、`PASSWORD_MAX_LENGTH`（既定128）以内。上限はUnicodeコードポイント数で判定 |
+| `PasswordChangeRequest` | current_password | pydanticレベルでは任意（`str \| None`）。指定時は`PASSWORD_MAX_LENGTH`（既定128）以内、上限はUnicodeコードポイント数で判定。「送信可否」の妥当性判定（`has_password`との整合）はサービス層で行う（DBの現在値を見る必要があるため） |
 
 ## 11. 非機能・セキュリティ考慮
 

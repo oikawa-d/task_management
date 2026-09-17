@@ -82,7 +82,7 @@
 |----|------|------|--------|----------|----------|----------------|
 | ① | 見出し | 静的テキスト | "タスク詳細" | - | 常時 | - |
 | ② | タイトル | インライン編集text | `task.title` | 1〜150文字必須 | 常時編集可 | フォーカスアウトで変更検知→`PATCH`（§9.1） |
-| ③ | 説明 | インライン編集textarea | `task.description` | 0〜2000文字（issue #40で確定） | 常時編集可 | フォーカスアウトで変更検知→`PATCH` |
+| ③ | 説明 | インライン編集textarea | `task.description` | 0〜2000文字、Unicodeコードポイント数で判定（issue #40で確定） | 常時編集可 | フォーカスアウトで変更検知→`PATCH` |
 | ④ | 担当者 | select | `task.assignee?.id ?? ''`（空文字＝未割当） | プロジェクトメンバーから選択、`is_active=false`のメンバーは選択肢に表示するが選択不可（グレーアウト） | 常時活性 | 選択変更で即時`PATCH` |
 | ⑤ | 期限 | datetime-local input | `task.due_at`を`APP_TIMEZONE`へ変換 | 任意 | 常時活性 | 変更で即時`PATCH`。送信時はUTCへ正規化 |
 | ⑥ | ステータス | select | `task.status` | `todo`/`in_progress`/`done` | 常時活性 | 変更で即時`PATCH`（ボード側の列移動と同一API） |
@@ -330,7 +330,7 @@ flowchart TB
 | フィールド | 実装箇所 | ルール | エラーメッセージ | バックエンド対応 |
 |-----------|-------------|--------|-------------------|-------------------|
 | ②title | `TaskEditForm.tsx` | 1〜150文字。blur時に変更があれば更新 callbackを呼ぶ | 「タイトルは1〜150文字で入力してください」 | pydantic `TaskUpdateRequest.title`（[04_patch_task.md](../api/tasks/04_patch_task.md) §10） |
-| ③description | `TaskEditForm.tsx` | 0〜2000文字、null可 | 「説明は2000文字以内で入力してください」 | issue #40で0〜2000文字に確定（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） |
+| ③description | `TaskEditForm.tsx` | `countCodePoints(value) <= TASK_DESCRIPTION_MAX_LENGTH`（0〜2000文字、null可） | 「説明は2000文字以内で入力してください」 | issue #40で0〜2000文字（Unicodeコードポイント数で判定）に確定（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） |
 | ④assignee_id | `TaskEditForm.tsx` | UUIDまたはnull。無効メンバーは選択不可 | 「担当者の選択が不正です」 | メンバー・`is_active`検証はサーバー側（`409 ASSIGNEE_INACTIVE`） |
 | ⑤due_at | `TaskEditForm.tsx` | datetime-localまたはnull | 「期限日時の形式が正しくありません」 | `APP_TIMEZONE`へ変換後、ISO 8601 UTCを送信 |
 | ⑥status | `TaskEditForm.tsx` | `todo`/`in_progress`/`done` | - | - |
@@ -408,7 +408,7 @@ flowchart LR
 
 | 区分 | 内容 | 影響 |
 |------|------|------|
-| 確定 | タスク`description`の文字数上限はissue #40で0〜2000文字に確定（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)、[04_patch_task.md §5](../api/tasks/04_patch_task.md)） | - |
+| 確定 | タスク`description`の文字数上限はissue #40で0〜2000文字（Unicodeコードポイント数で判定）に確定（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)、[04_patch_task.md §5](../api/tasks/04_patch_task.md)） | - |
 | 確定 | `TASK_COMMENT_BODY_MAX_LENGTH`（既定2000）はissue #40で`VITE_TASK_COMMENT_BODY_MAX_LENGTH`環境変数として共有することに確定（[05_frontend.md §6.2](../../basic_design/05_frontend.md#62-環境変数vite)） | - |
 | 要検討 | フィールド更新を「1回のPATCHにつき1フィールド」とする設計は本書独自の具体化であり、複数フィールドをまとめて1回のPATCHで送信する設計（バックエンドの部分更新自体は複数フィールド対応済み）でも基本設計と矛盾しない。UI応答性とversion競合の起こりやすさのトレードオフのため、実装時に見直す余地がある | フィールドごとのAPI呼び出し回数・体感速度に影響 |
 | 確定 | コメント投稿は`addTaskComment`、`taskDetailStore.addComment`、`useTaskDetail().addComment`を経由して`CommentForm`へ接続する。Issue #433の結合テストで一覧追加と入力クリアを検証する | コメント投稿の画面統合を保証する |
