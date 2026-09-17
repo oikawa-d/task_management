@@ -73,12 +73,13 @@
 | `oauth_handoff:{code}` | `{user_id, redirect_to, created_at}` | `OAUTH_HANDOFF_TTL_SECONDS`（既定60） | しない | jwt OAuthコールバック | フロントへの一時コード（ワンタイム） |
 | `pwreset:{token_hash}` | `{user_id, requested_at}` | `PASSWORD_RESET_TTL_SECONDS`（既定1800） | しない | パスワードリセット要求 | 現在トークンの実体 |
 | `pwreset_current:{user_id}` | 現在のtoken_hash | `PASSWORD_RESET_TTL_SECONDS`（既定1800） | しない（再発行時に原子的に置換） | パスワードリセット要求 | 最新トークンのみ有効にする逆引き |
+| `pwreset_consumed:{user_id}` | 最新に消費したtoken_hash | `PASSWORD_RESET_TTL_SECONDS`（既定1800） | しない | パスワードリセット消費時 | 補償対象tokenが後続消費より古いかを判定するtombstone |
 | `emailverify:{token_hash}` | `{user_id, requested_at}` | `EMAIL_VERIFY_TTL_SECONDS`（既定86400） | しない | 会員登録・認証メール再送 | メール認証トークン有効性判定 |
 | `emailverify_current:{user_id}` | 現在のtoken_hash | `EMAIL_VERIFY_TTL_SECONDS` | しない（再発行時に新TTLで置換） | 会員登録・認証メール再送 | 再送時に旧トークンを失効させる逆引き |
 | `emailverify_sent:{user_id}` | 直近送信時刻（数値） | `EMAIL_VERIFY_RESEND_INTERVAL_SECONDS`（既定60） | しない | 認証メール送信時（`SETEX`） | 認証メール再送のレート制限 |
 | `login_fail:{key_hash}` | 連続失敗回数（数値） | `LOGIN_LOCK_WINDOW_SECONDS`（既定900） | しない（初回`INCR`時のみ設定） | ログイン失敗時（`INCR`） | ブルートフォース対策のカウント |
 
-**値に保存しない情報**：パスワード・パスワードハッシュ・アクセストークン平文・リフレッシュトークン平文・メールアドレス/ユーザー名の平文（`login_fail`のキー自体はハッシュ化済み識別子）。全14キーは本表で網羅済み（[../../basic_design/02_redis.md](../../basic_design/02_redis.md) §2と1対1対応）。
+**値に保存しない情報**：パスワード・パスワードハッシュ・アクセストークン平文・リフレッシュトークン平文・メールアドレス/ユーザー名の平文（`login_fail`のキー自体はハッシュ化済み識別子）。キーは本表で網羅済み（[../../basic_design/02_redis.md](../../basic_design/02_redis.md) §2と1対1対応）。
 
 ## 6. キー命名規約
 
@@ -124,9 +125,12 @@ stateDiagram-v2
 ```mermaid
 stateDiagram-v2
     [*] --> 発行済み: "SETEX {種別}:{識別子} TTL"
-    発行済み --> 消費済み: "GETDEL 成功（正規のリクエストで1回のみ）"
+    発行済み --> 消費済み: "oauth/emailverifyはGETDEL、pwresetはLuaでcurrent一致を確認して消費"
+    消費済み --> 補償可能: "pwresetのみ、pwreset_consumed:{uid}へ最新消費hashをTTL付き記録"
+    補償可能 --> 発行済み: "restore_password_reset_tokenがtombstone一致・current/実体不存在を確認"
     発行済み --> TTL失効: "TTL満了（未消費のまま放置）"
     消費済み --> [*]
+    補償可能 --> [*]
     TTL失効 --> [*]
 ```
 
@@ -176,8 +180,8 @@ stateDiagram-v2
 | 関数 | シグネチャ | 処理概要 |
 |------|-----------|----------|
 | `save_password_reset_token` | `async def save_password_reset_token(token: str, user_id: UUID, ttl: int) -> bool` | Luaで旧`pwreset_current:{uid}`と実体を置換し、新hashを`pwreset`と`pwreset_current`へ原子的に登録。CAS競合時は`False` |
-| `consume_password_reset_token` | `async def consume_password_reset_token(token: str) -> UUID \| None` | Luaで`pwreset_current:{uid}`との一致を確認して実体・currentを原子的に消費し、`user_id`を返す |
-| `restore_password_reset_token` | `async def restore_password_reset_token(token: str, user_id: UUID, ttl: int) -> bool` | Luaで`pwreset_current:{uid}`とtoken実体の不存在を確認し、両方が不存在の場合だけ消費済みtokenを原子的に補償復元。後続tokenが存在する場合は`False` |
+| `consume_password_reset_token` | `async def consume_password_reset_token(token: str) -> UUID \| None` | Luaで`pwreset_current:{uid}`との一致を確認して実体・currentを原子的に消費し、`pwreset_consumed:{uid}`へ最新消費hashを`PASSWORD_RESET_TTL_SECONDS`付きで記録して`user_id`を返す |
+| `restore_password_reset_token` | `async def restore_password_reset_token(token: str, user_id: UUID, ttl: int) -> bool` | Luaで`pwreset_consumed:{uid}`が補償対象hashと一致し、currentとtoken実体が不存在の場合だけ消費済みtokenを原子的に復元。後続tokenの消費後は`False` |
 | `replace_email_verify_token` | `async def replace_email_verify_token(token: str, user_id: UUID, ttl: int) -> None` | `GET emailverify_current:{uid}`で旧hash取得 → 存在すれば`DEL emailverify:{旧hash}` → `SETEX emailverify:{新hash}` → `SET emailverify_current:{uid} 新hash EX ttl`（パイプラインで実行し、途中失敗時も新旧いずれかは残る想定。厳密なLua原子化は§12で要検討） |
 | `consume_email_verify_token` | `async def consume_email_verify_token(token: str) -> UUID \| None` | `GETDEL emailverify:{hash}` → `user_id`を返す（ワンタイム消費） |
 | `restore_email_verify_token` | `async def restore_email_verify_token(token: str, user_id: UUID, ttl: int) -> bool` | currentが別hashへ変わっていない場合だけ、消費済みtokenとcurrentをLuaで原子的に復元 |
@@ -200,8 +204,8 @@ stateDiagram-v2
 | 操作 | 原子性の担保方法 | 理由 |
 |------|-------------------|------|
 | `GETDEL`（`consume_oauth_state` / `consume_oauth_handoff` / `consume_email_verify_token`） | Redis 6.2以降のネイティブ`GETDEL`コマンドを使用（`GET`→`DEL`を別コマンドで行わない） | 単純な`GET`+`DEL`の2コマンドでは、同時に2リクエストが到達した場合に両方が値を取得してしまい、ワンタイム性が破れる |
-| `consume_password_reset_token` | 専用Luaスクリプト（`EVAL`）でtoken実体のpayloadから`user_id`を取得し、`pwreset_current:{uid}`との一致確認・token実体・currentの削除を1回のRedis呼び出し内で実行 | `GETDEL`だけではユーザー単位の最新token確認と2キーの原子的な消費を保証できない |
-| `restore_password_reset_token` | 専用Luaスクリプト（`EVAL`）で`pwreset_current:{uid}`とtoken実体の不存在を確認し、token実体・currentを原子的に復元 | DB/Redis障害時に後続tokenを上書きせず、消費済みtokenだけを補償復元する |
+| `consume_password_reset_token` | 専用Luaスクリプト（`EVAL`）でtoken実体のpayloadから`user_id`を取得し、`pwreset_current:{uid}`との一致確認・token実体・currentの削除・`pwreset_consumed:{uid}`への最新消費hash記録を1回のRedis呼び出し内で実行 | `GETDEL`だけではユーザー単位の最新token確認、2キーの原子的な消費、後続消費との世代判定を保証できない |
+| `restore_password_reset_token` | 専用Luaスクリプト（`EVAL`）でtombstoneと補償対象hashの一致、currentとtoken実体の不存在を確認し、token実体・currentを原子的に復元 | DB/Redis障害時に後続tokenの消費後に古いtokenを復活させず、消費済みtokenだけを補償復元する |
 | `rotate_refresh_token` | 専用Luaスクリプト（`EVAL`）で「family失効確認 → 旧キー存在確認 → 旧キー削除 → `refresh_used`へtombstone作成 → 新キー`SETEX` → `user_refresh`集合更新」を1回のRedis呼び出し内で実行 | 単純な`GET`→`DEL`→`SET`の複数コマンドでは、同一リフレッシュトークンでの同時複数リクエストが二重に成功し得る（Redisはシングルスレッドで各コマンドを順に実行するが、複数コマンド間には他クライアントの操作が割り込み得る） |
 | `mark_email_verify_sent` | `SET ... NX EX`（`SETNX`+`EXPIRE`ではなく単一コマンドの`NX`+`EX`オプション） | `SETNX`と`EXPIRE`を分離すると、`SETNX`成功直後にプロセスが落ちるとTTLが設定されないキーが残り得る |
 | `incr_login_failure`の初回EXPIRE | `INCR`の戻り値が`1`のときのみ`EXPIRE`を実行するパターン（Lua化はしない） | 複数ワーカーからの同時`INCR`はRedis側でアトミックに直列化されるため、戻り値`1`は必ず「このプロセスが最初にキーを作成した」ことを保証する。ごく短い間隔で`EXPIRE`未設定の状態が生じ得るが、実害（TTL無し永続化）はレースの当該ウィンドウでのみ発生しうる低リスクとして許容する（§12で要検討） |
@@ -274,13 +278,14 @@ flowchart LR
 | 4 | 単体 | `rotate_refresh_token`が旧キー削除・tombstone作成・新キー作成を原子的に行う | 有効な旧token | 旧`refresh:*`消失、`refresh_used:*`作成、新`refresh:*`作成 | `test_rotate_refresh_token_atomic` |
 | 5 | 結合 | 同一refresh tokenで同時に2回`rotate_refresh_token`を実行 | `asyncio.gather`で並行実行 | 成功は1回のみ、2回目は`TokenReused`、`refresh_family_revoked`が設定される | `test_rotate_refresh_token_concurrent_reuse_detected` |
 | 6 | 単体 | `consume_oauth_state`/`consume_oauth_handoff`/`consume_password_reset_token`/`consume_email_verify_token`が2回目は`None`を返す | 1回目呼び出し後に同一キーで2回目を呼ぶ | いずれも2回目は`None`（ワンタイム消費） | `test_consume_functions_are_one_time` |
-| 7 | 単体 | `replace_email_verify_token`が旧`emailverify:*`を削除し新規登録する | 既存`emailverify_current`あり | 旧hashキー消失、新hashキー・current更新 | `test_replace_email_verify_token_revokes_old` |
-| 8 | 単体 | `mark_email_verify_sent`が間隔内で`False`を返す | 直前に呼び出し済み | 2回目は`False`（`NX`失敗） | `test_mark_email_verify_sent_rate_limited` |
-| 9 | 単体 | `incr_login_failure`が初回のみTTLを設定する | 新規キー | 1回目`INCR`直後にTTLが設定され、2回目`INCR`ではTTLが変わらない（延長しない） | `test_incr_login_failure_sets_ttl_once` |
-| 10 | 結合 | TTL検証：短いTTL（1秒）に上書きし失効を確認 | 設定を1秒に上書き | `asyncio.sleep(1.5)`後に`GET`が`None` | `test_ttl_expiry_short_window` |
-| 11 | 結合 | Redis接続不能時に各関数が例外を送出しAPIが503を返す | Redisコンテナ停止をシミュレート（モック） | `ConnectionError`相当が伝播し`503 SERVICE_UNAVAILABLE` | `test_redis_unavailable_returns_503` |
-| 12 | 結合 | 集合整合性：`create_session`→`touch_session`→`delete_session`後に`user_sessions`から該当IDが除去されている | 一連の操作を実行 | `SMEMBERS`に残らない | `test_session_set_consistency` |
-| 13 | 後片付け | 各テスト後に`REDIS_TEST_DB`のみ`FLUSHDB` | テスト用DB限定 | 本番/開発用DB（DB0）へ影響しない | - |
+| 7 | 結合 | 後続パスワードリセットtokenの消費後に先行tokenを補償復元しない | Aを消費→Bを発行・消費→Aを復元 | Aの復元は`False`、Bも再利用不可、tombstoneはBのhash | `test_password_reset_compensation_does_not_restore_after_newer_token_is_consumed` |
+| 8 | 単体 | `replace_email_verify_token`が旧`emailverify:*`を削除し新規登録する | 既存`emailverify_current`あり | 旧hashキー消失、新hashキー・current更新 | `test_replace_email_verify_token_revokes_old` |
+| 9 | 単体 | `mark_email_verify_sent`が間隔内で`False`を返す | 直前に呼び出し済み | 2回目は`False`（`NX`失敗） | `test_mark_email_verify_sent_rate_limited` |
+| 10 | 単体 | `incr_login_failure`が初回のみTTLを設定する | 新規キー | 1回目`INCR`直後にTTLが設定され、2回目`INCR`ではTTLが変わらない（延長しない） | `test_incr_login_failure_sets_ttl_once` |
+| 11 | 結合 | TTL検証：短いTTL（1秒）に上書きし失効を確認 | 設定を1秒に上書き | `asyncio.sleep(1.5)`後に`GET`が`None` | `test_ttl_expiry_short_window` |
+| 12 | 結合 | Redis接続不能時に各関数が例外を送出しAPIが503を返す | Redisコンテナ停止をシミュレート（モック） | `ConnectionError`相当が伝播し`503 SERVICE_UNAVAILABLE` | `test_redis_unavailable_returns_503` |
+| 13 | 結合 | 集合整合性：`create_session`→`touch_session`→`delete_session`後に`user_sessions`から該当IDが除去されている | 一連の操作を実行 | `SMEMBERS`に残らない | `test_session_set_consistency` |
+| 14 | 後片付け | 各テスト後に`REDIS_TEST_DB`のみ`FLUSHDB` | テスト用DB限定 | 本番/開発用DB（DB0）へ影響しない | - |
 | 網羅できない範囲 | Redisプロセス自体のクラッシュ・OOM Killer発火時の挙動 | - | 自動テストでは再現せず、手動確認・監視アラートで代替する |
 
 ## 14. 不明点・要検討事項

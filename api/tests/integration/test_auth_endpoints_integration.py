@@ -229,6 +229,7 @@ async def test_password_reset_compensation_restores_token_when_current_is_missin
 	keys = (
 		f"{prefix}pwreset_current:{user_id}",
 		f"{prefix}pwreset:{token_hash(token)}",
+		f"{prefix}pwreset_consumed:{user_id}",
 	)
 	try:
 		assert await redis_store_auth.save_password_reset_token(redis_conn, prefix, token, user_id, 60)
@@ -236,6 +237,8 @@ async def test_password_reset_compensation_restores_token_when_current_is_missin
 		assert await redis_store_auth.restore_password_reset_token(redis_conn, prefix, token, user_id, 60)
 		assert await redis_conn.get(keys[0]) == token_hash(token)
 		assert await redis_conn.exists(keys[1]) == 1
+		assert await redis_conn.get(keys[2]) == token_hash(token)
+		assert await redis_conn.ttl(keys[2]) > 0
 		assert await redis_store_auth.consume_password_reset_token(redis_conn, prefix, token) == user_id
 		assert await redis_store_auth.consume_password_reset_token(redis_conn, prefix, token) is None
 	finally:
@@ -264,6 +267,37 @@ async def test_password_reset_compensation_does_not_restore_consumed_token_after
 		assert await redis_conn.exists(keys[1]) == 0
 		assert await redis_conn.exists(keys[2]) == 1
 		assert await redis_store_auth.consume_password_reset_token(redis_conn, prefix, token_b) == user_id
+		assert await redis_store_auth.consume_password_reset_token(redis_conn, prefix, token_b) is None
+	finally:
+		await redis_conn.delete(*keys)
+
+
+async def test_password_reset_compensation_does_not_restore_after_newer_token_is_consumed(
+	redis_conn: Redis,
+) -> None:
+	"""後続tokenの消費後は、先行tokenの補償復元をtombstoneで拒否する。"""
+	user_id = uuid.uuid4()
+	settings = get_backend_settings()
+	prefix = settings.redis_key_prefix
+	token_a = f"reset-a-{uuid.uuid4().hex}"
+	token_b = f"reset-b-{uuid.uuid4().hex}"
+	keys = (
+		f"{prefix}pwreset_current:{user_id}",
+		f"{prefix}pwreset:{token_hash(token_a)}",
+		f"{prefix}pwreset:{token_hash(token_b)}",
+		f"{prefix}pwreset_consumed:{user_id}",
+	)
+	try:
+		assert await redis_store_auth.save_password_reset_token(redis_conn, prefix, token_a, user_id, 60)
+		assert await redis_store_auth.consume_password_reset_token(redis_conn, prefix, token_a) == user_id
+		assert await redis_store_auth.save_password_reset_token(redis_conn, prefix, token_b, user_id, 60)
+		assert await redis_store_auth.consume_password_reset_token(redis_conn, prefix, token_b) == user_id
+
+		assert not await redis_store_auth.restore_password_reset_token(redis_conn, prefix, token_a, user_id, 60)
+		assert await redis_conn.get(keys[3]) == token_hash(token_b)
+		assert await redis_conn.exists(keys[0]) == 0
+		assert await redis_conn.exists(keys[1]) == 0
+		assert await redis_conn.exists(keys[2]) == 0
 		assert await redis_store_auth.consume_password_reset_token(redis_conn, prefix, token_b) is None
 	finally:
 		await redis_conn.delete(*keys)

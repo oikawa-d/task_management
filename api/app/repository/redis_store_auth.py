@@ -47,10 +47,12 @@ local data = cjson.decode(value)
 local current_key = ARGV[1] .. 'pwreset_current:' .. data.user_id
 if redis.call('GET', current_key) ~= ARGV[2] then return '' end
 redis.call('DEL', KEYS[1], current_key)
+redis.call('SET', ARGV[1] .. 'pwreset_consumed:' .. data.user_id, ARGV[2], 'EX', ARGV[3])
 return data.user_id
 """
 
 _RESTORE_PASSWORD_RESET_SCRIPT = """
+if redis.call('GET', KEYS[3]) ~= ARGV[1] then return 0 end
 if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
 if redis.call('EXISTS', KEYS[2]) == 1 then return 0 end
 redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
@@ -224,12 +226,15 @@ async def save_password_reset_token(client: Redis, prefix: str, token: str, user
 
 async def consume_password_reset_token(client: Redis, prefix: str, token: str) -> UUID | None:
 	token_hash_value = token_hash(token)
+	ttl = get_backend_settings().password_reset_ttl_seconds
+	validate_ttl(ttl, "password_reset_ttl_seconds")
 	result = await cast(Any, client.eval)(
 		_CONSUME_PASSWORD_RESET_SCRIPT,
 		1,
 		key("pwreset", prefix, token_hash_value),
 		prefix,
 		token_hash_value,
+		ttl,
 	)
 	if not result:
 		return None
@@ -241,9 +246,10 @@ async def restore_password_reset_token(client: Redis, prefix: str, token: str, u
 	token_hash_value = token_hash(token)
 	result = await cast(Any, client.eval)(
 		_RESTORE_PASSWORD_RESET_SCRIPT,
-		2,
+		3,
 		key("pwreset_current", prefix, user_id),
 		key("pwreset", prefix, token_hash_value),
+		key("pwreset_consumed", prefix, user_id),
 		token_hash_value,
 		dump({"user_id": user_id, "requested_at": datetime.now(UTC).isoformat()}),
 		ttl,

@@ -28,6 +28,7 @@
 | `oauth_handoff:{code}` | `{user_id, redirect_to, created_at}` | 60秒 | jwt OAuthコールバック | フロントへの一時コード。`GETDEL` でワンタイム消費 |
 | `pwreset:{token_hash}` | `{user_id, requested_at}` | `PASSWORD_RESET_TTL_SECONDS`（既定1800） | パスワードリセット要求 | リセットトークンの有効性判定 |
 | `pwreset_current:{user_id}` | 現在のtoken_hash | `PASSWORD_RESET_TTL_SECONDS`（既定1800） | 最新のパスワードリセットトークン以外を失効 |
+| `pwreset_consumed:{user_id}` | 最新に消費したtoken_hash | `PASSWORD_RESET_TTL_SECONDS`（既定1800） | パスワードリセット消費時 | 補償対象tokenが後続消費より古いかを判定するtombstone |
 | `emailverify:{token_hash}` | `{user_id, requested_at}` | `EMAIL_VERIFY_TTL_SECONDS`（既定86400 = 24時間） | 会員登録・認証メール再送 | メール認証トークンの有効性判定 |
 | `emailverify_current:{user_id}` | 現在のtoken_hash | `EMAIL_VERIFY_TTL_SECONDS` | 会員登録・認証メール再送 | 再送時に旧メール認証トークンを失効させるための逆引き |
 | `emailverify_sent:{user_id}` | 直近の送信時刻（数値） | `EMAIL_VERIFY_RESEND_INTERVAL_SECONDS`（既定60） | 認証メール送信時に `SETEX` | 認証メール再送のレート制限（メール爆撃の防止） |
@@ -150,7 +151,8 @@ stateDiagram-v2
 | `save_oauth_handoff` | `code: str`, `user_id: UUID`, `redirect_to: str`, `ttl: int` | `None` | `SETEX oauth_handoff:{code}` |
 | `consume_oauth_handoff` | `code: str` | `OAuthHandoffData \| None` | `GETDEL oauth_handoff:{code}`（ワンタイム消費） |
 | `save_password_reset_token` | `token: str`, `user_id: UUID`, `ttl: int` | `bool` | Luaで旧`pwreset_current:{uid}`と旧tokenを削除し、新tokenとcurrentを原子的に登録。CAS競合時は`False` |
-| `consume_password_reset_token` | `token: str` | `UUID \| None` | Luaでcurrent一致を確認し、`pwreset:{hash}`とcurrentを原子的に消費 |
+| `consume_password_reset_token` | `token: str` | `UUID \| None` | Luaでcurrent一致を確認し、`pwreset:{hash}`とcurrentを原子的に消費。同時に`pwreset_consumed:{uid}`へ消費hashをTTL付きで記録 |
+| `restore_password_reset_token` | `token: str`, `user_id: UUID`, `ttl: int` | `bool` | Luaでtombstoneが補償対象hashと一致し、currentと実体が不存在の場合だけ原子的に復元 |
 | `replace_email_verify_token` | `token: str`, `user_id: UUID`, `ttl: int` | `None` | Luaまたは同一トランザクション相当の処理で旧 `emailverify:{old_hash}` を削除し、新tokenと `emailverify_current:{uid}` を登録 |
 | `consume_email_verify_token` | `token: str` | `UUID \| None` | `GETDEL emailverify:{hash}` → user_id を返す（ワンタイム消費） |
 | `restore_email_verify_token` | `token: str`, `user_id: UUID`, `ttl: int` | `bool` | DB失敗時にcurrentが別tokenへ変わっていない場合だけ、消費済みtokenとcurrentを原子的に復元 |
