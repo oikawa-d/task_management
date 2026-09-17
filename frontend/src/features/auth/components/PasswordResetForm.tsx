@@ -4,6 +4,7 @@ import { useForm } from "react-hook-form";
 import { usePasswordReset } from "../hooks/usePasswordReset";
 import type { PasswordResetFormValues } from "../types";
 import { authTokenSchema, createZodResolver, getFieldErrors, passwordResetSchema } from "../validation";
+import styles from "./AuthForm.module.css";
 
 /** APIのsnake_caseフィールド名 → RHFのcamelCaseフィールド名 */
 const API_FIELD_TO_FORM_FIELD: Record<string, keyof PasswordResetFormValues> = {
@@ -70,12 +71,12 @@ export function PasswordResetForm({ token, onSuccess, onTokenInvalid }: Password
 	};
 
 	if (tokenInvalid) {
-		return <p role="alert">リンクの有効期限が切れているか、既に使用済みです</p>;
+		return <p className={styles.error} role="alert">リンクの有効期限が切れているか、既に使用済みです</p>;
 	}
 
 	return (
-		<form onSubmit={handleSubmit(submit)} noValidate>
-			<label htmlFor="password-reset-new-password">新しいパスワード</label>
+		<form className={styles.form} onSubmit={handleSubmit(submit)} noValidate>
+			<label className={styles.field} htmlFor="password-reset-new-password">新しいパスワード
 			<input
 				id="password-reset-new-password"
 				type="password"
@@ -83,13 +84,14 @@ export function PasswordResetForm({ token, onSuccess, onTokenInvalid }: Password
 				aria-describedby={errors.newPassword ? "password-reset-new-password-error" : undefined}
 				{...register("newPassword")}
 			/>
+			</label>
 			{errors.newPassword && (
-				<span id="password-reset-new-password-error" role="alert">
+				<span className={styles.error} id="password-reset-new-password-error" role="alert">
 					{errors.newPassword.message}
 				</span>
 			)}
 
-			<label htmlFor="password-reset-confirm">新しいパスワード（確認）</label>
+			<label className={styles.field} htmlFor="password-reset-confirm">新しいパスワード（確認）
 			<input
 				id="password-reset-confirm"
 				type="password"
@@ -97,13 +99,14 @@ export function PasswordResetForm({ token, onSuccess, onTokenInvalid }: Password
 				aria-describedby={errors.passwordConfirm ? "password-reset-confirm-error" : undefined}
 				{...register("passwordConfirm")}
 			/>
+			</label>
 			{errors.passwordConfirm && (
-				<span id="password-reset-confirm-error" role="alert">
+				<span className={styles.error} id="password-reset-confirm-error" role="alert">
 					{errors.passwordConfirm.message}
 				</span>
 			)}
 
-			{submitError && <p role="alert">{submitError}</p>}
+			{submitError && <p className={styles.error} role="alert">{submitError}</p>}
 
 			<button type="submit" disabled={isSubmitting}>
 				{isSubmitting ? "送信中…" : "再設定する"}

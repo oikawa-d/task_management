@@ -1,12 +1,12 @@
 .form {
 	display: grid;
-	gap: 1rem;
+	gap: var(--space-4);
 	max-width: 28rem;
 }
 
 .row {
 	display: flex;
-	gap: 0.75rem;
+	gap: var(--space-3);
 }
 
 .row > * {
@@ -15,25 +15,25 @@
 
 .field {
 	display: grid;
-	gap: 0.35rem;
+	gap: var(--space-2);
 }
 
 .input {
-	border: 1px solid #9ca3af;
-	border-radius: 0.25rem;
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-sm);
 	font: inherit;
-	padding: 0.5rem;
+	padding: var(--space-2);
 }
 
 .input[aria-invalid="true"] {
-	border-color: #b91c1c;
+	border-color: var(--color-danger);
 }
 
 .error {
-	color: #b91c1c;
+	color: var(--color-danger-fg);
 }
 
 .button {
 	justify-self: start;
-	padding: 0.5rem 1rem;
+	padding: var(--space-2) var(--space-4);
 }

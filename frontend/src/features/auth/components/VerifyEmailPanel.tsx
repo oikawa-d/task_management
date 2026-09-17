@@ -4,6 +4,7 @@ import { useForm } from "react-hook-form";
 import { useResendVerification } from "../hooks/useResendVerification";
 import type { ResendVerificationFormValues } from "../types";
 import { createZodResolver, resendVerificationSchema } from "../validation";
+import styles from "./AuthForm.module.css";
 
 export type VerifyEmailPhase = "noToken" | "verifying" | "success" | "error";
 
@@ -28,7 +29,7 @@ export function VerifyEmailPanel({ phase, errorMessage, onRedirectNow }: VerifyE
 	}, [phase]);
 
 	return (
-		<div>
+		<div className={styles.form}>
 			{phase === "verifying" && (
 				<p role="status">メールアドレスを確認中です</p>
 			)}
@@ -42,7 +43,7 @@ export function VerifyEmailPanel({ phase, errorMessage, onRedirectNow }: VerifyE
 				</div>
 			)}
 			{phase === "error" && (
-				<p role="alert">{errorMessage ?? "リンクの有効期限が切れているか、既に使用済みです"}</p>
+				<p className={styles.error} role="alert">{errorMessage ?? "リンクの有効期限が切れているか、既に使用済みです"}</p>
 			)}
 			{phase === "noToken" && <p>リンクが不正です</p>}
 			{(phase === "error" || phase === "noToken") && (
@@ -83,8 +84,8 @@ function ResendVerificationForm({ inputRef }: ResendVerificationFormProps) {
 	};
 
 	return (
-		<form onSubmit={handleSubmit(submit)} noValidate>
-			<label htmlFor="verify-email-resend-email">メールアドレス</label>
+		<form className={styles.form} onSubmit={handleSubmit(submit)} noValidate>
+			<label className={styles.field} htmlFor="verify-email-resend-email">メールアドレス
 			<input
 				id="verify-email-resend-email"
 				type="email"
@@ -96,15 +97,16 @@ function ResendVerificationForm({ inputRef }: ResendVerificationFormProps) {
 					inputRef.current = element;
 				}}
 			/>
+			</label>
 			{errors.email && (
-				<span id="verify-email-resend-email-error" role="alert">
+				<span className={styles.error} id="verify-email-resend-email-error" role="alert">
 					{errors.email.message}
 				</span>
 			)}
 			<button type="submit" disabled={mutation.isPending || Boolean(errors.email) || !email}>
 				{mutation.isPending ? "送信中…" : "認証メールを再送する"}
 			</button>
-			{sent && <p role="status">送信しました。しばらくしても届かない場合は迷惑メールフォルダをご確認ください</p>}
+			{sent && <p className={styles.success} role="status">送信しました。しばらくしても届かない場合は迷惑メールフォルダをご確認ください</p>}
 		</form>
 	);
 }

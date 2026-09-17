@@ -11,7 +11,7 @@
 | HTTPクライアント | `fetchWithAuth`（AuthAdapter経由の共通fetchクライアント） |
 | ドラッグ＆ドロップ | `@dnd-kit/core`（カンバンのカード移動） |
 | フォーム | React Hook Form + zod（バックエンドと同一のバリデーション規則を再現）。既存フォームの移行は各画面Issueで行う |
-| スタイル | CSS Modules + CSS変数（文字サイズ設定のため `rem` ベースで設計） |
+| スタイル | CSS Modules + CSS変数（文字サイズ設定のため `rem` ベースで設計）。`src/styles/tokens.css` に色・spacing・typography・radius・shadow・z-index・breakpointを集約し、`global.css`をエントリポイントから読み込む |
 | テスト | Vitest + React Testing Library + MSW（APIモック） |
 | Lint / 型 | ESLint（flat config）+ `tsc --noEmit` |
 | Node | v26（Dockerfile で固定） |
@@ -258,7 +258,7 @@ flowchart TB
 | ストア | 保持内容 | 永続化 | 備考 |
 |--------|----------|--------|------|
 | `authStore`（Zustand） | `user`, `status`（`loading` / `authenticated` / `unauthenticated`）, `googleLoginEnabled` | **しない**（メモリのみ） | JWTのアクセストークンは`AuthAdapter`へ注入したメモリ上の`TokenStore`が保持し、authStoreには保持しない。adapterと`googleLoginEnabled`は`GET /auth/config`の実行時設定から選択・保持する（`authBootstrap`が起動時に設定） |
-| `uiStore`（Zustand + persist） | `fontScale`, `sidebarOpen`, `dashboardView`（`"cards"` / `"calendar"`） | localStorage | 文字サイズ・サイドバー開閉・ダッシュボードの表示モードはクライアント側のみで保持。次回起動時も選択中の表示モードを復元する |
+| `uiStore`（Zustand + persist） | `fontScale`, `theme`（`"light"` / `"dark"` / `"system"`）, `sidebarOpen`, `dashboardView`（`"cards"` / `"calendar"`） | localStorage（`cerberus.ui`） | 文字サイズ・テーマ・サイドバー開閉・ダッシュボードの表示モードはクライアント側のみで保持。次回起動時も復元する。`theme=system` は `prefers-color-scheme` の変更へ追従する |
 | `projectStore`（Zustand） | `selectedProjectId` | しない（メモリのみ） | ダッシュボードで選択中のプロジェクトIDだけを保持する。プロジェクト本体はTanStack Queryのキャッシュから参照し、通常ログアウト・401による自動ログアウト時に共通処理でクリアする |
 | 通知（React Query） | `['notifications','unread-count']` / `['notifications', page]` | しない | 未読件数はポーリング、一覧はパネルを開いたときに取得。既読操作の失敗はパネル内で再試行でき、パネルの開閉状態と再試行状態はコンポーネントのローカルstateで持つ |
 | TanStack Query | プロジェクト一覧・ボード・ユーザー一覧 | しない | `queryKey` は `['projects']` / `['board', projectId]`。タスク詳細コメントは`taskDetailStore`で管理する（下段参照） |
@@ -540,6 +540,33 @@ flowchart LR
 | 端末間同期 | されない（localStorage のため）。DB保存が必要になった場合は `users` にカラム追加が必要 |
 | 影響範囲 | レイアウト崩れを防ぐため、固定 `px` 幅のコンテナは使わず `min-width` / `flex` で組む |
 
+### 8.1 テーマ設定
+
+`ThemeSelector` は `light` / `dark` / `system` を選択し、`uiStore.setTheme` で `cerberus.ui` に永続化する。選択値が `light` または `dark` の場合は `document.documentElement` の `data-theme` 属性へ反映し、`system` の場合は属性を外してCSSの `prefers-color-scheme` に委ねる。`index.html` の初期スクリプトは保存済みの明示テーマをReact描画前に適用し、ダークテーマのFOUCを防止する。
+
+```mermaid
+flowchart LR
+    TS["ThemeSelector"] --> ST["uiStore.setTheme(theme)"]
+    ST --> LS["localStorage: cerberus.ui"]
+    ST --> DT["document.documentElement[data-theme]"]
+    DT --> CSS["tokens.cssのテーマ変数"]
+    OS["prefers-color-scheme"] --> CSS
+    OS -->|system選択時の変更| ST
+```
+
+色・フォーカスリング・モーションはトークンと `global.css` を基準とし、全CSS Modulesから直接の色値を参照しない。`prefers-reduced-motion: reduce` 指定時はアニメーション・遷移を抑制する。
+
+### 8.2 UIシナリオ確認
+
+| シナリオ | 手順 | 期待結果・確認環境 |
+|------|------|------|
+| 認証〜コメント | 未ログインでログイン→ダッシュボード→プロジェクト→ボード→タスク詳細→コメント投稿 | 375/768/1440pxのChromiumで文字重なり・はみ出し・レイアウト崩れがない |
+| テーマ永続化 | 設定の表示設定でダークを選択し全画面を巡回してリロード | 全画面のコントラストとエラー表示が判読でき、リロード後もダークを維持 |
+| OS追従 | 保存値をシステムにしOSのライト/ダークを切り替える | CSSテーマが即時追従する。明示light/darkはOS変更に優先する |
+| 異常系 | 認証エラー・フォームバリデーション・通信失敗を各テーマで発生させる | `role=alert` のメッセージが判読でき、再試行導線が崩れない |
+
+実ブラウザの認証・API・OS切替は環境依存のため、VitestではDOM契約・トークン網羅・コントラスト・テーマ属性を検証し、上表の画面巡回はChromiumで手動実施する。
+
 ## 9. テスト方針
 
 | 区分 | 対象 | 内容 |
@@ -550,7 +577,8 @@ flowchart LR
 | 単体 | `AuthProvider` | 起動時の認証状態を `loading` に保ち、初期化成功で `authenticated`、未認証・失敗で `unauthenticated` に遷移 |
 | コンポーネント | `RequireAuth` / `RequireAdmin` / `RequireGuest` | `loading` 中はローディングUIを表示し、リダイレクトしない |
 | 単体 | zod スキーマ | パスワードポリシー・フリガナ・各環境変数上限などの境界値 |
-| 単体 | `uiStore` | 文字サイズの永続化と復元、localStorage が空の場合の既定値 |
+| 単体 | `uiStore` / `ThemeSelector` | 文字サイズとテーマの永続化・復元、`data-theme`反映、systemのOS追従 |
+| 静的契約 | CSSトークン | 全CSSのハードコード色検出、light/darkトークン網羅、主要色のWCAG AAコントラスト、DOMコンポーネントのclassName適用 |
 | コンポーネント | LoginForm / RegisterForm | 入力検証・エラー表示・送信内容 |
 | コンポーネント | KanbanBoard | D&D後の楽観的更新とロールバック（MSWで失敗レスポンスを返す） |
 | コンポーネント | CalendarView | 月送りで表示範囲(`from`/`to`)が再計算されること、`scope`/`project_id`切替で再取得されること、1セル超過分が「+N件」表示になること、チップクリックで`TaskDetailModal`が開くこと |

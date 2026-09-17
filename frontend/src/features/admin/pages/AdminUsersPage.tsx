@@ -6,6 +6,7 @@ import { ProjectTable } from "../components/ProjectTable";
 import { UserTable } from "../components/UserTable";
 import { useAdminProjects, useDeleteAdminProject } from "../hooks/useAdminProjects";
 import { useAdminUsers, useChangeRole, useChangeStatus, useForceLogout } from "../hooks/useAdminUsers";
+import styles from "./AdminUsersPage.module.css";
 
 type DialogAction = { kind: "role" | "status" | "logout" | "project"; user?: AdminUser; project?: AdminProject; role?: AdminRole; active?: boolean };
 const DEFAULT_USER_FILTERS: UserFilters = { page: 1, perPage: 20, q: "", role: "", isActive: "" };
@@ -59,19 +60,19 @@ export function AdminUsersPage() {
 	const updateUserFilters = (next: Partial<UserFilters>) => setFilters((current) => ({ ...current, ...next, page: next.page ?? 1 }));
 	const updateProjectFilters = (next: Partial<ProjectFilters>) => setProjectFilters((current) => ({ ...current, ...next, page: next.page ?? 1 }));
 
-	return <section>
+	return <section className={styles.page}>
 		<h1>管理者画面</h1>
-		<div role="tablist" aria-label="管理対象"><button type="button" role="tab" aria-selected={tab === "users"} onClick={() => setTab("users")}>ユーザー</button><button type="button" role="tab" aria-selected={tab === "projects"} onClick={() => setTab("projects")}>プロジェクト</button></div>
+		<div className={styles.tabs} role="tablist" aria-label="管理対象"><button type="button" role="tab" aria-selected={tab === "users"} onClick={() => setTab("users")}>ユーザー</button><button type="button" role="tab" aria-selected={tab === "projects"} onClick={() => setTab("projects")}>プロジェクト</button></div>
 		{message ? <p role="status">{message}</p> : null}{error ? <p role="alert">{error}</p> : null}
 		{tab === "users" ? <>
-			<label>検索<input value={userSearch} onChange={(event) => setUserSearch(event.target.value)} /></label>
+			<div className={styles.filters}><label>検索<input value={userSearch} onChange={(event) => setUserSearch(event.target.value)} /></label>
 			<label>権限<select aria-label="roleフィルタ" value={filters.role} onChange={(event) => updateUserFilters({ role: event.target.value as UserFilters["role"] })}><option value="">すべて</option><option value="member">member</option><option value="admin">admin</option></select></label>
-			<label>状態<select aria-label="is_activeフィルタ" value={filters.isActive} onChange={(event) => updateUserFilters({ isActive: event.target.value as UserFilters["isActive"] })}><option value="">すべて</option><option value="true">有効</option><option value="false">無効</option></select></label>
+			<label>状態<select aria-label="is_activeフィルタ" value={filters.isActive} onChange={(event) => updateUserFilters({ isActive: event.target.value as UserFilters["isActive"] })}><option value="">すべて</option><option value="true">有効</option><option value="false">無効</option></select></label></div>
 			{users.isLoading ? <p role="status">読み込み中...</p> : users.isError ? <button type="button" onClick={() => void users.refetch()}>再試行</button> : <><UserTable items={users.data?.items ?? []} currentUserId={currentUserId} onRoleChange={(user, role) => setDialog({ kind: "role", user, role })} onStatusChange={(user, active) => active ? void statusMutation.mutate({ userId: user.id, isActive: true }) : setDialog({ kind: "status", user, active })} onForceLogout={(user) => setDialog({ kind: "logout", user })} /><Pagination label="ユーザーページ" meta={users.data?.meta} onPageChange={(page) => updateUserFilters({ page })} /></>}
 		</> : <>
-			<label>検索<input value={projectSearch} onChange={(event) => setProjectSearch(event.target.value)} /></label>
+			<div className={styles.filters}><label>検索<input value={projectSearch} onChange={(event) => setProjectSearch(event.target.value)} /></label></div>
 			{projects.isLoading ? <p role="status">読み込み中...</p> : projects.isError ? <button type="button" onClick={() => void projects.refetch()}>再試行</button> : <><ProjectTable items={projects.data?.items ?? []} onDelete={(project) => setDialog({ kind: "project", project })} /><Pagination label="プロジェクトページ" meta={projects.data?.meta} onPageChange={(page) => updateProjectFilters({ page })} /></>}
 		</>}
-		{dialog ? <div role="alertdialog" aria-label="操作確認"><p>この操作を実行しますか？</p><button type="button" onClick={() => void runAction()}>確定</button><button type="button" onClick={() => { setDialog(null); setError(null); }}>キャンセル</button></div> : null}
+		{dialog ? <div className={styles.dialog} role="alertdialog" aria-label="操作確認"><p>この操作を実行しますか？</p><button type="button" onClick={() => void runAction()}>確定</button><button type="button" onClick={() => { setDialog(null); setError(null); }}>キャンセル</button></div> : null}
 	</section>;
 }

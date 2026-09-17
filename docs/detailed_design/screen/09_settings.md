@@ -19,7 +19,7 @@
 | レイアウト | AppLayout |
 | ガード | 認証必須（`RequireAuth`） |
 | 対応要件 | 要件書§2-6 |
-| 主なユースケース | プロフィール編集（OAuth新規ユーザーの未完了プロフィール補完を含む）、パスワード変更、文字サイズ変更、ログイン履歴閲覧 |
+| 主なユースケース | プロフィール編集（OAuth新規ユーザーの未完了プロフィール補完を含む）、パスワード変更、文字サイズ・テーマ変更、ログイン履歴閲覧 |
 | 実装ファイル | `frontend/src/features/settings/pages/SettingsPage.tsx`、`frontend/src/features/settings/ProfileForm.tsx`、`frontend/src/features/settings/PasswordChangeForm.tsx`、`frontend/src/features/settings/api/profileApi.ts`、`frontend/src/features/settings/components/FontSizeSelector.tsx`、`frontend/src/features/settings/components/LoginHistoryTable.tsx`、`frontend/src/features/settings/hooks/useLoginHistory.ts`、`frontend/src/features/settings/hooks/useUserProfile.ts`、`frontend/src/features/settings/hooks/useUpdateProfile.ts`、`frontend/src/features/settings/hooks/useChangePassword.ts`、`frontend/src/stores/uiStore.ts` |
 
 `?complete_profile=1` クエリ付きで遷移してきた場合（OAuthコールバック後、`profile_completed=false`）は、プロフィール編集タブを初期選択し、案内バナーを表示する。
@@ -46,9 +46,10 @@
 │  └─────────────────────────────────────┘                  │
 │  ┌ 表示設定タブ ─────────────────────────┐                  │
 │  │ [3-11]文字サイズ: 小/標準/大/特大（ラジオ）│                │
+│  │ [3-12]テーマ: ライト/ダーク/システム（選択）│              │
 │  └─────────────────────────────────────┘                  │
 │  ┌ ログイン履歴タブ ─────────────────────┐                  │
-│  │ [3-12]履歴テーブル（日時/方式/IP/成否）│                  │
+│  │ [3-13]履歴テーブル（日時/方式/IP/成否）│                  │
 │  └─────────────────────────────────────┘                  │
 └──────────────────────────────────────────────────────────┘
 ```
@@ -70,7 +71,8 @@
 | 3-9 | 新パスワード確認 | password | 空 | `3-8`と一致し、`VITE_PASSWORD_MAX_LENGTH`（既定128）以内。Unicodeコードポイント数で判定 | 常時活性 | - |
 | 3-10 | 変更ボタン | button | disabled | valid かつ submitting でない | valid | `PUT /users/me/password` 送信 |
 | 3-11 | 文字サイズラジオ | radio×4 | `uiStore.fontScale` に対応する項目 | - | 常時活性 | 選択即時に `uiStore.setFontScale()` |
-| 3-12 | ログイン履歴テーブル | table | - | - | タブ選択時に取得 | 行クリックなし（表示のみ） |
+| 3-12 | テーマ選択 | select | `uiStore.theme`（`system`） | `light` / `dark` / `system` | 常時活性 | 選択即時に `uiStore.setTheme()`。明示テーマは`data-theme`へ反映し、systemは属性を外す |
+| 3-13 | ログイン履歴テーブル | table | - | - | タブ選択時に取得 | 行クリックなし（表示のみ） |
 
 ## 4. 使用API
 
@@ -91,6 +93,7 @@
 | ローカルstate（RHF） | `passwordForm` | `PasswordFormValues` | 空文字群 | 入力・送信成功時リセット | しない |
 | Zustand | `authStore.user` | `User` | 起動時の`/auth/me` | プロフィール保存成功時に部分更新 | しない |
 | Zustand + persist | `uiStore.fontScale` | `number` | localStorage復元値（無ければ`1.0`） | ラジオ選択 | localStorage（`cerberus.ui`） |
+| Zustand + persist | `uiStore.theme` | `"light" | "dark" | "system"` | localStorage復元値（無ければ`system`） | テーマ選択 | localStorage（`cerberus.ui`）。systemは`prefers-color-scheme`変更を監視 |
 | TanStack Query | `['users','me']` | `User` | マウント時 | invalidate（プロフィール保存後） | しない |
 | TanStack Query | `['users','me','login-history']` | `LoginHistoryItem[]` | 履歴タブ初回選択時 | 明示的refetchのみ | しない |
 
@@ -302,6 +305,10 @@ flowchart LR
     M["FontSizeSelector選択"] --> N["uiStore.setFontScale"]
     N --> O["localStorage: cerberus.ui"]
     N --> P["--font-scale CSS変数"]
+
+    T["ThemeSelector選択"] --> U["uiStore.setTheme"]
+    U --> V["localStorage: cerberus.ui.theme"]
+    U --> W["data-theme属性 / prefers-color-scheme"]
 ```
 
 ## 13. アクセシビリティ・表示設定
@@ -313,6 +320,7 @@ flowchart LR
 | aria属性 | フォームエラーは`aria-invalid="true"`＋`aria-describedby`でエラー文言と紐付け。バナーは`role="status"` |
 | フォーカス管理 | クリックまたは矢印キーで選択したタブボタンへフォーカスを置く（ARIA Tabsの標準挙動）。パネル見出しへは移動しない。保存成功メッセージはフォーカスを奪わない |
 | ラベル | パスワード表示切替ボタンに`aria-label="パスワードを表示/非表示"`を付与 |
+| テーマ・モーション | `light` / `dark` / `system`を選択可能。`global.css`で`:focus-visible`を統一し、`prefers-reduced-motion: reduce`ではアニメーションを抑制 |
 
 ## 14. テスト設計
 
@@ -321,6 +329,7 @@ flowchart LR
 | 1 | 単体（zod） | パスワード強度不足 | - | `new_password`にエラー | `passwordSchema rejects weak password` |
 | 2 | 単体（zod） | フリガナに漢字混入 | - | `last_name_kana`にエラー | `profileSchema rejects non-kana` |
 | 3 | 単体（uiStore） | `setFontScale(1.25)`実行 | - | `--font-scale`更新・localStorage保存 | `uiStore persists font scale` |
+| 16 | 単体（uiStore/ThemeSelector） | light/dark/systemを選択、system時にOS変更 | - | `data-theme`即時反映、属性解除、永続化、OS変更追従 | `ThemeSelector and uiStore persist theme` |
 | 4 | コンポーネント | `has_password=false`でPasswordChangeForm描画 | `GET /users/me`で`has_password:false` | 現在PW欄が非表示 | `PasswordChangeForm hides current password field for oauth-only user` |
 | 5 | コンポーネント | プロフィール保存成功 | `PATCH /users/me`が200 | バナー非表示・成功メッセージ | `ProfileForm shows success and clears banner` |
 | 6 | コンポーネント | パスワード変更成功 | `PUT .../password`が204、`POST /auth/logout`が204 | `/login`へ遷移 | `PasswordChangeForm redirects to login after success` |

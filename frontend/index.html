@@ -4,6 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Cerberus</title>
+    <script>
+      (() => {
+        try {
+          const saved = JSON.parse(localStorage.getItem("cerberus.ui") || "null");
+          const theme = saved?.state?.theme;
+          if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+        } catch (_) { /* localStorage unavailable; CSS system theme remains active */ }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -1,4 +1,5 @@
 import type { CalendarTask } from "../api/types";
+import styles from "./Calendar.module.css";
 
 interface CalendarProps {
 	month: Date;
@@ -38,22 +39,22 @@ export function Calendar({ month, tasks, isLoading, isError, onPreviousMonth, on
 	const days = buildDays(month);
 
 	return (
-		<div aria-label="期限カレンダー">
-			<header>
+		<div className={styles.calendar} aria-label="期限カレンダー">
+			<header className={styles.header}>
 				<button type="button" onClick={onPreviousMonth} aria-label="前の月">前月</button>
 				<h3>{month.toLocaleDateString("ja-JP", { year: "numeric", month: "long" })}</h3>
 				<button type="button" onClick={onNextMonth} aria-label="次の月">次月</button>
 			</header>
 			{isLoading ? <p role="status">カレンダーを読み込み中...</p> : null}
 			{isError ? <p role="alert">カレンダーを読み込めませんでした。<button type="button" onClick={onRetry}>再試行</button></p> : null}
-			<table>
+			<table className={styles.table}>
 				<thead><tr>{["日", "月", "火", "水", "木", "金", "土"].map((label) => <th key={label}>{label}</th>)}</tr></thead>
 				<tbody>
 					{Array.from({ length: 6 }, (_, week) => (
 						<tr key={week}>
 							{days.slice(week * 7, week * 7 + 7).map((day) => {
 								const dayTasks = tasksByDate.get(dateKey(day)) ?? [];
-								return <td key={dateKey(day)}><time dateTime={dateKey(day)}>{day.getDate()}</time>{dayTasks.map((task) => <div key={task.id}>{task.title}</div>)}</td>;
+								return <td className={`${day.getMonth() === month.getMonth() ? styles.day : `${styles.day} ${styles.otherMonth}`} ${styles.tasks}`} key={dateKey(day)}><time dateTime={dateKey(day)}>{day.getDate()}</time>{dayTasks.slice(0, 2).map((task) => <span className={styles.task} key={task.id}>{task.title}</span>)}{dayTasks.length > 2 ? <span className={styles.more}>他{dayTasks.length - 2}件</span> : null}</td>;
 							})}
 						</tr>
 					))}
