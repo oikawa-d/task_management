@@ -255,8 +255,8 @@ flowchart LR
 
 ```mermaid
 stateDiagram-v2
-    [*] --> トークン発行済み: "09_post_auth_password_forgot.mdで<br/>SETEX pwreset:{hash} TTL=1800"
-    トークン発行済み --> Redis失効済み: "GETDEL pwreset:{hash}<br/>delete_all_sessions<br/>revoke_all_refresh_tokens"
+    [*] --> トークン発行済み: "09_post_auth_password_forgot.mdで<br/>Luaがpwreset_current:{user_id}とtoken実体を原子的に置換（TTL=1800）"
+    トークン発行済み --> Redis失効済み: "Luaがpwreset_currentとtoken実体のcurrent一致を確認して原子的に消費<br/>delete_all_sessions<br/>revoke_all_refresh_tokens"
     トークン発行済み --> Redis失効失敗: "Redis障害（DB未更新）"
     Redis失効失敗 --> トークン発行済み: "pwreset tokenを補償復元できた場合"
     トークン発行済み --> 期限切れ: "TTL満了（Redisが自動削除）"

@@ -24,11 +24,11 @@
 
 | 要素 | 種別 | 責務 | 備考 |
 |------|------|------|------|
-| `issue_email_verify_token` | 関数（`auth_service`） | 新token生成・旧token失効・Redis登録・送信予約 | 登録時・再送時の両方から呼ばれる共通関数 |
-| `verify_email` | 関数（`auth_service`） | トークン消費・`email_verified_at`更新 | ワンタイム消費（`GETDEL`） |
-| `resend_verification` | 関数（`auth_service`） | 再送レート制限確認 → `issue_email_verify_token`呼び出し | ユーザー不存在・認証済みでも例外を出さない |
-| `request_password_reset` | 関数（`auth_service`） | token生成・Redis登録・送信予約 | ユーザー不存在でも例外を出さず202を維持 |
-| `reset_password` | 関数（`auth_service`） | トークン消費・Redis全失効・パスワード更新 | Redis失効成功後にDB更新。DB失敗時はトークンを補償復元 |
+| `issue_email_verify_token` | 関数（`api/app/service/email_verification_service.py`） | 新token生成・旧token失効・Redis登録・送信予約 | 登録時・再送時の両方から呼ばれる共通関数 |
+| `verify_email` | 関数（`api/app/service/email_verification_service.py`） | トークン消費・`email_verified_at`更新 | ワンタイム消費（`GETDEL`） |
+| `resend_verification` | 関数（`api/app/service/email_verification_service.py`） | 再送レート制限確認 → `issue_email_verify_token`呼び出し | ユーザー不存在・認証済みでも例外を出さない |
+| `request_password_reset` | 関数（`api/app/service/email_verification_service.py`） | token生成・Redis登録・送信予約 | ユーザー不存在でも例外を出さず202を維持 |
+| `reset_password` | 関数（`api/app/service/email_verification_service.py`） | トークン消費・Redis全失効・パスワード更新 | Redis失効成功後にDB更新。DB失敗時はトークンを補償復元 |
 | `send_email_verification_mail` | 関数（`mail_service`） | テンプレートレンダリング＋SMTP送信 | `{FRONTEND_BASE_URL}/verify-email#token=...` |
 | `send_password_reset_mail` | 関数（`mail_service`） | 同上 | `{FRONTEND_BASE_URL}/password/reset#token=...` |
 | `BackgroundTasks` | FastAPI標準機能 | レスポンス返却後にSMTP送信を非同期実行 | 送信失敗はログのみ、APIレスポンスへは影響させない |
