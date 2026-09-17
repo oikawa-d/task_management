@@ -74,7 +74,7 @@ flowchart TB
 | ベース | `python:3.14-slim` |
 | 構成 | マルチステージ（builder で `pip install --prefix`、runtime へコピー） |
 | 実行ユーザー | 非root（`appuser`） |
-| エントリポイント | `alembic upgrade head` → `uvicorn app.main:app --host 0.0.0.0 --port 8000` |
+| エントリポイント | `alembic upgrade head` → `exec "$@"`（`CMD` 既定値は `uvicorn app.main:app --host 0.0.0.0 --port 8000`、devは `command` で `--reload` 付きに上書き） |
 | キャッシュ | `api/requirements.txt` のみを先にコピーして `pip install` する（レイヤキャッシュ） |
 
 ### 3.2 frontend（`frontend/Dockerfile`）
