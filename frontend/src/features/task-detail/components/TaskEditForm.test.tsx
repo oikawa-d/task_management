@@ -78,4 +78,16 @@ describe("TaskEditForm", () => {
 		expect(screen.getByText("説明は2000文字以内で入力してください")).toBeInTheDocument();
 		expect(onUpdate).not.toHaveBeenCalled();
 	});
+
+	it("説明は絵文字をUnicodeコードポイントで数え、入力UIで2000個を制限しない", () => {
+		const onUpdate = vi.fn();
+		render(<TaskEditForm task={task} members={members} onUpdate={onUpdate} />);
+
+		const description = screen.getByLabelText("説明");
+		fireEvent.change(description, { target: { value: "😀".repeat(2000) } });
+		fireEvent.blur(description);
+
+		expect(description).toHaveValue("😀".repeat(2000));
+		expect(onUpdate).toHaveBeenCalledWith("description", "😀".repeat(2000));
+	});
 });

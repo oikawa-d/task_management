@@ -78,7 +78,7 @@
 | `COOKIE_NAME_SESSION` | str | `cerberus_sid` | session Cookie名 | 平文可 |
 | `COOKIE_NAME_CSRF` | str | `cerberus_csrf` | CSRF Cookie名（session/jwt共通） | 平文可 |
 | `COOKIE_NAME_OAUTH_STATE` | str | `cerberus_oauth_state` | OAuth state Cookie名 | 平文可 |
-| `COOKIE_SECURE` | bool | `false`（本番相当は`true`） | Cookieの`Secure`属性 | 平文可 |
+| `COOKIE_SECURE` | bool | `false`（productionでは`true`必須） | Cookieの`Secure`属性 | 平文可 |
 | `COOKIE_SAMESITE` | Literal["lax","strict","none"] | `lax` | session/CSRF Cookieの`SameSite` | 平文可 |
 | `COOKIE_DOMAIN` | str | 空文字 | Cookieの`Domain`属性（必要時のみ設定） | 平文可 |
 | `LOGIN_MAX_ATTEMPTS` | int | `5` | ログイン失敗の許容回数上限 | 平文可 |
@@ -102,6 +102,8 @@
 | `ARGON2_TIME_COST` | int | `3` | argon2idコストパラメータ | 平文可 |
 | `ARGON2_MEMORY_COST` | int | `65536` | argon2idコストパラメータ（KiB） | 平文可 |
 | `ARGON2_PARALLELISM` | int | `4` | argon2idコストパラメータ | 平文可 |
+| `PASSWORD_MAX_LENGTH` | int | `128` | パスワード入力の最大文字数（Unicodeコードポイント数）。Argon2処理前に検証 | 平文可 |
+| `AUTH_TOKEN_MAX_LENGTH` | int | `512` | メール認証・パスワードリセットtoken、OAuth code/stateの最大文字数（Unicodeコードポイント数） | 平文可 |
 
 ### 3.4 jwt方式
 
@@ -122,7 +124,7 @@
 | `CORS_ALLOW_METHODS` | list[str]（カンマ区切りをパース） | `GET,POST,PUT,PATCH,DELETE,OPTIONS` | `CORSMiddleware`が許可するHTTPメソッド一覧 | 平文可 |
 | `CORS_ALLOW_HEADERS` | list[str]（カンマ区切りをパース） | `Content-Type,X-CSRF-Token,Authorization` | `CORSMiddleware`が許可するリクエストヘッダー一覧（Double Submit Cookieの`X-CSRF-Token`を含む） | 平文可 |
 | `CORS_MAX_AGE_SECONDS` | int | `600` | プリフライト(OPTIONS)応答のキャッシュ秒数（`Access-Control-Max-Age`） | 平文可 |
-| `ENABLE_API_DOCS` | bool | `true` | `/api/docs`（Swagger UI）の有効化。本番は`false`推奨 | 平文可 |
+| `ENABLE_API_DOCS` | bool | `true`（productionでは`false`必須） | `/api/docs`（Swagger UI）の有効化 | 平文可 |
 
 ### 3.6 ページング
 
@@ -138,7 +140,7 @@
 | `GOOGLE_LOGIN_ENABLED` | bool | `true` | Googleログインボタン有効化（`/auth/config`へ反映） | 平文可 |
 | `GOOGLE_CLIENT_ID` | str | なし（必須） | OAuth2クライアントID | **Secret** |
 | `GOOGLE_CLIENT_SECRET` | str | なし（必須） | OAuth2クライアントシークレット | **Secret** |
-| `GOOGLE_REDIRECT_URI` | str | `http://localhost:5173/api/auth/oauth/google/callback` | 認可コールバックURI | 平文可 |
+| `GOOGLE_REDIRECT_URI` | str | `http://localhost:5173/api/auth/oauth/google/callback`（productionではHTTPS必須） | 認可コールバックURI | 平文可 |
 | `GOOGLE_AUTHORIZE_ENDPOINT` | str | `https://accounts.google.com/o/oauth2/v2/auth` | 認可エンドポイント | 平文可 |
 | `GOOGLE_TOKEN_ENDPOINT` | str | `https://oauth2.googleapis.com/token` | tokenエンドポイント | 平文可 |
 | `GOOGLE_USERINFO_ENDPOINT` | str | `https://openidconnect.googleapis.com/v1/userinfo` | userinfoエンドポイント | 平文可 |
@@ -157,9 +159,9 @@
 | `SMTP_PORT` | int | `1025` | SMTP接続ポート（開発）。本番は外部SMTPのポート | 平文可 |
 | `SMTP_USER` | str | 空文字 | 本番外部SMTP利用時のみ | **Secret**（値がある場合） |
 | `SMTP_PASSWORD` | str | 空文字 | 本番外部SMTP利用時のみ | **Secret**（値がある場合） |
-| `SMTP_USE_TLS` | bool | `false` | SMTP接続のTLS有効化 | 平文可 |
+| `SMTP_USE_TLS` | bool | `false`（productionでは`true`必須） | SMTP接続のTLS有効化 | 平文可 |
 | `MAIL_FROM` | str | `no-reply@cerberus.local` | メール送信元アドレス | 平文可 |
-| `FRONTEND_BASE_URL` | str | `http://localhost:5173` | メール本文内リンク・OAuth後リダイレクト先の基点 | 平文可 |
+| `FRONTEND_BASE_URL` | str | `http://localhost:5173`（productionではHTTPS必須） | メール本文内リンク・OAuth後リダイレクト先の基点 | 平文可 |
 | `PASSWORD_RESET_TTL_SECONDS` | int | `1800` | パスワードリセットトークンTTL | 平文可 |
 | `EMAIL_VERIFY_TTL_SECONDS` | int | `86400` | メール認証トークンTTL（24時間） | 平文可 |
 | `EMAIL_VERIFY_RESEND_INTERVAL_SECONDS` | int | `60` | 認証メール再送の最小間隔 | 平文可 |
@@ -174,6 +176,8 @@
 | `VITE_API_BASE_URL` | str | `/api` | フロントのAPIベースURL。**ビルド時にArgとして埋め込み**（backendの`Settings`には含めない） | 平文可 |
 | `VITE_USER_NAME_MAX_LENGTH` | int | `30` | フロントのプロフィール姓名・フリガナのzod上限。frontend Docker build argとして埋め込む | 平文可 |
 | `VITE_PASSWORD_MIN_LENGTH` | int | `8` | フロントのパスワードzod最小文字数。frontend Docker build argとして埋め込む | 平文可 |
+| `VITE_PASSWORD_MAX_LENGTH` | int | `128` | フロントのパスワードzod最大文字数。`PASSWORD_MAX_LENGTH`と一致させ、frontend Docker build argとして埋め込む | 平文可 |
+| `VITE_AUTH_TOKEN_MAX_LENGTH` | int | `512` | フロントのtoken/code zod最大文字数。`AUTH_TOKEN_MAX_LENGTH`と一致させ、frontend Docker build argとして埋め込む | 平文可 |
 | `VITE_APP_TIMEZONE` | str | `Asia/Tokyo` | フロントの期限日時表示・入力に使用するタイムゾーン。frontend Docker build argとして埋め込む | 平文可 |
 
 ### 3.10 通知・batch
@@ -311,7 +315,19 @@ flowchart LR
 | 起動時バリデーション失敗方針 | fail-close。必須項目欠落時はプロセスを起動させず、Compose上でbackendがunhealthy/起動失敗となり後続（frontend起動）も止まる | [01_docker_compose.md](./01_docker_compose.md) |
 | ハードコーディング禁止 | URL・TTL・上限値・Cookie名等はすべて本章の環境変数経由とし、コード内リテラルを禁止する | 共通執筆ルール |
 | シークレットローテーション | `JWT_SECRET_KEY`変更時は既発行アクセストークンが全て無効化される（リフレッシュはRedis管理のため生存） | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §8 |
-| `ENABLE_API_DOCS` | 本番相当環境では`false`にしてSwagger UI経由の情報露出を避けることを推奨（既定`true`は開発優先） | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §4.3 |
+| `ENABLE_API_DOCS` | `APP_ENV=production`では`false`を必須とし、Swagger UI経由の情報露出を防ぐ | [../../basic_design/06_infra_cicd.md](../../basic_design/06_infra_cicd.md) §4.3 |
+
+### 10.1 production fail-close境界
+
+`APP_ENV=production`の`BackendSettings`生成時に、次の条件をすべて満たさない場合は`ValidationError`を送出する。`BackendSettings`はアプリケーション生成前に評価されるため、HTTP受付前に起動を失敗させる。
+
+- `COOKIE_SECURE=true`
+- `SMTP_USE_TLS=true`
+- `FRONTEND_BASE_URL`と、Googleログインを有効にする場合の`GOOGLE_REDIRECT_URI`がHTTPSの絶対URL
+- `ENABLE_API_DOCS=false`
+- `JWT_SECRET_KEY`、`GOOGLE_CLIENT_SECRET`、`INITIAL_ADMIN_PASSWORD`が空文字でなく、開発用プレースホルダ（`secret`、`password`、`changeme`、`change-me`、`test-secret`、`test-password`）ではない
+
+`local`と`ci`では既存の開発用既定値を許容する。TLS終端を外部プロキシへ委譲する場合も、アプリケーションからSMTPへ接続する経路はTLSを使用し、外部公開URLはHTTPSとする。
 
 ## 11. テスト設計
 
@@ -323,6 +339,9 @@ flowchart LR
 | 4 | 単体 | `CORS_ALLOW_ORIGINS`のカンマ区切り文字列が`list[str]`へ変換される | `CORS_ALLOW_ORIGINS=http://a,http://b` | `["http://a","http://b"]`になる | `test_settings_cors_origins_parsed` |
 | 5 | 単体 | `COOKIE_SECURE`等のbool文字列（`"true"`/`"false"`）が正しく変換される | 環境変数に文字列`"false"`を設定 | `Settings.cookie_secure is False` | `test_settings_bool_parsing` |
 | 6 | 結合 | CIの`backend-test`ジョブが`AUTH_MODE`のmatrix（session/jwt）双方で起動できる | CI環境変数一式 | 両方のジョブでSettings生成に成功しテストが実行される | `test_settings_ci_matrix_both_modes`（CIログで確認） |
+| 7 | 単体 | productionの安全な設定 | production用の安全な値 | `Settings`生成に成功 | `test_settings_production_accepts_safe_security_boundaries` |
+| 8 | 単体 | productionの危険なCookie・SMTP・URL・Docs設定 | 各項目を不安全な値に変更 | `ValidationError` | `test_settings_production_rejects_insecure_boundaries` |
+| 9 | 単体 | productionの開発用プレースホルダSecret | `secret`等を設定 | `ValidationError` | `test_settings_production_rejects_development_placeholders` |
 | 網羅できない範囲 | 実際の開発者環境で`.env`を設定し、Composeが全サービスへ値を渡す実運用確認 | - | ホスト固有のDocker環境に依存するため自動テスト対象外。ローカル起動時のヘルスチェックで確認する | - |
 
 ## 12. 不明点・要検討事項

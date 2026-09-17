@@ -1,4 +1,6 @@
 import { useEffect, useState, type Ref } from "react";
+import { TASK_DESCRIPTION_MAX_LENGTH } from "../config/taskConfig";
+import { countCodePoints } from "../../../lib/validation/stringLength";
 
 export type TaskStatus = "todo" | "in_progress" | "done";
 export type TaskEditableField = "title" | "description" | "assignee_id" | "due_at" | "status";
@@ -33,7 +35,6 @@ const STATUS_LABELS: Record<TaskStatus, string> = {
 };
 
 const TITLE_MAX_LENGTH = 150;
-const DESCRIPTION_MAX_LENGTH = 2000;
 
 export function TaskEditForm({
 	task,
@@ -59,13 +60,13 @@ export function TaskEditForm({
 	const validateText = (field: "title" | "description", value: string): boolean => {
 		const invalid =
 			(field === "title" && (value.length < 1 || value.length > TITLE_MAX_LENGTH)) ||
-			(field === "description" && value.length > DESCRIPTION_MAX_LENGTH);
+			(field === "description" && countCodePoints(value) > TASK_DESCRIPTION_MAX_LENGTH);
 		if (invalid) {
 			setError(
 				field,
 				field === "title"
 					? "タイトルは1〜150文字で入力してください"
-					: "説明は2000文字以内で入力してください",
+					: `説明は${TASK_DESCRIPTION_MAX_LENGTH}文字以内で入力してください`,
 			);
 			return false;
 		}
@@ -114,7 +115,6 @@ export function TaskEditForm({
 				説明
 				<textarea
 					value={description}
-					maxLength={DESCRIPTION_MAX_LENGTH}
 					rows={4}
 					onChange={(event) => setDescription(event.target.value)}
 					onBlur={(event) => handleTextBlur("description", event.target.value)}

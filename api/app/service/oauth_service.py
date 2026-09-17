@@ -16,6 +16,7 @@ from app.auth.jwt_auth import JwtAuthStrategy
 from app.auth.oauth import GoogleOAuthProvider, GoogleUserInfo
 from app.auth.session_auth import SessionAuthStrategy
 from app.core.config import BackendSettings, get_backend_settings
+from app.core.constants import TOKEN_URLSAFE_BYTES
 from app.core.exceptions import (
 	InvalidStateError,
 	NotSupportedInModeError,
@@ -61,9 +62,9 @@ async def oauth_start(
 	if isinstance(request, Response) and response is None:
 		response = request
 	redirect = normalize_redirect_to(redirect_to, config)
-	state = secrets.token_urlsafe(32)
+	state = secrets.token_urlsafe(TOKEN_URLSAFE_BYTES)
 	code_verifier = secrets.token_urlsafe(64)
-	nonce = secrets.token_urlsafe(32)
+	nonce = secrets.token_urlsafe(TOKEN_URLSAFE_BYTES)
 	code_challenge = base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode()).digest()).rstrip(b"=").decode()
 	try:
 		await redis_store.save_oauth_state(state, redirect, code_verifier, nonce, config.oauth_state_ttl_seconds)
@@ -209,7 +210,7 @@ async def _oauth_callback_impl(
 			db, user, request, response, config, client_info, configured_strategy, login_result, _record_oauth_login
 		)
 		return OAuthCallbackResult(auth_mode="session", redirect_to=state_data.redirect_to)
-	handoff_code = secrets.token_urlsafe(32)
+	handoff_code = secrets.token_urlsafe(TOKEN_URLSAFE_BYTES)
 	try:
 		await redis_store.save_oauth_handoff(
 			handoff_code, user.id, state_data.redirect_to, config.oauth_handoff_ttl_seconds

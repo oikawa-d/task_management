@@ -1,8 +1,11 @@
 import { z } from "zod";
 import type { FieldErrors, FieldValues, Resolver } from "react-hook-form";
 
+import { countCodePoints } from "../../lib/validation/stringLength";
 import { getAuthValidationConfig } from "./config/validationConfig";
 import type { ApiFieldError, AuthApiError } from "./types";
+
+export { countCodePoints } from "../../lib/validation/stringLength";
 
 const KANA_PATTERN = /^[ぁ-んァ-ヶー0-9]+$/;
 const USERNAME_PATTERN = /^[A-Za-z0-9_-]+$/;
@@ -34,7 +37,7 @@ export const emailSchema = z.string().max(EMAIL_MAX_LENGTH).email();
 
 export const loginSchema = z.object({
 	identifier: z.string().min(1, "IDまたはメールアドレスを入力してください").max(LOGIN_IDENTIFIER_MAX_LENGTH),
-	password: z.string().min(1, "パスワードを入力してください"),
+	password: passwordField("パスワードを入力してください"),
 });
 
 export const resendVerificationSchema = z.object({
@@ -45,7 +48,7 @@ export const resendVerificationSchema = z.object({
 });
 
 export function registerSchema() {
-	const { userNameMaxLength, passwordMinLength } = getAuthValidationConfig();
+	const { userNameMaxLength, passwordMinLength, passwordMaxLength } = getAuthValidationConfig();
 	const nameField = z.string().trim().min(1, "入力してください").max(userNameMaxLength, `${userNameMaxLength}文字以内で入力してください`);
 	const kanaField = nameField.regex(KANA_PATTERN, "ひらがな・カタカナ・数字で入力してください");
 
@@ -67,10 +70,14 @@ export function registerSchema() {
 			password: z
 				.string()
 				.refine(
-					(value) => value.length >= passwordMinLength && countCharacterTypes(value) >= 2,
+					(value) => countCodePoints(value) >= passwordMinLength && countCharacterTypes(value) >= 2,
 					`${passwordMinLength}文字以上で、英大文字/英小文字/数字/記号のうち2種類以上を含めてください`,
+				)
+				.refine(
+					(value) => countCodePoints(value) <= passwordMaxLength,
+					`${passwordMaxLength}文字以内で入力してください`,
 				),
-			password_confirm: z.string(),
+			password_confirm: passwordField(),
 		})
 		.superRefine((values, context) => {
 			if (values.password_confirm !== values.password) {
@@ -96,6 +103,30 @@ function isValidBirthDate(year: string, month: string, day: string): boolean {
 
 export function countCharacterTypes(value: string): number {
 	return [/[A-Z]/, /[a-z]/, /[0-9]/, /[^A-Za-z0-9]/].filter((pattern) => pattern.test(value)).length;
+}
+
+export function authTokenSchema() {
+	const maxLength = getAuthValidationConfig().authTokenMaxLength;
+	return z.string().min(1).refine(
+		(value) => countCodePoints(value) <= maxLength,
+		`${maxLength}文字以内で入力してください`,
+	);
+}
+
+export function oauthExchangeSchema() {
+	return z.object({ code: authTokenSchema() });
+}
+
+function passwordField(requiredMessage?: string): z.ZodType<string> {
+	const { passwordMaxLength } = getAuthValidationConfig();
+	let schema = z.string();
+	if (requiredMessage) {
+		schema = schema.min(1, requiredMessage);
+	}
+	return schema.refine(
+		(value) => countCodePoints(value) <= passwordMaxLength,
+		`${passwordMaxLength}文字以内で入力してください`,
+	);
 }
 
 /** design doc: docs/detailed_design/screen/01_login.md §9.3 buildResendPayload */
@@ -138,16 +169,23 @@ export const passwordForgotSchema = z.object({
 
 /** docs/detailed_design/screen/04_password_reset.md §10 */
 export function passwordResetSchema() {
-	const minLength = getAuthValidationConfig().passwordMinLength;
+	const { passwordMinLength, passwordMaxLength } = getAuthValidationConfig();
 	return z
 		.object({
 			newPassword: z
 				.string()
 				.refine(
-					(value) => value.length >= minLength && countCharacterTypes(value) >= 2,
-					`${minLength}文字以上で、2種類以上の文字種を含めてください`,
+					(value) => countCodePoints(value) >= passwordMinLength && countCharacterTypes(value) >= 2,
+					`${passwordMinLength}文字以上で、2種類以上の文字種を含めてください`,
+				)
+				.refine(
+					(value) => countCodePoints(value) <= passwordMaxLength,
+					`${passwordMaxLength}文字以内で入力してください`,
 				),
-			passwordConfirm: z.string(),
+			passwordConfirm: z.string().refine(
+				(value) => countCodePoints(value) <= passwordMaxLength,
+				`${passwordMaxLength}文字以内で入力してください`,
+			),
 		})
 		.superRefine((values, context) => {
 			if (values.newPassword !== values.passwordConfirm) {

@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { FieldErrors, FieldValues, Resolver } from "react-hook-form";
 
 import { PROJECT_DESCRIPTION_MAX_LENGTH, PROJECT_NAME_MAX_LENGTH, PROJECT_NAME_MIN_LENGTH } from "./config/dashboardConfig";
+import { countCodePoints } from "../../lib/validation/stringLength";
 
 /**
  * プロジェクト作成フォームのzodスキーマ。
@@ -12,7 +13,10 @@ export const projectCreateSchema = z.object({
 		.string()
 		.min(PROJECT_NAME_MIN_LENGTH, "プロジェクト名を1〜100文字で入力してください")
 		.max(PROJECT_NAME_MAX_LENGTH, "プロジェクト名を1〜100文字で入力してください"),
-	description: z.string().max(PROJECT_DESCRIPTION_MAX_LENGTH, "説明は2000文字以内で入力してください"),
+	description: z.string().refine(
+		(value) => countCodePoints(value) <= PROJECT_DESCRIPTION_MAX_LENGTH,
+		`説明は${PROJECT_DESCRIPTION_MAX_LENGTH}文字以内で入力してください`,
+	),
 });
 
 export type ProjectCreateFormValues = z.infer<typeof projectCreateSchema>;

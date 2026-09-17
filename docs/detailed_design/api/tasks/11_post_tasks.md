@@ -50,7 +50,7 @@
 |-----------|----|----|------|------|
 | project_id | string(uuid) \| null | - | 省略時 `null` として扱う（未所属タスク） | 所属先プロジェクト。指定時は[02_post_project_tasks.md](./02_post_project_tasks.md)と同じ所属チェックが行われる |
 | title | string | ○ | 1〜150文字 | タイトル |
-| description | string \| null | - | 省略時 `null` | 説明 |
+| description | string \| null | - | 0〜2,000文字。省略時 `null` | 説明 |
 | status | string | - | `todo` / `in_progress` / `done`、省略時 `todo` | 初期ステータス |
 | assignee_id | string(uuid) \| null | - | 省略時 `null`。`project_id`が非NULLの場合のみ指定可（有効なプロジェクトメンバーのIDであること） | 担当者 |
 | due_at | string(date-time) \| null | - | 省略時 `null`、ISO 8601 | 期限日時 |

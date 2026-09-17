@@ -53,6 +53,13 @@ def test_task_create_request_accepts_task_fields() -> None:
 	assert payload.due_at == due_at
 
 
+@pytest.mark.parametrize("model", [TaskCreateRequest, TaskCreateFlatRequest])
+def test_task_create_description_accepts_boundary_and_rejects_over_limit(model: type[object]) -> None:
+	assert model(title="task", description="a" * 2000)
+	with pytest.raises(ValidationError):
+		model(title="task", description="a" * 2001)
+
+
 def test_task_create_flat_request_rejects_assignee_without_project() -> None:
 	with pytest.raises(ValidationError):
 		TaskCreateFlatRequest(title="個人タスク", assignee_id=uuid4())

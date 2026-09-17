@@ -26,11 +26,16 @@ _ROTATE_REFRESH_SCRIPT = (Path(__file__).parent / "redis_scripts" / "rotate_refr
 )
 
 _SAVE_PASSWORD_RESET_SCRIPT = """
-if ARGV[1] ~= '' and redis.call('GET', KEYS[1]) ~= ARGV[1] then
+local current_hash = redis.call('GET', KEYS[1])
+if ARGV[1] == '' then
+    if current_hash then return 0 end
+elseif current_hash ~= ARGV[1] then
     return 0
 end
-redis.call('DEL', KEYS[2])
-redis.call('SET', KEYS[3], ARGV[3], 'EX', ARGV[4])
+if current_hash then
+    redis.call('DEL', ARGV[5] .. 'pwreset:' .. current_hash)
+end
+redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[4])
 redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[4])
 return 1
 """
@@ -42,7 +47,25 @@ local data = cjson.decode(value)
 local current_key = ARGV[1] .. 'pwreset_current:' .. data.user_id
 if redis.call('GET', current_key) ~= ARGV[2] then return '' end
 redis.call('DEL', KEYS[1], current_key)
+redis.call('SET', ARGV[1] .. 'pwreset_consumed:' .. data.user_id, ARGV[2], 'EX', ARGV[3])
 return data.user_id
+"""
+
+_RESTORE_PASSWORD_RESET_SCRIPT = """
+if redis.call('GET', KEYS[3]) ~= ARGV[1] then return 0 end
+if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
+if redis.call('EXISTS', KEYS[2]) == 1 then return 0 end
+redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
+redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[3])
+return 1
+"""
+
+_RESTORE_EMAIL_VERIFY_SCRIPT = """
+local current = redis.call('GET', KEYS[1])
+if current and current ~= ARGV[1] then return 0 end
+redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
+redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[3])
+return 1
 """
 
 
@@ -182,36 +205,56 @@ async def consume_oauth_handoff(client: Redis, prefix: str, code: str) -> OAuthH
 	return OAuthHandoffData(UUID(str(data["user_id"])), str(data["redirect_to"]), parse_datetime(data["created_at"]))
 
 
-async def save_password_reset_token(client: Redis, prefix: str, token: str, user_id: UUID, ttl: int) -> None:
+async def save_password_reset_token(client: Redis, prefix: str, token: str, user_id: UUID, ttl: int) -> bool:
 	validate_ttl(ttl)
 	token_hash_value = token_hash(token)
 	current_key = key("pwreset_current", prefix, user_id)
 	old_hash = await cast(Any, client.get)(current_key) or ""
-	await cast(Any, client.eval)(
+	result = await cast(Any, client.eval)(
 		_SAVE_PASSWORD_RESET_SCRIPT,
-		3,
+		2,
 		current_key,
-		key("pwreset", prefix, old_hash or token_hash_value),
 		key("pwreset", prefix, token_hash_value),
 		old_hash,
 		token_hash_value,
 		dump({"user_id": user_id, "requested_at": datetime.now(UTC).isoformat()}),
 		ttl,
+		prefix,
 	)
+	return bool(int(result))
 
 
 async def consume_password_reset_token(client: Redis, prefix: str, token: str) -> UUID | None:
 	token_hash_value = token_hash(token)
+	ttl = get_backend_settings().password_reset_ttl_seconds
+	validate_ttl(ttl, "password_reset_ttl_seconds")
 	result = await cast(Any, client.eval)(
 		_CONSUME_PASSWORD_RESET_SCRIPT,
 		1,
 		key("pwreset", prefix, token_hash_value),
 		prefix,
 		token_hash_value,
+		ttl,
 	)
 	if not result:
 		return None
 	return UUID(str(result.decode() if isinstance(result, bytes) else result))
+
+
+async def restore_password_reset_token(client: Redis, prefix: str, token: str, user_id: UUID, ttl: int) -> bool:
+	validate_ttl(ttl)
+	token_hash_value = token_hash(token)
+	result = await cast(Any, client.eval)(
+		_RESTORE_PASSWORD_RESET_SCRIPT,
+		3,
+		key("pwreset_current", prefix, user_id),
+		key("pwreset", prefix, token_hash_value),
+		key("pwreset_consumed", prefix, user_id),
+		token_hash_value,
+		dump({"user_id": user_id, "requested_at": datetime.now(UTC).isoformat()}),
+		ttl,
+	)
+	return bool(int(result))
 
 
 async def replace_email_verify_token(client: Redis, prefix: str, token: str, user_id: UUID, ttl: int) -> None:
@@ -234,3 +277,18 @@ async def replace_email_verify_token(client: Redis, prefix: str, token: str, use
 async def consume_email_verify_token(client: Redis, prefix: str, token: str) -> UUID | None:
 	data = parse_json(await client.getdel(key("emailverify", prefix, token_hash(token))))
 	return UUID(str(data["user_id"])) if data else None
+
+
+async def restore_email_verify_token(client: Redis, prefix: str, token: str, user_id: UUID, ttl: int) -> bool:
+	validate_ttl(ttl)
+	token_hash_value = token_hash(token)
+	result = await cast(Any, client.eval)(
+		_RESTORE_EMAIL_VERIFY_SCRIPT,
+		2,
+		key("emailverify_current", prefix, user_id),
+		key("emailverify", prefix, token_hash_value),
+		token_hash_value,
+		dump({"user_id": user_id, "requested_at": datetime.now(UTC).isoformat()}),
+		ttl,
+	)
+	return bool(int(result))

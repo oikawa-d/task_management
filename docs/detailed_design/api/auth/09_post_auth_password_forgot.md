@@ -26,7 +26,7 @@
 | AUTH_MODE差異 | 差異なし |
 | 冪等性 | レスポンスは常に `202 Accepted` で冪等（存在有無を問わない）。副作用（メール送信・トークン発行）はユーザーが存在する場合のみ発生し、その意味では冪等ではない |
 | レート制限 | IP単位で5回/900秒。超過時は `429 TOO_MANY_ATTEMPTS`（`Retry-After`付き）、Redis障害時は `503 SERVICE_UNAVAILABLE` |
-| トランザクション境界 | PostgreSQLへの更新は行わない（参照のみ）。Redisへのトークン保存は旧token/current削除と新token/current登録をLuaで原子的に行う |
+| トランザクション境界 | PostgreSQLへの更新は行わない（参照のみ）。Redisへのトークン保存は旧token/current削除と新token/current登録をLuaで原子的に行い、CAS競合時はメール送信を予約しない |
 
 ## 2. 入出力仕様（全体の出入力）
 
@@ -94,9 +94,14 @@ sequenceDiagram
         UR-->>S: "User"
         S->>S: "token = token_urlsafe(32)"
         S->>RD: "save_password_reset_token(token, user_id, ttl)"
-        RD->>RD: "SETEX pwreset:{sha256(token)} TTL=1800"
-        S->>BG: "send_password_reset_mail をキューイング"
-        BG->>SMTP: "リセットURL付きメール送信（非同期）"
+        alt CAS成功
+            RD->>RD: "Luaで旧token/current削除、新token/currentを原子的に登録"
+            S->>BG: "send_password_reset_mail をキューイング"
+            BG->>SMTP: "リセットURL付きメール送信（非同期）"
+        else CAS競合
+            RD-->>S: "False"
+            Note over S: "メール送信を予約しない"
+        end
     else ユーザーが存在しない
         UR-->>S: "None"
         Note over S: "何もせず終了（202を返すのみ）"
@@ -114,8 +119,9 @@ flowchart TB
     B -->|"OK"| C["SELECT users WHERE lower(email)=?"]
     C --> D{"ユーザー存在?"}
     D -->|"No"| G["202 Accepted<br/>（メール送信なし）"]
-    D -->|"Yes"| F1["token生成<br/>SETEX pwreset:{hash} TTL=1800"]
-    F1 --> F2["BackgroundTasksへ<br/>メール送信を登録"]
+    D -->|"Yes"| F1["token生成<br/>save_password_reset_token"]
+    F1 -->|"True"| F2["BackgroundTasksへ<br/>メール送信を登録"]
+    F1 -->|"False（CAS競合）"| G
     F2 --> G
 ```
 
@@ -142,8 +148,8 @@ flowchart TB
 | 引数 | `email: str`、`background: BackgroundTasks`、`db: AsyncSession`（ユーザー検索用DBセッション） |
 | 戻り値 | `None`（常に正常終了、例外を送出しない） |
 | 送出例外 | Redis障害、またはDB接続不能時は共通例外ハンドラで `503 SERVICE_UNAVAILABLE` |
-| 処理内容 | 1. `user_repository.get_by_email(db, email)` でユーザー取得。`None` なら終了 2. `token = secrets.token_urlsafe(32)` を生成 3. `redis_store.save_password_reset_token(token, user.id, ttl)` を呼ぶ 4. `background.add_task(mail_service.send_password_reset_mail, user.email, token, expires_minutes)` を登録 |
-| 副作用 | Redis：`pwreset:{hash}` の新規作成。メール：`BackgroundTasks` 経由で非同期送信 |
+| 処理内容 | 1. `user_repository.get_by_email(db, email)` でユーザー取得。`None` なら終了 2. `token = secrets.token_urlsafe(32)` を生成 3. `redis_store.save_password_reset_token(token, user.id, ttl)` を呼ぶ 4. 戻り値が`False`（CAS競合）ならメール送信を予約せず終了 5. `True`の場合だけ`background.add_task(mail_service.send_password_reset_mail, user.email, token, expires_minutes)`を登録 |
+| 副作用 | Redis：`pwreset_current:{uid}` と旧 `pwreset:{hash}` をLuaで原子的に管理し、旧tokenを失効して新tokenを登録。CAS競合時は`False`を返してメール送信を行わず、既存の最新tokenを維持する。CAS成功時のみメールを`BackgroundTasks`経由で非同期送信 |
 
 ### 6.3 `api/app/repository/user_repository.py :: get_by_email`
 
@@ -160,12 +166,12 @@ flowchart TB
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ | `async def save_password_reset_token(token: str, user_id: UUID, ttl: int) -> None` |
+| シグネチャ | `async def save_password_reset_token(token: str, user_id: UUID, ttl: int) -> bool` |
 | 引数 | `token: str`（平文）、`user_id: UUID`、`ttl: int`（`PASSWORD_RESET_TTL_SECONDS`、既定1800） |
-| 戻り値 | `None` |
+| 戻り値 | `True`（CAS成功）または`False`（別要求が先に最新tokenを保存） |
 | 送出例外 | なし（Redis接続不能時は `RedisError`） |
-| 処理内容 | 1. `hash = sha256(token).hexdigest()` を計算 2. `SETEX pwreset:{hash} ttl {"user_id": ..., "requested_at": ...}` を実行 |
-| 副作用 | Redis：`pwreset:{hash}` を新規作成（既存の旧トークンがあっても明示的な削除は行わない。複数トークンが同時に有効になり得る点は §13参照） |
+| 処理内容 | 1. `hash = sha256(token).hexdigest()` を計算 2. `pwreset_current:{uid}` と旧tokenをCASで確認 3. Luaで旧token/currentを削除し、新token/currentを原子的に登録 |
+| 副作用 | Redis：`pwreset:{hash}` と `pwreset_current:{uid}` を更新。CAS競合時は`False`を返し、呼び出し元はメール送信を予約しない |
 
 ### 6.5 `service/mail_service.py :: send_password_reset_mail`
 
@@ -196,8 +202,8 @@ flowchart LR
 ```mermaid
 stateDiagram-v2
     [*] --> トークンなし
-    トークンなし --> トークン発行済み: "forgot成功（ユーザー存在時）<br/>SETEX pwreset:{hash} TTL=1800<br/>メール送信"
-    トークン発行済み --> トークン発行済み: "再度forgot要求<br/>新しいpwreset:{new_hash}が追加発行される"
+    トークンなし --> トークン発行済み: "forgot成功（ユーザー存在時）<br/>Luaでpwreset/currentを原子的に登録<br/>メール送信"
+    トークン発行済み --> トークン発行済み: "再度forgot要求<br/>Luaで旧トークンを失効し、新しいpwreset/currentだけを有効化"
     トークン発行済み --> [*]: "TTL満了、または<br/>10_post_auth_password_reset.mdでGETDEL消費"
     トークンなし --> トークンなし: "存在しないメールで要求<br/>（何も発行されない）"
 ```
@@ -209,7 +215,7 @@ stateDiagram-v2
 | ストア | テーブル／キー | 操作 | 条件・TTL | 備考 |
 |--------|----------------|------|-----------|------|
 | PostgreSQL | `users` | `SELECT` | `WHERE lower(email) = lower(:email)` | 参照のみ、更新なし |
-| Redis | `pwreset:{sha256(token)}` | `SETEX` | TTL `PASSWORD_RESET_TTL_SECONDS`（既定1800） | 新規作成のみ。旧トークンの明示的な失効は行わない |
+| Redis | `pwreset:{sha256(token)}` / `pwreset_current:{uid}` | Luaによる原子的な置換 | TTL `PASSWORD_RESET_TTL_SECONDS`（既定1800） | 旧トークンを失効し、ユーザーごとに最新1本だけを有効化 |
 
 ## 10. バリデーション規則
 
