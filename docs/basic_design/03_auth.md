@@ -449,7 +449,7 @@ sequenceDiagram
 
     U->>FE: メール内リンク /password/reset#token=xxx
     FE->>API: POST /api/auth/password/reset {token, new_password, password_confirm}
-    API->>RD: GETDEL pwreset:{sha256(token)}
+    API->>RD: Luaでpwreset_current:{user_id}とtoken実体のhash一致を確認し、両方を原子的に消費
     alt トークン無効/期限切れ
         API-->>FE: 400 INVALID_RESET_TOKEN
     else 有効

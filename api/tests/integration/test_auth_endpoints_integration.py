@@ -220,6 +220,55 @@ async def test_password_reset_initial_concurrent_issue_has_one_winner(redis_conn
 		)
 
 
+async def test_password_reset_compensation_restores_token_when_current_is_missing(redis_conn: Redis) -> None:
+	"""currentが不存在なら、消費済みtokenを実体とcurrentの組で復元する。"""
+	user_id = uuid.uuid4()
+	settings = get_backend_settings()
+	prefix = settings.redis_key_prefix
+	token = f"reset-{uuid.uuid4().hex}"
+	keys = (
+		f"{prefix}pwreset_current:{user_id}",
+		f"{prefix}pwreset:{token_hash(token)}",
+	)
+	try:
+		assert await redis_store_auth.save_password_reset_token(redis_conn, prefix, token, user_id, 60)
+		assert await redis_store_auth.consume_password_reset_token(redis_conn, prefix, token) == user_id
+		assert await redis_store_auth.restore_password_reset_token(redis_conn, prefix, token, user_id, 60)
+		assert await redis_conn.get(keys[0]) == token_hash(token)
+		assert await redis_conn.exists(keys[1]) == 1
+		assert await redis_store_auth.consume_password_reset_token(redis_conn, prefix, token) == user_id
+		assert await redis_store_auth.consume_password_reset_token(redis_conn, prefix, token) is None
+	finally:
+		await redis_conn.delete(*keys)
+
+
+async def test_password_reset_compensation_does_not_restore_consumed_token_after_reissue(redis_conn: Redis) -> None:
+	"""後続tokenが発行済みなら、先行tokenの補償復元で最新tokenを上書きしない。"""
+	user_id = uuid.uuid4()
+	settings = get_backend_settings()
+	prefix = settings.redis_key_prefix
+	token_a = f"reset-a-{uuid.uuid4().hex}"
+	token_b = f"reset-b-{uuid.uuid4().hex}"
+	keys = (
+		f"{prefix}pwreset_current:{user_id}",
+		f"{prefix}pwreset:{token_hash(token_a)}",
+		f"{prefix}pwreset:{token_hash(token_b)}",
+	)
+	try:
+		assert await redis_store_auth.save_password_reset_token(redis_conn, prefix, token_a, user_id, 60)
+		assert await redis_store_auth.consume_password_reset_token(redis_conn, prefix, token_a) == user_id
+		assert await redis_store_auth.save_password_reset_token(redis_conn, prefix, token_b, user_id, 60)
+
+		assert not await redis_store_auth.restore_password_reset_token(redis_conn, prefix, token_a, user_id, 60)
+		assert await redis_conn.get(keys[0]) == token_hash(token_b)
+		assert await redis_conn.exists(keys[1]) == 0
+		assert await redis_conn.exists(keys[2]) == 1
+		assert await redis_store_auth.consume_password_reset_token(redis_conn, prefix, token_b) == user_id
+		assert await redis_store_auth.consume_password_reset_token(redis_conn, prefix, token_b) is None
+	finally:
+		await redis_conn.delete(*keys)
+
+
 async def test_register_endpoint_db_failure_creates_no_partial_row(
 	client: TestClient, monkeypatch: pytest.MonkeyPatch, db_session: AsyncSession
 ) -> None:

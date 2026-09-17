@@ -36,6 +36,7 @@ __all__ = [
 	"mark_email_verify_sent",
 	"ping",
 	"replace_email_verify_token",
+	"restore_password_reset_token",
 	"restore_email_verify_token",
 	"reset_login_failure",
 	"revoke_all_refresh_tokens",
@@ -130,6 +131,10 @@ async def save_password_reset_token(token: str, user_id: UUID, ttl: int) -> bool
 
 async def consume_password_reset_token(token: str) -> UUID | None:
 	return await redis_store_auth.consume_password_reset_token(_redis(), _key_prefix(), token)
+
+
+async def restore_password_reset_token(token: str, user_id: UUID, ttl: int) -> bool:
+	return await redis_store_auth.restore_password_reset_token(_redis(), _key_prefix(), token, user_id, ttl)
 
 
 async def replace_email_verify_token(token: str, user_id: UUID, ttl: int) -> None:

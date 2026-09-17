@@ -95,7 +95,7 @@ async def reset_password(token: str, new_password: str, db: AsyncSession) -> Non
 	except Exception:
 		try:
 			settings = get_backend_settings()
-			await redis_store.save_password_reset_token(token, user_id, ttl=settings.password_reset_ttl_seconds)
+			await redis_store.restore_password_reset_token(token, user_id, ttl=settings.password_reset_ttl_seconds)
 		except Exception:
 			pass
 		raise
@@ -106,7 +106,7 @@ async def reset_password(token: str, new_password: str, db: AsyncSession) -> Non
 		await db.rollback()
 		try:
 			settings = get_backend_settings()
-			await redis_store.save_password_reset_token(token, user_id, ttl=settings.password_reset_ttl_seconds)
+			await redis_store.restore_password_reset_token(token, user_id, ttl=settings.password_reset_ttl_seconds)
 		except Exception:
 			pass
 		raise_database_error(exc)

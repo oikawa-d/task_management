@@ -50,6 +50,14 @@ redis.call('DEL', KEYS[1], current_key)
 return data.user_id
 """
 
+_RESTORE_PASSWORD_RESET_SCRIPT = """
+if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
+if redis.call('EXISTS', KEYS[2]) == 1 then return 0 end
+redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
+redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[3])
+return 1
+"""
+
 _RESTORE_EMAIL_VERIFY_SCRIPT = """
 local current = redis.call('GET', KEYS[1])
 if current and current ~= ARGV[1] then return 0 end
@@ -226,6 +234,21 @@ async def consume_password_reset_token(client: Redis, prefix: str, token: str) -
 	if not result:
 		return None
 	return UUID(str(result.decode() if isinstance(result, bytes) else result))
+
+
+async def restore_password_reset_token(client: Redis, prefix: str, token: str, user_id: UUID, ttl: int) -> bool:
+	validate_ttl(ttl)
+	token_hash_value = token_hash(token)
+	result = await cast(Any, client.eval)(
+		_RESTORE_PASSWORD_RESET_SCRIPT,
+		2,
+		key("pwreset_current", prefix, user_id),
+		key("pwreset", prefix, token_hash_value),
+		token_hash_value,
+		dump({"user_id": user_id, "requested_at": datetime.now(UTC).isoformat()}),
+		ttl,
+	)
+	return bool(int(result))
 
 
 async def replace_email_verify_token(client: Redis, prefix: str, token: str, user_id: UUID, ttl: int) -> None:

@@ -98,7 +98,7 @@ sequenceDiagram
     FE->>R: "POST /api/auth/password/reset {token, new_password, password_confirm}"
     R->>S: "reset_password(token, new_password, db)"
     S->>RD: "consume_password_reset_token(token)"
-    RD->>RD: "GETDEL pwreset:{sha256(token)}"
+    RD->>RD: "Luaでpwreset_current:{user_id}とtoken実体のhash一致を確認し、両方を原子的に消費"
     alt トークンが存在しない
         RD-->>S: "None"
         S-->>R: "InvalidResetTokenError"
@@ -140,7 +140,7 @@ sequenceDiagram
 flowchart TB
     A["リクエスト受信"] --> B["pydanticバリデーション<br/>PasswordResetRequest<br/>（password_confirm一致確認含む）"]
     B -->|"不正"| E1["422 VALIDATION_ERROR"]
-    B -->|"OK"| C["GETDEL pwreset:{sha256(token)}"]
+    B -->|"OK"| C["Luaでpwreset_current:{user_id}とtoken実体のhash一致を確認し、両方を原子的に消費"]
     C --> D{"値が存在したか?"}
     D -->|"No"| E2["400 INVALID_RESET_TOKEN"]
     D -->|"Yes（user_id取得）"| F["argon2でnew_passwordをハッシュ化"]
@@ -198,8 +198,8 @@ flowchart TB
 | 引数 | `token: str`（平文） |
 | 戻り値 | `UUID` または `None` |
 | 送出例外 | `RedisError`（Redis障害時。グローバル例外ハンドラで503 `SERVICE_UNAVAILABLE`に変換） |
-| 処理内容 | 1. `hash = sha256(token).hexdigest()` を計算 2. `GETDEL pwreset:{hash}` を実行 3. 値が存在すれば `user_id` を返す |
-| 副作用 | Redis：`pwreset:{hash}` を削除（ワンタイム消費） |
+| 処理内容 | 1. `hash = sha256(token).hexdigest()` を計算 2. Luaでtoken実体を取得し、payloadの`user_id`に対応する`pwreset_current:{user_id}`が`hash`と一致することを確認 3. 一致時だけtoken実体とcurrentを原子的に削除し、`user_id`を返す |
+| 副作用 | Redis：`pwreset:{hash}`と対応する`pwreset_current:{user_id}`をLuaで原子的に削除（ワンタイム消費） |
 
 ### 6.5 `repository/redis_store.py :: delete_all_sessions`
 

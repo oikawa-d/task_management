@@ -292,7 +292,7 @@ async def test_reset_password_restores_token_when_database_commit_fails(
 		email_verification_service.redis_store, "consume_password_reset_token", AsyncMock(return_value=user_id)
 	)
 	restore = AsyncMock(return_value=True)
-	monkeypatch.setattr(email_verification_service.redis_store, "save_password_reset_token", restore)
+	monkeypatch.setattr(email_verification_service.redis_store, "restore_password_reset_token", restore)
 	update_password = AsyncMock()
 	monkeypatch.setattr(email_verification_service.user_repository, "update_password", update_password)
 	monkeypatch.setattr(email_verification_service.redis_store, "delete_all_sessions", AsyncMock())
@@ -322,7 +322,7 @@ async def test_reset_password_does_not_update_db_when_redis_revocation_fails(
 		AsyncMock(side_effect=RedisConnectionError("redis down")),
 	)
 	restore = AsyncMock(return_value=True)
-	monkeypatch.setattr(email_verification_service.redis_store, "save_password_reset_token", restore)
+	monkeypatch.setattr(email_verification_service.redis_store, "restore_password_reset_token", restore)
 	update_password = AsyncMock()
 	monkeypatch.setattr(email_verification_service.user_repository, "update_password", update_password)
 	db = _FakeDb()

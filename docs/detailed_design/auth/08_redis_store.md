@@ -177,6 +177,7 @@ stateDiagram-v2
 |------|-----------|----------|
 | `save_password_reset_token` | `async def save_password_reset_token(token: str, user_id: UUID, ttl: int) -> bool` | Luaで旧`pwreset_current:{uid}`と実体を置換し、新hashを`pwreset`と`pwreset_current`へ原子的に登録。CAS競合時は`False` |
 | `consume_password_reset_token` | `async def consume_password_reset_token(token: str) -> UUID \| None` | Luaで`pwreset_current:{uid}`との一致を確認して実体・currentを原子的に消費し、`user_id`を返す |
+| `restore_password_reset_token` | `async def restore_password_reset_token(token: str, user_id: UUID, ttl: int) -> bool` | Luaで`pwreset_current:{uid}`とtoken実体の不存在を確認し、両方が不存在の場合だけ消費済みtokenを原子的に補償復元。後続tokenが存在する場合は`False` |
 | `replace_email_verify_token` | `async def replace_email_verify_token(token: str, user_id: UUID, ttl: int) -> None` | `GET emailverify_current:{uid}`で旧hash取得 → 存在すれば`DEL emailverify:{旧hash}` → `SETEX emailverify:{新hash}` → `SET emailverify_current:{uid} 新hash EX ttl`（パイプラインで実行し、途中失敗時も新旧いずれかは残る想定。厳密なLua原子化は§12で要検討） |
 | `consume_email_verify_token` | `async def consume_email_verify_token(token: str) -> UUID \| None` | `GETDEL emailverify:{hash}` → `user_id`を返す（ワンタイム消費） |
 | `restore_email_verify_token` | `async def restore_email_verify_token(token: str, user_id: UUID, ttl: int) -> bool` | currentが別hashへ変わっていない場合だけ、消費済みtokenとcurrentをLuaで原子的に復元 |
@@ -198,7 +199,9 @@ stateDiagram-v2
 
 | 操作 | 原子性の担保方法 | 理由 |
 |------|-------------------|------|
-| `GETDEL`（`consume_oauth_state` / `consume_oauth_handoff` / `consume_password_reset_token` / `consume_email_verify_token`） | Redis 6.2以降のネイティブ`GETDEL`コマンドを使用（`GET`→`DEL`を別コマンドで行わない） | 単純な`GET`+`DEL`の2コマンドでは、同時に2リクエストが到達した場合に両方が値を取得してしまい、ワンタイム性が破れる |
+| `GETDEL`（`consume_oauth_state` / `consume_oauth_handoff` / `consume_email_verify_token`） | Redis 6.2以降のネイティブ`GETDEL`コマンドを使用（`GET`→`DEL`を別コマンドで行わない） | 単純な`GET`+`DEL`の2コマンドでは、同時に2リクエストが到達した場合に両方が値を取得してしまい、ワンタイム性が破れる |
+| `consume_password_reset_token` | 専用Luaスクリプト（`EVAL`）でtoken実体のpayloadから`user_id`を取得し、`pwreset_current:{uid}`との一致確認・token実体・currentの削除を1回のRedis呼び出し内で実行 | `GETDEL`だけではユーザー単位の最新token確認と2キーの原子的な消費を保証できない |
+| `restore_password_reset_token` | 専用Luaスクリプト（`EVAL`）で`pwreset_current:{uid}`とtoken実体の不存在を確認し、token実体・currentを原子的に復元 | DB/Redis障害時に後続tokenを上書きせず、消費済みtokenだけを補償復元する |
 | `rotate_refresh_token` | 専用Luaスクリプト（`EVAL`）で「family失効確認 → 旧キー存在確認 → 旧キー削除 → `refresh_used`へtombstone作成 → 新キー`SETEX` → `user_refresh`集合更新」を1回のRedis呼び出し内で実行 | 単純な`GET`→`DEL`→`SET`の複数コマンドでは、同一リフレッシュトークンでの同時複数リクエストが二重に成功し得る（Redisはシングルスレッドで各コマンドを順に実行するが、複数コマンド間には他クライアントの操作が割り込み得る） |
 | `mark_email_verify_sent` | `SET ... NX EX`（`SETNX`+`EXPIRE`ではなく単一コマンドの`NX`+`EX`オプション） | `SETNX`と`EXPIRE`を分離すると、`SETNX`成功直後にプロセスが落ちるとTTLが設定されないキーが残り得る |
 | `incr_login_failure`の初回EXPIRE | `INCR`の戻り値が`1`のときのみ`EXPIRE`を実行するパターン（Lua化はしない） | 複数ワーカーからの同時`INCR`はRedis側でアトミックに直列化されるため、戻り値`1`は必ず「このプロセスが最初にキーを作成した」ことを保証する。ごく短い間隔で`EXPIRE`未設定の状態が生じ得るが、実害（TTL無し永続化）はレースの当該ウィンドウでのみ発生しうる低リスクとして許容する（§12で要検討） |
