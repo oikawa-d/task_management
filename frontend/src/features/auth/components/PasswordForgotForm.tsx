@@ -4,6 +4,7 @@ import { useForm } from "react-hook-form";
 import { usePasswordForgot } from "../hooks/usePasswordForgot";
 import type { PasswordForgotFormValues } from "../types";
 import { createZodResolver, getFieldErrors, passwordForgotSchema } from "../validation";
+import styles from "./AuthForm.module.css";
 
 type FormState = "idle" | "submitting" | "sent" | "error";
 
@@ -61,15 +62,15 @@ export function PasswordForgotForm({ onSent }: PasswordForgotFormProps) {
 
 	if (formState === "sent") {
 		return (
-			<h2 tabIndex={-1} ref={sentHeadingRef} role="status" aria-live="polite">
+			<h2 className={styles.success} tabIndex={-1} ref={sentHeadingRef} role="status" aria-live="polite">
 				ご入力のメールアドレスが登録されている場合、パスワード再設定用のメールを送信しました。
 			</h2>
 		);
 	}
 
 	return (
-		<form onSubmit={handleSubmit(submit)} noValidate>
-			<label htmlFor="password-forgot-email">メールアドレス</label>
+		<form className={styles.form} onSubmit={handleSubmit(submit)} noValidate>
+			<label className={styles.field} htmlFor="password-forgot-email">メールアドレス
 			<input
 				id="password-forgot-email"
 				type="email"
@@ -79,12 +80,13 @@ export function PasswordForgotForm({ onSent }: PasswordForgotFormProps) {
 				aria-describedby={errors.email ? "password-forgot-email-error" : undefined}
 				{...register("email")}
 			/>
+			</label>
 			{errors.email && (
-				<span id="password-forgot-email-error" role="alert">
+				<span className={styles.error} id="password-forgot-email-error" role="alert">
 					{errors.email.message}
 				</span>
 			)}
-			{lastError && <p role="alert">{lastError.message}</p>}
+			{lastError && <p className={styles.error} role="alert">{lastError.message}</p>}
 			<button type="submit" disabled={formState === "submitting" || Boolean(errors.email) || !email}>
 				{formState === "submitting" ? "送信中…" : "送信"}
 			</button>

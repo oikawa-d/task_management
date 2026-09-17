@@ -6,3 +6,11 @@ export const FONT_SCALE_OPTIONS = [
 ] as const;
 
 export type FontScale = (typeof FONT_SCALE_OPTIONS)[number]["value"];
+
+export const THEME_OPTIONS = [
+	{ value: "light", label: "ライト" },
+	{ value: "dark", label: "ダーク" },
+	{ value: "system", label: "システム" },
+] as const;
+
+export type Theme = (typeof THEME_OPTIONS)[number]["value"];

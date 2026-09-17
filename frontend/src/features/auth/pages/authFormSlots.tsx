@@ -1,4 +1,5 @@
 import { createContext, type ReactNode } from "react";
+import styles from "./authFormSlots.module.css";
 
 /**
  * LoginPage/RegisterPageは、フォーム本体（LoginForm/RegisterForm/GoogleLoginButton）を
@@ -41,12 +42,12 @@ export function AuthFormsProvider({
 	slots?: AuthFormSlots;
 	children: ReactNode;
 }) {
-	return <AuthFormsContext.Provider value={slots ?? {}}>{children}</AuthFormsContext.Provider>;
+	return <AuthFormsContext.Provider value={slots ?? {}}><div className={styles.slotRoot}>{children}</div></AuthFormsContext.Provider>;
 }
 
 export function LoginFormPlaceholder({ onSuccess }: LoginFormSlotProps) {
 	return (
-		<form aria-label="ログインフォーム">
+		<form className={styles.placeholder} aria-label="ログインフォーム">
 			<p>ログインフォームは今後実装予定です。</p>
 			<button type="button" onClick={onSuccess}>
 				ログイン
@@ -57,7 +58,7 @@ export function LoginFormPlaceholder({ onSuccess }: LoginFormSlotProps) {
 
 export function RegisterFormPlaceholder({ onSuccess }: RegisterFormSlotProps) {
 	return (
-		<form aria-label="会員登録フォーム">
+		<form className={styles.placeholder} aria-label="会員登録フォーム">
 			<p>会員登録フォームは今後実装予定です。</p>
 			<button type="button" onClick={() => onSuccess("")}>
 				登録する
@@ -68,7 +69,7 @@ export function RegisterFormPlaceholder({ onSuccess }: RegisterFormSlotProps) {
 
 export function GoogleLoginButtonPlaceholder({ label }: GoogleLoginButtonSlotProps) {
 	return (
-		<button type="button" disabled aria-label={`${label}（準備中）`}>
+		<button className={styles.placeholder} type="button" disabled aria-label={`${label}（準備中）`}>
 			{label}
 		</button>
 	);

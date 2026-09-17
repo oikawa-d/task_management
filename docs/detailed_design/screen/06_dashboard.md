@@ -102,7 +102,7 @@
 | ローカルstate | `page` / `perPage` | `number` | `1` / `20` | ⑬操作。作成成功時は`page=1`へ戻して再取得 | なし |
 | React Hook Form | `ProjectCreateForm`（`name`, `description`） | `zod` スキーマ由来 | `{name:'', description:''}` | 入力・送信・リセット | なし |
 | Zustand（`projectStore`） | `selectedProjectId` | `string \| null` | `null` | カードクリック、作成成功（201）時に作成したプロジェクトIDを選択。ログアウト時にクリア | メモリのみ |
-| Zustand（`uiStore`） | `sidebarOpen`, `fontScale` | `boolean` / `number` | localStorage復元値、無ければ `true` / `1.0` | ①操作、設定画面での変更 | localStorage |
+| Zustand（`uiStore`） | `fontScale`, `theme` | `number` / `"light" \| "dark" \| "system"` | localStorage復元値、無ければ `1.0` / `"system"` | 設定画面での変更 | localStorage（`cerberus.ui`） |
 | Zustand（`authStore`） | `user.role` | `'member'\|'admin'` | `/auth/me` 由来 | ログイン/ログアウト | メモリのみ |
 | TanStack Query | `['projects', {page, perPage}]` | `Page<ProjectSummary>` | 未取得 | `page` / `perPage`変更時fetch、`createProject`成功時に`invalidate` | しない（[05_frontend.md §5](../../basic_design/05_frontend.md#5-状態管理)） |
 | TanStack Query | `['notifications', 'unread-count']` / `['notifications', page]` | 件数 / `NotificationListResponse` | 未取得 | ポーリング、パネル開閉、既読操作時 | しない |

@@ -8,6 +8,7 @@ import { NotificationCenter } from "../features/notifications";
 import { useUnreadCount } from "../features/notifications/hooks/useUnreadCount";
 import type { NotificationItemData } from "../features/notifications/types";
 import { ROUTES } from "../routes";
+import styles from "./AppLayout.module.css";
 
 export interface AppLayoutProps {
 	notifications?: NotificationItemData[];
@@ -71,9 +72,9 @@ export function AppLayout({
 	};
 
 	return (
-		<div>
-			<header>
-				<span>Cerberus</span>
+		<div className={styles.layout}>
+			<header className={styles.header}>
+				<strong>Cerberus</strong>
 				<NotificationCenter
 					unreadCount={unreadCount}
 					notifications={notifications}
@@ -85,7 +86,7 @@ export function AppLayout({
 				enableDataApi
 				/>
 			</header>
-			<nav aria-label="サイドバー">
+			<nav className={styles.nav} aria-label="サイドバー">
 				<Link to={ROUTES.DASHBOARD}>home</Link>
 				<Link to={ROUTES.SETTINGS}>設定</Link>
 				{isAdmin ? <Link to={ROUTES.ADMIN_USERS}>管理</Link> : null}
@@ -93,7 +94,7 @@ export function AppLayout({
 					ログアウト
 				</button>
 			</nav>
-			<main>
+			<main className={styles.main}>
 				<Outlet />
 			</main>
 		</div>

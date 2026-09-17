@@ -5,6 +5,7 @@ import { useAuthStore } from "../../../auth/authStore";
 import { consumeLoginMessage } from "../../../auth/loginMessage";
 import { ROUTES } from "../../../routes";
 import { AuthFormsContext, LoginFormPlaceholder } from "./authFormSlots";
+import styles from "./AuthPage.module.css";
 
 type LoginLocationState = {
 	registeredEmail?: string;
@@ -57,7 +58,7 @@ export function LoginPage() {
 			: null;
 
 	return (
-		<section aria-labelledby="login-heading">
+		<section className={styles.page} aria-labelledby="login-heading">
 			<h1 id="login-heading">Cerberus</h1>
 			<LoginMessage message={loginState?.message ?? storedMessage ?? undefined} />
 			<RegisteredMessage email={registeredEmail} />

@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { getConfiguredCommentBodyMaxLength, isPromiseLike } from "../formConfig";
+import styles from "./CommentForm.module.css";
 
 export interface CommentFormProps {
 	onSubmit: (body: string) => void | Promise<void>;
@@ -42,13 +43,14 @@ export function CommentForm({
 
 	return (
 		<form
+			className={styles.form}
 			aria-label="コメント投稿"
 			onSubmit={(event) => {
 				event.preventDefault();
 				submit();
 			}}
 		>
-			<label>
+			<label className={styles.field}>
 				コメント
 				<textarea
 					value={body}
@@ -65,8 +67,8 @@ export function CommentForm({
 					aria-invalid={Boolean(validationError)}
 				/>
 			</label>
-			{validationError && <p role="alert">{validationError}</p>}
-			{error && <p role="alert">{error}</p>}
+			{validationError && <p className={styles.error} role="alert">{validationError}</p>}
+			{error && <p className={styles.error} role="alert">{error}</p>}
 			<button type="submit" disabled={!isValid || isSubmitting}>
 				{isSubmitting ? "投稿中..." : "投稿"}
 			</button>

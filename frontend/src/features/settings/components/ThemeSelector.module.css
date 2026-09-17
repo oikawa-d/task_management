@@ -1,0 +1,2 @@
+.field { display: grid; gap: var(--space-2); max-width: var(--size-theme-control); font-weight: var(--font-weight-bold); }
+.field select { font-weight: var(--font-weight-normal); }

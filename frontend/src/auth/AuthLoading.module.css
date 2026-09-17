@@ -1,0 +1,4 @@
+.loading { display: grid; place-items: center; gap: var(--space-3); min-height: var(--size-auth-loading-min-height); color: var(--color-text-secondary); }
+.spinner { width: var(--size-spinner); height: var(--size-spinner); border: var(--border-width-focus) solid var(--color-border); border-top-color: var(--color-accent); border-radius: var(--radius-pill); animation: spin var(--duration-spinner) linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }

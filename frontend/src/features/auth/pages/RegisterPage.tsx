@@ -4,6 +4,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useAuthStore } from "../../../auth/authStore";
 import { ROUTES } from "../../../routes";
 import { AuthFormsContext, RegisterFormPlaceholder } from "./authFormSlots";
+import styles from "./AuthPage.module.css";
 
 export function RegisterPage() {
 	const navigate = useNavigate();
@@ -27,7 +28,7 @@ export function RegisterPage() {
 			: null;
 
 	return (
-		<section aria-labelledby="register-heading">
+		<section className={styles.page} aria-labelledby="register-heading">
 			<h1 id="register-heading">Cerberus 会員登録</h1>
 			{registerForm}
 			{googleLoginButton ? (

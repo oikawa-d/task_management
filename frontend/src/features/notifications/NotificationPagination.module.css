@@ -1,0 +1,3 @@
+.pagination { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); }
+.pagination button { min-width: var(--size-pagination-button); padding: var(--space-1) var(--space-2); }
+.pagination .current { border-color: var(--color-accent); color: var(--color-header-badge-fg); background: var(--color-accent); font-weight: var(--font-weight-bold); }

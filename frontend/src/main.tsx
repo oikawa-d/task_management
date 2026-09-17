@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import { authFormSlots } from "./features/auth/pages/connectedAuthForms";
 import "./styles/tokens.css";
+import "./styles/global.css";
 
 const rootElement = document.getElementById("root");
 if (!rootElement) {

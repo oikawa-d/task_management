@@ -9,12 +9,12 @@ export function NotificationPagination({ page, totalPages, onPageChange }: Notif
 	const pages = Array.from({ length: totalPages }, (_, index) => index + 1);
 
 	return (
-		<nav aria-label="通知ページ">
+		<nav className={styles.pagination} aria-label="通知ページ">
 			<button type="button" onClick={() => onPageChange(page - 1)} disabled={page <= 1}>
 				前へ
 			</button>
 			{pages.map((pageNumber) => (
-				<button
+				<button className={pageNumber === page ? styles.current : undefined}
 					key={pageNumber}
 					type="button"
 					aria-current={pageNumber === page ? "page" : undefined}
@@ -33,3 +33,4 @@ export function NotificationPagination({ page, totalPages, onPageChange }: Notif
 		</nav>
 	);
 }
+import styles from "./NotificationPagination.module.css";

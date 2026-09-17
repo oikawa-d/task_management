@@ -1,23 +1,23 @@
 .panel {
 	position: absolute;
-	top: calc(100% + 0.25rem);
+	top: calc(100% + var(--space-1));
 	right: 0;
-	width: 20rem;
-	max-width: calc(100vw - 1rem);
-	background: var(--color-surface, #fff);
-	border: 1px solid var(--color-border, #ddd);
-	border-radius: 0.5rem;
-	box-shadow: 0 0.25rem 1rem rgba(0, 0, 0, 0.15);
+	width: var(--size-panel-width);
+	max-width: calc(var(--size-viewport-width) - var(--space-4));
+	background: var(--color-surface);
+	border: var(--border-width-thin) solid var(--color-border);
+	border-radius: var(--radius-md);
+	box-shadow: var(--shadow-md);
 	overflow: hidden;
-	z-index: 20;
+	z-index: var(--z-panel);
 }
 
 .header {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	padding: 0.75rem;
-	border-bottom: 1px solid var(--color-border, #ddd);
+	padding: var(--space-3);
+	border-bottom: var(--border-width-thin) solid var(--color-border);
 	font-weight: 700;
 }
 
@@ -25,17 +25,17 @@
 	list-style: none;
 	margin: 0;
 	padding: 0;
-	max-height: 20rem;
+	max-height: var(--size-panel-width);
 	overflow-y: auto;
 }
 
 .empty {
-	padding: 1.5rem 0.75rem;
+	padding: var(--space-6) var(--space-3);
 	text-align: center;
-	color: var(--color-muted, #666);
+	color: var(--color-muted);
 }
 
 .footer {
-	padding: 0.5rem 0.75rem;
-	border-top: 1px solid var(--color-border, #ddd);
+	padding: var(--space-2) var(--space-3);
+	border-top: var(--border-width-thin) solid var(--color-border);
 }

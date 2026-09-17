@@ -1,3 +1,5 @@
+import styles from "./AuthLoading.module.css";
+
 export function AuthLoading() {
-	return <p role="status" aria-label="認証状態を確認中...">認証状態を確認中...</p>;
+	return <div className={styles.loading} role="status" aria-label="認証状態を確認中..."><span className={styles.spinner} aria-hidden="true" />認証状態を確認中...</div>;
 }

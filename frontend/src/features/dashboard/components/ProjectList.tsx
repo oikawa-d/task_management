@@ -1,5 +1,6 @@
 import type { ProjectSummary } from "../api/types";
 import { resolveForbiddenMessage } from "../errors";
+import styles from "./ProjectList.module.css";
 
 export interface ProjectListProps {
 	isLoading: boolean;
@@ -18,20 +19,20 @@ export interface ProjectListProps {
  */
 export function ProjectList({ isLoading, isError, error, projects, selectedProjectId, onSelect, onRetry, onCreateClick }: ProjectListProps) {
 	if (isLoading) {
-		return <p role="status">読み込み中です…</p>;
+		return <p className={styles.state} role="status">読み込み中です…</p>;
 	}
 
 	if (isError) {
 		const forbiddenMessage = resolveForbiddenMessage(error);
 		if (forbiddenMessage) {
 			return (
-				<div role="alert">
+				<div className={styles.state} role="alert">
 					<p>{forbiddenMessage}</p>
 				</div>
 			);
 		}
 		return (
-			<div role="alert">
+			<div className={styles.state} role="alert">
 				<p>プロジェクト一覧の取得に失敗しました。</p>
 				<button type="button" onClick={onRetry}>
 					再試行
@@ -44,7 +45,7 @@ export function ProjectList({ isLoading, isError, error, projects, selectedProje
 
 	if (items.length === 0) {
 		return (
-			<div role="status">
+			<div className={styles.state} role="status">
 				<p>まだプロジェクトがありません。</p>
 				<button type="button" onClick={onCreateClick}>
 					作成する
@@ -54,10 +55,10 @@ export function ProjectList({ isLoading, isError, error, projects, selectedProje
 	}
 
 	return (
-		<ul>
+		<ul className={styles.list}>
 			{items.map((project) => (
-				<li key={project.id}>
-					<button type="button" aria-current={project.id === selectedProjectId ? "true" : undefined} onClick={() => onSelect(project)}>
+				<li className={styles.item} key={project.id}>
+					<button className={styles.projectButton} type="button" aria-current={project.id === selectedProjectId ? "true" : undefined} onClick={() => onSelect(project)}>
 						{project.name}
 					</button>
 					{project.description && <p>{project.description}</p>}

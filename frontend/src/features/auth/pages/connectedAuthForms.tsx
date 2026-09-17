@@ -10,6 +10,7 @@ import type {
 	LoginFormSlotProps,
 	RegisterFormSlotProps,
 } from "./authFormSlots";
+import styles from "./authFormSlots.module.css";
 
 /**
  * issue #315: authFormSlots.tsxのスロット（#147）へ、フォーム本体（#148）と
@@ -21,13 +22,13 @@ function ConnectedLoginForm({ onSuccess }: LoginFormSlotProps) {
 	const resendMutation = useResendVerification();
 
 	return (
-		<LoginForm
+		<div className={styles.slotRoot}><LoginForm
 			onSubmit={async (values) => {
 				await loginMutation.mutateAsync(values);
 				onSuccess();
 			}}
 			onResendVerification={(payload) => resendMutation.mutateAsync(payload)}
-		/>
+		/></div>
 	);
 }
 
@@ -35,12 +36,12 @@ function ConnectedRegisterForm({ onSuccess }: RegisterFormSlotProps) {
 	const registerMutation = useRegister();
 
 	return (
-		<RegisterForm
+		<div className={styles.slotRoot}><RegisterForm
 			onSubmit={async (payload) => {
 				await registerMutation.mutateAsync(payload);
 			}}
 			onSuccess={onSuccess}
-		/>
+		/></div>
 	);
 }
 
@@ -49,7 +50,7 @@ function ConnectedRegisterForm({ onSuccess }: RegisterFormSlotProps) {
  * （呼ばれた時点でtrue確定）、ここでは常時enabledでGoogleLoginButtonを描画する。
  */
 function ConnectedGoogleLoginButton({ label }: GoogleLoginButtonSlotProps) {
-	return <GoogleLoginButton enabled label={label} />;
+	return <div className={styles.slotRoot}><GoogleLoginButton enabled label={label} /></div>;
 }
 
 /** main.tsxでAppへ渡し、AuthFormsProviderのslotsへ注入する */

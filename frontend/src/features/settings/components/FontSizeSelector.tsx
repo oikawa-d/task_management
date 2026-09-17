@@ -2,6 +2,7 @@ import { useEffect } from "react";
 
 import { FONT_SCALE_OPTIONS } from "../config/displayConfig";
 import { useUiStore } from "../../../stores/uiStore";
+import styles from "./FontSizeSelector.module.css";
 
 export function FontSizeSelector() {
 	const fontScale = useUiStore((state) => state.fontScale);
@@ -12,10 +13,10 @@ export function FontSizeSelector() {
 	}, [fontScale]);
 
 	return (
-		<fieldset>
+		<fieldset className={styles.fieldset}>
 			<legend>文字サイズ</legend>
 			{FONT_SCALE_OPTIONS.map((option) => (
-				<label key={option.value}>
+				<label className={styles.option} key={option.value}>
 					<input
 						type="radio"
 						name="font-scale"

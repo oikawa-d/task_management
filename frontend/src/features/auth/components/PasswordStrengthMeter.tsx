@@ -1,4 +1,5 @@
 import { getAuthValidationConfig } from "../config/validationConfig";
+import type { CSSProperties } from "react";
 import { countCharacterTypes } from "../validation";
 import { countCodePoints } from "../../../lib/validation/stringLength";
 import styles from "./PasswordStrengthMeter.module.css";
@@ -38,7 +39,7 @@ export function PasswordStrengthMeter({ password }: PasswordStrengthMeterProps) 
 	return (
 		<div className={styles.meter} aria-live="polite">
 			<div className={styles.bar}>
-				<div className={styles.fill} data-strength={strength} style={{ width: `${strength * 25}%` }} />
+				<div className={styles.fill} data-strength={strength} style={{ "--strength-width": `${strength * 25}%` } as CSSProperties} />
 			</div>
 			<span className={styles.label}>{STRENGTH_LABELS[strength]}</span>
 		</div>
