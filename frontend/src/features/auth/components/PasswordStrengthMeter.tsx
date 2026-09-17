@@ -1,5 +1,6 @@
 import { getAuthValidationConfig } from "../config/validationConfig";
 import { countCharacterTypes } from "../validation";
+import { countCodePoints } from "../../../lib/validation/stringLength";
 import styles from "./PasswordStrengthMeter.module.css";
 
 const STRENGTH_LABELS = ["未入力", "弱い", "やや弱い", "普通", "強い"] as const;
@@ -10,12 +11,13 @@ export interface PasswordStrengthMeterProps {
 
 /** design doc: docs/detailed_design/screen/02_register.md §9.1 calcPasswordStrength */
 export function calcPasswordStrength(password: string): 0 | 1 | 2 | 3 | 4 {
-	if (password.length === 0) {
+	const passwordLength = countCodePoints(password);
+	if (passwordLength === 0) {
 		return 0;
 	}
 	const { passwordMinLength } = getAuthValidationConfig();
 	const typeCount = countCharacterTypes(password);
-	if (password.length < passwordMinLength) {
+	if (passwordLength < passwordMinLength) {
 		return 1;
 	}
 	if (typeCount <= 1) {

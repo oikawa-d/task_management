@@ -202,8 +202,8 @@ flowchart LR
 ```mermaid
 stateDiagram-v2
     [*] --> トークンなし
-    トークンなし --> トークン発行済み: "forgot成功（ユーザー存在時）<br/>SETEX pwreset:{hash} TTL=1800<br/>メール送信"
-    トークン発行済み --> トークン発行済み: "再度forgot要求<br/>新しいpwreset:{new_hash}が追加発行される"
+    トークンなし --> トークン発行済み: "forgot成功（ユーザー存在時）<br/>Luaでpwreset/currentを原子的に登録<br/>メール送信"
+    トークン発行済み --> トークン発行済み: "再度forgot要求<br/>Luaで旧トークンを失効し、新しいpwreset/currentだけを有効化"
     トークン発行済み --> [*]: "TTL満了、または<br/>10_post_auth_password_reset.mdでGETDEL消費"
     トークンなし --> トークンなし: "存在しないメールで要求<br/>（何も発行されない）"
 ```
@@ -215,7 +215,7 @@ stateDiagram-v2
 | ストア | テーブル／キー | 操作 | 条件・TTL | 備考 |
 |--------|----------------|------|-----------|------|
 | PostgreSQL | `users` | `SELECT` | `WHERE lower(email) = lower(:email)` | 参照のみ、更新なし |
-| Redis | `pwreset:{sha256(token)}` | `SETEX` | TTL `PASSWORD_RESET_TTL_SECONDS`（既定1800） | 新規作成のみ。旧トークンの明示的な失効は行わない |
+| Redis | `pwreset:{sha256(token)}` / `pwreset_current:{uid}` | Luaによる原子的な置換 | TTL `PASSWORD_RESET_TTL_SECONDS`（既定1800） | 旧トークンを失効し、ユーザーごとに最新1本だけを有効化 |
 
 ## 10. バリデーション規則
 

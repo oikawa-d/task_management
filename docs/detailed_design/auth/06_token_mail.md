@@ -145,10 +145,14 @@ sequenceDiagram
 
     FE->>API: "POST /api/auth/password/forgot {email}"
     API->>PG: "SELECT users WHERE lower(email)=?"
-    API->>API: "token = secrets.token_urlsafe(32)"
     opt ユーザーが存在
+        API->>API: "token = secrets.token_urlsafe(32)"
         API->>RD: "Luaで旧pwresetとcurrentを削除し新token/currentを原子的にSETEX"
-        API->>SMTP: "BackgroundTasksでメール送信予約<br/>{FRONTEND_BASE_URL}/password/reset#token=..."
+        alt save_password_reset_token=True（CAS成功）
+            API->>SMTP: "BackgroundTasksでメール送信予約<br/>{FRONTEND_BASE_URL}/password/reset#token=..."
+        else save_password_reset_token=False（CAS競合）
+            Note over API: "メール送信を予約しない"
+        end
     end
     API-->>FE: "202 Accepted（存在有無を問わず同一応答）"
 
@@ -188,9 +192,18 @@ flowchart TB
     P -->|Yes| R{"emailverify_sent:{uid} 存在?"}
     R -->|Yes（間隔内）| Q
     R -->|No（間隔外）| A
+
+    U["request_password_reset(email, background, db)"] --> V["get_by_email(db, email)"]
+    V --> W{"ユーザー存在?"}
+    W -->|No| Z["何もせず202"]
+    W -->|Yes| X["token生成"]
+    X --> Y["save_password_reset_token"]
+    Y -->|False（CAS競合）| Z
+    Y -->|True| AA["BackgroundTasksへメール送信を登録"]
+    AA --> Z
 ```
 
-**fail-close方針**：Redis接続不能時は`issue_email_verify_token`・`verify_email`・`request_password_reset`・`reset_password`いずれも例外を送出し、APIハンドラは`503 SERVICE_UNAVAILABLE`へ変換する（[./08_redis_store.md](./08_redis_store.md) §10）。メール送信自体の失敗（SMTP接続不可）はBackgroundTasks内でログに記録するのみとし、既に返却済みの202/201/204レスポンスには影響させない。
+**fail-close方針**：Redis接続不能時は`issue_email_verify_token`・`verify_email`・`request_password_reset`・`reset_password`いずれも例外を送出し、APIハンドラは`503 SERVICE_UNAVAILABLE`へ変換する（[./08_redis_store.md](./08_redis_store.md) §10）。`request_password_reset`で`save_password_reset_token`が`False`を返すCAS競合は正常な競合として扱い、メール送信を予約せず、APIはユーザー不存在時と同じ`202 Accepted`を返す。メール送信自体の失敗（SMTP接続不可）はBackgroundTasks内でログに記録するのみとし、既に返却済みの202/201/204レスポンスには影響させない。
 
 ## 7. データ遷移図
 
@@ -256,12 +269,12 @@ stateDiagram-v2
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ / 定義 | `async def request_password_reset(email: str, background: BackgroundTasks) -> None` |
-| 引数 / 入力 | `email`、`background` |
+| シグネチャ / 定義 | `async def request_password_reset(email: str, background: BackgroundTasks, db: AsyncSession) -> None` |
+| 引数 / 入力 | `email`、`background`、`db`（ユーザー検索用DBセッション） |
 | 戻り値 / 出力 | `None`（存在有無によらず呼び出し元は常に202） |
-| 送出例外 / 失敗条件 | なし |
-| 処理内容 | 1. `user_repository.find_by_email(db, email)` 2. `None`なら何もせず終了 3. 存在すれば`token = secrets.token_urlsafe(32)` 4. `redis_store.save_password_reset_token(token, user.id, ttl=PASSWORD_RESET_TTL_SECONDS)` 5. `background.add_task(mail_service.send_password_reset_mail, user.email, token, expires_minutes=PASSWORD_RESET_TTL_SECONDS // 60)` |
-| 副作用 | 条件付きでRedis書き込み・BackgroundTasks登録 |
+| 送出例外 / 失敗条件 | RedisまたはDB接続不能時は例外を送出し、APIで503 `SERVICE_UNAVAILABLE`へ変換する。ユーザー不存在およびCAS競合（`save_password_reset_token=False`）は正常終了とする |
+| 処理内容 | 1. `user_repository.get_by_email(db, email)`でユーザーを検索 2. `None`なら何もせず終了 3. `token = secrets.token_urlsafe(32)`を生成 4. `saved = redis_store.save_password_reset_token(token, user.id, ttl=PASSWORD_RESET_TTL_SECONDS)`を実行 5. `saved=False`（CAS競合）ならメール送信を予約せず終了 6. `saved=True`の場合だけ`background.add_task(mail_service.send_password_reset_mail, user.email, token, PASSWORD_RESET_TTL_SECONDS // 60)`を登録 |
+| 副作用 | ユーザー存在かつCAS成功時のみ、Redisで旧`pwreset`と`pwreset_current`を失効・新token/currentを原子的に登録し、BackgroundTasksへメール送信を登録 |
 
 ### 8.5 `api/app/service/email_verification_service.py :: reset_password`
 
