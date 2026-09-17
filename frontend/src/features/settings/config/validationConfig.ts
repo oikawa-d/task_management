@@ -12,11 +12,16 @@ export function getValidationConfig(env: ImportMetaEnv = import.meta.env): Valid
 	return {
 		userNameMaxLength: readPositiveInteger(env.VITE_USER_NAME_MAX_LENGTH, DEFAULT_USER_NAME_MAX_LENGTH),
 		passwordMinLength: readPositiveInteger(env.VITE_PASSWORD_MIN_LENGTH, DEFAULT_PASSWORD_MIN_LENGTH),
-		passwordMaxLength: readPositiveInteger(env.VITE_PASSWORD_MAX_LENGTH, DEFAULT_PASSWORD_MAX_LENGTH),
+		passwordMaxLength: readIntegerAtLeast(env.VITE_PASSWORD_MAX_LENGTH, DEFAULT_PASSWORD_MAX_LENGTH, DEFAULT_PASSWORD_MIN_LENGTH),
 	};
 }
 
 function readPositiveInteger(value: string | undefined, fallback: number): number {
 	const parsed = Number(value);
 	return value && Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function readIntegerAtLeast(value: string | undefined, fallback: number, minimum: number): number {
+	const parsed = Number(value);
+	return value && Number.isInteger(parsed) && parsed >= minimum ? parsed : fallback;
 }

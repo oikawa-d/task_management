@@ -617,8 +617,8 @@ sequenceDiagram
 | `oauth_start` | `redirect_to: str \| None` | `str`（認可URL） | `api/app/service/oauth_service.py`。state/PKCE 生成 → Redis保存 → 認可URL組み立て |
 | `oauth_callback` | `code: str`, `state: str`, `request`, `response` | `OAuthCallbackResult` | `api/app/service/oauth_service.py`。state Cookie/Redis消費 → code交換 → id_token検証 → ユーザー解決。sessionはここでlogin、jwtはhandoff codeを発行 |
 | `oauth_exchange` | `code: str`, `request`, `response` | `OAuthExchangeResult` | `api/app/service/oauth_service.py`。jwtのみ。handoff codeをGETDELで消費 → `SELECT fn_get_user` → JwtStrategy.login → `CALL sp_record_login_history` |
-| `request_password_reset` | `email: str`, `background: BackgroundTasks`, `db: AsyncSession` | `None` | `api/app/service/email_verification_service.py`。ユーザー検索 → トークン生成 → `pwreset_current:{uid}`と旧tokenをLuaで原子的に置換 → CAS競合時はメール送信を予約せず終了 → 成功時のみメール送信（存在しなくても例外を出さない） |
-| `reset_password` | `token: str`, `new_password: str`, `db: AsyncSession` | `None` | `api/app/service/email_verification_service.py`。current tokenとの一致を原子的に確認・消費 → パスワードハッシュ化 → 全セッション/トークン失効 → `CALL sp_update_user_password` → DB commit。RedisまたはDB失敗時はDB rollbackと消費済みtokenの補償復元を行う |
+| `request_password_reset` | `email: str`, `background: BackgroundTasks`, `db: AsyncSession` | `None` | `api/app/service/email_verification_service.py`。ユーザー検索 → トークン生成 → `pwreset_current:{uid}`と旧tokenをLuaで原子的に置換 → CAS競合時はメール送信を予約せず終了 → 成功時のみメール送信（存在しなくても例外を出さない）。CAS競合時は新規メールを送信せず、保存済みの最新tokenを維持する |
+| `reset_password` | `token: str`, `new_password: str`, `db: AsyncSession` | `None` | `api/app/service/email_verification_service.py`。current tokenとの一致を原子的に確認・消費 → パスワードハッシュ化 → 全セッション/トークン失効 → `CALL sp_update_user_password` → DB commit。RedisまたはDB失敗時はDB rollbackを行い、消費済みtokenを`pwreset_current:{uid}`とtoken実体の組として補償復元する |
 
 ### 7.2 `service/project_service.py` / `task_service.py`
 

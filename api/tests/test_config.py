@@ -1,6 +1,6 @@
 import pytest
 from app.core.config import BackendSettings
-from app.core.constants import TOKEN_URLSAFE_LENGTH
+from app.core.constants import PASSWORD_MIN_LENGTH, TOKEN_URLSAFE_LENGTH
 from pydantic import ValidationError
 
 
@@ -218,6 +218,19 @@ def test_settings_auth_token_limit_matches_generated_token_boundary(
 	if value == TOKEN_URLSAFE_LENGTH:
 		settings = BackendSettings(_env_file=None)
 		assert settings.auth_token_max_length == TOKEN_URLSAFE_LENGTH
+	else:
+		with pytest.raises(ValidationError):
+			BackendSettings(_env_file=None)
+
+
+@pytest.mark.parametrize("value", [PASSWORD_MIN_LENGTH - 1, PASSWORD_MIN_LENGTH])
+def test_settings_password_limit_matches_schema_minimum_boundary(monkeypatch: pytest.MonkeyPatch, value: int) -> None:
+	_base_env(monkeypatch)
+	monkeypatch.setenv("PASSWORD_MAX_LENGTH", str(value))
+
+	if value == PASSWORD_MIN_LENGTH:
+		settings = BackendSettings(_env_file=None)
+		assert settings.password_max_length == PASSWORD_MIN_LENGTH
 	else:
 		with pytest.raises(ValidationError):
 			BackendSettings(_env_file=None)

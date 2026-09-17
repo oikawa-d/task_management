@@ -27,7 +27,7 @@
 | AUTH_MODE差異 | 差異なし。ただし失効対象がsessionモードでは `session:*`、jwtモードでは `refresh:*` となる（実行時点でユーザーが保持し得る両方の種類を対象に、`AUTH_MODE`に関わらず両方を失効させる。§13で要検討として明記） |
 | 冪等性 | **なし**。トークンは `GETDEL` によりワンタイム消費されるため、2回目のリクエストは `400 INVALID_RESET_TOKEN` になる |
 | レート制限 | IP単位で10回/900秒。超過時は `429 TOO_MANY_ATTEMPTS`（`Retry-After`付き） |
-| トランザクション境界 | Redisの`pwreset_current:{uid}`とtoken実体の一致確認・消費を原子的に行い、全セッション/リフレッシュ失効まで先に完了してから`UPDATE users`をDBトランザクションでcommitする。Redis失敗時はDBを更新せず、DB失敗時はrollback後に消費済みtokenを補償復元する |
+| トランザクション境界 | Redisの`pwreset_current:{uid}`とtoken実体の一致確認・消費を1つのLua処理で原子的に行い、全セッション/リフレッシュ失効まで先に完了してから`UPDATE users`をDBトランザクションでcommitする。Redis失敗時はDBを更新せず、DB失敗時はrollback後に`pwreset_current:{uid}`とtoken実体を組で補償復元する |
 
 ## 2. 入出力仕様（全体の出入力）
 

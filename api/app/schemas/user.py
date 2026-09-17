@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.constants import PASSWORD_MIN_LENGTH
 from app.core.input_validation import validate_password_max_length
 
 KANA_PATTERN = r"^[ぁ-んァ-ヶー0-9]+$"
@@ -45,7 +46,7 @@ class UserProfileUpdateRequest(BaseModel):
 
 class PasswordChangeRequest(BaseModel):
 	current_password: str | None = None
-	new_password: str = Field(min_length=8)
+	new_password: str = Field(min_length=PASSWORD_MIN_LENGTH)
 	password_confirm: str
 
 	@field_validator("current_password", "password_confirm")

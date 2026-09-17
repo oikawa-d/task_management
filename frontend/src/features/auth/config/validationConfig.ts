@@ -6,6 +6,7 @@ const DEFAULT_USER_NAME_MAX_LENGTH = 30;
 const DEFAULT_PASSWORD_MIN_LENGTH = 8;
 const DEFAULT_PASSWORD_MAX_LENGTH = 128;
 const DEFAULT_AUTH_TOKEN_MAX_LENGTH = 512;
+const MIN_AUTH_TOKEN_MAX_LENGTH = 43;
 
 export interface AuthValidationConfig {
 	userNameMaxLength: number;
@@ -18,12 +19,17 @@ export function getAuthValidationConfig(env: ImportMetaEnv = import.meta.env): A
 	return {
 		userNameMaxLength: readPositiveInteger(env.VITE_USER_NAME_MAX_LENGTH, DEFAULT_USER_NAME_MAX_LENGTH),
 		passwordMinLength: readPositiveInteger(env.VITE_PASSWORD_MIN_LENGTH, DEFAULT_PASSWORD_MIN_LENGTH),
-		passwordMaxLength: readPositiveInteger(env.VITE_PASSWORD_MAX_LENGTH, DEFAULT_PASSWORD_MAX_LENGTH),
-		authTokenMaxLength: readPositiveInteger(env.VITE_AUTH_TOKEN_MAX_LENGTH, DEFAULT_AUTH_TOKEN_MAX_LENGTH),
+		passwordMaxLength: readIntegerAtLeast(env.VITE_PASSWORD_MAX_LENGTH, DEFAULT_PASSWORD_MAX_LENGTH, DEFAULT_PASSWORD_MIN_LENGTH),
+		authTokenMaxLength: readIntegerAtLeast(env.VITE_AUTH_TOKEN_MAX_LENGTH, DEFAULT_AUTH_TOKEN_MAX_LENGTH, MIN_AUTH_TOKEN_MAX_LENGTH),
 	};
 }
 
 function readPositiveInteger(value: string | undefined, fallback: number): number {
 	const parsed = Number(value);
 	return value && Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function readIntegerAtLeast(value: string | undefined, fallback: number, minimum: number): number {
+	const parsed = Number(value);
+	return value && Number.isInteger(parsed) && parsed >= minimum ? parsed : fallback;
 }
