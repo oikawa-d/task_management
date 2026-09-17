@@ -27,7 +27,7 @@
 | AUTH_MODE差異 | 差異なし。ただし失効対象がsessionモードでは `session:*`、jwtモードでは `refresh:*` となる（実行時点でユーザーが保持し得る両方の種類を対象に、`AUTH_MODE`に関わらず両方を失効させる。§13で要検討として明記） |
 | 冪等性 | **なし**。トークンは `GETDEL` によりワンタイム消費されるため、2回目のリクエストは `400 INVALID_RESET_TOKEN` になる |
 | レート制限 | IP単位で10回/900秒。超過時は `429 TOO_MANY_ATTEMPTS`（`Retry-After`付き） |
-| トランザクション境界 | Redisでトークン消費と全セッション/リフレッシュ失効を先に完了し、その後に`UPDATE users`をDBトランザクションでcommitする。Redis失敗時はDBを更新せず、消費済みトークンを補償復元する。DB失敗時もrollback後にトークンを復元する |
+| トランザクション境界 | Redisの`pwreset_current:{uid}`とtoken実体の一致確認・消費を原子的に行い、全セッション/リフレッシュ失効まで先に完了してから`UPDATE users`をDBトランザクションでcommitする。Redis失敗時はDBを更新せず、DB失敗時はrollback後に消費済みtokenを補償復元する |
 
 ## 2. 入出力仕様（全体の出入力）
 
@@ -178,8 +178,8 @@ flowchart TB
 | 引数 | `token: str`（メールリンクのトークン）、`new_password: str`（バリデーション済み平文）、`db: AsyncSession`（ユーザー更新用DBセッション） |
 | 戻り値 | `None` |
 | 送出例外 | `InvalidResetTokenError`（HTTP 400）。Redis障害またはPostgreSQL接続障害はグローバル例外ハンドラで503 `SERVICE_UNAVAILABLE`に変換 |
-| 処理内容 | 1. `redis_store.consume_password_reset_token(token)` を呼び user_id を取得 2. `None` の場合は `InvalidResetTokenError` を送出 3. `core/security.py` の `hash_password(new_password)` で argon2 ハッシュを生成 4. `delete_all_sessions`と`revoke_all_refresh_tokens`を実行 5. Redis失敗時は消費済みトークンを補償復元して503 6. Redis成功後に`user_repository.update_password(db, user_id, password_hash)`と`db.commit()`を実行 7. DB失敗時はrollback後にトークンを復元し503 |
-| 副作用 | Redis：`pwreset:{hash}` 削除、`session:*` / `csrf:*` / `user_sessions:{uid}` 全削除、`refresh:*` / `user_refresh:{uid}` 全削除。PostgreSQL：`users.password_hash` 更新 |
+| 処理内容 | 1. `redis_store.consume_password_reset_token(token)` で`pwreset_current:{uid}`との一致確認からtoken実体の消費までを原子的に行い user_id を取得 2. `None` の場合は `InvalidResetTokenError` を送出 3. `core/security.py` の `hash_password(new_password)` で argon2 ハッシュを生成 4. `delete_all_sessions`と`revoke_all_refresh_tokens`を実行 5. Redis失敗時はDBを更新せず消費済みトークンを補償復元して503 6. Redis成功後に`user_repository.update_password(db, user_id, password_hash)`と`db.commit()`を実行 7. DB失敗時はrollback後にトークンを復元し503 |
+| 副作用 | Redis：`pwreset:{hash}` と対応する`pwreset_current:{uid}`を原子的に消費し、`session:*` / `csrf:*` / `user_sessions:{uid}`、`refresh:*` / `user_refresh:{uid}`を全削除。PostgreSQL：`users.password_hash`更新。失敗時は消費済みtokenを補償復元 |
 
 | 項目 | 内容 |
 |------|------|
@@ -274,7 +274,7 @@ stateDiagram-v2
 
 | ストア | テーブル／キー | 操作 | 条件・TTL | 備考 |
 |--------|----------------|------|-----------|------|
-| Redis | `pwreset:{sha256(token)}` | `GETDEL` | TTL `PASSWORD_RESET_TTL_SECONDS`（既定1800） | ワンタイム消費 |
+| Redis | `pwreset:{sha256(token)}` / `pwreset_current:{uid}` | Lua（current一致確認＋token実体・currentの原子的削除） | TTL `PASSWORD_RESET_TTL_SECONDS`（既定1800） | ユーザーごとの最新tokenだけをワンタイム消費。DB失敗時は補償復元 |
 | Redis | `session:{sid}` / `csrf:{sid}` / `user_sessions:{uid}` | `SMEMBERS` → `DEL`（複数） | 該当ユーザーの全件 | sessionモードの全失効 |
 | Redis | `refresh:{hash}` / `user_refresh:{uid}` | `SMEMBERS` → `DEL`（複数） | 該当ユーザーの全件 | jwtモードの全失効 |
 | PostgreSQL | `users` | `UPDATE` | `WHERE id = :user_id` | `password_hash` のみ更新（Redisトークン消費・全失効の成功後にcommit） |

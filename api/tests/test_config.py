@@ -1,5 +1,6 @@
 import pytest
 from app.core.config import BackendSettings
+from app.core.constants import TOKEN_URLSAFE_LENGTH
 from pydantic import ValidationError
 
 
@@ -205,3 +206,18 @@ def test_settings_input_length_limits_are_configurable(monkeypatch: pytest.Monke
 
 	assert settings.password_max_length == 64
 	assert settings.auth_token_max_length == 256
+
+
+@pytest.mark.parametrize("value", [TOKEN_URLSAFE_LENGTH - 1, TOKEN_URLSAFE_LENGTH])
+def test_settings_auth_token_limit_matches_generated_token_boundary(
+	monkeypatch: pytest.MonkeyPatch, value: int
+) -> None:
+	_base_env(monkeypatch)
+	monkeypatch.setenv("AUTH_TOKEN_MAX_LENGTH", str(value))
+
+	if value == TOKEN_URLSAFE_LENGTH:
+		settings = BackendSettings(_env_file=None)
+		assert settings.auth_token_max_length == TOKEN_URLSAFE_LENGTH
+	else:
+		with pytest.raises(ValidationError):
+			BackendSettings(_env_file=None)

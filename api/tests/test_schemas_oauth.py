@@ -1,5 +1,6 @@
 import pytest
 from app.core.config import BackendSettings
+from app.core.constants import TOKEN_URLSAFE_LENGTH
 from app.schemas.base import StrictSchema
 from app.schemas.oauth import (
 	OAuthCallbackResult,
@@ -46,11 +47,11 @@ def test_oauth_generated_values_are_not_limited_by_input_length_setting() -> Non
 		initial_admin_email="admin@example.com",
 		initial_admin_username="admin",
 		initial_admin_password="password",
-		auth_token_max_length=8,
+		auth_token_max_length=TOKEN_URLSAFE_LENGTH,
 	)
-	generated_value = "a" * 9
+	generated_value = "a" * (TOKEN_URLSAFE_LENGTH + 1)
 
-	assert settings.auth_token_max_length == 8
+	assert settings.auth_token_max_length == TOKEN_URLSAFE_LENGTH
 	assert OAuthStartResult(authorize_url="https://example.test", state=generated_value).state == generated_value
 	assert (
 		OAuthCallbackResult(auth_mode="jwt", redirect_to="/dashboard", handoff_code=generated_value).handoff_code

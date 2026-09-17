@@ -149,7 +149,7 @@ flowchart TB
 | 戻り値 | `None`（常に正常終了、例外を送出しない） |
 | 送出例外 | Redis障害、またはDB接続不能時は共通例外ハンドラで `503 SERVICE_UNAVAILABLE` |
 | 処理内容 | 1. `user_repository.get_by_email(db, email)` でユーザー取得。`None` なら終了 2. `token = secrets.token_urlsafe(32)` を生成 3. `redis_store.save_password_reset_token(token, user.id, ttl)` を呼ぶ 4. 戻り値が`False`（CAS競合）ならメール送信を予約せず終了 5. `True`の場合だけ`background.add_task(mail_service.send_password_reset_mail, user.email, token, expires_minutes)`を登録 |
-| 副作用 | Redis：`pwreset:{hash}` の新規作成。メール：`BackgroundTasks` 経由で非同期送信 |
+| 副作用 | Redis：`pwreset_current:{uid}` と旧 `pwreset:{hash}` をLuaで原子的に管理し、旧tokenを失効して新tokenを登録。CAS競合時は`False`を返してメール送信を行わない。CAS成功時のみメールを`BackgroundTasks`経由で非同期送信 |
 
 ### 6.3 `api/app/repository/user_repository.py :: get_by_email`
 

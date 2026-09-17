@@ -9,6 +9,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_backend_settings
+from app.core.constants import TOKEN_URLSAFE_BYTES
 from app.core.exceptions import (
 	InvalidResetTokenError,
 	InvalidVerifyTokenError,
@@ -19,11 +20,9 @@ from app.models.user import User
 from app.repository import redis_store, user_repository
 from app.service import mail_service
 
-_TOKEN_URLSAFE_BYTES = 32
-
 
 def _generate_token() -> str:
-	return secrets.token_urlsafe(_TOKEN_URLSAFE_BYTES)
+	return secrets.token_urlsafe(TOKEN_URLSAFE_BYTES)
 
 
 async def issue_email_verify_token(user: User, background: BackgroundTasks) -> None:

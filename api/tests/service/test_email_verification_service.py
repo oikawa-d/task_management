@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from app.core.constants import TOKEN_URLSAFE_LENGTH
 from app.core.exceptions import InvalidResetTokenError, InvalidVerifyTokenError, ServiceUnavailableError
 from app.service import email_verification_service
 from redis.exceptions import ConnectionError as RedisConnectionError
@@ -37,6 +38,12 @@ def _user(*, verified: bool = False, email: str = "taro@example.com") -> SimpleN
 		email=email,
 		email_verified_at="2026-01-01T00:00:00+09:00" if verified else None,
 	)
+
+
+def test_generate_token_uses_configured_urlsafe_generation_length() -> None:
+	token = email_verification_service._generate_token()
+
+	assert len(token) == TOKEN_URLSAFE_LENGTH
 
 
 @pytest.mark.asyncio

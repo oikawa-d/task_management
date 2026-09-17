@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-from app.core.constants import AUTH_TOKEN_MAX_LENGTH, PASSWORD_MAX_LENGTH
+from app.core.constants import AUTH_TOKEN_MAX_LENGTH, PASSWORD_MAX_LENGTH, TOKEN_URLSAFE_LENGTH
 
 AuthMode = Literal["session", "jwt"]
 
@@ -175,6 +175,13 @@ class BackendSettings(BaseSettings):
 	def _validate_positive_input_limit(cls, value: int) -> int:
 		if value <= 0:
 			raise ValueError("input length limit must be positive")
+		return value
+
+	@field_validator("auth_token_max_length")
+	@classmethod
+	def _validate_auth_token_minimum(cls, value: int) -> int:
+		if value < TOKEN_URLSAFE_LENGTH:
+			raise ValueError(f"auth_token_max_length must be at least {TOKEN_URLSAFE_LENGTH}")
 		return value
 
 	@model_validator(mode="after")

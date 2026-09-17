@@ -12,6 +12,7 @@ import pytest
 from app.auth.base import LoginResult
 from app.auth.oauth import GoogleOAuthProvider, GoogleUserInfo, IdTokenClaims, OAuthTokenResponse
 from app.core.config import BackendSettings
+from app.core.constants import TOKEN_URLSAFE_LENGTH
 from app.core.exceptions import (
 	InvalidStateError,
 	OAuthEmailUnverifiedError,
@@ -309,7 +310,7 @@ async def test_provider_rejects_invalid_issuer_exp_or_kid(issuer: str, expires_i
 
 @pytest.mark.asyncio
 async def test_oauth_start_saves_state_and_pkce_cookie(monkeypatch: pytest.MonkeyPatch) -> None:
-	settings = _settings(auth_token_max_length=8)
+	settings = _settings(auth_token_max_length=TOKEN_URLSAFE_LENGTH)
 	save_state = AsyncMock()
 	monkeypatch.setattr(auth_service.redis_store, "save_oauth_state", save_state)
 	response = Response()
@@ -657,7 +658,7 @@ async def test_oauth_callback_logs_rollback_failure_without_sensitive_values(
 async def test_oauth_callback_jwt_issues_handoff_without_recording_history(
 	monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-	settings = _settings(auth_mode="jwt", auth_token_max_length=8)
+	settings = _settings(auth_mode="jwt", auth_token_max_length=TOKEN_URLSAFE_LENGTH)
 	user = SimpleNamespace(id=uuid4(), email="alice@example.com", is_active=True)
 	provider = SimpleNamespace(
 		exchange_code=AsyncMock(return_value=OAuthTokenResponse("id", "access")),
@@ -865,7 +866,7 @@ async def test_oauth_exchange_rejects_unknown_handoff() -> None:
 async def test_oauth_exchange_returns_token_and_records_login_history(monkeypatch: pytest.MonkeyPatch) -> None:
 	user_id = uuid4()
 	user = SimpleNamespace(id=user_id, email="alice@example.com", is_active=True)
-	settings = _settings(auth_mode="jwt", auth_token_max_length=8)
+	settings = _settings(auth_mode="jwt", auth_token_max_length=TOKEN_URLSAFE_LENGTH)
 	monkeypatch.setattr(
 		auth_service.redis_store,
 		"consume_oauth_handoff",
