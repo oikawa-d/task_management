@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import UUID4, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.config import get_backend_settings
+from app.core.constants import DESCRIPTION_MAX_LENGTH
 
 TaskStatus = Literal["todo", "in_progress", "done"]
 TaskSort = Literal["created_at", "due_at"]
@@ -36,7 +37,7 @@ class TaskCreateRequest(BaseModel):
 	model_config = ConfigDict(extra="forbid")
 
 	title: str = Field(min_length=1, max_length=150)
-	description: str | None = None
+	description: str | None = Field(default=None, max_length=DESCRIPTION_MAX_LENGTH)
 	status: TaskStatus = "todo"
 	assignee_id: UUID4 | None = None
 	due_at: datetime | None = None
@@ -57,7 +58,7 @@ class TaskUpdateRequest(BaseModel):
 
 	version: int
 	title: str | None = Field(default=None, min_length=1, max_length=150)
-	description: str | None = Field(default=None, max_length=2000)
+	description: str | None = Field(default=None, max_length=DESCRIPTION_MAX_LENGTH)
 	status: TaskStatus | None = None
 	assignee_id: UUID4 | None = None
 	position: int | None = Field(default=None, ge=0)

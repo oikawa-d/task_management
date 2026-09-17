@@ -396,6 +396,7 @@ def test_verify_email_db_failure_is_fail_closed(
 	auth_client: TestClient,
 	mail_outbox: list[tuple[str, str, str]],
 	cleanup_state: _CleanupState,
+	redis_conn: SyncRedis,
 	monkeypatch: pytest.MonkeyPatch,
 ) -> None:
 	_, _, token = _register(auth_client, mail_outbox, cleanup_state)
@@ -407,12 +408,15 @@ def test_verify_email_db_failure_is_fail_closed(
 	response = auth_client.post("/api/auth/verify-email", json={"token": token})
 	assert response.status_code == 503
 	assert _error_code(response) == "SERVICE_UNAVAILABLE"
+	settings = get_backend_settings()
+	assert redis_conn.exists(key("emailverify", settings.redis_key_prefix, token_hash(token)))
 
 
 def test_password_reset_redis_failure_is_fail_closed(
 	auth_client: TestClient,
 	mail_outbox: list[tuple[str, str, str]],
 	cleanup_state: _CleanupState,
+	redis_conn: SyncRedis,
 	monkeypatch: pytest.MonkeyPatch,
 ) -> None:
 	_, email, verification_token = _register(auth_client, mail_outbox, cleanup_state)
@@ -433,3 +437,5 @@ def test_password_reset_redis_failure_is_fail_closed(
 	assert response.status_code == 503
 	assert _error_code(response) == "SERVICE_UNAVAILABLE"
 	assert not update_mock.called
+	settings = get_backend_settings()
+	assert redis_conn.exists(key("pwreset", settings.redis_key_prefix, token_hash(reset_token)))

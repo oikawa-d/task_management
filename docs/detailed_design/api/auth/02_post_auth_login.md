@@ -42,7 +42,7 @@ Cookie：なし
 | 名前 | 型 | 必須 | 制約 | 説明 |
 |------|----|------|------|------|
 | identifier | string | ○ | 1〜254文字 | `username` または `email`。`lower()`比較で照合 |
-| password | string | ○ | 1文字以上（上限はパスワードポリシー上限に準拠しないが極端な長さはDoS対策として要検討） | 平文。ログ出力しない |
+| password | string | ○ | 1〜`PASSWORD_MAX_LENGTH`（既定128）文字、Unicodeコードポイント数で判定 | 平文。ログ出力しない |
 
 ### 2.2 レスポンス
 
@@ -322,7 +322,7 @@ stateDiagram-v2
 | スキーマ | フィールド | 規則 | フロント(zod)対応 |
 |----------|-----------|------|--------------------|
 | `LoginRequest` | identifier | 1〜254文字必須 | `z.string().min(1).max(254)` |
-| `LoginRequest` | password | 1文字以上必須 | `z.string().min(1)` |
+| `LoginRequest` | password | 1〜`PASSWORD_MAX_LENGTH`（既定128）文字必須、Unicodeコードポイント数で判定 | `z.string().min(1)`と同じ上限を検証 |
 
 ログインAPIでは登録時のような複雑な文字種チェックは行わない（過去に発行された既存パスワードとの整合性を保つため。パスワードポリシーは登録・変更時のみ適用）。
 

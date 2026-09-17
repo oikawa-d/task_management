@@ -32,6 +32,8 @@
 | `VITE_API_BASE_URL` | str | `/api` | フロントのAPIベースURL。**ビルド時に静的ファイルへ埋め込まれる**（`ARG`として受け取り`ENV`化） | 否（`.env`） |
 | `VITE_USER_NAME_MAX_LENGTH` | int | `30` | プロフィール姓名・フリガナのzod上限。`ARG`として受け取り`ENV`化する | 否（`.env`） |
 | `VITE_PASSWORD_MIN_LENGTH` | int | `8` | パスワードzod最小文字数。`ARG`として受け取り`ENV`化する | 否（`.env`） |
+| `VITE_PASSWORD_MAX_LENGTH` | int | `128` | パスワードzod最大文字数。`ARG`として受け取り`ENV`化する | 否（`.env`） |
+| `VITE_AUTH_TOKEN_MAX_LENGTH` | int | `512` | token/code zod最大文字数。`ARG`として受け取り`ENV`化する | 否（`.env`） |
 | `VITE_APP_TIMEZONE` | str | `Asia/Tokyo` | 期限日時の表示・入力に使用するタイムゾーン。`ARG`として受け取り`ENV`化する | 否（`.env`） |
 | `FRONTEND_PORT` | int | `5173` | ホスト公開ポート（[01_docker_compose.md](./01_docker_compose.md)側の責務。Dockerfile自体には登場しない） | 否（`.env`） |
 

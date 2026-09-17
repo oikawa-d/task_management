@@ -608,6 +608,30 @@ def test_exchange_rejects_empty_code(client: TestClient) -> None:
 	assert response.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
+def test_exchange_rejects_code_over_configured_limit_before_service(
+	client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+	called: list[str] = []
+
+	async def _oauth_exchange(*_args: Any, **_kwargs: Any) -> OAuthExchangeResponse:
+		called.append("service")
+		raise AssertionError("上限超過時はserviceを呼び出さない")
+
+	monkeypatch.setattr(oauth_router_module.oauth_service, "oauth_exchange", _oauth_exchange)
+	response = client.post("/api/auth/oauth/exchange", json={"code": "a" * 513}, headers={"Origin": ALLOWED_ORIGIN})
+
+	assert response.status_code == 422
+	assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+	assert called == []
+
+
+def test_callback_rejects_code_over_configured_limit_before_google_service(client: TestClient) -> None:
+	response = client.get("/api/auth/oauth/google/callback", params={"code": "a" * 513, "state": "state-value"})
+
+	assert response.status_code == 422
+	assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
 def test_oauth_endpoints_are_published_in_openapi() -> None:
 	from app.main import app as main_app
 

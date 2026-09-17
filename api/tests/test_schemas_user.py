@@ -73,6 +73,14 @@ def test_password_change_accepts_optional_current_password() -> None:
 	assert payload.current_password is None
 
 
+def test_password_change_rejects_password_fields_over_128_unicode_code_points() -> None:
+	password = "A1!" + "a" * 126
+	with pytest.raises(ValidationError):
+		PasswordChangeRequest(new_password=password, password_confirm=password)
+	with pytest.raises(ValidationError):
+		PasswordChangeRequest(current_password=password, new_password="Password1!", password_confirm="Password1!")
+
+
 @pytest.mark.parametrize("password", ["password", "PASSWORD", "12345678", "!!!!!!!!"])
 def test_password_change_requires_two_password_categories(password: str) -> None:
 	with pytest.raises(ValidationError):

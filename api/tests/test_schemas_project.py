@@ -57,6 +57,13 @@ def test_project_create_request_rejects_invalid_name_length(name: str) -> None:
 		ProjectCreateRequest(name=name)
 
 
+@pytest.mark.parametrize("model", [ProjectCreateRequest, ProjectUpdateRequest])
+def test_project_description_accepts_boundary_and_rejects_over_limit(model: type[object]) -> None:
+	assert model(description="a" * 2000, **({"name": "project"} if model is ProjectCreateRequest else {}))
+	with pytest.raises(ValidationError):
+		model(description="a" * 2001, **({"name": "project"} if model is ProjectCreateRequest else {}))
+
+
 def test_project_update_request_requires_at_least_one_field() -> None:
 	with pytest.raises(ValidationError):
 		ProjectUpdateRequest()

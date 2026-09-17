@@ -6,6 +6,7 @@ import { AuthApiError, verifyEmail } from "../api/authApi";
 import { VerifyEmailPanel, type VerifyEmailPhase } from "../components/VerifyEmailPanel";
 import { EMAIL_VERIFY_REDIRECT_DELAY_MS } from "../config/pageConfig";
 import { useHashToken } from "../hooks/useHashToken";
+import { authTokenSchema } from "../validation";
 
 /**
  * メール認証画面（/verify-email#token=...）。
@@ -24,7 +25,7 @@ export function VerifyEmailPage() {
 		}
 		verifyRequestedRef.current = true;
 
-		if (!token) {
+		if (!token || !authTokenSchema().safeParse(token).success) {
 			setPhase("noToken");
 			return;
 		}

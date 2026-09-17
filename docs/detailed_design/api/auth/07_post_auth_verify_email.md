@@ -39,7 +39,7 @@
 
 | 名前 | 型 | 必須 | 制約 | 説明 |
 |------|----|------|------|------|
-| token | string | ○ | 1文字以上（`token_urlsafe(32)` で生成された値を想定するが、サーバー側で長さ上限は設けず文字列として受け取る） | メール内リンクの `#token=...` から抽出した認証トークン |
+| token | string | ○ | `AUTH_TOKEN_MAX_LENGTH=512`（設定変更可）以内、1文字以上。Python/JavaScriptともUnicodeコードポイント数で判定 | メール内リンクの `#token=...` から抽出した認証トークン |
 
 ### 2.2 レスポンス
 
@@ -103,12 +103,19 @@ sequenceDiagram
         R-->>FE: "400 INVALID_VERIFY_TOKEN"
     else トークンが有効
         RD-->>S: "user_id"
-        S->>UR: "mark_email_verified(db, user_id)"
-        UR->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
-        PG-->>UR: "更新完了"
-        S->>S: "db.commit()"
-        S-->>R: "None"
-        R-->>FE: "204 No Content"
+        alt DB更新・commit成功
+            S->>UR: "mark_email_verified(db, user_id)"
+            UR->>PG: "SP/FN内部処理（正式呼び出しはDBアクセス契約参照）"
+            PG-->>UR: "更新完了"
+            S->>S: "db.commit()"
+            S-->>R: "None"
+            R-->>FE: "204 No Content"
+        else DB更新・commit失敗
+            S->>S: "db.rollback()"
+            S->>RD: "restore_email_verify_token(token, user_id, ttl)"
+            S-->>R: "503 SERVICE_UNAVAILABLE"
+            R-->>FE: "503 SERVICE_UNAVAILABLE"
+        end
     end
 ```
 
@@ -122,7 +129,9 @@ flowchart TB
     C --> D{"値が存在したか?"}
     D -->|"No"| E2["400 INVALID_VERIFY_TOKEN"]
     D -->|"Yes（user_id取得）"| F["UPDATE users<br/>SET email_verified_at = now()"]
-    F --> G["204 No Content"]
+    F --> G["db.commit()"]
+    G --> H["204 No Content"]
+    F -.->|"DB失敗: rollback + トークン復元"| E3["503 SERVICE_UNAVAILABLE"]
 ```
 
 認証・認可の分岐は存在しない（未認証で呼び出し可能なエンドポイントのため）。
@@ -148,8 +157,8 @@ flowchart TB
 | 引数 | `token: str`（メールリンクのトークン）、`db: AsyncSession`（ユーザー更新用DBセッション） |
 | 戻り値 | `None` |
 | 送出例外 | `InvalidVerifyTokenError`（HTTP 400） |
-| 処理内容 | 1. `redis_store.consume_email_verify_token(token)` を呼び user_id を取得 2. `None` の場合は `InvalidVerifyTokenError` を送出 3. `user_repository.mark_email_verified(db, user_id)` を呼ぶ 4. `db.commit()` で更新を確定する |
-| 副作用 | Redis：`emailverify:{hash}` の削除（`GETDEL` の副作用）。PostgreSQL：`users.email_verified_at` 更新 |
+| 処理内容 | 1. `redis_store.consume_email_verify_token(token)` を呼び user_id を取得 2. `None` の場合は `InvalidVerifyTokenError` を送出 3. `user_repository.mark_email_verified(db, user_id)` と `db.commit()` を実行 4. DB失敗時はrollback後にトークンを競合安全に復元し、503を送出する |
+| 副作用 | Redis：`emailverify:{hash}` の削除（`GETDEL` の副作用）。DB失敗時は`restore_email_verify_token`で同一トークンを競合安全に復元。PostgreSQL：`users.email_verified_at` 更新 |
 
 ### 6.3 `repository/redis_store.py :: consume_email_verify_token`
 

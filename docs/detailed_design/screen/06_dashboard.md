@@ -75,7 +75,7 @@
 | ⑦ | タスク件数バッジ | badge×3 | `task_counts.{todo,in_progress,done}` | - | - | - |
 | ⑧ | 空状態メッセージ | text + button | - | - | `items.length===0` の時のみ表示 | 「作成する」ボタンは④と同じモーダルを開く |
 | ⑨ | ProjectCreateForm / name | text input | `""` | 1〜100文字必須（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） | - | 入力毎に `react-hook-form` へ反映 |
-| ⑩ | ProjectCreateForm / description | textarea | `""` | 任意、0〜2000文字（issue #40で確定。[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） | - | 入力毎に反映 |
+| ⑩ | ProjectCreateForm / description | textarea | `""` | 任意、0〜2000文字（Unicodeコードポイント数で判定。issue #40で確定。[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） | - | 入力毎に反映 |
 | ⑪ | ProjectCreateForm / 作成ボタン | button | - | - | `isValid && !isSubmitting` | クリックで `createProjectMutation.mutate()` |
 | ⑫ | ProjectCreateForm / キャンセル | button | - | - | 常時 | フォームを閉じ `reset()` |
 | ⑬ | ページネーション | pagination | `meta.page`等 | - | `meta.total_pages > 1` | ページ番号クリックで該当ページを再取得 |
@@ -316,7 +316,7 @@ flowchart TB
 | フィールド | zodルール | エラーメッセージ | バックエンド対応 |
 |-----------|-----------|-------------------|-------------------|
 | `name` | `z.string().min(1).max(100)` | 「プロジェクト名を1〜100文字で入力してください」 | `POST /projects` name（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） |
-| `description` | `z.string().max(2000).optional()` | 「説明は2000文字以内で入力してください」 | `POST/PATCH /projects` description（issue #40で確定。[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） |
+| `description` | `z.string().refine((value) => countCodePoints(value) <= PROJECT_DESCRIPTION_MAX_LENGTH)`（空文字可） | 「説明は2000文字以内で入力してください」 | `POST/PATCH /projects` description（0〜2000文字、Unicodeコードポイント数で判定。issue #40で確定。[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） |
 
 ## 11. エラーハンドリング
 
@@ -406,6 +406,6 @@ flowchart LR
 |------|------|------|
 | なし | ページングは`meta.page` / `meta.total_pages`を⑬として定義済み | - |
 | 確定 | 409はプロジェクトAPIに発生契機・エラーコードの定義がないため本画面では扱わない。Issue #159の受入条件をAPI契約に合わせて訂正する | - |
-| 確定 | `description` の文字数上限はissue #40で0〜2000文字に確定（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） | - |
+| 確定 | `description` の文字数上限はissue #40で0〜2000文字（Unicodeコードポイント数で判定）に確定（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） | - |
 | 要検討 | サイドバー開閉の画面幅によるデフォルト値切り替え（狭幅時の自動折りたたみ等）の要否が [05_frontend.md](../../basic_design/05_frontend.md) に明記されていない | レスポンシブ挙動の実装方針 |
 | 要検討 | ユーザー単位のタイムゾーン設定を将来導入する場合のカレンダー日付キー | `due_date`の算出元とAPI契約の再設計 |

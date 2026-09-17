@@ -360,9 +360,12 @@ async def test_change_password_database_connection_failure_rolls_back(monkeypatc
 	)
 	monkeypatch.setattr(user_service, "verify_password", lambda plain, hashed: True)
 	monkeypatch.setattr(user_service, "hash_password", lambda plain: f"hashed:{plain}")
-	monkeypatch.setattr(user_repository, "update_password", AsyncMock())
-	monkeypatch.setattr(redis_store, "delete_all_sessions", AsyncMock())
-	monkeypatch.setattr(redis_store, "revoke_all_refresh_tokens", AsyncMock())
+	update_password_mock = AsyncMock()
+	delete_sessions_mock = AsyncMock()
+	revoke_refresh_mock = AsyncMock()
+	monkeypatch.setattr(user_repository, "update_password", update_password_mock)
+	monkeypatch.setattr(redis_store, "delete_all_sessions", delete_sessions_mock)
+	monkeypatch.setattr(redis_store, "revoke_all_refresh_tokens", revoke_refresh_mock)
 	db = AsyncMock()
 	db.commit.side_effect = OperationalError("update password", {}, SimpleNamespace(sqlstate="08006"))
 
@@ -373,6 +376,9 @@ async def test_change_password_database_connection_failure_rolls_back(monkeypatc
 			db=db,
 		)
 
+	update_password_mock.assert_awaited_once_with(db, user_id, "hashed:NewPass1!")
+	delete_sessions_mock.assert_awaited_once_with(user_id)
+	revoke_refresh_mock.assert_awaited_once_with(user_id)
 	db.rollback.assert_awaited_once_with()
 
 

@@ -25,11 +25,20 @@ describe("calcPasswordStrength", () => {
 	it("8文字以上で4種類は4を返す", () => {
 		expect(calcPasswordStrength("Aa1!aaaa")).toBe(4);
 	});
+
+	it("絵文字をコードポイント1文字として最小長を判定する", () => {
+		expect(calcPasswordStrength("😀Aa1!xx")).toBe(1);
+	});
 });
 
 describe("PasswordStrengthMeter", () => {
 	it("強度に応じたラベルを表示する", () => {
 		render(<PasswordStrengthMeter password="Aa1!aaaa" />);
 		expect(screen.getByText("強い")).toBeInTheDocument();
+	});
+
+	it("絵文字を含むパスワードの最小長を強度表示に反映する", () => {
+		render(<PasswordStrengthMeter password="😀Aa1!xx" />);
+		expect(screen.getByText("弱い")).toBeInTheDocument();
 	});
 });

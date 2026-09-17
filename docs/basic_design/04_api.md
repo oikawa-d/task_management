@@ -154,8 +154,8 @@
 |-----------|----|------|------|
 | username | string | ○ | 3〜50文字、`^[A-Za-z0-9_-]+$` |
 | email | string | ○ | 254文字以内、メール形式 |
-| password | string | ○ | 8文字以上、大文字英字/小文字英字/数字/記号のうち2種類以上 |
-| password_confirm | string | ○ | `password` と一致 |
+| password | string | ○ | 8文字以上、`PASSWORD_MAX_LENGTH`（既定128）以内、大文字英字/小文字英字/数字/記号のうち2種類以上。Unicodeコードポイント数で判定 |
+| password_confirm | string | ○ | `password` と一致し、`PASSWORD_MAX_LENGTH`以内 |
 | last_name / first_name | string | ○ | 各30文字以内 |
 | last_name_kana / first_name_kana | string | ○ | 各30文字以内、ひらがな・カタカナ・数字のみ |
 | birth_date | string(date) | ○ | `YYYY-MM-DD`、未来日不可 |
@@ -185,7 +185,7 @@
 | フィールド | 型 | 必須 | 説明 |
 |-----------|----|------|------|
 | identifier | string | ○ | username または email |
-| password | string | ○ | |
+| password | string | ○ | 1〜`PASSWORD_MAX_LENGTH`（既定128）文字。Unicodeコードポイント数で判定 |
 
 レスポンス
 - session モード：`204 No Content` + `Set-Cookie: cerberus_sid, cerberus_csrf`
@@ -617,8 +617,8 @@ sequenceDiagram
 | `oauth_start` | `redirect_to: str \| None` | `str`（認可URL） | `api/app/service/oauth_service.py`。state/PKCE 生成 → Redis保存 → 認可URL組み立て |
 | `oauth_callback` | `code: str`, `state: str`, `request`, `response` | `OAuthCallbackResult` | `api/app/service/oauth_service.py`。state Cookie/Redis消費 → code交換 → id_token検証 → ユーザー解決。sessionはここでlogin、jwtはhandoff codeを発行 |
 | `oauth_exchange` | `code: str`, `request`, `response` | `OAuthExchangeResult` | `api/app/service/oauth_service.py`。jwtのみ。handoff codeをGETDELで消費 → `SELECT fn_get_user` → JwtStrategy.login → `CALL sp_record_login_history` |
-| `request_password_reset` | `email: str` | `None` | `api/app/service/email_verification_service.py`。ユーザー検索 → トークン生成 → Redis保存 → メール送信（存在しなくても例外を出さない） |
-| `reset_password` | `token: str`, `new_password: str`, `db: AsyncSession` | `None` | `api/app/service/email_verification_service.py`。トークン消費 → パスワードハッシュ化 → 全セッション/トークン失効 → `CALL sp_update_user_password` → DB commit |
+| `request_password_reset` | `email: str`, `background: BackgroundTasks`, `db: AsyncSession` | `None` | `api/app/service/email_verification_service.py`。ユーザー検索 → トークン生成 → `pwreset_current:{uid}`と旧tokenをLuaで原子的に置換 → CAS競合時はメール送信を予約せず終了 → 成功時のみメール送信（存在しなくても例外を出さない）。CAS競合時は新規メールを送信せず、保存済みの最新tokenを維持する |
+| `reset_password` | `token: str`, `new_password: str`, `db: AsyncSession` | `None` | `api/app/service/email_verification_service.py`。current tokenとの一致を原子的に確認・消費 → パスワードハッシュ化 → 全セッション/トークン失効 → `CALL sp_update_user_password` → DB commit。RedisまたはDB失敗時はDB rollbackを行い、消費済みtokenを`pwreset_current:{uid}`とtoken実体の組として補償復元する |
 
 ### 7.2 `service/project_service.py` / `task_service.py`
 

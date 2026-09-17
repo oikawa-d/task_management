@@ -59,7 +59,7 @@
 | フィールド | 型 | 必須 | 制約 | 説明 |
 |-----------|----|----|------|------|
 | title | string | ○ | 1〜150文字 | タイトル（`tasks.title` の `VARCHAR(150)` に対応） |
-| description | string \| null | - | 省略時 `null` | 説明 |
+| description | string \| null | - | 0〜2,000文字。省略時 `null` | 説明 |
 | status | string | - | `todo` / `in_progress` / `done`、省略時 `todo` | 初期ステータス |
 | assignee_id | string(uuid) \| null | - | 省略時 `null`。有効なプロジェクトメンバーのIDであること | 担当者 |
 | due_at | string(date-time) \| null | - | 省略時 `null`、ISO 8601。オフセットなしは `APP_TIMEZONE` として解釈 | 期限日時 |
@@ -268,7 +268,7 @@ repositoryはDBテーブルへ直結せず、SP/FN契約だけを呼び出す。
 | フィールド | pydanticスキーマ | 制約 | フロント（zod）との一致 |
 |-----------|-------------------|------|--------------------------|
 | title | `TaskCreateRequest.title` | `min_length=1, max_length=150` | タスク作成モーダルの同一制約 |
-| description | `TaskCreateRequest.description` | `str \| None`、上限なし（`TEXT`） | 同左 |
+| description | `TaskCreateRequest.description` | `str \| None`、0〜2,000文字 | 同左 |
 | status | `TaskCreateRequest.status` | `Literal["todo","in_progress","done"]`、既定 `"todo"` | セレクトボックスの選択肢と一致 |
 | assignee_id | `TaskCreateRequest.assignee_id` | `UUID \| None` 型検証はpydantic、メンバー検証はサービス層 | 候補一覧APIの返す `id` のみ選択可能な形でUIを制限 |
 | due_at | `TaskCreateRequest.due_at` | `datetime \| None` | 日時入力の型と一致。表示時は `APP_TIMEZONE` へ変換 |

@@ -26,6 +26,7 @@ GET /api/auth/config は実DB/Redisへ依存しないAPIであり、
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from types import SimpleNamespace
 from typing import Any
@@ -40,6 +41,7 @@ from app.repository import (
 	redis_store_session,
 	user_repository,
 )
+from app.repository.redis_store_common import token_hash
 from app.service import email_verification_service, mail_service
 from fastapi.testclient import TestClient
 from redis.asyncio import Redis
@@ -193,6 +195,112 @@ async def test_register_endpoint_stores_email_verify_token_in_redis(
 	token_key = f"{prefix}emailverify:{token_hash}"
 	assert bool(await redis_conn.exists(token_key)) is True
 	assert await redis_conn.ttl(token_key) > 0
+
+
+async def test_password_reset_initial_concurrent_issue_has_one_winner(redis_conn: Redis) -> None:
+	"""初回の同時発行はLua内CASで1件だけ成功し、勝者のtokenだけを保持する。"""
+	user_id = uuid.uuid4()
+	settings = get_backend_settings()
+	prefix = settings.redis_key_prefix
+	tokens = (f"reset-a-{uuid.uuid4().hex}", f"reset-b-{uuid.uuid4().hex}")
+	try:
+		results = await asyncio.gather(
+			*(redis_store_auth.save_password_reset_token(redis_conn, prefix, token, user_id, 60) for token in tokens)
+		)
+
+		assert sorted(results) == [False, True]
+		current_hash = await redis_conn.get(f"{prefix}pwreset_current:{user_id}")
+		assert current_hash in {token_hash(token) for token in tokens}
+		stored_tokens = [await redis_conn.exists(f"{prefix}pwreset:{token_hash(token)}") for token in tokens]
+		assert stored_tokens.count(1) == 1
+	finally:
+		await redis_conn.delete(
+			f"{prefix}pwreset_current:{user_id}",
+			*(f"{prefix}pwreset:{token_hash(token)}" for token in tokens),
+		)
+
+
+async def test_password_reset_compensation_restores_token_when_current_is_missing(redis_conn: Redis) -> None:
+	"""currentが不存在なら、消費済みtokenを実体とcurrentの組で復元する。"""
+	user_id = uuid.uuid4()
+	settings = get_backend_settings()
+	prefix = settings.redis_key_prefix
+	token = f"reset-{uuid.uuid4().hex}"
+	keys = (
+		f"{prefix}pwreset_current:{user_id}",
+		f"{prefix}pwreset:{token_hash(token)}",
+		f"{prefix}pwreset_consumed:{user_id}",
+	)
+	try:
+		assert await redis_store_auth.save_password_reset_token(redis_conn, prefix, token, user_id, 60)
+		assert await redis_store_auth.consume_password_reset_token(redis_conn, prefix, token) == user_id
+		assert await redis_store_auth.restore_password_reset_token(redis_conn, prefix, token, user_id, 60)
+		assert await redis_conn.get(keys[0]) == token_hash(token)
+		assert await redis_conn.exists(keys[1]) == 1
+		assert await redis_conn.get(keys[2]) == token_hash(token)
+		assert await redis_conn.ttl(keys[2]) > 0
+		assert await redis_store_auth.consume_password_reset_token(redis_conn, prefix, token) == user_id
+		assert await redis_store_auth.consume_password_reset_token(redis_conn, prefix, token) is None
+	finally:
+		await redis_conn.delete(*keys)
+
+
+async def test_password_reset_compensation_does_not_restore_consumed_token_after_reissue(redis_conn: Redis) -> None:
+	"""後続tokenが発行済みなら、先行tokenの補償復元で最新tokenを上書きしない。"""
+	user_id = uuid.uuid4()
+	settings = get_backend_settings()
+	prefix = settings.redis_key_prefix
+	token_a = f"reset-a-{uuid.uuid4().hex}"
+	token_b = f"reset-b-{uuid.uuid4().hex}"
+	keys = (
+		f"{prefix}pwreset_current:{user_id}",
+		f"{prefix}pwreset:{token_hash(token_a)}",
+		f"{prefix}pwreset:{token_hash(token_b)}",
+	)
+	try:
+		assert await redis_store_auth.save_password_reset_token(redis_conn, prefix, token_a, user_id, 60)
+		assert await redis_store_auth.consume_password_reset_token(redis_conn, prefix, token_a) == user_id
+		assert await redis_store_auth.save_password_reset_token(redis_conn, prefix, token_b, user_id, 60)
+
+		assert not await redis_store_auth.restore_password_reset_token(redis_conn, prefix, token_a, user_id, 60)
+		assert await redis_conn.get(keys[0]) == token_hash(token_b)
+		assert await redis_conn.exists(keys[1]) == 0
+		assert await redis_conn.exists(keys[2]) == 1
+		assert await redis_store_auth.consume_password_reset_token(redis_conn, prefix, token_b) == user_id
+		assert await redis_store_auth.consume_password_reset_token(redis_conn, prefix, token_b) is None
+	finally:
+		await redis_conn.delete(*keys)
+
+
+async def test_password_reset_compensation_does_not_restore_after_newer_token_is_consumed(
+	redis_conn: Redis,
+) -> None:
+	"""後続tokenの消費後は、先行tokenの補償復元をtombstoneで拒否する。"""
+	user_id = uuid.uuid4()
+	settings = get_backend_settings()
+	prefix = settings.redis_key_prefix
+	token_a = f"reset-a-{uuid.uuid4().hex}"
+	token_b = f"reset-b-{uuid.uuid4().hex}"
+	keys = (
+		f"{prefix}pwreset_current:{user_id}",
+		f"{prefix}pwreset:{token_hash(token_a)}",
+		f"{prefix}pwreset:{token_hash(token_b)}",
+		f"{prefix}pwreset_consumed:{user_id}",
+	)
+	try:
+		assert await redis_store_auth.save_password_reset_token(redis_conn, prefix, token_a, user_id, 60)
+		assert await redis_store_auth.consume_password_reset_token(redis_conn, prefix, token_a) == user_id
+		assert await redis_store_auth.save_password_reset_token(redis_conn, prefix, token_b, user_id, 60)
+		assert await redis_store_auth.consume_password_reset_token(redis_conn, prefix, token_b) == user_id
+
+		assert not await redis_store_auth.restore_password_reset_token(redis_conn, prefix, token_a, user_id, 60)
+		assert await redis_conn.get(keys[3]) == token_hash(token_b)
+		assert await redis_conn.exists(keys[0]) == 0
+		assert await redis_conn.exists(keys[1]) == 0
+		assert await redis_conn.exists(keys[2]) == 0
+		assert await redis_store_auth.consume_password_reset_token(redis_conn, prefix, token_b) is None
+	finally:
+		await redis_conn.delete(*keys)
 
 
 async def test_register_endpoint_db_failure_creates_no_partial_row(

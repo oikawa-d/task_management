@@ -209,9 +209,11 @@ async def test_one_time_tokens_are_consumed_once(redis: _FakeRedis) -> None:
 
 async def test_password_and_email_tokens_enforce_current_value(redis: _FakeRedis) -> None:
 	user_id = uuid.uuid4()
-	redis.eval = AsyncMock(return_value=[str(user_id)])
-	await redis_store.save_password_reset_token("reset", user_id, 60)
+	redis.eval = AsyncMock(return_value=1)
+	assert await redis_store.save_password_reset_token("reset", user_id, 60) is True
 	assert redis.eval.await_count == 1
+	redis.eval = AsyncMock(return_value=0)
+	assert await redis_store.save_password_reset_token("reset-lost", user_id, 60) is False
 	redis.eval = AsyncMock(return_value=str(user_id))
 	assert await redis_store.consume_password_reset_token("reset") == user_id
 
@@ -220,6 +222,9 @@ async def test_password_and_email_tokens_enforce_current_value(redis: _FakeRedis
 	assert not await redis_store.mark_email_verify_sent(user_id, 60)
 	assert await redis_store.consume_email_verify_token("email-one") == user_id
 	assert await redis_store.consume_email_verify_token("email-one") is None
+	redis.eval = AsyncMock(return_value=1)
+	assert await redis_store.restore_email_verify_token("email-one", user_id, 60) is True
+	assert await redis_store.restore_password_reset_token("reset", user_id, 60) is True
 
 
 async def test_login_failures_and_rate_limit_are_hashed_and_expiring(redis: _FakeRedis) -> None:

@@ -8,6 +8,7 @@ import { OAuthCallbackApiError } from "../api/oauthCallbackApi";
 import { useAuthMeQuery } from "../hooks/useAuthMeQuery";
 import { useOAuthExchange } from "../hooks/useOAuthExchange";
 import { isSafeRelativePath } from "../utils/url";
+import { oauthExchangeSchema } from "../validation";
 
 type CallbackState = "processing" | "failed";
 
@@ -63,13 +64,14 @@ export function OAuthCallbackPage() {
 			let redirectTo = hashRedirectTo;
 
 			if (adapter.mode === "jwt") {
-				if (!code) {
+				const parsedCode = oauthExchangeSchema().safeParse({ code });
+				if (!parsedCode.success) {
 					fail(ERROR_MESSAGES.invalidAccess);
 					return;
 				}
 
 				try {
-					const exchangeResult = await exchangeMutation.mutateAsync({ code });
+					const exchangeResult = await exchangeMutation.mutateAsync(parsedCode.data);
 					clearHash();
 					redirectTo = exchangeResult.redirect_to;
 				} catch (error) {

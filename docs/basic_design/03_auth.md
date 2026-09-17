@@ -233,6 +233,8 @@ sessionモードはsession Cookieを必要とし、`DEL session:{sid}` 等を実
 
 Googleログインの有効状態は、`GOOGLE_LOGIN_ENABLED=true`かつ`GOOGLE_CLIENT_ID`・`GOOGLE_CLIENT_SECRET`が設定されている場合のみ成立する。無効時は`GET /api/auth/config`が`google_login_enabled=false`を返し、OAuth開始・callback・exchangeを拒否する。開始・exchangeは404 `OAUTH_DISABLED`、callbackは302 `/login?error=oauth_disabled`とし、開始済みのstateやhandoffを消費せず、Google APIも呼び出さない。
 
+認証入力の長さは、backendの`PASSWORD_MAX_LENGTH`（既定128）と`AUTH_TOKEN_MAX_LENGTH`（既定512）で管理する。パスワード、メール認証・パスワードリセットtoken、OAuthのcode/stateは、PythonおよびJavaScriptのUnicodeコードポイント数で上限を判定し、超過時は認証処理・Argon2・Redis・OAuth外部通信を開始せず422とする。
+
 ### 5.2 シーケンス
 
 ```mermaid
@@ -445,9 +447,9 @@ sequenceDiagram
     API-->>FE: 202 Accepted（存在有無を返さない）
     Note over API,FE: ユーザー列挙攻撃を防ぐため、<br/>存在しないメールでも同じ応答を返す
 
-    U->>FE: メール内リンク /reset-password#token=xxx
-    FE->>API: POST /api/auth/password/reset {token, new_password}
-    API->>RD: GETDEL pwreset:{sha256(token)}
+    U->>FE: メール内リンク /password/reset#token=xxx
+    FE->>API: POST /api/auth/password/reset {token, new_password, password_confirm}
+    API->>RD: Luaでpwreset_current:{user_id}とtoken実体のhash一致を確認し、両方を原子的に消費
     alt トークン無効/期限切れ
         API-->>FE: 400 INVALID_RESET_TOKEN
     else 有効
@@ -476,7 +478,7 @@ sequenceDiagram
 
 メール内の認証・リセットURLは query string ではなく fragment（`#token=...`）を使う。fragmentはHTTPリクエストや通常のRefererに送られない。フロントは読み取り後に `history.replaceState` でURLから除去し、APIにはPOST本文でのみトークンを送る。
 
-パスワード変更・再設定では、Redisの全セッション・全リフレッシュトークン失効を先に完了してからDB更新をcommitする。Redis失敗時はDBを更新せず `503 SERVICE_UNAVAILABLE` とし、部分失効は同じ処理を再実行する。Google OAuthのみで登録したユーザーは `password_hash` が NULL のため、設定画面の `PUT /users/me/password` で `current_password` を省略してパスワードを設定できる。JWTのforce-logout後の既発行Access Tokenは最大 `ACCESS_TOKEN_TTL_SECONDS`（既定900秒）残り得るため、即時遮断が必要な場合は管理者の無効化APIを使用する。
+パスワード変更・再設定では、Redisの全セッション・全リフレッシュトークン失効を先に完了してからDBのパスワード更新をcommitする。Redis失敗時はDBを更新せず、消費済みの再設定トークンを可能な限り競合安全に復元して `503 SERVICE_UNAVAILABLE` とする。DB失敗時もrollback後にトークンを復元して再試行可能にする。Google OAuthのみで登録したユーザーは `password_hash` が NULL のため、設定画面の `PUT /users/me/password` で `current_password` を省略してパスワードを設定できる。JWTのforce-logout後の既発行Access Tokenは最大 `ACCESS_TOKEN_TTL_SECONDS`（既定900秒）残り得るため、即時遮断が必要な場合は管理者の無効化APIを使用する。
 
 ## 8. CSRF対策
 
