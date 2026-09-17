@@ -122,12 +122,12 @@ sequenceDiagram
                 R-->>FE: "204 No Content"
             else DB更新・commit失敗
                 S->>PG: "db.rollback()"
-                S->>RD: "save_password_reset_token(token, user_id, ttl)（補償復元）"
+                S->>RD: "restore_password_reset_token(token, user_id, ttl)（補償復元）"
                 S-->>R: "503 SERVICE_UNAVAILABLE"
                 R-->>FE: "503 SERVICE_UNAVAILABLE"
             end
         else Redis失効失敗
-            S->>RD: "save_password_reset_token(token, user_id, ttl)（補償復元）"
+            S->>RD: "restore_password_reset_token(token, user_id, ttl)（補償復元）"
             S-->>R: "503 SERVICE_UNAVAILABLE"
             R-->>FE: "503 SERVICE_UNAVAILABLE（DB未更新）"
         end
@@ -240,7 +240,7 @@ flowchart TB
 flowchart LR
     R["auth_router.password_reset"] --> S["email_verification_service.reset_password"]
     S --> RD1["redis_store.consume_password_reset_token"]
-    S --> RD4["redis_store.save_password_reset_token（補償復元）"]
+    S --> RD4["redis_store.restore_password_reset_token（補償復元）"]
     S --> SEC["core/security.hash_password"]
     S --> UR["user_repository.update_password"]
     S --> RD2["redis_store.delete_all_sessions"]

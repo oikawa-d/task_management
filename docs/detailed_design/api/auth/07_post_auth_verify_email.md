@@ -39,7 +39,7 @@
 
 | 名前 | 型 | 必須 | 制約 | 説明 |
 |------|----|------|------|------|
-| token | string | ○ | 1〜`AUTH_TOKEN_MAX_LENGTH`（既定512）文字、Unicodeコードポイント数で判定 | メール内リンクの `#token=...` から抽出した認証トークン |
+| token | string | ○ | `AUTH_TOKEN_MAX_LENGTH=512`（設定変更可）以内、1文字以上。Python/JavaScriptともUnicodeコードポイント数で判定 | メール内リンクの `#token=...` から抽出した認証トークン |
 
 ### 2.2 レスポンス
 

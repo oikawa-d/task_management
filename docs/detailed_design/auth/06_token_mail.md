@@ -247,12 +247,12 @@ stateDiagram-v2
 
 | 項目 | 内容 |
 |------|------|
-| シグネチャ / 定義 | `async def verify_email(token: str) -> None` |
-| 引数 / 入力 | `token`（クライアントから受け取った平文） |
+| シグネチャ / 定義 | `async def verify_email(token: str, db: AsyncSession) -> None` |
+| 引数 / 入力 | `token`（クライアントから受け取った平文）、`db`（ユーザー更新用DBセッション） |
 | 戻り値 / 出力 | `None` |
-| 送出例外 / 失敗条件 | `InvalidVerifyTokenError`（→400 `INVALID_VERIFY_TOKEN`）：`consume_email_verify_token`が`None`を返した場合 |
-| 処理内容 | 1. `user_id = await redis_store.consume_email_verify_token(token)`（内部で`sha256`化して`GETDEL`） 2. `None`なら例外 3. `user_repository.mark_email_verified(db, user_id)`で`UPDATE users SET email_verified_at = now()` |
-| 副作用 | Redis削除（ワンタイム消費）、PostgreSQL UPDATE |
+| 送出例外 / 失敗条件 | `InvalidVerifyTokenError`（→400 `INVALID_VERIFY_TOKEN`）：`consume_email_verify_token`が`None`を返した場合。DB障害はrollback後にトークンを補償復元し、503 `SERVICE_UNAVAILABLE`へ変換 |
+| 処理内容 | 1. `user_id = await redis_store.consume_email_verify_token(token)`（内部で`sha256`化して`GETDEL`） 2. `None`なら例外 3. `user_repository.mark_email_verified(db, user_id)`で`UPDATE users SET email_verified_at = now()` 4. `db.commit()`を実行 5. DB障害時は`db.rollback()`後に`restore_email_verify_token(token, user_id, ttl)`で消費済みトークンを競合安全に補償復元 |
+| 副作用 | Redis削除（ワンタイム消費）、PostgreSQL UPDATE・commit。DB障害時は`restore_email_verify_token`でRedisトークンを補償復元 |
 
 ### 8.3 `api/app/service/email_verification_service.py :: resend_verification`
 
@@ -284,7 +284,7 @@ stateDiagram-v2
 | 引数 / 入力 | `token`（平文）、`new_password`（バリデーション済み）、`db` |
 | 戻り値 / 出力 | `None` |
 | 送出例外 / 失敗条件 | `InvalidResetTokenError`（→400 `INVALID_RESET_TOKEN`）：`consume_password_reset_token`が`None`を返した場合。Redis障害またはPostgreSQL接続障害はグローバル例外ハンドラで503 `SERVICE_UNAVAILABLE`へ変換する。Redis失効に失敗した場合はfail-closeとし、DB更新・`commit()`を行わず、消費済みトークンを補償復元する |
-| 処理内容 | 1. `user_id = await redis_store.consume_password_reset_token(token)` 2. `None`なら例外 3. `hash_password`で新パスワードをハッシュ化 4. `delete_all_sessions`を実行 5. `revoke_all_refresh_tokens`を実行 6. Redis失敗時は`save_password_reset_token`で消費済みトークンを補償復元 7. Redis成功後に`user_repository.update_password(db, user_id, password_hash)`を実行 8. `db.commit()`を実行 9. DB失敗時はrollback後に`save_password_reset_token`でトークンを復元 |
+| 処理内容 | 1. `user_id = await redis_store.consume_password_reset_token(token)` 2. `None`なら例外 3. `hash_password`で新パスワードをハッシュ化 4. `delete_all_sessions`を実行 5. `revoke_all_refresh_tokens`を実行 6. Redis失敗時は`restore_password_reset_token`で消費済みトークンを補償復元 7. Redis成功後に`user_repository.update_password(db, user_id, password_hash)`を実行 8. `db.commit()`を実行 9. DB失敗時はrollback後に`restore_password_reset_token`でトークンを復元 |
 | 副作用 | Redis削除（ワンタイム消費＋全失効）、PostgreSQL UPDATE |
 
 ### 8.6 `service/mail_service.py :: send_email_verification_mail` / `send_password_reset_mail`
