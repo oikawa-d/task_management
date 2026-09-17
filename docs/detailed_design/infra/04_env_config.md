@@ -232,7 +232,7 @@ sequenceDiagram
     participant CFG as core/config.py
     participant ENV as OS環境変数（.env経由）
 
-    EP->>MAIN: exec uvicorn app.main:app
+    EP->>MAIN: exec "$@"（CMD/command経由でuvicorn app.main:app）
     MAIN->>CFG: get_settings() を呼び出し
     CFG->>ENV: BaseSettingsが環境変数を読み取り
     alt 必須項目欠落 or 型不一致
