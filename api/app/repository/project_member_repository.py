@@ -133,6 +133,12 @@ async def delete(db: AsyncSession, project_id: uuid.UUID, user_id: uuid.UUID) ->
 
 	Returns:
 		None。
+
+	Raises:
+		sqlalchemy.exc.DBAPIError: `user_id`がプロジェクトオーナーである場合
+			(SQLSTATE `P0004`)、元の例外を再送出する(通常は呼び出し元の
+			`member_service.remove_member`が事前に`OwnerCannotBeRemovedError`を
+			送出するため、本関数まで到達するのはSP側の不変条件チェックとして働く)。
 	"""
 	await db.execute(
 		text("CALL sp_remove_project_member(:project_id, :user_id)"),

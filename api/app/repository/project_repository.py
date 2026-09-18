@@ -52,6 +52,11 @@ async def create(
 
 	Returns:
 		作成されたプロジェクトのID。
+
+	Raises:
+		sqlalchemy.exc.DBAPIError: `end_at`が`start_at`より前の場合(SQLSTATE `P0009`)、
+			元の例外を再送出する(通常はAPIスキーマの`ProjectCreateRequest`側で事前に
+			検証されるため、本関数まで到達するのはSP側の不変条件チェックとして働く)。
 	"""
 	result = await db.execute(
 		text("CALL sp_create_project(:owner_id, :name, :description, :start_at, :end_at, NULL)"),
@@ -188,6 +193,11 @@ async def update(
 
 	Returns:
 		None。
+
+	Raises:
+		sqlalchemy.exc.DBAPIError: `end_at`が`start_at`より前の場合(SQLSTATE `P0009`)、
+			元の例外を再送出する(通常はAPIスキーマの`ProjectUpdateRequest`側で事前に
+			検証されるため、本関数まで到達するのはSP側の不変条件チェックとして働く)。
 	"""
 	await db.execute(
 		text("CALL sp_update_project(:project_id, :name, :description, :start_at, :end_at)"),

@@ -114,5 +114,10 @@ async def purge_expired(db: AsyncSession, retention_days: int) -> None:
 
 	Returns:
 		None。
+
+	Raises:
+		sqlalchemy.exc.DBAPIError: `retention_days`が0以下の場合、SP内部の
+			`RAISE EXCEPTION 'p_retention_days must be positive'`が発生し、
+			元の例外を再送出する。
 	"""
 	await db.execute(text("CALL sp_purge_api_history(:retention_days)"), {"retention_days": retention_days})
