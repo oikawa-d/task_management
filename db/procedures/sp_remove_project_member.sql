@@ -1,3 +1,7 @@
+-- 概要: プロジェクトメンバーを削除する。オーナーは削除できない。削除対象がプロジェクト内タスクの担当者になっている場合は担当を解除する。
+-- 引数: p_project_id UUID — 対象プロジェクトID / p_user_id UUID — 削除対象ユーザーID
+-- 戻り値: なし
+-- 副作用: tasksテーブルの該当プロジェクト・担当者に一致する行のassignee_idをNULLにUPDATE。project_membersテーブルから対象行をDELETE。対象ユーザーがプロジェクトオーナーの場合はERRCODE 'P0004'でRAISE EXCEPTIONする。COMMIT/ROLLBACKは本プロシージャ内では行わない。
 CREATE OR REPLACE PROCEDURE sp_remove_project_member(
     p_project_id UUID,
     p_user_id UUID

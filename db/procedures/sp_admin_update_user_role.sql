@@ -1,3 +1,7 @@
+-- 概要: 管理者操作としてユーザーのroleを変更する。本人への操作、および有効なadminが0人になる降格は禁止する。
+-- 引数: p_actor_id UUID — 操作を実行する管理者のユーザーID / p_target_id UUID — role変更対象ユーザーID / p_new_role VARCHAR — 変更後のrole
+-- 戻り値: p_old_role VARCHAR — 変更前のrole
+-- 副作用: usersテーブルのroleをUPDATE。対象行をFOR UPDATEでロックし、admin保護判定用の固定キーでpg_advisory_xact_lockによりrole/status変更全体を直列化する。自己操作時はERRCODE 'P0007'、対象ユーザー不在時は'P0010'、最後の有効adminを降格しようとした場合は'P0008'でRAISE EXCEPTIONする。COMMIT/ROLLBACKは本プロシージャ内では行わない。
 CREATE OR REPLACE PROCEDURE sp_admin_update_user_role(
     p_actor_id UUID,
     p_target_id UUID,

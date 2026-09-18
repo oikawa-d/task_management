@@ -1,3 +1,7 @@
+-- 概要: 新規プロジェクトを作成し、オーナーを最初のメンバーとして登録する。
+-- 引数: p_owner_id UUID — オーナーとなるユーザーID / p_name VARCHAR — プロジェクト名 / p_description TEXT — 説明 / p_start_at TIMESTAMPTZ — 開始日時 / p_end_at TIMESTAMPTZ — 終了日時
+-- 戻り値: p_project_id UUID — 作成されたプロジェクトのID
+-- 副作用: projectsテーブルへINSERTし、project_membersテーブルへオーナーを招待者NULLでINSERT。p_end_atがp_start_atより前の場合はERRCODE 'P0009'でRAISE EXCEPTIONする。COMMIT/ROLLBACKは本プロシージャ内では行わない。
 CREATE OR REPLACE PROCEDURE sp_create_project(
     p_owner_id UUID,
     p_name VARCHAR,
