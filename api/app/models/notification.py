@@ -1,3 +1,5 @@
+"""タスク期限通知を表す `Notification` モデルを定義するモジュール。"""
+
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -14,6 +16,15 @@ if TYPE_CHECKING:
 
 
 class Notification(UUIDPkMixin, CreatedAtMixin, Base):
+	"""`notifications` テーブルに対応するモデル。
+
+	バッチ処理が生成する期限接近・当日作成/更新タスクの通知を1件ずつ保持する。
+	`dedupe_key` によりユーザー単位での重複通知を防ぎ（`uq_notifications_user_dedupe`）、
+	`read_at` の有無で既読/未読を判定する。`task` は通知の一覧表示・検索は
+	`fn_list_notifications` のLEFT JOIN結果をrepositoryが直接マッピングするため、
+	ORM側の遅延/eagerロードは使わない（`lazy="noload"`）。
+	"""
+
 	__tablename__ = "notifications"
 
 	user_id: Mapped[uuid.UUID] = mapped_column(

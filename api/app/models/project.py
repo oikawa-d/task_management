@@ -1,3 +1,5 @@
+"""プロジェクトを表す `Project` モデルを定義するモジュール。"""
+
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -15,6 +17,14 @@ if TYPE_CHECKING:
 
 
 class Project(UUIDPkMixin, TimestampMixin, Base):
+	"""`projects` テーブルに対応するモデル。
+
+	タスクを束ねる作業単位を表し、`owner` が管理責任者、`members` が参加メンバー
+	（招待者情報を含む中間モデル `ProjectMember` を介した関連）、`tasks` が配下のタスク一覧を表す。
+	プロジェクト削除時は `members`・`tasks` を `cascade="all, delete-orphan"` で連動削除する。
+	`start_at`/`end_at` は `end_at >= start_at` の期間整合性チェック（`ck_projects_period`）を課す。
+	"""
+
 	__tablename__ = "projects"
 
 	name: Mapped[str] = mapped_column(String(100), nullable=False)

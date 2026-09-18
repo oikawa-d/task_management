@@ -1,3 +1,5 @@
+"""全DTOスキーマが共通で継承する基底クラスを定義するモジュール。"""
+
 from pydantic import BaseModel, ConfigDict
 
 

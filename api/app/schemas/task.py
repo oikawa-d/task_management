@@ -1,3 +1,5 @@
+"""タスク管理エンドポイント（`tasks_router`、カンバンボード・カレンダー含む）の入出力DTOを定義するモジュール。"""
+
 from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
@@ -14,10 +16,13 @@ CalendarScope = Literal["me", "project"]
 
 
 def _default_per_page() -> int:
+	"""タスク一覧のデフォルトページサイズを設定値から取得する。"""
 	return get_backend_settings().pagination_default_per_page
 
 
 class TaskAssignee(BaseModel):
+	"""タスク担当者の表示用情報を表すDTO。ORMの`User`から`from_attributes`で変換する。"""
+
 	model_config = ConfigDict(from_attributes=True)
 
 	id: UUID4
@@ -26,6 +31,8 @@ class TaskAssignee(BaseModel):
 
 
 class TaskCreator(BaseModel):
+	"""タスク作成者の表示用情報を表すDTO。ORMの`User`から`from_attributes`で変換する。"""
+
 	model_config = ConfigDict(from_attributes=True)
 
 	id: UUID4
@@ -34,6 +41,8 @@ class TaskCreator(BaseModel):
 
 
 class TaskCreateRequest(BaseModel):
+	"""`POST /projects/{project_id}/tasks` のリクエストDTO。"""
+
 	model_config = ConfigDict(extra="forbid")
 
 	title: str = Field(min_length=1, max_length=150)
@@ -44,16 +53,28 @@ class TaskCreateRequest(BaseModel):
 
 
 class TaskCreateFlatRequest(TaskCreateRequest):
+	"""`POST /tasks`（プロジェクト非依存の作成）のリクエストDTO。プロジェクト未指定時は担当者割当を禁止する。"""
+
 	project_id: UUID4 | None = None
 
 	@model_validator(mode="after")
 	def reject_assignee_without_project(self) -> "TaskCreateFlatRequest":
+		"""プロジェクト未所属のタスクに担当者が指定されていないことを検証する。
+
+		Returns:
+			検証を通過した自インスタンス。
+
+		Raises:
+			ValueError: `project_id`が未指定にもかかわらず`assignee_id`が指定されている場合。
+		"""
 		if self.project_id is None and self.assignee_id is not None:
 			raise ValueError("assignee_id cannot be set for an unassigned task")
 		return self
 
 
 class TaskUpdateRequest(BaseModel):
+	"""`PATCH /tasks/{task_id}` のリクエストDTO。`version`による楽観ロックと部分更新を行う。"""
+
 	model_config = ConfigDict(extra="forbid")
 
 	version: int
@@ -67,6 +88,14 @@ class TaskUpdateRequest(BaseModel):
 
 	@model_validator(mode="after")
 	def reject_null_for_non_nullable_fields(self) -> "TaskUpdateRequest":
+		"""非NULL項目（`title`・`status`・`position`・`is_active`）に`null`が明示指定された場合を拒否する。
+
+		Returns:
+			検証を通過した自インスタンス。
+
+		Raises:
+			ValueError: 対象フィールドが指定されており、かつ値が`None`の場合。
+		"""
 		for field_name in ("title", "status", "position", "is_active"):
 			if field_name in self.model_fields_set and getattr(self, field_name) is None:
 				raise ValueError(f"{field_name} cannot be null")
@@ -74,6 +103,8 @@ class TaskUpdateRequest(BaseModel):
 
 
 class TaskSummary(BaseModel):
+	"""カンバンボード表示用のタスク要約DTO。ORMの`Task`から`from_attributes`で変換する。"""
+
 	model_config = ConfigDict(from_attributes=True)
 
 	id: UUID4
@@ -90,6 +121,8 @@ class TaskSummary(BaseModel):
 
 
 class TaskResponse(BaseModel):
+	"""タスク1件の基本情報を表すレスポンスDTO。ORMの`Task`から`from_attributes`で変換する。"""
+
 	model_config = ConfigDict(from_attributes=True)
 
 	id: UUID4
@@ -109,24 +142,32 @@ class TaskResponse(BaseModel):
 
 
 class TaskDetailResponse(TaskResponse):
+	"""タスク詳細取得エンドポイントのレスポンスDTO。コメント件数を追加で保持する。"""
+
 	comment_count: int
 
 
 class TaskListItem(TaskDetailResponse):
-	pass
+	"""`GET /tasks` 一覧の1件分のレスポンスDTO。`TaskDetailResponse`と同一構造。"""
 
 
 class CalendarTaskItem(TaskListItem):
+	"""カレンダー表示用エンドポイントのレスポンスDTO。表示対象日（`due_date`）を追加で保持する。"""
+
 	due_date: date
 
 
 class BoardColumns(BaseModel):
+	"""カンバンボードのステータス別タスク列を表すDTO。"""
+
 	todo: list[TaskSummary] = Field(default_factory=list)
 	in_progress: list[TaskSummary] = Field(default_factory=list)
 	done: list[TaskSummary] = Field(default_factory=list)
 
 
 class BoardResponse(BaseModel):
+	"""`GET /projects/{project_id}/board` のレスポンスDTO。"""
+
 	model_config = ConfigDict(from_attributes=True)
 
 	project_id: UUID4
@@ -135,6 +176,8 @@ class BoardResponse(BaseModel):
 
 
 class TaskListQuery(BaseModel):
+	"""`GET /tasks` のクエリパラメータDTO。ページネーション・絞り込み・並び替えを指定する。"""
+
 	page: int = Field(default=1, ge=1)
 	per_page: int = Field(default_factory=_default_per_page, ge=1)
 	# FastAPIはDepends()でクエリパラメータモデルを解決する際、この型注釈だけから
@@ -151,6 +194,18 @@ class TaskListQuery(BaseModel):
 	@field_validator("project_id", mode="before")
 	@classmethod
 	def normalize_unassigned_filter(cls, value: object) -> object:
+		"""`project_id`フィルタの`"null"`（未所属指定）を正規化し、それ以外の文字列をUUIDへ変換する。
+
+		Args:
+			value: パース前の入力値。
+
+		Returns:
+			`"null"`は`"unassigned"`へ正規化した値、UUID文字列は`UUID`へ変換した値、
+			それ以外はそのままの値。
+
+		Raises:
+			ValueError: `"unassigned"`が直接指定された場合、またはUUIDとして解釈できない文字列の場合。
+		"""
 		if value == "null":
 			return "unassigned"
 		if isinstance(value, str) and value == "unassigned":
@@ -165,12 +220,25 @@ class TaskListQuery(BaseModel):
 	@field_validator("per_page")
 	@classmethod
 	def validate_per_page_limit(cls, value: int) -> int:
+		"""`per_page`が設定上限（`pagination_max_per_page`）を超えていないかを検証する。
+
+		Args:
+			value: 検証対象のページサイズ。
+
+		Returns:
+			検証を通過した値。
+
+		Raises:
+			ValueError: 設定上限を超えている場合。
+		"""
 		if value > get_backend_settings().pagination_max_per_page:
 			raise ValueError("per_page exceeds the configured maximum")
 		return value
 
 
 class TaskListMeta(BaseModel):
+	"""タスク一覧のページネーション情報を表すDTO。"""
+
 	page: int = Field(ge=1)
 	per_page: int = Field(ge=1)
 	total: int = Field(ge=0)
@@ -178,11 +246,15 @@ class TaskListMeta(BaseModel):
 
 
 class TaskListResponse(BaseModel):
+	"""`GET /tasks` のレスポンスDTO。"""
+
 	items: list[TaskListItem]
 	meta: TaskListMeta
 
 
 class CalendarTaskQuery(BaseModel):
+	"""カレンダー表示用エンドポイントのクエリパラメータDTO。表示期間とスコープ（自分/プロジェクト）を指定する。"""
+
 	from_date: date = Field(alias="from")
 	to_date: date = Field(alias="to")
 	scope: CalendarScope
@@ -190,6 +262,15 @@ class CalendarTaskQuery(BaseModel):
 
 	@model_validator(mode="after")
 	def validate_range_and_scope(self) -> "CalendarTaskQuery":
+		"""表示期間が62日以内であること、および`scope`と`project_id`の組み合わせが整合していることを検証する。
+
+		Returns:
+			検証を通過した自インスタンス。
+
+		Raises:
+			ValueError: 期間が62日を超える場合、`scope="project"`で`project_id`が未指定の場合、
+				または`scope="me"`で`project_id`が指定されている場合。
+		"""
 		if self.to_date < self.from_date or (self.to_date - self.from_date).days > 62:
 			raise ValueError("calendar range must be within 62 days")
 		if self.scope == "project" and self.project_id is None:

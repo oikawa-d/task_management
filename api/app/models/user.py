@@ -1,3 +1,5 @@
+"""ユーザーアカウントを表す `User` モデルを定義するモジュール。"""
+
 from datetime import date, datetime
 from typing import TYPE_CHECKING
 
@@ -13,6 +15,15 @@ if TYPE_CHECKING:
 
 
 class User(UUIDPkMixin, TimestampMixin, Base):
+	"""`users` テーブルに対応するモデル。
+
+	認証・認可の主体となるユーザーアカウントを表す。`password_hash` はOAuth専用アカウントでは
+	`NULL` を許容し、`role`（member/admin）で権限を区別する。`username`・`email`・氏名カナは
+	DB側のCHECK制約（`ck_users_username_format` 等）で形式を強制する。`oauth_accounts` は
+	アカウント削除に伴い連動削除するが、`login_histories` は監査証跡として削除せず残す
+	（`lazy="noload"` で一覧取得時の暗黙ロードを避ける）。
+	"""
+
 	__tablename__ = "users"
 
 	username: Mapped[str] = mapped_column(String(50), nullable=False)

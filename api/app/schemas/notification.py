@@ -1,3 +1,5 @@
+"""通知関連エンドポイント（`notifications_router`）の入出力DTOを定義するモジュール。"""
+
 from datetime import datetime
 from typing import Literal, cast
 from uuid import UUID
@@ -13,18 +15,24 @@ _MAX_PER_PAGE = cast(int, BackendSettings.model_fields["pagination_max_per_page"
 
 
 class NotificationListQuery(BaseModel):
+	"""`GET /notifications` のクエリパラメータDTO。ページネーションと未読限定表示の指定を受け取る。"""
+
 	page: int = Field(default=1, ge=1)
 	per_page: int = Field(default=_DEFAULT_PER_PAGE, ge=1, le=_MAX_PER_PAGE)
 	unread_only: bool = False
 
 
 class NotificationTask(BaseModel):
+	"""通知が紐づくタスクの表示用サマリDTO。`NotificationItem.task` として埋め込まれる。"""
+
 	id: UUID
 	project_id: UUID | None
 	title: str
 
 
 class NotificationItem(BaseModel):
+	"""通知一覧の1件分を表すレスポンスDTO。"""
+
 	id: UUID
 	type: NotificationType
 	title: str
@@ -36,6 +44,8 @@ class NotificationItem(BaseModel):
 
 
 class NotificationMeta(BaseModel):
+	"""通知一覧のページネーション情報を表すDTO。"""
+
 	page: int = Field(ge=1)
 	per_page: int = Field(ge=1, le=_MAX_PER_PAGE)
 	total: int = Field(ge=0)
@@ -43,21 +53,29 @@ class NotificationMeta(BaseModel):
 
 
 class NotificationListResponse(BaseModel):
+	"""`GET /notifications` のレスポンスDTO。通知一覧・ページ情報・未読件数を返す。"""
+
 	items: list[NotificationItem]
 	meta: NotificationMeta
 	unread_count: int = Field(ge=0)
 
 
 class UnreadCountResponse(BaseModel):
+	"""`GET /notifications/unread-count` のレスポンスDTO。未読通知件数のみを返す。"""
+
 	unread_count: int = Field(ge=0)
 
 
 class NotificationReadResponse(BaseModel):
+	"""`PATCH /notifications/{id}/read` のレスポンスDTO。既読化した通知IDと更新後の未読件数を返す。"""
+
 	id: UUID
 	read_at: datetime
 	unread_count: int = Field(ge=0)
 
 
 class NotificationReadAllResponse(BaseModel):
+	"""`PATCH /notifications/read-all` のレスポンスDTO。一括既読化した件数と更新後の未読件数を返す。"""
+
 	updated_count: int = Field(ge=0)
 	unread_count: int = Field(ge=0)
