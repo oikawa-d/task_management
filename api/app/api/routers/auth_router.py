@@ -72,6 +72,25 @@ async def register(
 	request: Request,
 	db: AsyncSession = Depends(get_db_session),
 ) -> RegisterResponse:
+	"""POST /api/auth/register: メールアドレス・パスワードで新規会員登録を行う。
+
+	認可: 不要（未認証で呼び出し可能）。Origin検証とレート制限（登録用）を課す。
+	ユーザー列挙を防ぐため、確認メール送信の成否によらず同一メッセージを返す。
+
+	Args:
+		payload: 登録情報（メールアドレス・パスワード等）。
+		background: 確認メール送信をバックグラウンド実行するためのタスクキュー。
+		request: クライアントIP解決等に用いるRequest。
+		db: DBセッション。
+
+	Returns:
+		201 Createdで登録受付メッセージを返す。
+
+	Raises:
+		DuplicateUsernameError: ユーザーIDが既に使用されている場合（409 DUPLICATE_USERNAME）。
+		DuplicateEmailError: メールアドレスが既に使用されている場合（409 DUPLICATE_EMAIL）。
+		TooManyAttemptsError: レート制限超過時（429 TOO_MANY_ATTEMPTS）。
+	"""
 	user = await auth_service.register(payload, background, request, db)
 	return RegisterResponse(id=user.id, email=user.email, message=REGISTER_ACCEPTED_MESSAGE)
 
@@ -85,6 +104,29 @@ async def login(
 	strategy: AuthStrategy = Depends(get_auth_strategy),
 	_: None = Depends(verify_origin),
 ) -> LoginResponse | Response:
+	"""POST /api/auth/login: ユーザーIDまたはメールアドレスとパスワードでログインする。
+
+	認可: 不要（未認証で呼び出し可能）。Origin検証を課す。
+	sessionモードではCookie（session/csrf）を発行し204を返し、
+	jwtモードではrefresh/csrf tokenをCookieに設定した上でaccess tokenをJSONで返す。
+
+	Args:
+		payload: ログイン識別子とパスワード。
+		request: レート制限判定用のクライアントIP解決等に用いるRequest。
+		response: Set-Cookie設定先のResponse。
+		db: DBセッション。
+		strategy: 現在の認証方式（session/jwt）に対応するStrategy。
+
+	Returns:
+		sessionモードは204 No Content、jwtモードは200 OKでaccess tokenを返す。
+
+	Raises:
+		InvalidCredentialsError: ID・パスワードが一致しない場合（401 INVALID_CREDENTIALS）。
+		UserInactiveError: アカウントが無効化されている場合（403 USER_INACTIVE）。
+		EmailNotVerifiedError: メール未認証の場合（403 EMAIL_NOT_VERIFIED）。
+		TooManyAttemptsError: 連続失敗によるロック中の場合（429 TOO_MANY_ATTEMPTS）。
+		AppError: jwtモードでStrategyがaccess tokenを発行できなかった内部不整合の場合（500 INTERNAL_ERROR）。
+	"""
 	result = await auth_service.login(payload.identifier, payload.password, request, response, db, strategy)
 	if result.auth_mode == "session":
 		return _no_content_with_cookies(response)
@@ -102,6 +144,20 @@ async def logout(
 	_: None = Depends(verify_origin),
 	__csrf: None = Depends(verify_csrf_for_logout),
 ) -> None:
+	"""POST /api/auth/logout: ログアウトし認証状態を破棄する。
+
+	認可: 不要（未認証状態での呼び出しも許容し、その場合は何もしない）。
+	Origin検証と、ログアウト専用のCSRF検証（`verify_csrf_for_logout`）を課す。
+	sessionモードはセッションを削除し、jwtモードはrefresh tokenを失効させる。いずれもCookieを削除する。
+
+	Args:
+		request: Cookie読み取りに用いるRequest。
+		response: Cookie削除を反映するResponse。
+		strategy: 現在の認証方式に対応するStrategy。
+
+	Returns:
+		204 No Contentを返す。
+	"""
 	await auth_service.logout(request, response, strategy)
 
 
@@ -111,6 +167,18 @@ async def get_me(
 	db: AsyncSession = Depends(get_db_session),
 	settings: BackendSettings = Depends(get_backend_settings),
 ) -> MeResponse:
+	"""GET /api/auth/me: ログイン中ユーザー自身のプロフィールと現在の認証方式を取得する。
+
+	認可: 認証必須（`get_current_user`、未認証は401 UNAUTHENTICATED）。
+
+	Args:
+		current_user: 認証済みユーザー。
+		db: DBセッション。
+		settings: 現在の`auth_mode`取得用の設定。
+
+	Returns:
+		200 OKでプロフィールと`auth_mode`を返す。
+	"""
 	profile = await user_service.get_profile(current_user, db)
 	return MeResponse(**profile.model_dump(), auth_mode=settings.auth_mode)
 
@@ -120,6 +188,17 @@ async def get_auth_config(
 	response: Response,
 	settings: BackendSettings = Depends(get_backend_settings),
 ) -> AuthConfigResponse:
+	"""GET /api/auth/config: フロントが認証UIを出し分けるための公開設定を取得する。
+
+	認可: 不要（未認証で呼び出し可能）。レスポンスは`Cache-Control: no-store`とする。
+
+	Args:
+		response: no-storeヘッダ設定先のResponse。
+		settings: `auth_mode`やGoogleログイン有効可否を含む設定。
+
+	Returns:
+		200 OKで認証方式・OAuth有効可否等を返す。
+	"""
 	response.headers["Cache-Control"] = "no-store"
 	return auth_service.get_auth_config(settings)
 
@@ -130,6 +209,26 @@ async def refresh(
 	response: Response,
 	strategy: AuthStrategy = Depends(get_auth_strategy),
 ) -> RefreshResponse:
+	"""POST /api/auth/refresh: refresh tokenを用いてaccess tokenを再発行する（jwtモード専用）。
+
+	認可: 不要な認証ヘッダの代わりにrefresh token Cookieを検証する。
+	Origin検証・CSRF検証を課す（不正時403 CSRF_INVALID）。
+	refresh tokenはローテーションされ、再利用検知時はトークンファミリー全体を失効させる。
+
+	Args:
+		request: refresh token Cookie読み取りに用いるRequest。
+		response: 新しいCookie設定先のResponse。
+		strategy: 現在の認証方式に対応するStrategy。
+
+	Returns:
+		200 OKで新しいaccess tokenを返す。
+
+	Raises:
+		TokenInvalidError: refresh token Cookieが存在しない場合（401 TOKEN_INVALID）。
+		TokenRevokedError: 既に失効・再利用検知済みのtokenの場合（401 TOKEN_REVOKED）。
+		NotSupportedInModeError: sessionモードで呼び出された場合（405 NOT_SUPPORTED_IN_MODE）。
+		AppError: Strategyがaccess tokenを発行できなかった内部不整合の場合（500 INTERNAL_ERROR）。
+	"""
 	result = await auth_service.refresh(request, response, strategy)
 	if result.access_token is None:
 		# jwtモードのStrategyがaccess tokenを返さないのは内部不整合であり、成功応答にしてはならない。
@@ -143,6 +242,21 @@ async def refresh(
 	dependencies=[Depends(_verify_email_rate_limit)],
 )
 async def verify_email(payload: VerifyEmailRequest, db: AsyncSession = Depends(get_db_session)) -> None:
+	"""POST /api/auth/verify-email: メール内リンクのトークンでメールアドレス認証を完了する。
+
+	認可: 不要（未認証で呼び出し可能）。メール認証用のレート制限を課す。
+
+	Args:
+		payload: 確認メールに含まれる検証トークン。
+		db: DBセッション。
+
+	Returns:
+		204 No Contentを返す。
+
+	Raises:
+		InvalidVerifyTokenError: トークンが無効または期限切れの場合（400 INVALID_VERIFY_TOKEN）。
+		TooManyAttemptsError: レート制限超過時（429 TOO_MANY_ATTEMPTS）。
+	"""
 	await email_verification_service.verify_email(payload.token, db)
 
 
@@ -157,6 +271,22 @@ async def resend_verify_email(
 	background: BackgroundTasks,
 	db: AsyncSession = Depends(get_db_session),
 ) -> ResendVerifyEmailResponse:
+	"""POST /api/auth/verify-email/resend: 確認メールを再送する。
+
+	認可: 不要（未認証で呼び出し可能）。再送用のレート制限を課す。
+	ユーザー列挙を防ぐため、対象メールアドレスの存在有無に関わらず同一メッセージを返す。
+
+	Args:
+		payload: 再送先メールアドレス。
+		background: メール送信をバックグラウンド実行するためのタスクキュー。
+		db: DBセッション。
+
+	Returns:
+		202 Acceptedで再送受付メッセージを返す。
+
+	Raises:
+		TooManyAttemptsError: レート制限超過時（429 TOO_MANY_ATTEMPTS）。
+	"""
 	await email_verification_service.resend_verification(payload.email, background, db)
 	return ResendVerifyEmailResponse(message=RESEND_ACCEPTED_MESSAGE)
 
@@ -172,6 +302,22 @@ async def password_forgot(
 	background: BackgroundTasks,
 	db: AsyncSession = Depends(get_db_session),
 ) -> PasswordForgotResponse:
+	"""POST /api/auth/password/forgot: パスワード再設定メールの送信を申請する。
+
+	認可: 不要（未認証で呼び出し可能）。申請用のレート制限を課す。
+	ユーザー列挙を防ぐため、対象メールアドレスの登録有無に関わらず同一メッセージを返す。
+
+	Args:
+		payload: 再設定対象のメールアドレス。
+		background: メール送信をバックグラウンド実行するためのタスクキュー。
+		db: DBセッション。
+
+	Returns:
+		202 Acceptedで受付メッセージを返す。
+
+	Raises:
+		TooManyAttemptsError: レート制限超過時（429 TOO_MANY_ATTEMPTS）。
+	"""
 	await email_verification_service.request_password_reset(payload.email, background, db)
 	return PasswordForgotResponse(message=PASSWORD_FORGOT_ACCEPTED_MESSAGE)
 
@@ -182,6 +328,21 @@ async def password_forgot(
 	dependencies=[Depends(_password_reset_rate_limit)],
 )
 async def password_reset(payload: PasswordResetRequest, db: AsyncSession = Depends(get_db_session)) -> None:
+	"""POST /api/auth/password/reset: メール内リンクのトークンで新しいパスワードを設定する。
+
+	認可: 不要（未認証で呼び出し可能）。パスワード再設定用のレート制限を課す。
+
+	Args:
+		payload: 再設定トークンと新しいパスワード。
+		db: DBセッション。
+
+	Returns:
+		204 No Contentを返す。
+
+	Raises:
+		InvalidResetTokenError: トークンが無効または期限切れの場合（400 INVALID_RESET_TOKEN）。
+		TooManyAttemptsError: レート制限超過時（429 TOO_MANY_ATTEMPTS）。
+	"""
 	await email_verification_service.reset_password(payload.token, payload.new_password, db)
 
 

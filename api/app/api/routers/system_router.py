@@ -1,3 +1,5 @@
+"""死活監視用のヘルスチェックエンドポイント。"""
+
 from fastapi import APIRouter, Depends, Response
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -18,6 +20,20 @@ async def get_health(
 	redis_client: Redis = Depends(get_redis_client),
 	settings: BackendSettings = Depends(get_backend_settings),
 ) -> HealthResponse:
+	"""GET /api/health: DB・Redisへの疎通を含むアプリケーションの死活状態を返す。
+
+	認可: 不要（未認証で呼び出し可能）。レスポンスは`Cache-Control: no-store`とする。
+
+	Args:
+		response: ステータスコード・no-storeヘッダ設定先のResponse。
+		db_engine: DB疎通確認用のエンジン。
+		redis_client: Redis疎通確認用のクライアント。
+		settings: ヘルスチェックの判定に用いる設定。
+
+	Returns:
+		DB・Redisともに正常なら200 OK、いずれかが異常なら503 Service Unavailableで、
+		各コンポーネントの状態を含む結果を返す（例外は送出しない）。
+	"""
 	health_response, is_healthy = await check_health(db_engine, redis_client, settings)
 	response.headers["Cache-Control"] = "no-store"
 	response.status_code = 200 if is_healthy else 503

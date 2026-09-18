@@ -55,6 +55,23 @@ async def oauth_google_start(
 	redirect_to: str | None = Query(default=None),
 	settings: BackendSettings = Depends(get_backend_settings),
 ) -> RedirectResponse:
+	"""GET /api/auth/oauth/google: GoogleのOAuth認可画面へリダイレクトする。
+
+	認可: 不要（未認証で呼び出し可能）。Googleログインが無効な設定の場合は404 NOT_FOUNDを返す。
+	CSRF対策のstate・PKCE用のcode_verifier・nonceをCookieに設定してから認可URLへ302する。
+
+	Args:
+		response: state等のCookie設定先のResponse。
+		request: リクエスト情報取得用のRequest。
+		redirect_to: 認証完了後にフロントで復元する遷移先パス。
+		settings: Googleログイン有効可否・OAuthエンドポイント設定。
+
+	Returns:
+		302でGoogleの認可エンドポイントへリダイレクトする。
+
+	Raises:
+		OAuthDisabledError: Googleログインが無効な場合（404 OAUTH_DISABLED）。
+	"""
 	_ensure_google_login_enabled(settings)
 	result = await oauth_service.oauth_start(redirect_to, request, response)
 	redirect = RedirectResponse(result.authorize_url, status_code=_HTTP_FOUND)
@@ -70,6 +87,28 @@ async def oauth_google_callback(
 	db: AsyncSession = Depends(get_db_session),
 	settings: BackendSettings = Depends(get_backend_settings),
 ) -> RedirectResponse:
+	"""GET /api/auth/oauth/google/callback: GoogleのOAuth認可後のcallbackを処理する。
+
+	認可: 不要（未認証で呼び出し可能。ブラウザからの直接遷移のため認可ヘッダは使わない）。
+	正常系・異常系ともに基本的にJSONエラーではなく`/login?error=...`または
+	`/oauth/callback#...`へ302リダイレクトする（ブラウザの直接遷移のため）。
+	ただし、Redis障害等によるServiceUnavailableErrorとレート制限超過のTooManyAttemptsErrorは
+	リダイレクトに変換せずそのまま送出する。
+
+	Args:
+		request: state Cookie等の読み取りに用いるRequest。
+		response: state/nonce等のCookie削除を反映するResponse。
+		query: Googleから付与される`code`・`state`・`error`クエリ。
+		db: DBセッション。
+		settings: Googleログイン有効可否・フロントURL等の設定。
+
+	Returns:
+		302で`/login?error=...`（拒否・失敗時）または`/oauth/callback#...`（成功時）へリダイレクトする。
+
+	Raises:
+		ServiceUnavailableError: Redis等の基盤障害時（503 SERVICE_UNAVAILABLE）。
+		TooManyAttemptsError: レート制限超過時（429 TOO_MANY_ATTEMPTS）。
+	"""
 	code = query.code
 	state = query.state
 	error = query.error
@@ -135,6 +174,26 @@ async def oauth_exchange(
 	db: AsyncSession = Depends(get_db_session),
 	settings: BackendSettings = Depends(get_backend_settings),
 ) -> OAuthExchangeResponse:
+	"""POST /api/auth/oauth/exchange: OAuth callback発行のhandoff codeをaccess tokenへ交換する（jwtモード専用）。
+
+	認可: 不要な認証ヘッダの代わりにhandoff codeを検証する。Origin検証を課す。
+	sessionモードでの呼び出しは405を返す。レスポンスは`Cache-Control: no-store`とする。
+
+	Args:
+		payload: callbackで発行されたhandoff code。
+		request: リクエスト情報取得用のRequest。
+		response: refresh/csrf tokenのCookie設定先のResponse。
+		db: DBセッション。
+		settings: Googleログイン有効可否・`auth_mode`設定。
+
+	Returns:
+		200 OKでaccess tokenを返す。
+
+	Raises:
+		OAuthDisabledError: Googleログインが無効な場合（404 OAUTH_DISABLED）。
+		NotSupportedInModeError: sessionモードで呼び出された場合（405 NOT_SUPPORTED_IN_MODE）。
+		OAuthHandoffInvalidError: handoff codeが無効・期限切れの場合（400 OAUTH_HANDOFF_INVALID）。
+	"""
 	_ensure_google_login_enabled(settings)
 	if settings.auth_mode != "jwt":
 		raise NotSupportedInModeError()
@@ -144,6 +203,14 @@ async def oauth_exchange(
 
 
 def _callback_error_value(exc: Exception) -> str:
+	"""callback処理中の例外を、`/login?error=...`へ渡すフロント向けエラー種別文字列へ変換する。
+
+	Args:
+		exc: callback処理中に捕捉した例外。
+
+	Returns:
+		対応するエラー種別が定義されていればそれを、無ければ`OAUTH_ERROR_FAILED`を返す。
+	"""
 	for exception_type, error_value in _CALLBACK_ERROR_BY_EXCEPTION:
 		if isinstance(exc, exception_type):
 			return error_value
@@ -151,15 +218,31 @@ def _callback_error_value(exc: Exception) -> str:
 
 
 def _is_google_login_enabled(settings: BackendSettings) -> bool:
+	"""現在の設定でGoogleログインが有効かどうかを判定する。"""
 	return auth_service.get_auth_config(settings).google_login_enabled
 
 
 def _ensure_google_login_enabled(settings: BackendSettings) -> None:
+	"""Googleログインが無効な場合にOAuthDisabledError（404 OAUTH_DISABLED）を送出する。
+
+	Raises:
+		OAuthDisabledError: Googleログインが無効な場合。
+	"""
 	if not _is_google_login_enabled(settings):
 		raise OAuthDisabledError()
 
 
 def _login_error_redirect(error_value: str, settings: BackendSettings, response: Response) -> RedirectResponse:
+	"""フロントのログイン画面へエラー種別付きでリダイレクトするResponseを組み立てる。
+
+	Args:
+		error_value: フロントに伝えるエラー種別文字列。
+		settings: リダイレクト先ベースURLの設定。
+		response: 引き継ぐSet-Cookieを保持するResponse。
+
+	Returns:
+		`/login?error=...`への302 RedirectResponse。
+	"""
 	location = f"{settings.frontend_base_url}/login?{urlencode({'error': error_value})}"
 	return _redirect_with_cookies(location, response)
 
