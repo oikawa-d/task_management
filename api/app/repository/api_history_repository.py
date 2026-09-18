@@ -1,3 +1,9 @@
+"""APIアクセス履歴(api_history テーブル)へのデータアクセス層。
+
+各関数はトランザクションのcommit/rollbackを行わない。呼び出し元のservice層(または
+ミドルウェア)が同一セッションのcommitを担う。
+"""
+
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -15,6 +21,8 @@ from app.models.api_history import ApiHistory
 
 @dataclass(frozen=True)
 class ApiHistoryCreateInput:
+	"""`create`関数へ渡すAPI履歴1件分の入力値をまとめるデータクラス。"""
+
 	request_id: uuid.UUID
 	method: str
 	path: str
@@ -31,6 +39,22 @@ class ApiHistoryCreateInput:
 
 
 async def create(db: AsyncSession, data: ApiHistoryCreateInput) -> uuid.UUID:
+	"""APIアクセス履歴を1件追加する。
+
+	api_history テーブルへ直接INSERTする副作用を持つ(業務ロジックを伴わない追記専用の
+	ため生SQLを使用する設計判断による)。本関数自体はcommitを行わず、呼び出し元が
+	同一セッションでcommitする。
+
+	Args:
+		db: 更新に使用する非同期DBセッション。
+		data: 挿入する履歴1件分の値。`created_at`がNoneの場合はDBのデフォルト値が使われる。
+
+	Returns:
+		挿入された行のid(UUID)。
+
+	Raises:
+		sqlalchemy.exc.DBAPIError: INSERTに失敗した場合(一意制約違反等)、そのまま送出する。
+	"""
 	params: dict[str, object] = {
 		"request_id": data.request_id,
 		"method": data.method,
@@ -62,9 +86,38 @@ async def create(db: AsyncSession, data: ApiHistoryCreateInput) -> uuid.UUID:
 
 
 async def list_by_request_id(db: AsyncSession, request_id: uuid.UUID) -> ApiHistory | None:
+	"""リクエストIDに紐づくAPI履歴を1件取得する。
+
+	api_history テーブルを `request_id` で検索する。
+
+	Args:
+		db: 検索に使用する非同期DBセッション。
+		request_id: 検索対象のリクエストID。
+
+	Returns:
+		該当するApiHistory。該当行が存在しない場合はNone。
+	"""
 	result = await db.execute(select(ApiHistory).where(ApiHistory.request_id == request_id))
 	return result.scalars().one_or_none()
 
 
 async def purge_expired(db: AsyncSession, retention_days: int) -> None:
+	"""保持期間を過ぎた古いAPI履歴を削除する。
+
+	ストアドプロシージャ `sp_purge_api_history` を呼び出し、api_history テーブルから
+	`retention_days` を超えて経過した行を削除する副作用を持つ。本関数自体はcommitを
+	行わず、呼び出し元のservice層が同一セッションでcommitする。
+
+	Args:
+		db: 更新に使用する非同期DBセッション。
+		retention_days: この日数より古い履歴を削除対象とする保持日数。
+
+	Returns:
+		None。
+
+	Raises:
+		sqlalchemy.exc.DBAPIError: `retention_days`が0以下の場合、SP内部の
+			`RAISE EXCEPTION 'p_retention_days must be positive'`が発生し、
+			元の例外を再送出する。
+	"""
 	await db.execute(text("CALL sp_purge_api_history(:retention_days)"), {"retention_days": retention_days})
