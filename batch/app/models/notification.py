@@ -1,3 +1,5 @@
+"""通知（notificationsテーブル）のSQLAlchemyモデルを定義するモジュール。"""
+
 import uuid
 from datetime import datetime
 
@@ -9,6 +11,12 @@ from app.models.base import Base, CreatedAtMixin, UUIDPkMixin
 
 
 class Notification(UUIDPkMixin, CreatedAtMixin, Base):
+	"""ユーザーへの期限通知1件を表すモデル。
+
+	`dedupe_key`と`user_id`の複合一意制約により、同一ユーザーへの
+	同一通知の重複挿入をDB側で防止する（通知dedupe）。
+	"""
+
 	__tablename__ = "notifications"
 
 	user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)

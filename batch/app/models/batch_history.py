@@ -1,3 +1,5 @@
+"""batchジョブ実行履歴（batch_historyテーブル）のSQLAlchemyモデルを定義するモジュール。"""
+
 import uuid
 from datetime import datetime
 
@@ -12,6 +14,8 @@ class BatchHistory(UUIDPkMixin, Base):
 	"""batchジョブ1回の実行履歴。API側には同テーブルを更新できるモデルを置かない（12_table_batch_history.md §4）。
 
 	created_at相当の役割はstarted_atが担うため、CreatedAtMixin/TimestampMixinは使わずupdated_atのみを持つ。
+	`__table_args__`で状態（inprogress/complete/error）とそれに対応する
+	ended_at・error_code・error_detailの整合性をDB制約として強制する。
 	"""
 
 	__tablename__ = "batch_history"
