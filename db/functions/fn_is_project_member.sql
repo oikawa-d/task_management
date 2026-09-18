@@ -1,3 +1,8 @@
+-- 概要: 指定ユーザーが有効かつ、管理者またはプロジェクトメンバーとしてそのプロジェクトへのアクセス権を持つかを判定する
+-- 引数: p_project_id UUID — 判定対象のプロジェクトID／p_user_id UUID — 判定対象のユーザーID
+-- 戻り値: BOOLEAN — アクセス権を持つ場合はtrue
+-- 副作用: なし（参照のみ）
+-- 主な呼び出し元: api/app/repository/project_member_repository.py, api/app/repository/project_repository.py
 CREATE OR REPLACE FUNCTION fn_is_project_member(
     p_project_id UUID,
     p_user_id UUID

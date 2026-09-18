@@ -1,3 +1,8 @@
+-- 概要: 管理者向けにユーザー一覧を検索条件・ページングで絞り込み、全件数を付与して返す
+-- 引数: p_query VARCHAR — ユーザー名/メールアドレスの部分一致検索語（NULLで無視）／p_role VARCHAR — ロールで絞り込み（NULLで無視）／p_is_active BOOLEAN — 有効/無効で絞り込み（NULLで無視）／p_limit INTEGER — 取得件数上限／p_offset INTEGER — 取得開始位置
+-- 戻り値: TABLE("user" users, total_count BIGINT) — 条件に合致したユーザー行と、絞り込み後の全件数
+-- 副作用: なし（参照のみ）
+-- 主な呼び出し元: api/app/repository/admin_repository.py
 CREATE OR REPLACE FUNCTION fn_admin_list_users(
     p_query VARCHAR,
     p_role VARCHAR,

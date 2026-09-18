@@ -1,3 +1,8 @@
+-- 概要: 呼び出しユーザーが閲覧権限を持つプロジェクト一覧を取得し、メンバー数・ステータス別タスク数・全件数を付与して返す
+-- 引数: p_user_id UUID — 権限判定に使う呼び出しユーザーID／p_include_inactive BOOLEAN — 無効プロジェクトも含めるか／p_limit INTEGER — 取得件数上限／p_offset INTEGER — 取得開始位置
+-- 戻り値: TABLE(project projects, member_count BIGINT, task_count_todo BIGINT, task_count_in_progress BIGINT, task_count_done BIGINT, total_count BIGINT) — 権限内のプロジェクト行と集計値、絞り込み後の全件数
+-- 副作用: なし（参照のみ）
+-- 主な呼び出し元: api/app/repository/project_repository.py
 CREATE OR REPLACE FUNCTION fn_list_projects(
     p_user_id UUID,
     p_include_inactive BOOLEAN,
