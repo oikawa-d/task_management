@@ -1,3 +1,10 @@
+"""Google OAuth2（Authorization Code + PKCE）のトークン交換・ユーザー情報取得・ID token検証。
+
+認可コードの交換、userinfoエンドポイントからのプロフィール取得、GoogleのJWKSを用いた
+ID tokenの署名・audience・issuer・nonce検証を行う。ネットワーク・検証エラーは
+すべて`OAuthFailedError`（400 OAUTH_FAILED）に正規化して送出する。
+"""
+
 from __future__ import annotations
 
 import json
@@ -20,6 +27,11 @@ logger = logging.getLogger("app.oauth")
 
 
 def _log_oauth_failure(operation: str) -> None:
+	"""OAuth処理の失敗を、詳細情報を含めずイベント種別のみでログ出力する（機微情報の漏洩防止）。
+
+	Args:
+		operation: 失敗した処理を識別する文字列（例: `token_exchange`）。
+	"""
 	logger.warning(
 		"OAuth operation failed",
 		extra={"operation": operation, "event": "oauth_failure"},
@@ -28,12 +40,16 @@ def _log_oauth_failure(operation: str) -> None:
 
 @dataclass(frozen=True)
 class OAuthTokenResponse:
+	"""Googleのtokenエンドポイントから取得した、認可コード交換結果。"""
+
 	id_token: str
 	access_token: str
 
 
 @dataclass(frozen=True)
 class IdTokenClaims:
+	"""検証済みID tokenから取り出したクレーム。"""
+
 	sub: str
 	email: str
 	email_verified: bool
@@ -43,6 +59,8 @@ class IdTokenClaims:
 
 @dataclass(frozen=True)
 class GoogleUserInfo:
+	"""Googleのuserinfoエンドポイントから取得したユーザープロフィール。"""
+
 	sub: str
 	email: str
 	email_verified: bool
@@ -51,12 +69,16 @@ class GoogleUserInfo:
 
 
 class OAuthHttpResponse(Protocol):
+	"""テスト用のHTTPクライアント差し替えを可能にする、HTTPレスポンスの最小プロトコル。"""
+
 	status_code: int
 
 	def json(self) -> dict[str, Any]: ...
 
 
 class OAuthHttpClient(Protocol):
+	"""テスト用のHTTPクライアント差し替えを可能にする、HTTPクライアントの最小プロトコル。"""
+
 	async def post(self, url: str, *, data: dict[str, str]) -> OAuthHttpResponse: ...
 
 	async def get(self, url: str, *, headers: dict[str, str] | None = None) -> OAuthHttpResponse: ...
@@ -66,11 +88,29 @@ _jwks_cache: tuple[str, dict[str, Any], float] | None = None
 
 
 class GoogleOAuthProvider:
+	"""Google OAuth2の認可URL組み立て・トークン交換・userinfo取得・ID token検証を提供する。"""
+
 	def __init__(self, settings: BackendSettings | None = None, http_client: OAuthHttpClient | None = None) -> None:
+		"""設定とHTTPクライアントを保持して初期化する。
+
+		Args:
+			settings: Google OAuthのクライアントID・エンドポイント等の設定。未指定時はグローバル設定を使う。
+			http_client: テスト用に差し替えるHTTPクライアント。未指定時は`httpx.AsyncClient`を都度生成する。
+		"""
 		self.settings = settings or get_backend_settings()
 		self._http_client = http_client
 
 	def build_authorize_url(self, state: str, code_challenge: str, nonce: str) -> str:
+		"""PKCE・CSRF対策のstate・nonceを含む、Googleの認可エンドポイントURLを組み立てる。
+
+		Args:
+			state: CSRF対策用のランダム値（callbackで照合する）。
+			code_challenge: PKCEのcode_challenge（S256方式）。
+			nonce: ID tokenのリプレイ対策用のランダム値。
+
+		Returns:
+			ブラウザをリダイレクトさせるGoogleの認可URL。
+		"""
 		query = urlencode(
 			{
 				"client_id": self.settings.google_client_id,
@@ -87,6 +127,18 @@ class GoogleOAuthProvider:
 		return f"{self.settings.google_authorize_endpoint}?{query}"
 
 	async def exchange_code(self, code: str, code_verifier: str) -> OAuthTokenResponse:
+		"""認可コードとPKCE code_verifierをGoogleのtokenエンドポイントでid/access tokenに交換する。
+
+		Args:
+			code: 認可コード（callbackで受け取ったもの）。
+			code_verifier: 認可開始時に生成したPKCE code_verifier。
+
+		Returns:
+			id tokenとaccess tokenを含む`OAuthTokenResponse`。
+
+		Raises:
+			OAuthFailedError: Googleがエラー応答を返した場合、または通信・応答形式の異常時（400 OAUTH_FAILED）。
+		"""
 		try:
 			response = await self._post(
 				self.settings.google_token_endpoint,
@@ -111,6 +163,17 @@ class GoogleOAuthProvider:
 			raise OAuthFailedError() from exc
 
 	async def fetch_userinfo(self, access_token: str) -> GoogleUserInfo:
+		"""access tokenを用いてGoogleのuserinfoエンドポイントからプロフィールを取得する。
+
+		Args:
+			access_token: `exchange_code`で取得したaccess token。
+
+		Returns:
+			ユーザーのsub・email・email_verified等を含む`GoogleUserInfo`。
+
+		Raises:
+			OAuthFailedError: Googleがエラー応答を返した場合、または応答形式が不正な場合（400 OAUTH_FAILED）。
+		"""
 		try:
 			response = await self._get(
 				self.settings.google_userinfo_endpoint,
@@ -137,6 +200,22 @@ class GoogleOAuthProvider:
 			raise OAuthFailedError() from exc
 
 	async def verify_id_token(self, id_token: str, expected_nonce: str) -> IdTokenClaims:
+		"""GoogleのJWKSでID tokenの署名を検証し、audience・issuer・nonceの整合性を確認する。
+
+		署名アルゴリズムはRS256のみを許容し、`aud`/`azp`がクライアントIDと一致すること、
+		`iss`が既知のGoogle issuerであること、`nonce`が認可開始時に発行した値と
+		一致することを検証する。
+
+		Args:
+			id_token: `exchange_code`で取得したID token。
+			expected_nonce: 認可開始時に発行したnonce（定数時間比較で照合する）。
+
+		Returns:
+			検証済みクレームを含む`IdTokenClaims`。
+
+		Raises:
+			OAuthFailedError: 署名・audience・issuer・nonce・必須クレームのいずれかが不正な場合（400 OAUTH_FAILED）。
+		"""
 		try:
 			header = jwt.get_unverified_header(id_token)
 			if header.get("alg") != "RS256" or not isinstance(header.get("kid"), str):
@@ -176,6 +255,14 @@ class GoogleOAuthProvider:
 			raise OAuthFailedError() from exc
 
 	async def _get_jwks(self) -> dict[str, Any]:
+		"""GoogleのJWKS（署名検証鍵集合）を取得する。プロセス内キャッシュがあればそれを使う。
+
+		Returns:
+			`keys`配列を含むJWKSのJSON。
+
+		Raises:
+			OAuthFailedError: JWKSの取得に失敗した場合、または応答形式が不正な場合（400 OAUTH_FAILED）。
+		"""
 		global _jwks_cache
 		now = time.monotonic()
 		if _jwks_cache is not None and _jwks_cache[0] == self.settings.google_jwks_uri and _jwks_cache[2] > now:
@@ -195,15 +282,34 @@ class GoogleOAuthProvider:
 			raise OAuthFailedError() from exc
 
 	async def _verify_id_token(self, id_token: str, expected_nonce: str) -> IdTokenClaims:
+		"""`verify_id_token`への後方互換用の内部エイリアス。"""
 		return await self.verify_id_token(id_token, expected_nonce)
 
 	async def _post(self, url: str, *, data: dict[str, str]) -> OAuthHttpResponse:
+		"""テスト用クライアントがあればそれを、無ければ`httpx.AsyncClient`でPOSTする。
+
+		Args:
+			url: リクエスト先URL。
+			data: フォームエンコードするリクエストボディ。
+
+		Returns:
+			HTTPレスポンス。
+		"""
 		if self._http_client is not None:
 			return await self._http_client.post(url, data=data)
 		async with httpx.AsyncClient() as client:
 			return cast(OAuthHttpResponse, await client.post(url, data=data))
 
 	async def _get(self, url: str, *, headers: dict[str, str] | None = None) -> OAuthHttpResponse:
+		"""テスト用クライアントがあればそれを、無ければ`httpx.AsyncClient`でGETする。
+
+		Args:
+			url: リクエスト先URL。
+			headers: 付与するリクエストヘッダ。
+
+		Returns:
+			HTTPレスポンス。
+		"""
 		if self._http_client is not None:
 			return await self._http_client.get(url, headers=headers)
 		async with httpx.AsyncClient() as client:
@@ -211,6 +317,18 @@ class GoogleOAuthProvider:
 
 
 def _required_string(value: dict[str, Any], key: str) -> str:
+	"""辞書から必須の文字列フィールドを取り出す。空文字列や非文字列は不正値として扱う。
+
+	Args:
+		value: レスポンスボディ等の辞書。
+		key: 取り出すフィールド名。
+
+	Returns:
+		取り出した文字列値。
+
+	Raises:
+		ValueError: フィールドが存在しない、文字列でない、または空文字列の場合。
+	"""
 	result = value.get(key)
 	if not isinstance(result, str) or not result:
 		raise ValueError(f"missing OAuth value: {key}")
@@ -218,6 +336,15 @@ def _required_string(value: dict[str, Any], key: str) -> str:
 
 
 def _validate_audience(claims: dict[str, Any], client_id: str) -> None:
+	"""ID tokenの`aud`（audience）と`azp`（authorized party）がクライアントIDと一致するか検証する。
+
+	Args:
+		claims: 検証対象のID tokenクレーム。
+		client_id: 自アプリケーションのGoogle OAuthクライアントID。
+
+	Raises:
+		ValueError: `aud`が不正な型・値の場合、または`azp`がクライアントIDと一致しない場合。
+	"""
 	audience = claims.get("aud")
 	if isinstance(audience, str):
 		if audience != client_id:
@@ -237,5 +364,14 @@ def _validate_audience(claims: dict[str, Any], client_id: str) -> None:
 
 
 def _optional_string(value: dict[str, Any], key: str) -> str | None:
+	"""辞書から任意の文字列フィールドを取り出す。存在しない・文字列でない場合は`None`を返す。
+
+	Args:
+		value: レスポンスボディ等の辞書。
+		key: 取り出すフィールド名。
+
+	Returns:
+		文字列値、または存在しない・型が異なる場合は`None`。
+	"""
 	result = value.get(key)
 	return result if isinstance(result, str) else None
