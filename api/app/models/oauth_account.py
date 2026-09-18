@@ -1,3 +1,5 @@
+"""外部OAuthプロバイダとの連携アカウントを表す `OAuthAccount` モデルを定義するモジュール。"""
+
 import uuid
 from typing import TYPE_CHECKING
 
@@ -12,6 +14,14 @@ if TYPE_CHECKING:
 
 
 class OAuthAccount(UUIDPkMixin, CreatedAtMixin, Base):
+	"""`oauth_accounts` テーブルに対応するモデル。
+
+	1ユーザーが連携した外部プロバイダ（現状Googleのみ）のアカウントを表し、
+	`(provider, provider_user_id)` の組でプロバイダ側アカウントとの一意対応を保証する
+	（`uq_oauth_accounts_provider_provider_user_id`）。ログイン時に毎回参照されるため
+	`user` は `lazy="joined"` としている。
+	"""
+
 	__tablename__ = "oauth_accounts"
 
 	user_id: Mapped[uuid.UUID] = mapped_column(

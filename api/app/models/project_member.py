@@ -1,3 +1,5 @@
+"""プロジェクトとユーザーの多対多関係を表す中間モデル `ProjectMember` を定義するモジュール。"""
+
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -14,6 +16,13 @@ if TYPE_CHECKING:
 
 
 class ProjectMember(Base):
+	"""`project_members` テーブルに対応するモデル。
+
+	`(project_id, user_id)` を複合主キーとする、プロジェクトとユーザーの参加関係を表す中間テーブル。
+	代理キーを持たず主キー自体で重複参加を防止する。`inviter` は招待者への参照で、
+	招待者アカウントが削除されても参加記録自体は残すため `ondelete="SET NULL"` としている。
+	"""
+
 	__tablename__ = "project_members"
 
 	project_id: Mapped[uuid.UUID] = mapped_column(

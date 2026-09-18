@@ -1,3 +1,5 @@
+"""タスクを表す `Task` モデルを定義するモジュール。"""
+
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -15,6 +17,16 @@ if TYPE_CHECKING:
 
 
 class Task(UUIDPkMixin, TimestampMixin, Base):
+	"""`tasks` テーブルに対応するモデル。
+
+	カンバンボード上の1タスクを表し、`status`（todo/in_progress/done）と
+	`position` によりステータス内の表示順を管理する（同一プロジェクト・ステータス内で
+	`position` は一意、`uq_tasks_project_status_position`）。`version` は楽観ロック用の
+	更新カウンタで、更新のたびにインクリメントし競合検知に用いる。`assignee` は担当者、
+	`creator` は作成者への参照で、いずれも `User` を指す。`comments` はタスク削除に伴い
+	`cascade="all, delete-orphan"` で連動削除する。
+	"""
+
 	__tablename__ = "tasks"
 
 	project_id: Mapped[uuid.UUID | None] = mapped_column(

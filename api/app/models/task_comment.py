@@ -1,3 +1,5 @@
+"""タスクへのコメントを表す `TaskComment` モデルを定義するモジュール。"""
+
 import uuid
 from typing import TYPE_CHECKING
 
@@ -13,6 +15,13 @@ if TYPE_CHECKING:
 
 
 class TaskComment(UUIDPkMixin, TimestampMixin, Base):
+	"""`task_comments` テーブルに対応するモデル。
+
+	`task` に紐づくコメント本文と投稿者（`author`）を保持する。投稿者アカウントの削除は
+	コメントの証跡を残すため禁止し（`ondelete="RESTRICT"`）、タスク削除時のみ
+	`task` 側の `cascade="all, delete-orphan"` により連動削除される。
+	"""
+
 	__tablename__ = "task_comments"
 
 	task_id: Mapped[uuid.UUID] = mapped_column(

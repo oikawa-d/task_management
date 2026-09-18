@@ -1,3 +1,5 @@
+"""APIリクエストの実行履歴（監査ログ）を表す `ApiHistory` モデルを定義するモジュール。"""
+
 import uuid
 from typing import TYPE_CHECKING
 
@@ -22,6 +24,14 @@ if TYPE_CHECKING:
 
 
 class ApiHistory(UUIDPkMixin, CreatedAtMixin, Base):
+	"""`api_history` テーブルに対応するモデル。
+
+	リクエスト単位でのAPI呼び出し結果（成功/エラー、ステータスコード、所要時間等）を
+	追記専用で記録する監査ログであり、更新・削除は行わない。`user` はリクエスト実行者への
+	参照だが、ユーザー削除時も履歴を残すため `ondelete="SET NULL"` かつ `lazy="noload"` とし、
+	一覧・検索時に不要なJOINが発生しないようにしている。
+	"""
+
 	__tablename__ = "api_history"
 
 	request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
