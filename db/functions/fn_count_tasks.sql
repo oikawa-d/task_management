@@ -1,3 +1,8 @@
+-- 概要: 呼び出しユーザーが閲覧権限を持つタスクを対象に、プロジェクト・ステータス・未所属タスク条件で絞り込んだ件数を算出する
+-- 引数: p_user_id UUID — 権限判定・作成者判定に使う呼び出しユーザーID／p_project_id UUID — 対象プロジェクト（NULLでプロジェクト横断）／p_status VARCHAR — ステータスで絞り込み（NULLで無視）／p_include_inactive BOOLEAN — 無効タスクも含めるか／p_unassigned BOOLEAN — プロジェクト未所属タスクのみを対象にするか（p_project_idがNULLの場合のみ意味を持つ）
+-- 戻り値: BIGINT — 権限・条件に合致するタスクの件数
+-- 副作用: なし（参照のみ）
+-- 主な呼び出し元: api/app/repository/task_repository.py
 CREATE OR REPLACE FUNCTION fn_count_tasks(
     p_user_id UUID,
     p_project_id UUID,

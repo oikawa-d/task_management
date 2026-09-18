@@ -1,3 +1,8 @@
+-- 概要: カレンダー表示向けに、期限日が指定期間内の有効タスクを「自分のタスク」または「指定プロジェクトのタスク」の範囲で取得する
+-- 引数: p_user_id UUID — 呼び出しユーザーID（p_scope='me'時の対象判定に使用）／p_from TIMESTAMPTZ — 期限日の検索期間開始／p_to TIMESTAMPTZ — 期限日の検索期間終了／p_scope VARCHAR — 'me'（自分に関連するタスク）または'project'（指定プロジェクトのタスク）／p_project_id UUID — p_scope='project'時の対象プロジェクト（省略時NULL）
+-- 戻り値: TABLE(task tasks, project_is_active BOOLEAN, comment_count BIGINT) — 期限日昇順のタスク行と付帯情報
+-- 副作用: なし（参照のみ）
+-- 主な呼び出し元: api/app/repository/task_repository.py
 CREATE OR REPLACE FUNCTION fn_list_calendar_tasks(
     p_user_id UUID,
     p_from TIMESTAMPTZ,

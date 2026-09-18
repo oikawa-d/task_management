@@ -1,3 +1,8 @@
+-- 概要: 指定プロジェクトのカンバンボード表示用に、タスク一覧とプロジェクト有効状態・コメント数を付与して返す
+-- 引数: p_project_id UUID — 対象プロジェクトID／p_include_inactive BOOLEAN — 無効タスクも含めるか
+-- 戻り値: TABLE(task tasks, project_is_active BOOLEAN, comment_count BIGINT) — ステータス・並び順でソートされたタスク行とその付帯情報
+-- 副作用: なし（参照のみ）
+-- 主な呼び出し元: api/app/repository/task_repository.py
 CREATE OR REPLACE FUNCTION fn_get_project_board(
     p_project_id UUID,
     p_include_inactive BOOLEAN
