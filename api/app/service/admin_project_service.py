@@ -24,15 +24,46 @@ logger = logging.getLogger("app.audit")
 
 
 def _display_name(user: User) -> str:
+	"""ユーザーの表示名を組み立てる。
+
+	姓名が設定されていれば「姓 名」を、いずれも未設定であればログインIDである
+	`username`を表示名として用いる。
+
+	Args:
+		user: 表示名を求める対象のユーザー。
+
+	Returns:
+		str: 表示に用いるユーザー名。
+	"""
 	return " ".join(part for part in (user.last_name, user.first_name) if part) or user.username
 
 
 async def _member_count(db: AsyncSession, project_id: UUID) -> int:
+	"""プロジェクトの現在のメンバー数を取得する（監査ログ記録用）。
+
+	Args:
+		db: メンバー一覧取得に使用する非同期DBセッション。
+		project_id: 対象プロジェクトのID。
+
+	Returns:
+		int: プロジェクトに所属するメンバー数。
+	"""
 	members = await project_member_repository.list_by_project(db, project_id)
 	return len(members)
 
 
 async def _task_counts(db: AsyncSession, project_id: UUID) -> AdminProjectTaskCounts:
+	"""プロジェクトのステータス別タスク件数を集計する（監査ログ記録用）。
+
+	論理削除済みタスクも含めて集計する（`include_inactive=True`）。
+
+	Args:
+		db: タスク一覧取得に使用する非同期DBセッション。
+		project_id: 対象プロジェクトのID。
+
+	Returns:
+		AdminProjectTaskCounts: todo/in_progress/doneそれぞれの件数。
+	"""
 	tasks = await task_repository.list_board(db, project_id, include_inactive=True)
 	return AdminProjectTaskCounts(
 		todo=sum(item.task.status == "todo" for item in tasks),
@@ -42,6 +73,14 @@ async def _task_counts(db: AsyncSession, project_id: UUID) -> AdminProjectTaskCo
 
 
 def _to_summary(row: AdminProjectListItem) -> AdminProjectSummary:
+	"""管理者向けプロジェクト一覧取得結果の1行をレスポンス要素へ変換する。
+
+	Args:
+		row: リポジトリから返されたプロジェクトとメンバー数・タスク件数の集計行。
+
+	Returns:
+		AdminProjectSummary: レスポンス表示用のプロジェクト要約。
+	"""
 	project = row.project
 	return AdminProjectSummary(
 		id=project.id,
@@ -67,8 +106,20 @@ async def list_projects(query: AdminProjectListQuery, db: AsyncSession) -> Admin
 	"""検索・ページング条件で全プロジェクトを一覧取得する（05_get_admin_projects.md §6.2）。
 
 	admin一覧は`is_active`の値によらず常に全件を返す（無効化済みも含む）。
-	fn_admin_list_projectsのtotal_countはウィンドウ関数のため該当ページが0件の場合のみ
-	fn_count_admin_projectsへフォールバックする（#347レビュー対応）。
+	`fn_admin_list_projects`が返す`total_count`はウィンドウ関数によるものであり、
+	該当ページの行が0件の場合は集計値も取得できないため、その場合に限り
+	`fn_count_admin_projects`へフォールバックして総件数を取得する（#347レビュー対応）。
+
+	Args:
+		query: 検索語・ページ指定を含む検索条件。
+		db: 検索に使用する非同期DBセッション。
+
+	Returns:
+		AdminProjectListResponse: 該当ページのプロジェクト一覧とページングメタ情報。
+
+	Raises:
+		app.core.exceptions.AppError: DB問い合わせでSQLSTATEエラーが発生した場合、
+			`raise_database_error`によりSQLSTATEに対応する業務例外へ変換されて送出される。
 	"""
 	offset = (query.page - 1) * query.per_page
 	try:
@@ -89,8 +140,25 @@ async def deactivate_project(
 ) -> None:
 	"""管理者が任意のプロジェクトを論理削除する（06_delete_admin_project.md §6.2）。
 
-	所属・オーナーシップは問わない。存在しなければNotFoundError。
-	`project_members` / `tasks` / `task_comments` は変更しない。
+	権限チェックはルーター側の管理者ロール判定に委ね、本関数では
+	所属・オーナーシップを問わず任意のプロジェクトを対象とする。
+	論理削除（`is_active=false`への更新）とコミットが本関数のトランザクション境界であり、
+	`project_members` / `tasks` / `task_comments` は変更しない。削除前の
+	メンバー数・タスク件数はDB更新前に取得し、監査ログへ記録する。
+
+	Args:
+		actor: 削除操作を行った管理者ユーザー。監査ログに記録する。
+		project_id: 論理削除対象のプロジェクトID。
+		db: プロジェクト取得・更新に使用する非同期DBセッション。
+		request_id: 監査ログに紐づけるリクエストID。
+
+	Returns:
+		None
+
+	Raises:
+		NotFoundError: 指定IDのプロジェクトが存在しない場合。
+		app.core.exceptions.AppError: DB更新でSQLSTATEエラーが発生した場合、
+			`raise_database_error`により業務例外へ変換されて送出される。
 	"""
 	try:
 		project = await project_repository.get_by_id(db, project_id)

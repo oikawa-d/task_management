@@ -45,6 +45,18 @@ def _is_profile_completed(
 	first_name_kana: str | None,
 	birth_date: date | None,
 ) -> bool:
+	"""プロフィール入力必須項目がすべて埋まっているかを判定する。
+
+	Args:
+		last_name: 姓。
+		first_name: 名。
+		last_name_kana: 姓（カナ）。
+		first_name_kana: 名（カナ）。
+		birth_date: 生年月日。
+
+	Returns:
+		bool: 5項目すべてが`None`でなければ`True`。
+	"""
 	return all(value is not None for value in (last_name, first_name, last_name_kana, first_name_kana, birth_date))
 
 
@@ -62,6 +74,26 @@ def _build_profile_response(
 	has_password: bool,
 	oauth_providers: list[str],
 ) -> UserProfileResponse:
+	"""ユーザープロフィールの各フィールドからレスポンスを組み立てる。
+
+	`profile_completed`はここで`_is_profile_completed`により算出する。
+
+	Args:
+		user_id: ユーザーID。
+		username: ログインID。
+		email: メールアドレス。
+		last_name: 姓。
+		first_name: 名。
+		last_name_kana: 姓（カナ）。
+		first_name_kana: 名（カナ）。
+		birth_date: 生年月日。
+		role: ロール（`admin`/`user`等）。
+		has_password: パスワード認証を設定済みかどうか（OAuth限定登録では`False`）。
+		oauth_providers: 連携済みOAuthプロバイダ名の一覧。
+
+	Returns:
+		UserProfileResponse: レスポンス表示用のプロフィール。
+	"""
 	return UserProfileResponse(
 		id=user_id,
 		username=username,
@@ -79,6 +111,15 @@ def _build_profile_response(
 
 
 async def _response_from_user(db: AsyncSession, user: User) -> UserProfileResponse:
+	"""ユーザーモデルから連携OAuthプロバイダ一覧を取得し、プロフィールレスポンスを組み立てる。
+
+	Args:
+		db: OAuth連携情報取得に使用する非同期DBセッション。
+		user: 対象ユーザー。
+
+	Returns:
+		UserProfileResponse: レスポンス表示用のプロフィール。
+	"""
 	providers = await oauth_account_repository.list_by_user_id(db, user.id)
 	return _build_profile_response(
 		user_id=user.id,
@@ -96,6 +137,19 @@ async def _response_from_user(db: AsyncSession, user: User) -> UserProfileRespon
 
 
 async def get_profile(current_user: CurrentUser, db: AsyncSession) -> UserProfileResponse:
+	"""ログインユーザー自身のプロフィールを取得する。
+
+	Args:
+		current_user: 取得対象のログインユーザー。
+		db: ユーザー取得に使用する非同期DBセッション。
+
+	Returns:
+		UserProfileResponse: プロフィール情報。
+
+	Raises:
+		NotFoundError: トークンに含まれるユーザーがDB上に存在しない場合
+			（削除済み等の想定外の不整合）。
+	"""
 	user = await user_repository.get_by_id(db, current_user.id)
 	if user is None:
 		raise NotFoundError()
@@ -105,6 +159,28 @@ async def get_profile(current_user: CurrentUser, db: AsyncSession) -> UserProfil
 async def update_profile(
 	current_user: CurrentUser, payload: UserProfileUpdateRequest, db: AsyncSession
 ) -> UserProfileResponse:
+	"""ログインユーザー自身のプロフィールを部分更新する。
+
+	リクエストで指定されたフィールドのみを更新し（`model_fields_set`による
+	部分更新判定）、未指定フィールドは既存値を維持する。指定されたフィールドに
+	`null`が渡された場合は必須項目のnull不可制約として`ValidationError`とする。
+	プロフィール更新・OAuth連携一覧再取得・コミットが本関数のトランザクション境界である。
+
+	Args:
+		current_user: 更新対象のログインユーザー。
+		payload: 更新したいフィールドを含むリクエスト（未指定フィールドは維持）。
+		db: プロフィール取得・更新に使用する非同期DBセッション。
+
+	Returns:
+		UserProfileResponse: 更新後のプロフィール。
+
+	Raises:
+		NotFoundError: トークンに含まれるユーザーがDB上に存在しない場合
+			（削除済み等の想定外の不整合）。
+		ValidationError: 更新対象フィールドに`null`が指定された場合。
+		app.core.exceptions.AppError: DB更新でSQLSTATEエラーが発生した場合、
+			`raise_database_error`により業務例外へ変換されて送出される。
+	"""
 	user = await user_repository.get_by_id(db, current_user.id)
 	if user is None:
 		raise NotFoundError()
@@ -155,6 +231,35 @@ async def change_password(
 	payload: PasswordChangeRequest,
 	db: AsyncSession,
 ) -> None:
+	"""ログインユーザー自身のパスワードを変更する。
+
+	既にパスワードが設定済みの場合は現在のパスワードの一致を必須とし、
+	未設定（OAuth限定登録）の場合は`current_password`を指定不可とする。
+	処理順序はRedis操作が先行しDB更新が後続する。パスワードハッシュ更新の前に
+	全セッション削除・全リフレッシュトークン失効をRedis上で行い（パスワード変更を
+	トリガーとした強制再ログイン）、これに失敗した場合は`ServiceUnavailableError`
+	（503）として送出しDB更新には進まない。パスワードハッシュ更新とコミットが
+	本関数のトランザクション境界である。
+
+	Args:
+		current_user: 変更対象のログインユーザー。
+		payload: 現在のパスワード（該当する場合）と新しいパスワードを含むリクエスト。
+		db: パスワード取得・更新に使用する非同期DBセッション。
+
+	Returns:
+		None
+
+	Raises:
+		NotFoundError: トークンに含まれるユーザーがDB上に存在しない場合
+			（削除済み等の想定外の不整合）。
+		ValidationError: パスワード設定済みなのに`current_password`が未指定の場合、
+			または未設定なのに`current_password`が指定された場合。
+		InvalidCredentialsError: 現在のパスワードが一致しない場合。
+		ServiceUnavailableError: Redisでのセッション削除・リフレッシュトークン失効に
+			失敗した場合。
+		app.core.exceptions.AppError: DB更新でSQLSTATEエラーが発生した場合、
+			`raise_database_error`により業務例外へ変換されて送出される。
+	"""
 	user = await user_repository.get_by_id(db, current_user.id)
 	if user is None:
 		raise NotFoundError()
@@ -185,6 +290,16 @@ async def change_password(
 
 
 async def get_login_history(current_user: CurrentUser, db: AsyncSession, limit: int) -> LoginHistoryListResponse:
+	"""ログインユーザー自身のログイン履歴を新しい順に取得する。
+
+	Args:
+		current_user: 取得対象のログインユーザー。
+		db: 履歴取得に使用する非同期DBセッション。
+		limit: 取得件数上限。
+
+	Returns:
+		LoginHistoryListResponse: ログイン履歴一覧と取得件数。
+	"""
 	histories = await login_history_repository.list_by_user_id(db, current_user.id, limit=limit, offset=0)
 	items = [
 		LoginHistoryItem(
