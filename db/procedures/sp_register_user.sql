@@ -1,3 +1,7 @@
+-- 概要: 新規ユーザーを登録する。username/emailは大文字小文字を区別せず重複チェックする。
+-- 引数: p_username VARCHAR — ユーザー名 / p_email VARCHAR — メールアドレス / p_password_hash TEXT — ハッシュ化済みパスワード
+-- 戻り値: p_user_id UUID — 作成されたユーザーのID
+-- 副作用: usersテーブルへINSERT。username重複時はERRCODE 'P0001'、email重複時は'P0002'でRAISE EXCEPTIONする。COMMIT/ROLLBACKは本プロシージャ内では行わない。
 CREATE OR REPLACE PROCEDURE sp_register_user(
     p_username VARCHAR,
     p_email VARCHAR,

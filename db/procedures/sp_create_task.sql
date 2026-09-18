@@ -1,3 +1,7 @@
+-- 概要: プロジェクト内に新規タスクを作成する。position未指定時はfn_next_task_positionで末尾位置を採番し、明示指定時は既存タスクを後方へずらして挿入する。当日期限で担当者がいる場合は期限通知も作成する。
+-- 引数: p_project_id UUID — 所属プロジェクトID（NULL可） / p_created_by UUID — 作成者ユーザーID / p_assignee_id UUID — 担当者ユーザーID（NULL可） / p_title VARCHAR — タイトル / p_body TEXT — 本文 / p_status VARCHAR — ステータス / p_due_at TIMESTAMPTZ — 期限日時 / p_position INTEGER — 挿入位置（NULLで末尾自動採番） / p_day_start_utc TIMESTAMPTZ — 当日判定の開始境界（UTC） / p_day_end_utc TIMESTAMPTZ — 当日判定の終了境界（UTC）
+-- 戻り値: p_task_id UUID — 作成されたタスクのID
+-- 副作用: 明示position指定時はtasksテーブルの該当ステータス内で挿入位置以降のpositionを+1でUPDATE。tasksテーブルへ新規タスクをINSERT。担当者が有効ユーザーでない場合はERRCODE 'P0006'でRAISE EXCEPTIONする。担当者が設定され期限が対象日時範囲内の場合、notificationsテーブルへ'due_today_created'通知をINSERT（同一dedupe_keyが既存の場合はON CONFLICT DO NOTHING）。ステータス単位の直列化のためpg_advisory_xact_lockを取得する。COMMIT/ROLLBACKは本プロシージャ内では行わない。
 CREATE OR REPLACE PROCEDURE sp_create_task(
     p_project_id UUID,
     p_created_by UUID,

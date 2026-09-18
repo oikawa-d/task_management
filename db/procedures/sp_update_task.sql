@@ -1,3 +1,7 @@
+-- 概要: タスクを楽観ロック（version一致）で更新する。ステータス変更・position変更に応じて同一ステータス列内の他タスクのpositionを詰め直し、当日期限で担当者がいる場合は期限通知も作成する。対象タスクが存在しない場合は何もせず正常終了する。
+-- 引数: p_task_id UUID — 対象タスクID / p_editor_id UUID — 更新者ユーザーID（本SP内では未使用） / p_version INTEGER — 更新前提のバージョン（楽観ロック用） / p_title VARCHAR — タイトル / p_body TEXT — 本文 / p_status VARCHAR — ステータス / p_assignee_id UUID — 担当者ユーザーID（NULL可） / p_due_at TIMESTAMPTZ — 期限日時 / p_position INTEGER — 挿入位置（NULLで末尾自動採番） / p_is_active BOOLEAN — 有効状態（NULLで現状維持） / p_day_start_utc TIMESTAMPTZ — 当日判定の開始境界（UTC） / p_day_end_utc TIMESTAMPTZ — 当日判定の終了境界（UTC）
+-- 戻り値: なし
+-- 副作用: tasksテーブルの対象行および同一プロジェクト・ステータス内の他タスク行のpositionをUPDATE、対象行のtitle/description/status/assignee_id/due_at/position/is_active/versionをUPDATE（+1）。旧ステータスと新ステータス両方に対しpg_advisory_xact_lockを昇順で取得しdeadlockを回避する。versionが不一致の場合はERRCODE 'P0005'でRAISE EXCEPTIONする。担当者が有効ユーザーでない場合は'P0006'でRAISE EXCEPTIONする。担当者が設定され期限が変更され対象日時範囲内の場合、notificationsテーブルへ'due_today_updated'通知をINSERT（同一dedupe_keyが既存の場合はON CONFLICT DO NOTHING）。COMMIT/ROLLBACKは本プロシージャ内では行わない。
 CREATE OR REPLACE PROCEDURE sp_update_task(
     p_task_id UUID,
     p_editor_id UUID,
