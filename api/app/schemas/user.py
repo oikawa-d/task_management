@@ -15,7 +15,7 @@ LoginMethod = Literal["session", "jwt", "oauth_google"]
 
 
 class UserProfileResponse(BaseModel):
-	"""`GET /users/me/profile` のレスポンスDTO。ORMの`User`から`from_attributes`で変換する。"""
+	"""`GET /api/users/me` のレスポンスDTO。ORMの`User`から`from_attributes`で変換する。"""
 
 	model_config = ConfigDict(from_attributes=True)
 
@@ -34,7 +34,7 @@ class UserProfileResponse(BaseModel):
 
 
 class UserProfileUpdateRequest(BaseModel):
-	"""`PATCH /users/me/profile` のリクエストDTO。"""
+	"""`PATCH /api/users/me` のリクエストDTO。"""
 
 	last_name: str | None = Field(default=None, min_length=1, max_length=30)
 	first_name: str | None = Field(default=None, min_length=1, max_length=30)
@@ -62,7 +62,7 @@ class UserProfileUpdateRequest(BaseModel):
 
 
 class PasswordChangeRequest(BaseModel):
-	"""`PATCH /users/me/password` のリクエストDTO。パスワード有無に応じ現在パスワードの要否をservice層で判定する。"""
+	"""`PUT /api/users/me/password` のリクエストDTO。パスワード有無に応じ現在パスワードの要否をservice層で判定する。"""
 
 	current_password: str | None = None
 	new_password: str = Field(min_length=PASSWORD_MIN_LENGTH)
@@ -145,7 +145,7 @@ class LoginHistoryMeta(BaseModel):
 
 
 class LoginHistoryListResponse(BaseModel):
-	"""`GET /users/me/login-history` のレスポンスDTO。"""
+	"""`GET /api/users/me/login-history` のレスポンスDTO。"""
 
 	items: list[LoginHistoryItem]
 	meta: LoginHistoryMeta

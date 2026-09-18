@@ -39,7 +39,7 @@ class AdminPaginationQuery(StrictSchema):
 
 
 class AdminUserListQuery(AdminPaginationQuery):
-	"""`GET /admin/users` のクエリパラメータDTO。検索・ロール・有効状態での絞り込みを行う。"""
+	"""`GET /api/admin/users` のクエリパラメータDTO。検索・ロール・有効状態での絞り込みを行う。"""
 
 	q: str | None = None
 	role: AdminRole | None = None
@@ -53,13 +53,13 @@ class AdminUserListQuery(AdminPaginationQuery):
 
 
 class AdminUserRoleUpdateRequest(StrictSchema):
-	"""`PATCH /admin/users/{user_id}/role` のリクエストDTO。"""
+	"""`PATCH /api/admin/users/{user_id}/role` のリクエストDTO。"""
 
 	role: AdminRole
 
 
 class AdminUserStatusUpdateRequest(StrictSchema):
-	"""`PATCH /admin/users/{user_id}/status` のリクエストDTO。アカウントの有効/無効を切り替える。"""
+	"""`PATCH /api/admin/users/{user_id}/status` のリクエストDTO。アカウントの有効/無効を切り替える。"""
 
 	is_active: bool
 
@@ -89,20 +89,20 @@ class AdminUserListMeta(StrictSchema):
 
 
 class AdminUserListResponse(StrictSchema):
-	"""`GET /admin/users` のレスポンスDTO。"""
+	"""`GET /api/admin/users` のレスポンスDTO。"""
 
 	items: list[AdminUserItem]
 	meta: AdminUserListMeta
 
 
 class AdminUserDetailResponse(AdminUserItem):
-	"""`GET /admin/users/{user_id}` のレスポンスDTO。更新日時を追加で保持する。"""
+	"""`GET /api/admin/users/{user_id}` のレスポンスDTO。更新日時を追加で保持する。"""
 
 	updated_at: datetime
 
 
 class AdminProjectListQuery(AdminPaginationQuery):
-	"""`GET /admin/projects` のクエリパラメータDTO。"""
+	"""`GET /api/admin/projects` のクエリパラメータDTO。"""
 
 	q: str | None = None
 
@@ -149,14 +149,14 @@ class AdminProjectSummary(StrictSchema):
 
 
 class AdminProjectListResponse(StrictSchema):
-	"""`GET /admin/projects` のレスポンスDTO。"""
+	"""`GET /api/admin/projects` のレスポンスDTO。"""
 
 	items: list[AdminProjectSummary]
 	meta: AdminProjectListMeta
 
 
 class AdminLoginHistoryQuery(AdminPaginationQuery):
-	"""`GET /admin/login-history` のクエリパラメータDTO。対象ユーザー・方式・成否・期間での絞り込みを行う。"""
+	"""`GET /api/admin/login-history` のクエリパラメータDTO。対象ユーザー・方式・成否・期間での絞り込みを行う。"""
 
 	model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -213,7 +213,7 @@ class AdminLoginHistoryItem(StrictSchema):
 
 
 class AdminLoginHistoryListResponse(StrictSchema):
-	"""`GET /admin/login-history` のレスポンスDTO。"""
+	"""`GET /api/admin/login-history` のレスポンスDTO。"""
 
 	items: list[AdminLoginHistoryItem]
 	meta: AdminUserListMeta

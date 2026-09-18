@@ -1,4 +1,4 @@
-"""ヘルスチェックエンドポイント（`GET /health`）のレスポンスDTOを定義するモジュール。"""
+"""ヘルスチェックエンドポイント（`GET /api/health`）のレスポンスDTOを定義するモジュール。"""
 
 from typing import Literal
 
@@ -13,7 +13,7 @@ class ComponentHealth(BaseModel):
 
 
 class HealthResponse(BaseModel):
-	"""`GET /health` のレスポンスDTO。全体ステータスと稼働中の認証方式、依存コンポーネント別の状態を返す。"""
+	"""`GET /api/health` のレスポンスDTO。全体ステータスと稼働中の認証方式、依存コンポーネント別の状態を返す。"""
 
 	status: Literal["ok", "degraded"]
 	auth_mode: Literal["session", "jwt"]

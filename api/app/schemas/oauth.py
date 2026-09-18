@@ -9,14 +9,17 @@ from app.schemas.base import StrictSchema
 
 
 class OAuthStartResult(StrictSchema):
-	"""`GET /auth/oauth/google/start` のレスポンスDTO。Google認可画面へのリダイレクト先とCSRF対策用stateを返す。"""
+	"""`GET /api/auth/oauth/google` の内部処理結果を表すDTO。`oauth_service.oauth_start`が生成し、
+	Google認可画面へのリダイレクト先（`authorize_url`）とCSRF対策用state（`state`）を保持する。
+	エンドポイントはこれをJSONで返さず`RedirectResponse`の構築に用いる。
+	"""
 
 	authorize_url: str = Field(min_length=1)
 	state: str = Field(min_length=1)
 
 
 class OAuthCallbackQuery(StrictSchema):
-	"""`GET /auth/oauth/google/callback` のクエリパラメータDTO。Google側から返却される認可コード等を受け取る。"""
+	"""`GET /api/auth/oauth/google/callback` のクエリパラメータDTO。Google側から返却される認可コード等を受け取る。"""
 
 	code: str | None = None
 	state: str | None = None
@@ -48,7 +51,9 @@ class OAuthCallbackResult(StrictSchema):
 
 
 class OAuthExchangeRequest(StrictSchema):
-	"""`POST /auth/oauth/exchange` のリクエストDTO。コールバックで発行された引換コードをアクセストークンに交換する。"""
+	"""`POST /api/auth/oauth/exchange` のリクエストDTO。コールバックで発行された引換コードを
+	アクセストークンに交換する。
+	"""
 
 	code: str = Field(min_length=1)
 
@@ -70,7 +75,7 @@ class OAuthExchangeRequest(StrictSchema):
 
 
 class OAuthExchangeResponse(StrictSchema):
-	"""`POST /auth/oauth/exchange` のレスポンスDTO。JWTモードでのアクセストークン発行結果を返す。"""
+	"""`POST /api/auth/oauth/exchange` のレスポンスDTO。JWTモードでのアクセストークン発行結果を返す。"""
 
 	access_token: str = Field(min_length=1)
 	token_type: Literal["bearer"]

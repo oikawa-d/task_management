@@ -35,7 +35,7 @@ class CommentAuthor(StrictSchema):
 
 
 class CommentCreateRequest(StrictSchema):
-	"""`POST /tasks/{task_id}/comments` のリクエストDTO。前後空白を除去したうえで本文長を検証する。"""
+	"""`POST /api/tasks/{task_id}/comments` のリクエストDTO。前後空白を除去したうえで本文長を検証する。"""
 
 	model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -49,7 +49,7 @@ class CommentCreateRequest(StrictSchema):
 
 
 class CommentUpdateRequest(CommentCreateRequest):
-	"""`PATCH /tasks/{task_id}/comments/{comment_id}` のリクエストDTO。作成時と同じ制約を流用する。"""
+	"""`PATCH /api/comments/{comment_id}` のリクエストDTO。作成時と同じ制約を流用する。"""
 
 
 class CommentResponse(StrictSchema):
@@ -64,7 +64,7 @@ class CommentResponse(StrictSchema):
 
 
 class CommentListResponse(StrictSchema):
-	"""`GET /tasks/{task_id}/comments` のレスポンスDTO。対象タスクのコメント一覧と件数を返す。"""
+	"""`GET /api/tasks/{task_id}/comments` のレスポンスDTO。対象タスクのコメント一覧と件数を返す。"""
 
 	task_id: UUID
 	items: list[CommentResponse]

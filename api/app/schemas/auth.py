@@ -57,7 +57,7 @@ def _validate_password_categories(value: str) -> str:
 
 
 class RegisterRequest(StrictSchema):
-	"""`POST /auth/register` のリクエストDTO。"""
+	"""`POST /api/auth/register` のリクエストDTO。"""
 
 	username: str = Field(min_length=3, max_length=50, pattern=USERNAME_PATTERN)
 	email: str = Field(max_length=EMAIL_MAX_LENGTH)
@@ -105,7 +105,7 @@ class RegisterRequest(StrictSchema):
 
 
 class RegisterResponse(StrictSchema):
-	"""`POST /auth/register` のレスポンスDTO。"""
+	"""`POST /api/auth/register` のレスポンスDTO。"""
 
 	id: UUID
 	email: str
@@ -113,7 +113,7 @@ class RegisterResponse(StrictSchema):
 
 
 class LoginRequest(StrictSchema):
-	"""`POST /auth/login` のリクエストDTO。ユーザー名またはメールアドレスでのログインを受け付ける。"""
+	"""`POST /api/auth/login` のリクエストDTO。ユーザー名またはメールアドレスでのログインを受け付ける。"""
 
 	identifier: str = Field(min_length=1, max_length=EMAIL_MAX_LENGTH)
 	password: str = Field(min_length=1)
@@ -126,7 +126,7 @@ class LoginRequest(StrictSchema):
 
 
 class LoginResponse(StrictSchema):
-	"""`POST /auth/login` のレスポンスDTO（JWTモード時）。"""
+	"""`POST /api/auth/login` のレスポンスDTO（JWTモード時）。"""
 
 	access_token: str
 	token_type: Literal["bearer"]
@@ -134,7 +134,7 @@ class LoginResponse(StrictSchema):
 
 
 class RefreshResponse(StrictSchema):
-	"""`POST /auth/refresh` のレスポンスDTO。新しいアクセストークンを返す。"""
+	"""`POST /api/auth/refresh` のレスポンスDTO。新しいアクセストークンを返す。"""
 
 	access_token: str
 	token_type: Literal["bearer"]
@@ -142,7 +142,7 @@ class RefreshResponse(StrictSchema):
 
 
 class VerifyEmailRequest(StrictSchema):
-	"""`POST /auth/verify-email` のリクエストDTO。"""
+	"""`POST /api/auth/verify-email` のリクエストDTO。"""
 
 	token: str = Field(min_length=1)
 
@@ -154,7 +154,7 @@ class VerifyEmailRequest(StrictSchema):
 
 
 class ResendVerifyEmailRequest(StrictSchema):
-	"""`POST /auth/verify-email/resend` のリクエストDTO。"""
+	"""`POST /api/auth/verify-email/resend` のリクエストDTO。"""
 
 	email: str = Field(max_length=EMAIL_MAX_LENGTH)
 
@@ -166,13 +166,13 @@ class ResendVerifyEmailRequest(StrictSchema):
 
 
 class ResendVerifyEmailResponse(StrictSchema):
-	"""`POST /auth/verify-email/resend` のレスポンスDTO。"""
+	"""`POST /api/auth/verify-email/resend` のレスポンスDTO。"""
 
 	message: str
 
 
 class PasswordForgotRequest(StrictSchema):
-	"""`POST /auth/password/forgot` のリクエストDTO。"""
+	"""`POST /api/auth/password/forgot` のリクエストDTO。"""
 
 	email: str = Field(max_length=EMAIL_MAX_LENGTH)
 
@@ -184,13 +184,13 @@ class PasswordForgotRequest(StrictSchema):
 
 
 class PasswordForgotResponse(StrictSchema):
-	"""`POST /auth/password/forgot` のレスポンスDTO。"""
+	"""`POST /api/auth/password/forgot` のレスポンスDTO。"""
 
 	message: str
 
 
 class PasswordResetRequest(StrictSchema):
-	"""`POST /auth/password/reset` のリクエストDTO。"""
+	"""`POST /api/auth/password/reset` のリクエストDTO。"""
 
 	token: str = Field(min_length=1)
 	new_password: str = Field(min_length=PASSWORD_MIN_LENGTH)
@@ -230,7 +230,7 @@ class PasswordResetRequest(StrictSchema):
 
 
 class MeResponse(StrictSchema):
-	"""`GET /auth/me` のレスポンスDTO。ログイン中ユーザーのプロフィールと認証状態をまとめて返す。"""
+	"""`GET /api/auth/me` のレスポンスDTO。ログイン中ユーザーのプロフィールと認証状態をまとめて返す。"""
 
 	id: UUID
 	username: str
@@ -248,7 +248,7 @@ class MeResponse(StrictSchema):
 
 
 class AuthConfigResponse(StrictSchema):
-	"""`GET /auth/config` のレスポンスDTO。フロントエンドが参照する認証方式・機能有効化状態を返す。"""
+	"""`GET /api/auth/config` のレスポンスDTO。フロントエンドが参照する認証方式・機能有効化状態を返す。"""
 
 	auth_mode: Literal["session", "jwt"]
 	google_login_enabled: bool

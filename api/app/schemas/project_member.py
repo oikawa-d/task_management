@@ -9,19 +9,27 @@ MemberRole = Literal["member", "admin"]
 
 
 class MemberListQueryParams(BaseModel):
-	"""`GET /projects/{project_id}/members` のパスパラメータDTO。"""
+	"""`GET /api/projects/{project_id}/members` が受け取る`project_id`の形状を検証するDTO。
+
+	実際のルーティングではFastAPIのパス引数として`project_id: UUID`を直接受け取るため、
+	このクラス自体はルーターに直接バインドされておらず、値のバリデーション仕様を表す。
+	"""
 
 	project_id: UUID4
 
 
 class MemberDeletePathParams(MemberListQueryParams):
-	"""`DELETE /projects/{project_id}/members/{user_id}` のパスパラメータDTO。削除対象ユーザーIDを追加で保持する。"""
+	"""`DELETE /api/projects/{project_id}/members/{user_id}` が受け取るパスパラメータの形状を検証するDTO。
+
+	`MemberListQueryParams`と同様、ルーターへ直接バインドされる型ではなく、
+	削除対象ユーザーIDを含めたバリデーション仕様を表す。
+	"""
 
 	user_id: UUID4
 
 
 class AddMemberRequest(BaseModel):
-	"""`POST /projects/{project_id}/members` のリクエストDTO。招待対象ユーザーIDを指定する。"""
+	"""`POST /api/projects/{project_id}/members` のリクエストDTO。招待対象ユーザーIDを指定する。"""
 
 	model_config = ConfigDict(extra="forbid")
 
@@ -41,7 +49,7 @@ class MemberSummary(BaseModel):
 
 
 class MemberResponse(MemberSummary):
-	"""メンバー追加・単体取得エンドポイントのレスポンスDTO。`MemberSummary`と同一構造。"""
+	"""`POST /api/projects/{project_id}/members` のレスポンスDTO。`MemberSummary`と同一構造。"""
 
 
 class MemberListMeta(BaseModel):
@@ -51,14 +59,17 @@ class MemberListMeta(BaseModel):
 
 
 class MemberListResponse(BaseModel):
-	"""`GET /projects/{project_id}/members` のレスポンスDTO。"""
+	"""`GET /api/projects/{project_id}/members` のレスポンスDTO。"""
 
 	items: list[MemberSummary]
 	meta: MemberListMeta
 
 
 class CandidateSearchQuery(BaseModel):
-	"""メンバー招待候補検索エンドポイントのクエリパラメータDTO。検索文字列の長さを1〜50文字に制限する。"""
+	"""`GET /api/projects/{project_id}/member-candidates` のクエリパラメータDTO。
+
+	検索文字列の長さを1〜50文字に制限する。
+	"""
 
 	model_config = ConfigDict(extra="forbid")
 
@@ -74,6 +85,6 @@ class CandidateSummary(BaseModel):
 
 
 class CandidateListResponse(BaseModel):
-	"""招待候補検索エンドポイントのレスポンスDTO。"""
+	"""`GET /api/projects/{project_id}/member-candidates` のレスポンスDTO。"""
 
 	items: list[CandidateSummary]

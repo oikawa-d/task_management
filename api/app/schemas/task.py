@@ -41,7 +41,7 @@ class TaskCreator(BaseModel):
 
 
 class TaskCreateRequest(BaseModel):
-	"""`POST /projects/{project_id}/tasks` のリクエストDTO。"""
+	"""`POST /api/projects/{project_id}/tasks` のリクエストDTO。"""
 
 	model_config = ConfigDict(extra="forbid")
 
@@ -53,7 +53,7 @@ class TaskCreateRequest(BaseModel):
 
 
 class TaskCreateFlatRequest(TaskCreateRequest):
-	"""`POST /tasks`（プロジェクト非依存の作成）のリクエストDTO。プロジェクト未指定時は担当者割当を禁止する。"""
+	"""`POST /api/tasks`（プロジェクト非依存の作成）のリクエストDTO。プロジェクト未指定時は担当者割当を禁止する。"""
 
 	project_id: UUID4 | None = None
 
@@ -73,7 +73,7 @@ class TaskCreateFlatRequest(TaskCreateRequest):
 
 
 class TaskUpdateRequest(BaseModel):
-	"""`PATCH /tasks/{task_id}` のリクエストDTO。`version`による楽観ロックと部分更新を行う。"""
+	"""`PATCH /api/tasks/{task_id}` のリクエストDTO。`version`による楽観ロックと部分更新を行う。"""
 
 	model_config = ConfigDict(extra="forbid")
 
@@ -148,7 +148,7 @@ class TaskDetailResponse(TaskResponse):
 
 
 class TaskListItem(TaskDetailResponse):
-	"""`GET /tasks` 一覧の1件分のレスポンスDTO。`TaskDetailResponse`と同一構造。"""
+	"""`GET /api/tasks` 一覧の1件分のレスポンスDTO。`TaskDetailResponse`と同一構造。"""
 
 
 class CalendarTaskItem(TaskListItem):
@@ -166,7 +166,7 @@ class BoardColumns(BaseModel):
 
 
 class BoardResponse(BaseModel):
-	"""`GET /projects/{project_id}/board` のレスポンスDTO。"""
+	"""`GET /api/projects/{project_id}/tasks` のレスポンスDTO。プロジェクトのカンバンボード表示用データを返す。"""
 
 	model_config = ConfigDict(from_attributes=True)
 
@@ -176,7 +176,7 @@ class BoardResponse(BaseModel):
 
 
 class TaskListQuery(BaseModel):
-	"""`GET /tasks` のクエリパラメータDTO。ページネーション・絞り込み・並び替えを指定する。"""
+	"""`GET /api/tasks` のクエリパラメータDTO。ページネーション・絞り込み・並び替えを指定する。"""
 
 	page: int = Field(default=1, ge=1)
 	per_page: int = Field(default_factory=_default_per_page, ge=1)
@@ -246,14 +246,18 @@ class TaskListMeta(BaseModel):
 
 
 class TaskListResponse(BaseModel):
-	"""`GET /tasks` のレスポンスDTO。"""
+	"""`GET /api/tasks` のレスポンスDTO。"""
 
 	items: list[TaskListItem]
 	meta: TaskListMeta
 
 
 class CalendarTaskQuery(BaseModel):
-	"""カレンダー表示用エンドポイントのクエリパラメータDTO。表示期間とスコープ（自分/プロジェクト）を指定する。"""
+	"""`GET /api/tasks/calendar` のクエリパラメータの検証仕様を表すDTO。
+
+	表示期間とスコープ（自分/プロジェクト）を指定する。ルーター側では個々のクエリパラメータを
+	`Query(...)`で受け取ってから本クラスを構築するため、FastAPIのクエリ解決に直接バインドされる型ではない。
+	"""
 
 	from_date: date = Field(alias="from")
 	to_date: date = Field(alias="to")

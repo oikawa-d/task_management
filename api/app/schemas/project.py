@@ -14,7 +14,12 @@ _PAGINATION_MAX_PER_PAGE = cast(int, BackendSettings.model_fields["pagination_ma
 
 
 class ProjectListQuery(BaseModel):
-	"""`GET /projects` のクエリパラメータDTO。ページネーションと非活性プロジェクトの表示可否を指定する。"""
+	"""`GET /api/projects` が受け取るクエリパラメータの形状を検証するDTO。
+
+	ルーター側では個々のクエリパラメータを`Query(...)`で直接受け取るため、
+	このクラス自体はルーターへ直接バインドされておらず、ページネーションと
+	非活性プロジェクトの表示可否に関するバリデーション仕様を表す。
+	"""
 
 	page: int = Field(default=1, ge=1)
 	per_page: int = Field(default=_PAGINATION_DEFAULT_PER_PAGE, ge=1, le=_PAGINATION_MAX_PER_PAGE)
@@ -22,7 +27,7 @@ class ProjectListQuery(BaseModel):
 
 
 class ProjectCreateRequest(BaseModel):
-	"""`POST /projects` のリクエストDTO。"""
+	"""`POST /api/projects` のリクエストDTO。"""
 
 	name: str = Field(min_length=1, max_length=100)
 	description: str | None = Field(default=None, max_length=DESCRIPTION_MAX_LENGTH)
@@ -45,7 +50,7 @@ class ProjectCreateRequest(BaseModel):
 
 
 class ProjectUpdateRequest(BaseModel):
-	"""`PATCH /projects/{project_id}` のリクエストDTO。指定されたフィールドのみ部分更新する。"""
+	"""`PATCH /api/projects/{project_id}` のリクエストDTO。指定されたフィールドのみ部分更新する。"""
 
 	name: str | None = Field(default=None, min_length=1, max_length=100)
 	description: str | None = Field(default=None, max_length=DESCRIPTION_MAX_LENGTH)
@@ -89,7 +94,11 @@ class ProjectUpdateRequest(BaseModel):
 
 
 class ProjectPathParams(BaseModel):
-	"""プロジェクトIDをパスパラメータに持つエンドポイント共通のパスパラメータDTO。"""
+	"""`project_id`をパスパラメータに持つプロジェクト関連エンドポイントが受け取る値の形状を検証するDTO。
+
+	実際のルーティングではFastAPIのパス引数として`project_id: UUID`を直接受け取るため、
+	このクラス自体はルーターへ直接バインドされておらず、値のバリデーション仕様を表す。
+	"""
 
 	project_id: UUID
 
@@ -137,7 +146,7 @@ class ProjectSummary(BaseModel):
 
 
 class ProjectSummaryResponse(ProjectSummary):
-	"""`GET /projects` の一覧アイテムのレスポンスDTO。"""
+	"""`GET /api/projects` の一覧アイテムのレスポンスDTO。"""
 
 	updated_at: datetime | None = None
 
@@ -150,7 +159,7 @@ class ProjectDetail(ProjectSummary):
 
 
 class ProjectDetailResponse(ProjectDetail):
-	"""`GET /projects/{project_id}` のレスポンスDTO。`ProjectDetail`と同一構造。"""
+	"""`GET /api/projects/{project_id}` のレスポンスDTO。`ProjectDetail`と同一構造。"""
 
 
 class ProjectListMeta(BaseModel):
@@ -163,7 +172,7 @@ class ProjectListMeta(BaseModel):
 
 
 class ProjectListResponse(BaseModel):
-	"""`GET /projects` のレスポンスDTO。"""
+	"""`GET /api/projects` のレスポンスDTO。"""
 
 	items: list[ProjectSummaryResponse]
 	meta: ProjectListMeta
