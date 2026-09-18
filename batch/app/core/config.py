@@ -1,9 +1,21 @@
+"""batchプロセスの環境変数設定を定義するモジュール。
+
+pydantic-settingsを用いて`.env`および環境変数からbatch設定を読み込み、
+スケジューラ・DB・Redis・通知ジョブが共通で参照する設定値を提供する。
+"""
+
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class BatchSettings(BaseSettings):
+	"""batchプロセス全体で使用する環境変数設定。
+
+	`.env`ファイルおよび環境変数（大文字小文字を区別しない）から値を読み込む。
+	定義されていない環境変数は無視する（`extra="ignore"`）。
+	"""
+
 	model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore")
 
 	log_level: str = "INFO"
@@ -27,4 +39,15 @@ class BatchSettings(BaseSettings):
 
 @lru_cache
 def get_batch_settings() -> BatchSettings:
+	"""batch設定のシングルトンインスタンスを返す。
+
+	`lru_cache`によりプロセス内で初回呼び出し時のみ`BatchSettings`を生成し、
+	以降は同一インスタンスを再利用することで環境変数の再読み込みを避ける。
+
+	Returns:
+		読み込み済みの`BatchSettings`インスタンス。
+
+	Raises:
+		pydantic.ValidationError: 必須の環境変数（`database_url`等）が未設定の場合。
+	"""
 	return BatchSettings()

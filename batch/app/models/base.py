@@ -1,3 +1,9 @@
+"""SQLAlchemyモデルの共通基底クラスと共通カラムMixinを定義するモジュール。
+
+主キー・作成日時・更新日時など複数テーブルで共通する列定義をMixin化し、
+各モデルでの重複記述を避ける。
+"""
+
 import uuid
 from datetime import datetime
 
@@ -7,6 +13,8 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class Base(DeclarativeBase):
+	"""batchが扱う全SQLAlchemyモデルの共通基底クラス。"""
+
 	pass
 
 
