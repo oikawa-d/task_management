@@ -1,3 +1,7 @@
+"""
+OAuth スキーマの承認フロー・トークン交換・フィールド制限を検証するテスト。
+"""
+
 import pytest
 from app.core.config import BackendSettings
 from app.core.constants import TOKEN_URLSAFE_LENGTH
@@ -12,6 +16,11 @@ from pydantic import ValidationError
 
 
 def test_oauth_start_result_accepts_authorize_url_and_state() -> None:
+	"""
+	OAuthStartResult が authorize_url と state トークンを受け入れることを検証。
+
+	条件：authorize_url と state を指定してOAuthStartResult を作成したとき、state フィールドが正しく保持されること。
+	"""
 	result = OAuthStartResult(
 		authorize_url="https://accounts.google.com/o/oauth2/v2/auth?state=state-token",
 		state="state-token",
@@ -21,12 +30,22 @@ def test_oauth_start_result_accepts_authorize_url_and_state() -> None:
 
 
 def test_oauth_callback_result_accepts_session_mode_without_handoff_code() -> None:
+	"""
+	OAuthCallbackResult が auth_mode="session" で handoff_code なしを受け入れることを検証。
+
+	条件：auth_mode="session" で handoff_code を指定しないOAuthCallbackResult を作成したとき、handoff_code が None に保たれること。
+	"""
 	result = OAuthCallbackResult(auth_mode="session", redirect_to="/dashboard")
 
 	assert result.handoff_code is None
 
 
 def test_oauth_callback_result_accepts_jwt_mode_with_handoff_code() -> None:
+	"""
+	OAuthCallbackResult が auth_mode="jwt" で handoff_code を受け入れることを検証。
+
+	条件：auth_mode="jwt" で handoff_code を指定してOAuthCallbackResult を作成したとき、handoff_code フィールドが正しく保持されること。
+	"""
 	result = OAuthCallbackResult(
 		auth_mode="jwt",
 		redirect_to="/projects/1",
@@ -70,11 +89,21 @@ def test_oauth_generated_values_are_not_limited_by_input_length_setting() -> Non
 
 @pytest.mark.parametrize("auth_mode", ["cookie", "oauth", ""])
 def test_oauth_callback_result_rejects_unknown_auth_mode(auth_mode: str) -> None:
+	"""
+	OAuthCallbackResult が設計定義外の auth_mode（"cookie"、"oauth"、""）を拒否することを検証。
+
+	条件：サポート外のauth_mode を指定してOAuthCallbackResult を作成したとき、ValidationError が送出されること。
+	"""
 	with pytest.raises(ValidationError):
 		OAuthCallbackResult(auth_mode=auth_mode, redirect_to="/dashboard")
 
 
 def test_oauth_exchange_request_accepts_handoff_code() -> None:
+	"""
+	OAuthExchangeRequest が code フィールド（handoff code）を受け入れることを検証。
+
+	条件：code を指定してOAuthExchangeRequest を作成したとき、code フィールドが正しく保持されること。
+	"""
 	payload = OAuthExchangeRequest(code="handoff-token")
 
 	assert payload.code == "handoff-token"
@@ -82,11 +111,21 @@ def test_oauth_exchange_request_accepts_handoff_code() -> None:
 
 @pytest.mark.parametrize("code", ["", None])
 def test_oauth_exchange_request_rejects_empty_or_missing_code(code: object) -> None:
+	"""
+	OAuthExchangeRequest が code フィールド欠落または空値を拒否することを検証。
+
+	条件：code が None または空文字列のとき、ValidationError が送出されること。
+	"""
 	with pytest.raises(ValidationError):
 		OAuthExchangeRequest(code=code)
 
 
 def test_oauth_exchange_response_accepts_bearer_token_and_redirect_to() -> None:
+	"""
+	OAuthExchangeResponse が bearer token_type と redirect_to を受け入れることを検証。
+
+	条件：access_token、token_type="bearer"、expires_in、redirect_to を指定してOAuthExchangeResponse を作成したとき、redirect_to フィールドが正しく保持されること。
+	"""
 	response = OAuthExchangeResponse(
 		access_token="access-token",
 		token_type="bearer",
@@ -98,6 +137,11 @@ def test_oauth_exchange_response_accepts_bearer_token_and_redirect_to() -> None:
 
 
 def test_oauth_exchange_response_rejects_non_bearer_token_type() -> None:
+	"""
+	OAuthExchangeResponse が bearer 以外の token_type（例："basic"）を拒否することを検証。
+
+	条件：token_type="basic" を指定してOAuthExchangeResponse を作成したとき、ValidationError が送出されること。
+	"""
 	with pytest.raises(ValidationError):
 		OAuthExchangeResponse(
 			access_token="access-token",
@@ -119,6 +163,11 @@ def test_oauth_exchange_response_rejects_non_bearer_token_type() -> None:
 	],
 )
 def test_oauth_schemas_reject_invalid_required_values(field: str, value: object) -> None:
+	"""
+	OAuth各スキーマが必須フィールドの不正値（空文字列、0）を拒否することを検証。
+
+	条件：OAuthStartResult、OAuthCallbackResult、OAuthExchangeRequest、OAuthExchangeResponse の必須フィールドに空文字列または 0 を設定したとき、ValidationError が送出されること。
+	"""
 	start_payload = {
 		"authorize_url": "https://accounts.google.com/auth",
 		"state": "state-token",
