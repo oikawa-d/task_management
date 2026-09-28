@@ -1,3 +1,10 @@
+"""`app.core.exceptions.register_error_handling`によるエラーハンドリング統合のテスト。
+
+アプリ例外（`AppError`系）・未処理例外・Redis/SQLAlchemyのインフラ例外・
+バリデーションエラーそれぞれが、共通のエラーレスポンス形式・ステータスコード・
+構造化ログへ変換されることを検証する。
+"""
+
 import logging
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -19,10 +26,18 @@ from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 
 class _Payload(BaseModel):
+	"""バリデーションエラーのテスト用に、必須文字列フィールド`name`のみを持つ入力スキーマ。"""
+
 	name: str
 
 
 def _build_app() -> FastAPI:
+	"""`register_error_handling`を適用した上で、各種例外・正常系を意図的に発生させる
+	検証用エンドポイント群を持つ`FastAPI`アプリを構築するヘルパー関数。
+
+	Returns:
+		FastAPI: `/boom-*`系の例外送出用エンドポイントと`/validate`・`/ok`を含むアプリ。
+	"""
 	app = FastAPI()
 	register_error_handling(app)
 
@@ -98,10 +113,19 @@ def _build_app() -> FastAPI:
 
 
 def _client() -> TestClient:
+	"""検証用アプリに対する`TestClient`を、サーバー側例外をそのまま再送出せず
+	HTTPレスポンスとして受け取れる設定（`raise_server_exceptions=False`）で生成するヘルパー関数。
+
+	Returns:
+		TestClient: `/boom-*`系エンドポイントを持つ検証用アプリのテストクライアント。
+	"""
 	return TestClient(_build_app(), raise_server_exceptions=False)
 
 
 def test_app_error_converted_to_common_error_response() -> None:
+	"""`NotFoundError`が404と共通形式のエラーボディ（`code="NOT_FOUND"`・`request_id`）へ
+	変換されることを検証する。
+	"""
 	res = _client().get("/boom-app-error")
 
 	assert res.status_code == 404
@@ -111,6 +135,9 @@ def test_app_error_converted_to_common_error_response() -> None:
 
 
 def test_app_error_with_details() -> None:
+	"""`ForbiddenError`に渡した`details`が、403レスポンスのエラーボディへ
+	そのまま引き継がれることを検証する。
+	"""
 	res = _client().get("/boom-forbidden")
 
 	assert res.status_code == 403
@@ -120,6 +147,9 @@ def test_app_error_with_details() -> None:
 
 
 def test_rate_limit_error_includes_retry_after_header() -> None:
+	"""`TooManyAttemptsError(retry_after=42)`が429レスポンスへ変換され、
+	`Retry-After`ヘッダーに指定秒数がそのまま設定されることを検証する。
+	"""
 	res = _client().get("/boom-rate-limit")
 
 	assert res.status_code == 429
@@ -127,6 +157,9 @@ def test_rate_limit_error_includes_retry_after_header() -> None:
 
 
 def test_unhandled_exception_converted_to_internal_error() -> None:
+	"""アプリ例外体系に属さない`RuntimeError`が500と`code="INTERNAL_ERROR"`、
+	利用者向け固定メッセージ「サーバーエラーが発生しました」へ変換されることを検証する。
+	"""
 	res = _client().get("/boom-unhandled")
 
 	assert res.status_code == 500
@@ -136,6 +169,9 @@ def test_unhandled_exception_converted_to_internal_error() -> None:
 
 
 def test_unhandled_exception_emits_event_and_request_id() -> None:
+	"""未処理例外のハンドラーが、`logger.exception`に`event="unhandled_exception"`と
+	レスポンスボディの`request_id`を一致させた`extra`を渡してログ出力することを検証する。
+	"""
 	with patch.object(exceptions_module.logger, "exception") as log_exception:
 		response = _client().get("/boom-unhandled")
 
@@ -146,6 +182,12 @@ def test_unhandled_exception_emits_event_and_request_id() -> None:
 
 
 def _assert_service_unavailable_body(body: dict) -> None:
+	"""503レスポンスの共通ボディが、`code="SERVICE_UNAVAILABLE"`・固定の利用者向けメッセージ・
+	`details=None`・`request_id`を含む形式であることを検証するアサーションヘルパー関数。
+
+	Args:
+		body: 検証対象のレスポンスJSONをパースした辞書。
+	"""
 	assert body["error"]["code"] == "SERVICE_UNAVAILABLE"
 	assert body["error"]["message"] == "現在サービスをご利用いただけません"
 	assert body["error"]["details"] is None
@@ -153,6 +195,7 @@ def _assert_service_unavailable_body(body: dict) -> None:
 
 
 def test_service_unavailable_app_error_returns_503() -> None:
+	"""`ServiceUnavailableError`が503と共通のサービス利用不可ボディへ変換されることを検証する。"""
 	res = _client().get("/boom-service-unavailable")
 
 	assert res.status_code == 503
@@ -160,6 +203,10 @@ def test_service_unavailable_app_error_returns_503() -> None:
 
 
 def test_503_handlers_emit_common_structured_log_fields() -> None:
+	"""アプリ例外由来の503（`ServiceUnavailableError`）とインフラ例外由来の503（Redis接続エラー）の
+	両方について、`logger.exception`が`event="service_unavailable"`と各レスポンスの`request_id`を
+	一致させた`extra`で1回ずつ呼ばれることを検証する。
+	"""
 	with patch.object(exceptions_module.logger, "exception") as log_exception:
 		app_error_response = _client().get("/boom-service-unavailable")
 		infra_error_response = _client().get("/boom-redis-error")
@@ -179,6 +226,9 @@ def test_503_handlers_emit_common_structured_log_fields() -> None:
 
 
 def test_app_error_handler_does_not_log_client_errors(caplog) -> None:
+	"""4xx系のアプリ例外（`NotFoundError`）では、`app.error`ロガーへERRORレベルの
+	ログが一切出力されないことを検証する。
+	"""
 	with caplog.at_level(logging.ERROR, logger="app.error"):
 		response = _client().get("/boom-app-error")
 
@@ -187,6 +237,9 @@ def test_app_error_handler_does_not_log_client_errors(caplog) -> None:
 
 
 def test_redis_error_is_converted_to_503_by_infra_error_handler() -> None:
+	"""Redisの`ConnectionError`がインフラエラーハンドラーにより503・共通のサービス利用不可ボディへ
+	変換されることを検証する。
+	"""
 	res = _client().get("/boom-redis-error")
 
 	assert res.status_code == 503
@@ -194,6 +247,9 @@ def test_redis_error_is_converted_to_503_by_infra_error_handler() -> None:
 
 
 def test_operational_error_is_converted_to_503_by_infra_error_handler() -> None:
+	"""sqlstate="08006"（接続例外）を持つ`OperationalError`が503・共通の
+	サービス利用不可ボディへ変換されることを検証する。
+	"""
 	res = _client().get("/boom-operational-error")
 
 	assert res.status_code == 503
@@ -201,6 +257,9 @@ def test_operational_error_is_converted_to_503_by_infra_error_handler() -> None:
 
 
 def test_operational_error_uses_pgcode_when_sqlstate_is_missing() -> None:
+	"""`orig.sqlstate`が無く`orig.pgcode="08006"`のみ持つ`OperationalError`でも、
+	pgcodeを接続例外として扱い503へ変換されることを検証する。
+	"""
 	res = _client().get("/boom-operational-error-pgcode")
 
 	assert res.status_code == 503
@@ -208,6 +267,9 @@ def test_operational_error_uses_pgcode_when_sqlstate_is_missing() -> None:
 
 
 def test_operational_error_with_retryable_sqlstate_is_converted_to_503() -> None:
+	"""`_POSTGRES_RETRYABLE_CONNECTION_STATES`に含まれるsqlstate="57P03"を持つ
+	`OperationalError`が、接続例外プレフィックス"08"と同様に503へ変換されることを検証する。
+	"""
 	res = _client().get("/boom-operational-error-retryable")
 
 	assert res.status_code == 503
@@ -215,6 +277,9 @@ def test_operational_error_with_retryable_sqlstate_is_converted_to_503() -> None
 
 
 def test_operational_error_without_sqlstate_returns_internal_error() -> None:
+	"""`orig`に`sqlstate`も`pgcode`も持たない`OperationalError`は接続例外と判定されず、
+	500・`code="INTERNAL_ERROR"`になることを検証する。
+	"""
 	res = _client().get("/boom-operational-error-no-sqlstate")
 
 	assert res.status_code == 500
@@ -222,6 +287,9 @@ def test_operational_error_without_sqlstate_returns_internal_error() -> None:
 
 
 def test_non_operational_dbapi_error_returns_internal_error() -> None:
+	"""`OperationalError`ではない一般の`DBAPIError`は接続例外判定の対象外であり、
+	500・`code="INTERNAL_ERROR"`になることを検証する。
+	"""
 	res = _client().get("/boom-dbapi-error")
 
 	assert res.status_code == 500
@@ -229,6 +297,9 @@ def test_non_operational_dbapi_error_returns_internal_error() -> None:
 
 
 def test_operational_error_with_unmapped_sqlstate_returns_internal_error() -> None:
+	"""接続例外プレフィックス"08"にもリトライ可能一覧にも該当しないsqlstate="40P01"
+	（デッドロック検出）を持つ`OperationalError`は、500・`code="INTERNAL_ERROR"`になることを検証する。
+	"""
 	res = _client().get("/boom-unknown-operational-error")
 
 	assert res.status_code == 500
@@ -236,6 +307,10 @@ def test_operational_error_with_unmapped_sqlstate_returns_internal_error() -> No
 
 
 def test_unmapped_operational_error_emits_internal_event_and_request_id() -> None:
+	"""未マッピングsqlstateの`OperationalError`について、`logger.exception`が
+	`event="infrastructure_error"`とレスポンスの`request_id`を一致させた`extra`で
+	呼ばれることを検証する。
+	"""
 	with patch.object(exceptions_module.logger, "exception") as log_exception:
 		response = _client().get("/boom-unknown-operational-error")
 
@@ -246,6 +321,9 @@ def test_unmapped_operational_error_emits_internal_event_and_request_id() -> Non
 
 
 def test_interface_error_is_converted_to_503_by_infra_error_handler() -> None:
+	"""`InterfaceError`（DBAPIとの通信断）が503・共通のサービス利用不可ボディへ
+	変換されることを検証する。
+	"""
 	res = _client().get("/boom-interface-error")
 
 	assert res.status_code == 503
@@ -253,6 +331,9 @@ def test_interface_error_is_converted_to_503_by_infra_error_handler() -> None:
 
 
 def test_pool_timeout_error_is_converted_to_503_by_infra_error_handler() -> None:
+	"""SQLAlchemyの接続プール取得タイムアウト（`TimeoutError`）が503・共通の
+	サービス利用不可ボディへ変換されることを検証する。
+	"""
 	res = _client().get("/boom-pool-timeout-error")
 
 	assert res.status_code == 503
@@ -260,6 +341,9 @@ def test_pool_timeout_error_is_converted_to_503_by_infra_error_handler() -> None
 
 
 def test_disconnection_error_is_converted_to_503_by_infra_error_handler() -> None:
+	"""`DisconnectionError`（コネクション無効化）が503・共通のサービス利用不可ボディへ
+	変換されることを検証する。
+	"""
 	res = _client().get("/boom-disconnection-error")
 
 	assert res.status_code == 503
@@ -267,6 +351,9 @@ def test_disconnection_error_is_converted_to_503_by_infra_error_handler() -> Non
 
 
 def test_validation_error_returns_field_details() -> None:
+	"""必須フィールド`name`を欠いたリクエストボディが422・`code="VALIDATION_ERROR"`となり、
+	エラー詳細の`field`にフィールド名`name`が含まれることを検証する。
+	"""
 	res = _client().post("/validate", json={})
 
 	assert res.status_code == 422
@@ -276,6 +363,7 @@ def test_validation_error_returns_field_details() -> None:
 
 
 def test_response_includes_request_id_header() -> None:
+	"""正常応答（`/ok`）にも`X-Request-ID`ヘッダーが付与されることを検証する。"""
 	res = _client().get("/ok")
 
 	assert res.status_code == 200

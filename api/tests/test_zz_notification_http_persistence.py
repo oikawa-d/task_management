@@ -22,16 +22,45 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 
 class _AuthenticatedStrategy:
+	"""固定の`user_id`でjwtモード認証済みとみなす、テスト専用の認証ストラテジースタブ。
+
+	`get_auth_strategy`の依存差し替え先として使い、実際のJWT検証を行わずに
+	`AuthContext(user_id=...)`を返すことでルーターの通知APIを直接叩けるようにする。
+	"""
+
 	mode = "jwt"
 
 	def __init__(self, user_id: UUID) -> None:
+		"""認証成功として扱うユーザーIDを保持する。
+
+		Args:
+			user_id: 認証済みユーザーとして返すユーザーID。
+		"""
 		self.user_id = user_id
 
 	async def authenticate(self, _request: object) -> AuthContext:
+		"""リクエスト内容を検証せず、常に固定`user_id`の`AuthContext`を返す。
+
+		Args:
+			_request: 認証対象のリクエスト（本スタブでは未使用）。
+
+		Returns:
+			AuthContext: `self.user_id`を持つ認証済みコンテキスト。
+		"""
 		return AuthContext(user_id=self.user_id)
 
 
 async def _insert_notification(db: AsyncSession, user_id: UUID, dedupe_key: str) -> UUID:
+	"""検証用の通知レコードを`notifications`テーブルへ直接1件INSERTするヘルパー関数。
+
+	Args:
+		db: INSERTに使う`AsyncSession`。
+		user_id: 通知の宛先ユーザーID。
+		dedupe_key: 重複排除キー（テストごとに一意な値を渡す）。
+
+	Returns:
+		UUID: 作成された通知レコードのid。
+	"""
 	result = await db.execute(
 		text(
 			"INSERT INTO notifications "
@@ -48,6 +77,11 @@ async def _insert_notification(db: AsyncSession, user_id: UUID, dedupe_key: str)
 async def test_notification_mutations_persist_after_http_response(
 	db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+	"""`PATCH /api/notifications/{notification_id}/read`と`POST /api/notifications/read-all`を
+	実DB・実HTTPクライアント（`httpx.ASGITransport`）経由で呼び出し、レスポンス返却後に
+	`notifications.read_at`の更新と未読件数の減少が別セッションからも確認できる形で
+	永続化されていることを検証する。
+	"""
 	username = f"notification-http-{uuid4().hex[:8]}"
 	user_id = await user_repository.create(db_session, username, f"{username}@example.com", "hash")
 	first_id = await _insert_notification(db_session, user_id, f"http-first-{uuid4().hex}")

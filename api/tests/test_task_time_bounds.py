@@ -1,3 +1,5 @@
+"""タスクの「アプリ日付」境界をUTCで算出する`_app_day_bounds_utc`のテスト。"""
+
 from datetime import UTC, datetime
 
 import pytest
@@ -5,6 +7,7 @@ from app.repository.task_repository import _app_day_bounds_utc
 
 
 def test_app_day_bounds_are_utc_for_tokyo_date() -> None:
+	"""`Asia/Tokyo`基準の日付境界（当日0:00〜翌日0:00）が、UTC時刻へ正しく変換されて返ることを検証する。"""
 	start, end = _app_day_bounds_utc(datetime(2026, 9, 8, 15, 30, tzinfo=UTC), "Asia/Tokyo")
 
 	assert start == datetime(2026, 9, 8, 15, tzinfo=UTC)
@@ -29,6 +32,9 @@ def test_app_day_bounds_are_utc_for_tokyo_date() -> None:
 def test_app_day_bounds_follow_timezone_day_boundaries(
 	now: datetime, expected_start: datetime, expected_end: datetime
 ) -> None:
+	"""`Asia/Tokyo`の日付境界ちょうど（前日23:59:59.999999と当日0:00:00）を挟む2つの`now`について、
+	それぞれ想定される前日分・当日分の日付境界に切り替わることを検証する。
+	"""
 	start, end = _app_day_bounds_utc(now, "Asia/Tokyo")
 
 	assert start == expected_start
@@ -36,6 +42,9 @@ def test_app_day_bounds_follow_timezone_day_boundaries(
 
 
 def test_app_day_bounds_handle_dst_timezone() -> None:
+	"""サマータイム（夏時間）中の`America/New_York`を指定した場合でも、
+	その日のローカル0:00〜翌日0:00に対応するUTCオフセット（-4時間）で境界が算出されることを検証する。
+	"""
 	start, end = _app_day_bounds_utc(datetime(2026, 7, 1, 16, tzinfo=UTC), "America/New_York")
 
 	assert start == datetime(2026, 7, 1, 4, tzinfo=UTC)
