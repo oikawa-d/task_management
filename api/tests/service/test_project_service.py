@@ -1,3 +1,9 @@
+"""project_service (プロジェクトのCRUD) のユニットテストおよびDB結合テスト。
+
+一覧取得時の件数マッピング、作成・更新時のフィールド反映(部分更新・期間フィールドのクリア/維持)、
+期間バリデーション、およびDBセッションを用いたCRUDライフサイクル全体の契約を検証する。
+"""
+
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -14,14 +20,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def _user() -> User:
+	"""テスト用のUserダミーを生成する。"""
 	return User(id=uuid4(), username="alice", email="alice@example.com", last_name="山田", first_name="太郎")
 
 
 def _current_user(user: User) -> CurrentUser:
+	"""指定したUserに対応する一般メンバーロールのCurrentUserを生成する。"""
 	return CurrentUser(id=user.id, username=user.username, role="member", is_active=True, email_verified_at=None)
 
 
 def _project(user: User) -> Project:
+	"""指定ユーザーをオーナーとするテスト用Projectダミーを生成する。"""
 	return Project(
 		id=uuid4(),
 		name="Project",
@@ -36,6 +45,9 @@ def _project(user: User) -> Project:
 
 @pytest.mark.asyncio
 async def test_list_projects_maps_repository_counts(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""list_for_userが返すProjectListItemのタスク件数(todo/in_progress/done)と
+	総件数がレスポンスのtask_counts・meta.totalへ正しくマッピングされることを検証する。
+	"""
 	user = _user()
 	project = _project(user)
 	item = project_repository.ProjectListItem(project, 2, 3, 4, 5, 6)
@@ -51,6 +63,9 @@ async def test_list_projects_maps_repository_counts(monkeypatch: pytest.MonkeyPa
 
 @pytest.mark.asyncio
 async def test_create_project_returns_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""プロジェクト作成が成功した場合、repositoryのcreateが1回呼ばれ、
+	作成されたプロジェクトのidを持ちis_owner=Trueのサマリーが返ることを検証する。
+	"""
 	user = _user()
 	project = _project(user)
 	create = AsyncMock(return_value=project.id)
@@ -69,6 +84,10 @@ async def test_create_project_returns_summary(monkeypatch: pytest.MonkeyPatch) -
 
 @pytest.mark.asyncio
 async def test_update_project_passes_partial_values(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""description・is_activeのみを指定した更新リクエストで、name・start_at・end_atは
+	既存プロジェクトの値のままrepository.updateへ渡され、is_activeはset_activeで
+	個別に反映されることを検証する。
+	"""
 	user = _user()
 	project = _project(user)
 	db = AsyncMock()
@@ -89,6 +108,9 @@ async def test_update_project_passes_partial_values(monkeypatch: pytest.MonkeyPa
 @pytest.mark.asyncio
 @pytest.mark.parametrize("field_name", ["start_at", "end_at"])
 async def test_update_project_clears_specified_period_field(monkeypatch: pytest.MonkeyPatch, field_name: str) -> None:
+	"""start_at/end_atのいずれかをNoneとして明示的に指定した場合、その期間フィールドのみが
+	クリアされ、もう一方の期間フィールドは既存値のまま更新されることを検証する。
+	"""
 	user = _user()
 	project = _project(user)
 	project.start_at = datetime(2026, 9, 10, tzinfo=timezone.utc)
@@ -105,6 +127,7 @@ async def test_update_project_clears_specified_period_field(monkeypatch: pytest.
 		start_at: datetime | None,
 		end_at: datetime | None,
 	) -> None:
+		"""project_repository.updateの代わりに、渡された値をダミープロジェクトへ反映するスタブ。"""
 		project.description = description
 		project.start_at = start_at
 		project.end_at = end_at
@@ -130,6 +153,9 @@ async def test_update_project_clears_specified_period_field(monkeypatch: pytest.
 async def test_update_project_preserves_unspecified_period_field(
 	monkeypatch: pytest.MonkeyPatch, omitted_field: str
 ) -> None:
+	"""更新リクエストで期間フィールドの片方のみを指定した場合、リクエストに含まれない
+	もう一方の期間フィールドは既存プロジェクトの値のまま保持されることを検証する。
+	"""
 	user = _user()
 	project = _project(user)
 	project.start_at = datetime(2026, 9, 10, tzinfo=timezone.utc)
@@ -146,6 +172,7 @@ async def test_update_project_preserves_unspecified_period_field(
 		start_at: datetime | None,
 		end_at: datetime | None,
 	) -> None:
+		"""project_repository.updateの代わりに、渡された値をダミープロジェクトへ反映するスタブ。"""
 		project.description = description
 		project.start_at = start_at
 		project.end_at = end_at
@@ -169,6 +196,9 @@ async def test_update_project_preserves_unspecified_period_field(
 
 
 async def test_update_project_rejects_period_before_database_update(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""既存のend_atより後のstart_atを指定した場合、DB更新(repository.update)を
+	一切呼び出す前にValidationErrorが送出されることを検証する。
+	"""
 	user = _user()
 	project = _project(user)
 	project.start_at = datetime(2026, 9, 10, tzinfo=timezone.utc)
@@ -188,6 +218,11 @@ async def test_update_project_rejects_period_before_database_update(monkeypatch:
 
 
 async def test_project_crud_lifecycle_uses_database_contract(db_session: AsyncSession) -> None:
+	"""実DBセッション(db_session)を用いて、作成・詳細取得・一覧取得(is_active絞り込み含む)・
+	更新・無効化(deactivate_project)までの一連のCRUDライフサイクルが、実際のDB契約
+	(ストアドプロシージャ・テーブル状態)と整合して動作することを検証する。
+	実DB(PostgreSQL)接続が前提のテストであり、DBが疎通していない環境では実行できない。
+	"""
 	owner_id = await user_repository.create(db_session, "project-lifecycle-owner", "project-owner@example.com", "hash")
 	owner = await user_repository.get_by_id(db_session, owner_id)
 	assert owner is not None

@@ -1,3 +1,10 @@
+"""task_service (タスクのボード表示・CRUD・カレンダー表示・権限制御) のユニットテスト。
+
+repository層をmonkeypatchでスタブ化し、ボード集計、作成・更新時の制約違反
+ロールバック、一覧のページング・絞り込み、権限マトリクス、カレンダー用の
+タイムゾーン変換を検証する。
+"""
+
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -13,10 +20,12 @@ from app.service import task_service
 
 
 def _user() -> CurrentUser:
+	"""一般メンバーロールのテスト用CurrentUserを生成する。"""
 	return CurrentUser(id=uuid4(), username="alice", role="member", is_active=True, email_verified_at=None)
 
 
 def _item(user: CurrentUser) -> TaskWithProjectStatus:
+	"""指定ユーザーが作成した、有効なプロジェクトに属すtodo状態のタスクダミーを生成する。"""
 	now = datetime.now(timezone.utc)
 	return TaskWithProjectStatus(
 		task=Task(
@@ -38,6 +47,9 @@ def _item(user: CurrentUser) -> TaskWithProjectStatus:
 
 @pytest.mark.asyncio
 async def test_get_board_groups_tasks_by_status(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""list_boardが返すtodoステータスのタスクが、ボードレスポンスの
+	columns.todoへ正しく分類されることを検証する。
+	"""
 	user = _user()
 	item = _item(user)
 	monkeypatch.setattr(task_service.task_repository, "list_board", AsyncMock(return_value=[item]))
@@ -49,6 +61,9 @@ async def test_get_board_groups_tasks_by_status(monkeypatch: pytest.MonkeyPatch)
 
 @pytest.mark.asyncio
 async def test_create_task_calls_repository_and_returns_response(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""タスク作成が成功した場合、repositoryのcreateが1回呼ばれ、作成された
+	タスクのidを持つレスポンスが返ることを検証する。
+	"""
 	user = _user()
 	item = _item(user)
 	create = AsyncMock(return_value=item.task.id)
@@ -67,6 +82,10 @@ async def test_create_task_calls_repository_and_returns_response(monkeypatch: py
 async def test_create_task_rolls_back_repository_constraint_error(
 	error: type[Exception], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+	"""タスク作成(create)がAssigneeInactiveError/TaskConflictErrorのいずれかを
+	送出した場合、その例外がそのまま伝播しDBのrollbackが1回呼ばれ
+	commitは呼ばれないことを検証する。
+	"""
 	user = _user()
 	db = AsyncMock()
 	monkeypatch.setattr(task_service.task_repository, "create", AsyncMock(side_effect=error()))
@@ -83,6 +102,10 @@ async def test_create_task_rolls_back_repository_constraint_error(
 async def test_update_task_rolls_back_repository_constraint_error(
 	error: type[Exception], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+	"""タスク更新(update)がAssigneeInactiveError/TaskConflictErrorのいずれかを
+	送出した場合、その例外がそのまま伝播しDBのrollbackが1回呼ばれ
+	commitは呼ばれないことを検証する。
+	"""
 	user = _user()
 	item = _item(user)
 	db = AsyncMock()
@@ -98,6 +121,10 @@ async def test_update_task_rolls_back_repository_constraint_error(
 
 
 async def test_list_tasks_passes_unassigned_filter_to_repository(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""project_idに"unassigned"を指定した場合、repositoryへは担当者未割当を示す
+	フラグ(unassigned_only=True)と、担当ユーザー絞り込み無し(project_id=None)が
+	渡されることを検証する。
+	"""
 	user = _user()
 	db = AsyncMock()
 	list_for_user = AsyncMock(return_value=([], 0))
@@ -111,6 +138,9 @@ async def test_list_tasks_passes_unassigned_filter_to_repository(monkeypatch: py
 
 @pytest.mark.asyncio
 async def test_list_tasks_uses_filtered_total_for_paging_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""list_for_user_with_totalが返す絞り込み後の総件数がそのままレスポンスの
+	meta.totalへ反映され、ページ数(total_pages)が正しく算出されることを検証する。
+	"""
 	user = _user()
 	item = _item(user)
 	list_for_user = AsyncMock(return_value=([item], 11))
@@ -124,6 +154,9 @@ async def test_list_tasks_uses_filtered_total_for_paging_metadata(monkeypatch: p
 
 @pytest.mark.asyncio
 async def test_task_endpoints_preserve_repository_comment_count(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""repositoryが返すcomment_countが、ボード・一覧・カレンダー・詳細の
+	いずれのエンドポイント経由でもレスポンスへそのまま引き継がれることを検証する。
+	"""
 	user = _user()
 	base_item = _item(user)
 	item = TaskWithProjectStatus(task=base_item.task, project_is_active=base_item.project_is_active, comment_count=3)
@@ -148,6 +181,10 @@ async def test_task_endpoints_preserve_repository_comment_count(monkeypatch: pyt
 
 @pytest.mark.asyncio
 async def test_admin_can_filter_tasks_by_project_without_membership_check(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""管理者ロールのユーザーがプロジェクト指定でタスク一覧を取得する場合、
+	プロジェクトメンバーであるかの確認(project_repository.is_member)を
+	呼び出さずに一覧取得できることを検証する。
+	"""
 	user = _user().model_copy(update={"role": "admin"})
 	project_id = uuid4()
 	is_member = AsyncMock(return_value=False)
@@ -174,6 +211,10 @@ async def test_admin_can_filter_tasks_by_project_without_membership_check(monkey
 async def test_task_active_state_permission_matrix(
 	role: str, is_creator: bool, is_owner: bool, allowed: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+	"""無効化されたタスクのis_activeをTrueへ戻す更新について、タスク作成者・
+	プロジェクトオーナー・管理者ロールは許可され、それ以外の一般メンバーは
+	ForbiddenErrorで拒否される権限マトリクスを検証する。
+	"""
 	user = _user().model_copy(update={"role": role})
 	item = _item(user)
 	item.task.is_active = False
@@ -207,6 +248,10 @@ async def test_task_active_state_permission_matrix(
 async def test_list_calendar_tasks_converts_app_dates_to_utc_and_checks_membership(
 	monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+	"""scope="project"のカレンダー検索で、対象プロジェクトのメンバーであるかを
+	確認(is_member)したうえで、リクエストのfrom/to(アプリのタイムゾーン基準の日付)が
+	正しくUTCの範囲へ変換されてrepositoryへ渡されることを検証する。
+	"""
 	user = _user()
 	item = _item(user)
 	project_id = item.task.project_id
@@ -233,6 +278,10 @@ async def test_list_calendar_tasks_converts_app_dates_to_utc_and_checks_membersh
 async def test_list_calendar_tasks_returns_app_timezone_due_date_at_utc_boundary(
 	monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+	"""UTC境界に近いdue_at(UTCで前日16:00=アプリのタイムゾーンで翌日0:00相当)を持つ
+	タスクが、カレンダーレスポンスのdue_dateとしてアプリのタイムゾーン基準の
+	日付に正しく変換されることを検証する。
+	"""
 	user = _user()
 	item = _item(user)
 	item.task.due_at = datetime(2026, 9, 9, 16, 0, tzinfo=timezone.utc)

@@ -1,3 +1,9 @@
+"""member_service (プロジェクトメンバーの一覧・追加・削除) のユニットテスト。
+
+repository層をmonkeypatchでスタブ化し、メンバー一覧の整形、既存メンバー・
+オーナー除去の拒否、追加/削除失敗時のDBロールバック挙動を検証する。
+"""
+
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -18,14 +24,17 @@ from sqlalchemy.exc import DBAPIError, OperationalError
 
 
 def _user(username: str = "alice") -> User:
+	"""指定ユーザー名でテスト用のUserダミーを生成する。"""
 	return User(id=uuid4(), username=username, email=f"{username}@example.com", role="member", is_active=True)
 
 
 def _project(owner: User) -> Project:
+	"""指定ユーザーをオーナーとするテスト用Projectダミーを生成する。"""
 	return Project(id=uuid4(), name="Project", owner_id=owner.id, owner=owner, is_active=True)
 
 
 def _member(project: Project, user: User) -> ProjectMember:
+	"""指定プロジェクト・ユーザーの組み合わせでテスト用ProjectMemberダミーを生成する。"""
 	return ProjectMember(
 		project_id=project.id,
 		user_id=user.id,
@@ -36,6 +45,9 @@ def _member(project: Project, user: User) -> ProjectMember:
 
 @pytest.mark.asyncio
 async def test_list_members_returns_member_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""list_by_projectが返すメンバー1件がレスポンスへ正しく整形され、
+	総件数・ユーザー名が反映されることを検証する。
+	"""
 	owner = _user()
 	project = _project(owner)
 	member = _member(project, _user("bob"))
@@ -50,6 +62,9 @@ async def test_list_members_returns_member_summary(monkeypatch: pytest.MonkeyPat
 
 @pytest.mark.asyncio
 async def test_add_member_rejects_existing_member(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""既にメンバーであるユーザーを追加しようとした場合、AlreadyMemberErrorが送出され、
+	DBのcommit・rollbackがどちらも呼ばれないことを検証する。
+	"""
 	owner = _user()
 	project = _project(owner)
 	target = _user("bob")
@@ -66,6 +81,9 @@ async def test_add_member_rejects_existing_member(monkeypatch: pytest.MonkeyPatc
 
 @pytest.mark.asyncio
 async def test_add_member_rejects_missing_user_without_rollback(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""追加対象のユーザーIDが存在しない場合、NotFoundErrorが送出され、
+	DBのcommit・rollbackがどちらも呼ばれないことを検証する。
+	"""
 	owner = _user()
 	project = _project(owner)
 	db = AsyncMock()
@@ -93,6 +111,10 @@ async def test_add_member_rejects_missing_user_without_rollback(monkeypatch: pyt
 async def test_add_member_rolls_back_database_errors(
 	monkeypatch: pytest.MonkeyPatch, database_error: DBAPIError, expected_error: type[Exception]
 ) -> None:
+	"""メンバー作成(create)がDB接続エラー(sqlstate 08006)やその他のDBAPIErrorを
+	送出した場合、それぞれServiceUnavailableError・元の例外へ変換され、
+	いずれもDBのrollbackが1回呼ばれcommitは呼ばれないことを検証する。
+	"""
 	owner = _user()
 	project = _project(owner)
 	target = _user("bob")
@@ -110,6 +132,9 @@ async def test_add_member_rolls_back_database_errors(
 
 @pytest.mark.asyncio
 async def test_add_member_rolls_back_not_found_after_create(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""メンバー作成後の一覧取得(list_by_project)に追加したはずのメンバーが
+	含まれない場合、NotFoundErrorへ変換されDBがrollbackされることを検証する。
+	"""
 	owner = _user()
 	project = _project(owner)
 	target = _user("bob")
@@ -128,6 +153,9 @@ async def test_add_member_rolls_back_not_found_after_create(monkeypatch: pytest.
 
 @pytest.mark.asyncio
 async def test_add_member_rolls_back_already_member_after_create(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""事前のexists確認をすり抜けた後にcreateがAlreadyMemberErrorを送出した場合
+	(競合状態を想定)、その例外がそのまま伝播しDBがrollbackされることを検証する。
+	"""
 	owner = _user()
 	project = _project(owner)
 	target = _user("bob")
@@ -149,6 +177,9 @@ async def test_add_member_rolls_back_already_member_after_create(monkeypatch: py
 
 @pytest.mark.asyncio
 async def test_remove_member_rejects_owner() -> None:
+	"""プロジェクトオーナー自身を削除しようとした場合、OwnerCannotBeRemovedErrorが
+	送出されることを検証する。
+	"""
 	owner = _user()
 	project = _project(owner)
 
@@ -158,6 +189,9 @@ async def test_remove_member_rejects_owner() -> None:
 
 @pytest.mark.asyncio
 async def test_remove_member_rejects_missing_member(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""削除対象のユーザーがプロジェクトメンバーとして存在しない場合、
+	NotFoundErrorが送出されることを検証する。
+	"""
 	owner = _user()
 	project = _project(owner)
 	monkeypatch.setattr(member_service.project_member_repository, "exists", AsyncMock(return_value=False))
@@ -181,6 +215,10 @@ async def test_remove_member_rejects_missing_member(monkeypatch: pytest.MonkeyPa
 async def test_remove_member_rolls_back_database_errors(
 	monkeypatch: pytest.MonkeyPatch, database_error: DBAPIError, expected_error: type[Exception]
 ) -> None:
+	"""メンバー削除(delete)がDB接続エラー(sqlstate 08006)やその他のDBAPIErrorを
+	送出した場合、それぞれServiceUnavailableError・元の例外へ変換され、
+	いずれもDBのrollbackが1回呼ばれcommitは呼ばれないことを検証する。
+	"""
 	owner = _user()
 	project = _project(owner)
 	target = _user("bob")

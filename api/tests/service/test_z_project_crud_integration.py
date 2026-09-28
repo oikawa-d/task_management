@@ -1,3 +1,17 @@
+"""プロジェクトCRUD APIの認可・可視性制御を実DB(PostgreSQL)接続で検証する結合テスト。
+
+`projects_router` を単独のFastAPIアプリに組み込み、実際のJWT発行・DBセッションを
+経由してowner/member/admin/outsiderそれぞれの権限境界(閲覧・更新・削除の可否と
+エラーコード)を確認する。
+
+ファイル名の`test_z_`接頭辞について: 本ファイルはテスト関数を1つしか持たないため
+テスト同士のデータ依存はないが、`apply_migrations`(モジュールスコープ)により
+alembicのマイグレーションがモジュール単位でupgrade/downgradeされ、`db_session`が
+`await db_session.commit()`で行った変更はモジュール内のテストをまたいで実DBに残る。
+そのため他のservice結合テストと異なるテストプロセス上で安全に完結させる必要があり、
+`test_z_`接頭辞によって実行順・実行グループを制御する対象として区別している。
+"""
+
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -18,6 +32,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def _build_app() -> FastAPI:
+	"""projects_routerのみを組み込んだ検証用FastAPIアプリを構築する。
+
+	エラーハンドリング登録と`get_auth_strategy`のJWT認証オーバーライドを行い、
+	実際のルーター・例外処理を通したHTTP経路のテストを可能にする。
+
+	Returns:
+		プロジェクトAPIの検証に使うFastAPIアプリケーションインスタンス。
+	"""
 	app = FastAPI()
 	register_error_handling(app)
 	app.include_router(router)
@@ -26,6 +48,7 @@ def _build_app() -> FastAPI:
 
 
 def _token(user_id: UUID) -> str:
+	"""指定ユーザーIDをsubに持つ、有効期限900秒のアクセストークン(JWT)を発行する。"""
 	now = datetime.now(UTC)
 	settings = get_backend_settings()
 	return encode_jwt(
@@ -42,19 +65,29 @@ def _token(user_id: UUID) -> str:
 
 
 def _authorization(user_id: UUID) -> dict[str, str]:
+	"""指定ユーザーのアクセストークンを含むAuthorizationヘッダー辞書を生成する。"""
 	return {"Authorization": f"Bearer {_token(user_id)}"}
 
 
 def _error_code(response: Any) -> str:
+	"""APIエラーレスポンスのJSONボディからエラーコード文字列を取り出す。"""
 	return response.json()["error"]["code"]
 
 
 async def _create_user(db: AsyncSession, username: str) -> UUID:
+	"""指定ユーザー名で実DBにユーザーを1件作成し、そのIDを返す。"""
 	return await user_repository.create(db, username, f"{username}@example.com", "hash")
 
 
 @pytest.mark.asyncio
 async def test_project_crud_router_enforces_authz_and_hides_non_member(db_session: AsyncSession) -> None:
+	"""実DBとJWT認証を通した/api/projectsのCRUD経路で、owner/member/admin/outsiderの
+	権限差を検証する。owner・adminは作成/参照/更新/削除できる一方、memberは参照のみ
+	(更新・削除は403 FORBIDDEN)、outsiderにはプロジェクトが一覧・詳細ともに見えず
+	(一覧から除外、詳細は404 NOT_FOUND)、更新・削除も404になることを確認する。
+	また未認証・不正トークンでのアクセスが401 UNAUTHENTICATEDになること、
+	削除後にprojectsテーブルのis_activeがFalseへ更新される(論理削除)ことも検証する。
+	"""
 	suffix = uuid4().hex[:8]
 	owner_id = await _create_user(db_session, f"crud-owner-{suffix}")
 	member_id = await _create_user(db_session, f"crud-member-{suffix}")
@@ -155,6 +188,11 @@ async def test_project_crud_router_enforces_authz_and_hides_non_member(db_sessio
 
 
 async def _db_session_for_request():
+	"""get_db_sessionの依存性オーバーライド用に、専用のDBエンジンから新規セッションを
+	生成して提供するジェネレータ。テスト側のdb_sessionとは別接続にすることで、
+	TestClient経由のHTTPリクエストが自身のトランザクションでcommitした結果を
+	即座に読み取れるようにし、使用後はエンジンを破棄する。
+	"""
 	from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 	engine = create_async_engine(get_backend_settings().database_url)
