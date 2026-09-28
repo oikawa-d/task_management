@@ -19,6 +19,13 @@ export interface AppLayoutProps {
 	onMarkAllNotificationsRead?: () => void;
 }
 
+/**
+ * 認証後画面のヘッダー、開閉式共通ナビ、通知、メイン領域を描画する。
+ * @param props 通知データ、ページ制御callbackなどの任意のレイアウト設定。
+ * @returns 共通レイアウトのReact要素。
+ * @副作用 ログアウト・通知操作・ナビ開閉時にstore、router、親callbackを更新する。
+ * @throws 子コンポーネントまたはrouter/query依存が利用できない場合はReactへ描画エラーを伝播する。
+ */
 export function AppLayout({
 	notifications,
 	notificationPage = 1,
@@ -34,6 +41,7 @@ export function AppLayout({
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
 	const [isLoggingOut, setIsLoggingOut] = useState(false);
+	const [isNavOpen, setIsNavOpen] = useState(false);
 	const [unreadOverride, setUnreadOverride] = useState<number | null>(null);
 	const [currentNotificationPage, setCurrentNotificationPage] = useState(notificationPage);
 	const { data: polledUnreadCount } = useUnreadCount({ isAuthenticated: status === "authenticated" });
@@ -74,6 +82,16 @@ export function AppLayout({
 	return (
 		<div className={styles.layout}>
 			<header className={styles.header}>
+				<button
+					type="button"
+					className={styles.menuButton}
+					aria-label={isNavOpen ? "ナビゲーションを閉じる" : "ナビゲーションを開く"}
+					aria-expanded={isNavOpen}
+					aria-controls="app-navigation"
+					onClick={() => setIsNavOpen((open) => !open)}
+				>
+					≡
+				</button>
 				<strong>Cerberus</strong>
 				<NotificationCenter
 					unreadCount={unreadCount}
@@ -86,7 +104,7 @@ export function AppLayout({
 				enableDataApi
 				/>
 			</header>
-			<nav className={styles.nav} aria-label="サイドバー">
+			<nav id="app-navigation" className={`${styles.nav} ${isNavOpen ? styles.navOpen : ""}`} aria-label="サイドバー">
 				<Link to={ROUTES.DASHBOARD}>home</Link>
 				<Link to={ROUTES.SETTINGS}>設定</Link>
 				{isAdmin ? <Link to={ROUTES.ADMIN_USERS}>管理</Link> : null}

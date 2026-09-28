@@ -34,15 +34,37 @@ const extractColorTokens = (block: string): Record<string, string> => Object.fro
 
 const styleEntries = Object.entries(allStyles);
 const tokenText = Object.values(tokenStyles).map(toRawCssText)[0] ?? "";
+const EXPECTED_COLOR_TOKENS = [
+	"--color-page", "--color-overlay", "--color-text-primary", "--color-text-secondary", "--color-text-tertiary", "--color-muted",
+	"--color-surface", "--color-surface-muted", "--color-border", "--color-border-light", "--color-border-subtle", "--color-border-muted",
+	"--color-border-placeholder", "--color-accent", "--color-accent-strong", "--color-accent-surface", "--color-danger", "--color-danger-fg",
+	"--color-danger-surface", "--color-success", "--color-success-surface", "--color-warning", "--color-warning-surface", "--color-warning-border",
+	"--color-focus", "--color-header-bg", "--color-header-fg", "--color-header-hover", "--color-header-badge-fg", "--color-row-hover",
+];
 
 describe("CSS color tokens", () => {
-	/** Viteのraw importが文字列形式とdefault形式のどちらでも本文化できることを検証する。 */
+	/**
+	 * Viteのraw importが文字列形式とdefault形式のどちらでも本文へ正規化できることを検証する。
+	 * @param なし。
+	 * @returns なし。
+	 * @副作用 テスト用値のみを評価し、外部状態を変更しない。
+	 * @throws 期待値不一致時にVitestのアサーション例外を送出する。
+	 */
 	it("raw CSS importの両形式を正規化する", () => {
 		expect(toRawCssText(".sample {}")).toBe(".sample {}");
 		expect(toRawCssText({ default: ".sample {}" })).toBe(".sample {}");
+		expect(styleEntries.length).toBeGreaterThan(0);
+		expect(styleEntries.every(([path]) => path.length > 0)).toBe(true);
+		expect(tokenText.trim().length).toBeGreaterThan(0);
 	});
 
-	/** コンポーネントCSSに色のハードコードがないことを検証する。 */
+	/**
+	 * コンポーネントCSSに色のハードコードがないことを検証する。
+	 * @param なし。
+	 * @returns なし。
+	 * @副作用 raw CSS本文を読み取るが、ファイルは変更しない。
+	 * @throws ハードコード色を検出した場合にVitestのアサーション例外を送出する。
+	 */
 	it("コンポーネントCSSに色のハードコードを残さない", () => {
 		const rawColors = styleEntries.filter(([path]) => !path.endsWith("tokens.css")).flatMap(([path, source]) =>
 			toRawCssText(source)
@@ -54,7 +76,13 @@ describe("CSS color tokens", () => {
 		expect(rawColors).toEqual([]);
 	});
 
-	/** 参照された色トークンが定義済みであることを検証する。 */
+	/**
+	 * 参照された色トークンが定義済みであることを検証する。
+	 * @param なし。
+	 * @returns なし。
+	 * @副作用 raw CSS本文を読み取るが、ファイルは変更しない。
+	 * @throws 未定義トークンを検出した場合にVitestのアサーション例外を送出する。
+	 */
 	it("参照する色トークンを定義する", () => {
 		const references = new Set(
 			styleEntries.flatMap(([, source]) =>
@@ -70,18 +98,41 @@ describe("CSS color tokens", () => {
 		}
 	});
 
-	/** lightテーマの全色トークンにexplicit darkテーマ値があることを検証する。 */
+	/**
+	 * lightテーマの全色トークンにexplicit darkテーマ値があることを検証する。
+	 * @param なし。
+	 * @returns なし。
+	 * @副作用 raw CSS本文を読み取るが、ファイルは変更しない。
+	 * @throws dark値が欠落した場合にVitestのアサーション例外を送出する。
+	 */
 	it("全カラートークンにダークテーマ値を定義する", () => {
 		const lightBlock = tokenText.match(/:root\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
 		const darkBlock = tokenText.match(/:root\[data-theme="dark"\]\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
+		const lightTokens = extractColorTokens(lightBlock);
 		const darkTokens = extractColorTokens(darkBlock);
-		for (const token of Object.keys(extractColorTokens(lightBlock))) expect(darkTokens).toHaveProperty(token);
+		expect(Object.keys(lightTokens).length).toBeGreaterThan(0);
+		expect(Object.keys(darkTokens).length).toBeGreaterThan(0);
+		expect(Object.keys(lightTokens).sort()).toEqual([...EXPECTED_COLOR_TOKENS].sort());
+		expect(Object.keys(darkTokens).sort()).toEqual([...EXPECTED_COLOR_TOKENS].sort());
+		for (const token of Object.keys(lightTokens)) expect(darkTokens).toHaveProperty(token);
 	});
 
-	/** explicit darkとOS追従system darkの色トークン名・値が一致することを検証する。 */
+	/**
+	 * explicit darkとOS追従system darkの色トークン名・値が一致することを検証する。
+	 * @param なし。
+	 * @returns なし。
+	 * @副作用 raw CSS本文を読み取るが、ファイルは変更しない。
+	 * @throws テーマ間の集合または値が異なる場合にVitestのアサーション例外を送出する。
+	 */
 	it("明示的ダークテーマとOS追従ダークテーマの色トークン値が一致する", () => {
 		const explicitDarkBlock = tokenText.match(/:root\[data-theme="dark"\]\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
 		const systemDarkBlock = tokenText.match(/@media\s*\(prefers-color-scheme:\s*dark\)[\s\S]*?:root:not\(\[data-theme\]\)\s*\{([\s\S]*?)\n\s*\}\s*\}/)?.[1] ?? "";
-		expect(extractColorTokens(systemDarkBlock)).toEqual(extractColorTokens(explicitDarkBlock));
+		const explicitTokens = extractColorTokens(explicitDarkBlock);
+		const systemTokens = extractColorTokens(systemDarkBlock);
+		expect(Object.keys(explicitTokens).length).toBeGreaterThan(0);
+		expect(Object.keys(systemTokens).length).toBeGreaterThan(0);
+		expect(Object.keys(explicitTokens).sort()).toEqual([...EXPECTED_COLOR_TOKENS].sort());
+		expect(Object.keys(systemTokens).sort()).toEqual([...EXPECTED_COLOR_TOKENS].sort());
+		expect(systemTokens).toEqual(explicitTokens);
 	});
 });

@@ -19,13 +19,25 @@ function sourceOf(value: string | { default: string }): string {
 const rawStyles = Object.fromEntries(Object.entries(styles).map(([path, source]) => [path, sourceOf(source)]));
 
 describe("UIスタイリング契約", () => {
-	/** Viteのraw importが文字列形式とdefault形式のどちらでも本文化できることを検証する。 */
+	/**
+	 * Viteのraw importが文字列形式とdefault形式のどちらでも本文へ正規化できることを検証する。
+	 * @param なし。
+	 * @returns なし。
+	 * @副作用 テスト用値のみを評価し、外部状態を変更しない。
+	 * @throws 期待値不一致時にVitestのアサーション例外を送出する。
+	 */
 	it("raw CSS importの両形式を正規化する", () => {
 		expect(sourceOf(".sample {}")).toBe(".sample {}");
 		expect(sourceOf({ default: ".sample {}" })).toBe(".sample {}");
 	});
 
-	/** DOMを描画するコンポーネントへ意味のあるclassNameが適用されていることを検証する。 */
+	/**
+	 * DOMを描画するコンポーネントへ意味のあるclassNameが適用されていることを検証する。
+	 * @param なし。
+	 * @returns なし。
+	 * @副作用 raw TSX本文を読み取るが、ファイルは変更しない。
+	 * @throws classNameがない描画コンポーネントを検出した場合にVitestのアサーション例外を送出する。
+	 */
 	it("DOMを描画する非テストコンポーネントはclassNameを持つ", () => {
 		const nonVisual = new Set(["../App.tsx", "../main.tsx", "../router.tsx", "../auth/AuthProvider.tsx"]);
 		const unstyled = Object.entries(components).filter(([path, source]) => {
@@ -36,14 +48,26 @@ describe("UIスタイリング契約", () => {
 		expect(unstyled).toEqual([]);
 	});
 
-	/** responsive境界値がbreakpoints.tsとtokens.cssで一致することを検証する。 */
+	/**
+	 * responsive境界値がbreakpoints.tsとtokens.cssで一致することを検証する。
+	 * @param なし。
+	 * @returns なし。
+	 * @副作用 raw CSS本文を読み取るが、ファイルは変更しない。
+	 * @throws 定数とtokenの値が異なる場合にVitestのアサーション例外を送出する。
+	 */
 	it("レスポンシブ境界値を共通定数で管理する", () => {
 		expect(BREAKPOINTS).toEqual({ sm: "30rem", md: "48rem", lg: "90rem" });
 		const tokenText = rawStyles["./tokens.css"] ?? "";
 		for (const [name, value] of Object.entries(BREAKPOINTS)) expect(tokenText).toContain(`--breakpoint-${name}: ${value};`);
 	});
 
-	/** CSS media queryの幅が共通breakpoint定義だけで構成されることを検証する。 */
+	/**
+	 * CSS media queryの幅が共通breakpoint定義だけで構成されることを検証する。
+	 * @param なし。
+	 * @returns なし。
+	 * @副作用 raw CSS本文を読み取るが、ファイルは変更しない。
+	 * @throws 未定義のmedia query幅を検出した場合にVitestのアサーション例外を送出する。
+	 */
 	it("全media queryの幅がbreakpoints.tsとtokens.cssの値に一致する", () => {
 		const allowed = new Set<string>(Object.values(BREAKPOINTS));
 		const mediaValues = Object.entries(rawStyles).flatMap(([path, source]) => {
@@ -53,7 +77,13 @@ describe("UIスタイリング契約", () => {
 		expect(mediaValues.every((value) => allowed.has(value.value)), mediaValues.map((value) => `${value.path}: ${value.value}`).join("\n")).toBe(true);
 	});
 
-	/** CSSの寸法・アニメーション時間がトークン化されていることを検証する。 */
+	/**
+	 * CSSの寸法・アニメーション時間がトークン化されていることを検証する。
+	 * @param なし。
+	 * @returns なし。
+	 * @副作用 raw CSS本文を読み取るが、ファイルは変更しない。
+	 * @throws 未トークン化の寸法または時間を検出した場合にVitestのアサーション例外を送出する。
+	 */
 	it("CSSの寸法値はトークンへ集約されている", () => {
 		const violations = Object.entries(rawStyles).flatMap(([path, source]) => {
 			if (path.endsWith("/tokens.css")) return [];
@@ -63,7 +93,13 @@ describe("UIスタイリング契約", () => {
 		expect(violations).toEqual([]);
 	});
 
-	/** 狭い画面でもboardと管理テーブルが横方向へ収まることを検証する。 */
+	/**
+	 * 狭い画面でもboardと管理テーブルが横方向へ収まることを検証する。
+	 * @param なし。
+	 * @returns なし。
+	 * @副作用 raw CSS本文を読み取るが、ファイルは変更しない。
+	 * @throws overflow-x契約が欠落した場合にVitestのアサーション例外を送出する。
+	 */
 	it("狭い画面ではboardとテーブルが横スクロールを担保する", () => {
 		const raw = rawStyles;
 		const board = raw["../features/board/BoardPage.module.css"];
@@ -72,10 +108,30 @@ describe("UIスタイリング契約", () => {
 		expect(table).toContain("overflow-x: auto");
 	});
 
-	/** 管理系三画面が共通のテーブルCSS moduleを参照することを検証する。 */
+	/**
+	 * 管理系三画面が共通のテーブルCSS moduleを参照することを検証する。
+	 * @param なし。
+	 * @returns なし。
+	 * @副作用 raw TSX本文を読み取るが、ファイルは変更しない。
+	 * @throws 共通CSS moduleの参照がない画面を検出した場合にVitestのアサーション例外を送出する。
+	 */
 	it("管理・プロジェクト・ログイン履歴の3テーブルは共通CSS moduleを使う", () => {
 		for (const path of ["../features/admin/components/UserTable.tsx", "../features/admin/components/ProjectTable.tsx", "../features/settings/components/LoginHistoryTable.tsx"]) {
 			expect(sourceOf(components[path]), path).toContain('AdminTable.module.css');
 		}
+	});
+
+	/**
+	 * 共通ナビが狭幅では閉じ、開閉状態クラスとdesktop media queryで表示できることを検証する。
+	 * @param なし。
+	 * @returns なし。
+	 * @副作用 raw CSS本文を読み取るが、ファイルは変更しない。
+	 * @throws ナビの表示契約が欠落した場合にVitestのアサーション例外を送出する。
+	 */
+	it("共通ナビの狭幅開閉CSS契約を満たす", () => {
+		const layout = rawStyles["../layouts/AppLayout.module.css"] ?? "";
+		expect(layout).toContain(".nav { display: none;");
+		expect(layout).toContain(".navOpen { display: flex; }");
+		expect(layout).toContain("@media (min-width: 48rem)");
 	});
 });

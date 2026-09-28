@@ -60,7 +60,7 @@
 
 | No | 要素 | 種別 | 初期値 | 入力制約 | 活性条件 | イベント／遷移 |
 |----|------|------|--------|----------|----------|----------------|
-| ① | ハンバーガー | button | `uiStore.sidebarOpen` | - | 常時 | サイドバー開閉 |
+| ① | ハンバーガー | button | `AppLayout`のローカルstate（初期`false`） | - | 常時 | 共通ナビを開閉。状態はlocalStorageや`uiStore`へ保存しない |
 | ② | プロジェクト名見出し | text | `board.project.name` | - | - | - |
 | ③ | タスク作成ボタン | button | - | - | 常時活性 | `TaskCreateModal` を開く |
 | ④⑤⑥ | 列ヘッダー | text + badge | 固定ラベル + `columns[status].length` | - | - | - |

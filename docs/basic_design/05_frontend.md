@@ -565,7 +565,7 @@ flowchart LR
 | OS追従 | 保存値をシステムにしOSのライト/ダークを切り替える | CSSテーマが即時追従する。明示light/darkはOS変更に優先する |
 | 異常系 | 認証エラー・フォームバリデーション・通信失敗を各テーマで発生させる | `role=alert` のメッセージが判読でき、再試行導線が崩れない |
 
-実ブラウザの認証・API・OS切替は環境依存のため、VitestではDOM契約・トークン網羅・コントラスト・テーマ属性を検証し、上表の画面巡回はChromiumで手動実施する。本修正環境にはChromium実行ファイルおよびE2Eランナーが存在しないため、375px/768px/1440pxのlight/dark画面巡回は未実施である。実施時は`npm run dev -- --host 0.0.0.0`で起動し、各幅でlight/darkを切り替えて、横はみ出し・重なり・フォーカス表示・コントラストを確認する。
+PR #562の検証として、オーケストレーターがPlaywright Chromium v1.55のDocker環境で、設計書およびfrontendレスポンス型に合わせたroute mockを用いて実ブラウザシナリオを実施した（[検証証跡コメント](https://github.com/oikawa-d/task_management/pull/562#issuecomment-5861988134)）。ログイン→ダッシュボード→プロジェクト→タスク詳細→コメント投稿、dark切替後の再読込によるテーマ維持、OS dark時のsystemテーマ適用、`/login`・`/dashboard`・`/projects/project-1`・`/settings`・`/admin/users`の375px/768px/1440px巡回、root横overflowなし、スクリーンショット目視を確認し、結果は`ok: true`だった。route mockのため実backendとのE2Eおよび実ユーザー環境での確認は未実施であり、別途必要である。
 
 ## 9. テスト方針
 

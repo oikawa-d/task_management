@@ -11,6 +11,13 @@ describe("uiStore theme", () => {
 		localStorage.clear();
 	});
 
+	/**
+	 * light/darkを選択した条件でdata-themeとlocalStorageが即時更新されることを検証する。
+	 * @param なし。
+	 * @returns なし。
+	 * @副作用 uiStore、DOM、localStorageを一時的に変更する。
+	 * @throws テーマ属性または永続化値が期待と異なる場合にVitestのアサーション例外を送出する。
+	 */
 	it("light/darkをdata-themeへ即時反映する", () => {
 		const { result } = renderHook(() => useUiStore());
 		act(() => result.current.setTheme("dark"));
@@ -20,6 +27,13 @@ describe("uiStore theme", () => {
 		expect(JSON.parse(localStorage.getItem("cerberus.ui") ?? "{}").state.theme).toBe("light");
 	});
 
+	/**
+	 * systemを選択した条件でdata-themeを削除し、store状態をsystemに保持することを検証する。
+	 * @param なし。
+	 * @returns なし。
+	 * @副作用 uiStoreとdocumentのdata-theme属性を一時的に変更する。
+	 * @throws テーマ状態または属性が期待と異なる場合にVitestのアサーション例外を送出する。
+	 */
 	it("systemではdata-themeを外し、状態を保持する", () => {
 		document.documentElement.dataset.theme = "dark";
 		const { result } = renderHook(() => useUiStore());
@@ -28,6 +42,13 @@ describe("uiStore theme", () => {
 		expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
 	});
 
+	/**
+	 * 保存済みテーマをrehydrateした条件でstoreとdata-themeへ復元することを検証する。
+	 * @param なし。
+	 * @returns 非同期検証処理を表すPromise。
+	 * @副作用 localStorage、uiStore、documentを一時的に変更する。
+	 * @throws 復元値が期待と異なる場合にVitestのアサーション例外を送出する。
+	 */
 	it("保存済みthemeをrehydrateしてdata-themeへ反映する", async () => {
 		localStorage.setItem("cerberus.ui", JSON.stringify({ state: { fontScale: 1.15, theme: "dark" }, version: 0 }));
 		await act(async () => {
@@ -38,6 +59,13 @@ describe("uiStore theme", () => {
 		expect(document.documentElement.dataset.theme).toBe("dark");
 	});
 
+	/**
+	 * system選択時にmatchMedia listenerを登録し、明示テーマ選択時に解除することを検証する。
+	 * @param なし。
+	 * @returns なし。
+	 * @副作用 matchMedia mock、uiStore、documentを一時的に変更する。
+	 * @throws listenerの登録・解除が期待と異なる場合にVitestのアサーション例外を送出する。
+	 */
 	it("system themeのmatchMedia listenerを登録し、明示テーマで解除する", () => {
 		const addEventListener = vi.fn();
 		const removeEventListener = vi.fn();
@@ -53,6 +81,13 @@ describe("uiStore theme", () => {
 		expect(removeEventListener).toHaveBeenCalledOnce();
 	});
 
+	/**
+	 * addListener/removeListenerしかない旧APIでもsystem listenerを解除できることを検証する。
+	 * @param なし。
+	 * @returns なし。
+	 * @副作用 matchMedia mock、uiStore、documentを一時的に変更する。
+	 * @throws listenerの登録・解除が期待と異なる場合にVitestのアサーション例外を送出する。
+	 */
 	it("旧matchMedia APIでもsystem listenerを解除できる", () => {
 		const addListener = vi.fn();
 		const removeListener = vi.fn();

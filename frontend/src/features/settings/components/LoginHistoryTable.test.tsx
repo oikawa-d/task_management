@@ -13,6 +13,13 @@ const mockedUseLoginHistory = vi.mocked(useLoginHistory);
 describe("LoginHistoryTable", () => {
 	beforeEach(() => vi.clearAllMocks());
 
+	/**
+	 * loading/error/emptyの各状態で専用state classを付けたメッセージを描画することを検証する。
+	 * @param なし。
+	 * @returns なし。
+	 * @副作用 hook mockとDOMを一時的に変更する。
+	 * @throws 状態表示またはclassが期待と異なる場合にVitestのアサーション例外を送出する。
+	 */
 	it.each([
 		["読み込み中", { isLoading: true, isError: false, data: undefined }],
 		["取得失敗", { isLoading: false, isError: true, data: undefined }],
@@ -23,6 +30,13 @@ describe("LoginHistoryTable", () => {
 		expect(screen.getByRole(query.isError ? "alert" : "status").className).toContain("state");
 	});
 
+	/**
+	 * 履歴データがある条件で共通AdminTableのwrapperとtableを利用することを検証する。
+	 * @param なし。
+	 * @returns なし。
+	 * @副作用 hook mockとDOMを一時的に変更する。
+	 * @throws 共通table構造が期待と異なる場合にVitestのアサーション例外を送出する。
+	 */
 	it("履歴表示では共通AdminTableのwrapperとtableを利用する", () => {
 		mockedUseLoginHistory.mockReturnValue({ isLoading: false, isError: false, data: { items: [{ id: "1", login_method: "session", ip_address: null, user_agent: null, success: true, failure_reason: null, created_at: "2026-09-10T00:00:00Z" }], meta: { count: 1, limit: 20 } }, refetch: vi.fn() } as never);
 		render(<LoginHistoryTable />);
