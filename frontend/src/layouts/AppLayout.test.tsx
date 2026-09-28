@@ -12,6 +12,8 @@ import { buildNotification } from "../features/notifications/testFixtures";
 import { ROUTES } from "../routes";
 import { useProjectStore } from "../stores/projectStore";
 import { AppLayout } from "./AppLayout";
+import appLayoutClassNames from "./AppLayout.module.css";
+import appLayoutStyles from "./AppLayout.module.css?raw";
 
 /**
  * テスト用の認証adapterを生成し、指定された差分だけを上書きする。
@@ -202,5 +204,32 @@ describe("AppLayout", () => {
 		fireEvent.click(closeButton);
 		expect(screen.getByRole("button", { name: "ナビゲーションを開く" })).toHaveAttribute("aria-expanded", "false");
 		expect(navigation.className).not.toContain("navOpen");
+	});
+
+	/**
+	 * desktop幅でも開閉stateだけがナビ表示を決め、常時表示media queryへ依存しないことを検証する。
+	 * @param なし。
+	 * @returns なし。
+	 * @副作用 DOMを一時的に変更する。
+	 * @throws 表示クラスまたはCSS表示契約が期待と異なる場合にVitestのアサーション例外を送出する。
+	 */
+	it("desktop幅でも初期falseから開閉stateとCSS表示契約を同期する", () => {
+		renderAppLayout();
+
+		const navigation = screen.getByRole("navigation", { name: "サイドバー" });
+		const layout = navigation.parentElement;
+		const toggle = () => fireEvent.click(screen.getByRole("button", { name: /ナビゲーションを/ }));
+
+		expect(layout).not.toHaveClass(appLayoutClassNames.layoutNavOpen);
+		expect(navigation).not.toHaveClass(appLayoutClassNames.navOpen);
+		toggle();
+		expect(layout).toHaveClass(appLayoutClassNames.layoutNavOpen);
+		expect(navigation).toHaveClass(appLayoutClassNames.navOpen);
+		toggle();
+		expect(layout).not.toHaveClass(appLayoutClassNames.layoutNavOpen);
+		expect(navigation).not.toHaveClass(appLayoutClassNames.navOpen);
+		expect(appLayoutStyles).toMatch(/\.nav\s*\{[^}]*display:\s*none;/);
+		expect(appLayoutStyles).toMatch(/\.navOpen\s*\{\s*display:\s*flex;\s*\}/);
+		expect(appLayoutStyles).not.toMatch(/@media[^{}]*min-width[^{}]*\{[^{}]*\.nav[^{}]*display:\s*flex/);
 	});
 });

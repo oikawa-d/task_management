@@ -53,14 +53,14 @@
 └────────────────────────────────────────────────────────────┘
 ```
 
-- ①ハンバーガー：`AppLayout`のローカルstateで共通ナビを開閉する（localStorageへ永続化しない）。狭幅では初期状態を閉じ、ハンバーガー操作時だけ表示する。デスクトップ幅ではナビを表示する。
+- ①ハンバーガー：`AppLayout`のローカルstate（初期`false`）で共通ナビを開閉する（localStorageへ永続化しない）。全画面幅でstateが表示状態を決め、閉じている間は非表示とする。デスクトップ幅で開いている間はメイン領域をサイドバー幅ぶん右へ配置し、狭幅ではメイン領域に重なる左ドロワーとして表示する。
 - ②Sidebar：`home` / `管理`（`role==='admin'` のみ描画） / `設定` / `ログアウト`。共通仕様は [05_frontend.md §3](../../basic_design/05_frontend.md#3-共通レイアウト)
 - ③④ヘッダー行：見出しと新規作成ボタン
 - ⑤カード：プロジェクト名、説明の先頭、オーナー表示名
 - ⑥メンバー数バッジ、⑦ステータス別タスク件数バッジ（todo/in_progress/done）
 - ⑧空状態：`items.length === 0` のとき表示
 
-レスポンシブ：カードグリッドは `grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr))` とし、幅に応じて列数が自動で変わる。共通ナビは `AppLayout` のローカルstateで開閉し、localStorageへ保存しない。狭幅では初期状態を閉じ、ハンバーガーで開いた時だけ表示する。デスクトップ幅では表示する。
+レスポンシブ：カードグリッドは `grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr))` とし、幅に応じて列数が自動で変わる。共通ナビは`AppLayout`のローカルstateで開閉し、localStorageへ保存しない。初期状態は全画面幅で閉じ、ハンバーガーで開いた時だけ表示する。サイドバー幅は`--size-sidebar-width`トークンに従う。
 
 ## 3. UI要素仕様
 
@@ -407,5 +407,5 @@ flowchart LR
 | なし | ページングは`meta.page` / `meta.total_pages`を⑬として定義済み | - |
 | 確定 | 409はプロジェクトAPIに発生契機・エラーコードの定義がないため本画面では扱わない。Issue #159の受入条件をAPI契約に合わせて訂正する | - |
 | 確定 | `description` の文字数上限はissue #40で0〜2000文字（Unicodeコードポイント数で判定）に確定（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） | - |
-| 決定済み | 共通ナビは`AppLayout`のローカルstateで管理し、狭幅の初期状態は閉、開いた時だけ表示する。localStorageや`uiStore`には保持しない | [05_frontend.md §3](../../basic_design/05_frontend.md#3-共通レイアウト)の「開閉状態は保持しない」に合わせる |
+| 決定済み | 共通ナビは`AppLayout`のローカルstate（初期`false`）で管理し、全画面幅で閉じた時は非表示、開いた時だけ表示する。デスクトップ幅ではメイン領域をサイドバー幅ぶん調整し、狭幅では左ドロワーとして重ねる。localStorageや`uiStore`には保持しない | [05_frontend.md §3](../../basic_design/05_frontend.md#3-共通レイアウト)に合わせる |
 | 要検討 | ユーザー単位のタイムゾーン設定を将来導入する場合のカレンダー日付キー | `due_date`の算出元とAPI契約の再設計 |

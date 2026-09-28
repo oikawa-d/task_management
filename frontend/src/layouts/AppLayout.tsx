@@ -80,7 +80,7 @@ export function AppLayout({
 	};
 
 	return (
-		<div className={styles.layout}>
+		<div className={`${styles.layout} ${isNavOpen ? styles.layoutNavOpen : ""}`}>
 			<header className={styles.header}>
 				<button
 					type="button"

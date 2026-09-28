@@ -58,6 +58,8 @@
 - ⑨強制ログアウトボタンは自分自身に対しても活性のまま（自己対象の禁止規定がAPI側にないため。[04_post_admin_user_force_logout.md](../api/admin/04_post_admin_user_force_logout.md) §13）。session/refreshは即時失効するが、JWT access tokenは最大15分（`ACCESS_TOKEN_TTL_SECONDS`既定900秒）残る旨を確認ダイアログに表示する
 - レスポンシブ：幅768px未満ではテーブルを横スクロール可能な`overflow-x: auto`コンテナに収め、列の折り返しは行わない
 
+共通ナビは`AppLayout`のローカルstate（初期`false`）で表示を制御する。開いているデスクトップ幅ではメイン領域をサイドバー幅ぶん調整し、狭幅では左ドロワーとして重ねる。閉じた状態では全画面幅で非表示とし、状態はlocalStorageや`uiStore`へ保存しない（サイドバー幅は`--size-sidebar-width`トークン）。
+
 ## 3. UI要素仕様
 
 | No | 要素 | 種別 | 初期値 | 入力制約 | 活性条件 | イベント／遷移 |

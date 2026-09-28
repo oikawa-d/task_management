@@ -122,7 +122,7 @@ describe("UIスタイリング契約", () => {
 	});
 
 	/**
-	 * 共通ナビが狭幅では閉じ、開閉状態クラスとdesktop media queryで表示できることを検証する。
+	 * 共通ナビが初期状態では閉じ、開閉状態クラスだけで表示を切り替えることを検証する。
 	 * @param なし。
 	 * @returns なし。
 	 * @副作用 raw CSS本文を読み取るが、ファイルは変更しない。
@@ -130,8 +130,13 @@ describe("UIスタイリング契約", () => {
 	 */
 	it("共通ナビの狭幅開閉CSS契約を満たす", () => {
 		const layout = rawStyles["../layouts/AppLayout.module.css"] ?? "";
-		expect(layout).toContain(".nav { display: none;");
-		expect(layout).toContain(".navOpen { display: flex; }");
-		expect(layout).toContain("@media (min-width: 48rem)");
+		const tokens = rawStyles["./tokens.css"] ?? "";
+		expect(layout).toMatch(/\.nav\s*\{[^}]*display:\s*none;/);
+		expect(layout).toMatch(/\.navOpen\s*\{\s*display:\s*flex;\s*\}/);
+		expect(layout).toContain("flex-direction: column");
+		expect(layout).toContain("width: var(--size-sidebar-width)");
+		expect(layout).toContain(".layoutNavOpen .main");
+		expect(layout).not.toMatch(/@media[^{}]*min-width[^{}]*\{[^{}]*\.nav[^{}]*display:\s*flex/);
+		expect(tokens).toContain("--size-sidebar-width: 16rem;");
 	});
 });
