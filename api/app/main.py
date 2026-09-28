@@ -1,3 +1,9 @@
+"""FastAPIアプリケーションのエントリポイント。
+
+ロギング初期化、エラーハンドラ・履歴ミドルウェア・CORS・各ルーターの登録、
+Redisクライアントのライフサイクル管理を行い、`app`インスタンスを構築する。
+"""
+
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -25,6 +31,14 @@ configure_logging(settings.log_level)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+	"""アプリの起動時にRedisクライアントを初期化し、終了時にクローズするライフスパン管理。
+
+	Args:
+		_app: 対象のFastAPIアプリケーション（未使用）。
+
+	Yields:
+		None。yield中がアプリの稼働期間に相当する。
+	"""
 	get_redis_client()
 	try:
 		yield

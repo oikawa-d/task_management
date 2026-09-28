@@ -1,3 +1,5 @@
+"""環境変数から読み込むバックエンド設定（`BackendSettings`）を定義するモジュール。"""
+
 from functools import lru_cache
 from typing import Annotated, Literal
 from urllib.parse import urlparse
@@ -18,6 +20,28 @@ _PRODUCTION_PLACEHOLDERS = frozenset({"secret", "password", "changeme", "change-
 
 
 class BackendSettings(BaseSettings):
+	"""環境変数（`.env`）から読み込むバックエンドAPIの全設定値。
+
+	`get_backend_settings()`経由でプロセス内シングルトンとして利用する。
+	フィールドは用途ごとに以下のセクションへ分類している。
+
+	- 共通・ポート: 実行環境種別、ログレベル
+	- データストア: DB/Redis接続、各種履歴の保持日数・サイズ上限
+	- 認証共通・session方式: セッションCookie名・TTL、ログイン試行制限、
+		各種レート制限の閾値・時間窓、信頼済みプロキシ、argon2idコストパラメータ
+	- jwt方式: アクセス/リフレッシュトークンTTL、JWT署名鍵・アルゴリズム
+	- CORS・API公開設定: 許可オリジン/メソッド/ヘッダ、APIドキュメント公開可否
+	- ページング: 一覧APIの1ページ件数上限、コメント本文長上限
+	- Google OAuth2: クライアント資格情報、各エンドポイントURL、state/handoffのTTL
+	- メール（SMTP/Mailpit）: 送信設定、パスワードリセット/メール認証のTTL
+	- 初期データ: 初回起動時に作成する管理者アカウント
+	- 通知・batch: `batch`コンテナと共有するタイムゾーン
+	- 追加項目: CSRF・ヘルスチェック・検索等の個別設定
+
+	`app_env="production"`時は`_validate_production_security`で本番相応の
+	安全な値になっているかを追加検証する。
+	"""
+
 	model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore")
 
 	# 共通・ポート
@@ -66,7 +90,7 @@ class BackendSettings(BaseSettings):
 	rate_limit_notification_read_max_requests: int = 120
 	rate_limit_notification_write_max_requests: int = 60
 	rate_limit_notification_window_seconds: int = 60
-	trusted_proxy_cidrs: Annotated[list[str], NoDecode] = []
+	trusted_proxy_cidrs: Annotated[list[str], NoDecode] = []  # X-Forwarded-Forを信頼するプロキシのCIDR一覧
 	argon2_time_cost: int = 3
 	argon2_memory_cost: int = 65536
 	argon2_parallelism: int = 4
@@ -84,7 +108,7 @@ class BackendSettings(BaseSettings):
 	cors_allow_methods: Annotated[list[str], NoDecode] = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 	cors_allow_headers: Annotated[list[str], NoDecode] = ["Content-Type", "X-CSRF-Token", "Authorization"]
 	cors_max_age_seconds: int = 600
-	enable_api_docs: bool = True
+	enable_api_docs: bool = True  # /api/docs（Swagger UI）を公開するか。本番ではfalse必須
 
 	# ページング
 	pagination_default_per_page: int = 20
@@ -128,16 +152,17 @@ class BackendSettings(BaseSettings):
 	app_timezone: str = "Asia/Tokyo"
 
 	# 追加項目（§3.12）
-	csrf_trust_referer_on_https: bool = False
-	health_check_timeout_seconds: float = 2
-	login_history_list_limit: int = 50
-	admin_search_query_max_length: int = 100
+	csrf_trust_referer_on_https: bool = False  # HTTPS時にOriginヘッダ欠落をRefererで代替検証するか
+	health_check_timeout_seconds: float = 2  # ヘルスチェックでDB/Redis疎通確認を待つ最大秒数
+	login_history_list_limit: int = 50  # ログイン履歴一覧APIの最大取得件数
+	admin_search_query_max_length: int = 100  # 管理者検索APIのクエリ文字列最大長
 
 	@field_validator(
 		"cors_allow_origins", "cors_allow_methods", "cors_allow_headers", "trusted_proxy_cidrs", mode="before"
 	)
 	@classmethod
 	def _split_comma_separated(cls, value: object) -> object:
+		"""環境変数がカンマ区切り文字列の場合にリストへ変換する（`NoDecode`指定フィールド向け前処理）。"""
 		if isinstance(value, str):
 			return [item.strip() for item in value.split(",") if item.strip()]
 		return value
@@ -145,6 +170,11 @@ class BackendSettings(BaseSettings):
 	@field_validator("cors_allow_origins")
 	@classmethod
 	def _reject_wildcard_origin(cls, value: list[str]) -> list[str]:
+		"""`cors_allow_origins`にワイルドカード`"*"`が含まれる場合は設定エラーとする。
+
+		Raises:
+			ValueError: `"*"`が含まれる場合。
+		"""
 		# app.main.appのCORSMiddlewareはallow_credentials=Trueで固定登録しているため、
 		# ここでのワイルドカード禁止は常にその前提で成立する（docs/detailed_design/auth/03_csrf.md §10）。
 		if "*" in value:
@@ -154,6 +184,11 @@ class BackendSettings(BaseSettings):
 	@field_validator("initial_admin_email", "initial_admin_username", "initial_admin_password")
 	@classmethod
 	def _reject_blank(cls, value: str) -> str:
+		"""初期管理者アカウントのメール・ユーザー名・パスワードが空文字でないことを検証する。
+
+		Raises:
+			ValueError: 空白のみを含む場合。
+		"""
 		if not value.strip():
 			raise ValueError("must not be blank")
 		return value
@@ -171,6 +206,11 @@ class BackendSettings(BaseSettings):
 	)
 	@classmethod
 	def _validate_positive_ttl(cls, value: int) -> int:
+		"""各種TTL（有効期限）設定が正の値であることを検証する。
+
+		Raises:
+			ValueError: 0以下の値が指定された場合。
+		"""
 		if value <= 0:
 			raise ValueError("TTL must be positive")
 		return value
@@ -178,6 +218,11 @@ class BackendSettings(BaseSettings):
 	@field_validator("password_max_length", "auth_token_max_length")
 	@classmethod
 	def _validate_positive_input_limit(cls, value: int) -> int:
+		"""パスワード・トークンの入力長上限が正の値であることを検証する。
+
+		Raises:
+			ValueError: 0以下の値が指定された場合。
+		"""
 		if value <= 0:
 			raise ValueError("input length limit must be positive")
 		return value
@@ -185,6 +230,11 @@ class BackendSettings(BaseSettings):
 	@field_validator("password_max_length")
 	@classmethod
 	def _validate_password_maximum(cls, value: int) -> int:
+		"""パスワード最大長が最小長（`PASSWORD_MIN_LENGTH`）以上であることを検証する。
+
+		Raises:
+			ValueError: `PASSWORD_MIN_LENGTH`未満の値が指定された場合。
+		"""
 		if value < PASSWORD_MIN_LENGTH:
 			raise ValueError(f"password_max_length must be at least {PASSWORD_MIN_LENGTH}")
 		return value
@@ -192,12 +242,26 @@ class BackendSettings(BaseSettings):
 	@field_validator("auth_token_max_length")
 	@classmethod
 	def _validate_auth_token_minimum(cls, value: int) -> int:
+		"""認証トークン最大長がトークン生成長（`TOKEN_URLSAFE_LENGTH`）以上であることを検証する。
+
+		Raises:
+			ValueError: `TOKEN_URLSAFE_LENGTH`未満の値が指定された場合。
+		"""
 		if value < TOKEN_URLSAFE_LENGTH:
 			raise ValueError(f"auth_token_max_length must be at least {TOKEN_URLSAFE_LENGTH}")
 		return value
 
 	@model_validator(mode="after")
 	def _validate_production_security(self) -> "BackendSettings":
+		"""`app_env="production"`時に、安全でない設定値の組み合わせを起動時に検出する。
+
+		Cookieの`Secure`属性、SMTPのTLS、公開URLのHTTPS化、APIドキュメント非公開、
+		秘匿情報（JWT鍵・OAuthクライアントシークレット・初期管理者パスワード）が
+		開発用プレースホルダのままでないこと、をまとめて検証する。
+
+		Raises:
+			ValueError: いずれかの検証に違反した場合。違反内容を`; `区切りで連結して送出する。
+		"""
 		if self.app_env != "production":
 			return self
 
@@ -228,4 +292,9 @@ class BackendSettings(BaseSettings):
 
 @lru_cache
 def get_backend_settings() -> BackendSettings:
+	"""`BackendSettings`をプロセス内で1度だけ生成し、以降はキャッシュを返す。
+
+	Returns:
+		環境変数から読み込んだ設定のシングルトンインスタンス。
+	"""
 	return BackendSettings()
