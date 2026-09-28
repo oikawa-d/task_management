@@ -1,3 +1,17 @@
+-- 状態: 現役（根拠: alembic api/alembic/versions/0010_create_project_task_functions_and_triggers.py の
+--       upgrade()、および 0025_add_unassigned_filter_to_task_function.py の downgrade() から参照される）
+-- 概要: タスク一覧を取得する。担当外(unassigned)フィルタ導入前の版で、
+--       プロジェクト所属・作成者・管理者権限に基づくアクセス制御のうえ、
+--       ステータス・有効/無効・ページングで絞り込む。
+-- 引数: p_user_id UUID — 参照者のユーザーID（権限判定に使用）
+--       p_project_id UUID — 絞り込み対象プロジェクトID（NULLで個人タスクも対象）
+--       p_status VARCHAR — ステータス絞り込み（NULLで全件）
+--       p_include_inactive BOOLEAN — 無効化済みタスクを含めるか
+--       p_limit INTEGER — 取得件数上限
+--       p_offset INTEGER — 取得開始位置
+-- 戻り値: TABLE(task tasks, project_is_active BOOLEAN) — 条件に合致するタスク本体と、
+--       そのプロジェクトの有効状態
+-- 副作用: なし
 CREATE OR REPLACE FUNCTION fn_list_tasks(
     p_user_id UUID,
     p_project_id UUID,
