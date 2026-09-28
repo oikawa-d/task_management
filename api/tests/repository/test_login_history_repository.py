@@ -1,3 +1,7 @@
+"""app.repository.login_history_repository（ログイン履歴の記録・一覧取得・期限切れ削除）に対する単体テスト。
+DB接続はAsyncMockで模擬し、実DBには接続しない。
+"""
+
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -10,6 +14,10 @@ from sqlalchemy.exc import OperationalError
 
 @pytest.mark.asyncio
 async def test_create_calls_record_login_history_procedure() -> None:
+	"""createが、指定した全パラメータ（user_id・login_identifier・login_method・ip_address・
+	user_agent・success・failure_reason）を伴ってsp_record_login_historyストアドプロシージャを
+	CALLしていることを検証する。
+	"""
 	db = AsyncMock()
 	user_id = uuid.uuid4()
 
@@ -39,6 +47,9 @@ async def test_create_calls_record_login_history_procedure() -> None:
 
 @pytest.mark.asyncio
 async def test_create_translates_database_connection_error() -> None:
+	"""DB接続エラー（sqlstate=08006）を表すOperationalErrorが発生した場合、
+	createがそれをServiceUnavailableErrorへ変換して送出することを検証する。
+	"""
 	db = AsyncMock()
 	db.execute.side_effect = OperationalError("CALL", {}, SimpleNamespace(sqlstate="08006"))
 
@@ -57,6 +68,9 @@ async def test_create_translates_database_connection_error() -> None:
 
 @pytest.mark.asyncio
 async def test_all_login_history_db_operations_translate_operational_error() -> None:
+	"""create・list_by_user_id・purge_expiredのいずれも、DB接続エラー（sqlstate=08006）を表す
+	OperationalErrorをServiceUnavailableErrorへ変換して送出することを検証する。
+	"""
 	db = AsyncMock()
 	db.execute.side_effect = OperationalError("statement", {}, SimpleNamespace(sqlstate="08006"))
 

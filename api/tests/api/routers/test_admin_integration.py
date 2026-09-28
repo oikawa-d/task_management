@@ -1,3 +1,10 @@
+"""admin_router配下エンドポイントの実DB/実Redisを用いた結合テスト（issue #435系）。
+ロール・状態変更に伴うRedisセッション/リフレッシュトークンの実失効、監査ログの記録内容、
+管理者向け一覧取得SQL関数の呼び出し契約、権限エラー時の情報漏えい防止までを実インフラ越しに検証する。
+db_session・cleanup_stateはテスト後にDB/Redisへ加えた変更を後片付けする。
+実PostgreSQL/Redisへの接続が必要なため、疎通できない環境ではエラーになる。
+"""
+
 import logging
 import secrets
 from collections.abc import AsyncIterator
@@ -32,12 +39,18 @@ _ORIGIN = "http://localhost:5173"
 
 @dataclass(frozen=True)
 class _TestUser:
+	"""テストで作成したユーザーのID・usernameを保持するイミュータブルなレコード。"""
+
 	id: UUID
 	username: str
 
 
 @dataclass
 class _CleanupState:
+	"""テスト中に作成したユーザー・プロジェクト・Redisセッション・リフレッシュトークンのIDを蓄積し、
+	cleanup_state fixtureの後片付け処理へ引き渡すための可変な状態。
+	"""
+
 	user_ids: list[UUID]
 	project_ids: list[UUID]
 	session_ids: list[tuple[UUID, str]]
@@ -46,6 +59,7 @@ class _CleanupState:
 
 @pytest_asyncio.fixture
 async def redis_conn() -> AsyncIterator[Redis]:
+	"""テストの後片付け処理専用の生Redis接続を提供する。テスト後に必ずクローズする。"""
 	settings = get_backend_settings()
 	client = Redis.from_url(settings.redis_url, decode_responses=True)
 	try:
@@ -56,6 +70,9 @@ async def redis_conn() -> AsyncIterator[Redis]:
 
 @pytest_asyncio.fixture
 async def cleanup_state(db_session: AsyncSession, redis_conn: Redis) -> AsyncIterator[_CleanupState]:
+	"""空の_CleanupStateを提供し、テスト終了後にそこへ蓄積されたセッション・リフレッシュトークンを
+	Redisから、ユーザー・プロジェクト・関連するタスク/コメントをDBから削除する後片付けを行うfixture。
+	"""
 	state = _CleanupState([], [], [], [])
 	yield state
 	settings = get_backend_settings()
@@ -92,6 +109,10 @@ async def cleanup_state(db_session: AsyncSession, redis_conn: Redis) -> AsyncIte
 
 @pytest_asyncio.fixture
 async def admin_api_client(db_session: AsyncSession, caplog: pytest.LogCaptureFixture):
+	"""実アプリ(app.main.app)のDBセッションをテスト用db_sessionへ差し替え、監査ログをcaplogで
+	捕捉できるようにしたうえで、実アプリへHTTPリクエストを送るhttpx.AsyncClientを提供する。
+	テスト終了後にDBセッションのオーバーライド解除・ログハンドラの取り外し・Redis接続のクローズを行う。
+	"""
 	audit_logger = logging.getLogger("app.audit")
 	audit_logger.disabled = False
 	if caplog.handler not in audit_logger.handlers:
@@ -116,6 +137,16 @@ async def admin_api_client(db_session: AsyncSession, caplog: pytest.LogCaptureFi
 
 
 async def _create_user(db: AsyncSession, cleanup_state: _CleanupState, role: str = "member") -> _TestUser:
+	"""実DBへ検証用ユーザーを作成し、cleanup_stateへ後片付け対象として登録する。
+
+	Args:
+		db: 実DBセッション。
+		cleanup_state: 作成したユーザーIDを登録する後片付け状態。
+		role: 作成するユーザーのロール（既定はmember）。
+
+	Returns:
+		作成したユーザーのID・usernameを持つ_TestUser。
+	"""
 	suffix = secrets.token_hex(8)
 	username = f"issue435_{suffix}"
 	user_id = await user_repository.create(db, username, f"{username}@example.com", "unused-password-hash")
@@ -129,6 +160,18 @@ async def _create_user(db: AsyncSession, cleanup_state: _CleanupState, role: str
 
 
 async def _authenticate(client: httpx.AsyncClient, user_id: UUID, cleanup_state: _CleanupState) -> dict[str, str]:
+	"""現在の認証モード(session/jwt)に応じて、指定ユーザーとしてログイン済みの状態をclientへ
+	設定する（実Redisへセッション作成、またはJWTアクセストークンをAuthorizationヘッダーへ設定）。
+	作成したセッションはcleanup_stateへ登録し、テスト後に削除できるようにする。
+
+	Args:
+		client: 認証状態を設定する対象のhttpx.AsyncClient。
+		user_id: ログインさせるユーザーのID。
+		cleanup_state: 作成したセッションIDを登録する後片付け状態。
+
+	Returns:
+		sessionモードでは{"session_id", "csrf_token"}、jwtモードでは{"access_token", "csrf_token"}。
+	"""
 	settings = get_backend_settings()
 	csrf_token = secrets.token_urlsafe(24)
 	client.headers["Origin"] = _ORIGIN
@@ -159,6 +202,15 @@ async def _authenticate(client: httpx.AsyncClient, user_id: UUID, cleanup_state:
 
 
 async def _store_refresh(user_id: UUID, cleanup_state: _CleanupState) -> str:
+	"""実Redisへ検証用のリフレッシュトークンを保存し、cleanup_stateへ後片付け対象として登録する。
+
+	Args:
+		user_id: リフレッシュトークンの持ち主のユーザーID。
+		cleanup_state: 作成したトークンを登録する後片付け状態。
+
+	Returns:
+		保存したリフレッシュトークンの平文文字列。
+	"""
 	token = secrets.token_urlsafe(32)
 	await redis_store.store_refresh_token(token, user_id, str(uuid4()), get_backend_settings().refresh_ttl_seconds)
 	cleanup_state.refresh_tokens.append((user_id, token))
@@ -166,6 +218,13 @@ async def _store_refresh(user_id: UUID, cleanup_state: _CleanupState) -> str:
 
 
 def _assert_error(response: httpx.Response, status_code: int, code: str | tuple[str, ...]) -> None:
+	"""レスポンスが期待するステータスコード・エラーコード（複数候補も許容）であることを検証する。
+
+	Args:
+		response: 検証対象のレスポンス。
+		status_code: 期待するHTTPステータスコード。
+		code: 期待するエラーコード。複数候補がある場合はタプルで渡す。
+	"""
 	assert response.status_code == status_code
 	actual_code = response.json()["error"]["code"]
 	expected_codes = (code,) if isinstance(code, str) else code
@@ -179,6 +238,13 @@ async def test_admin_user_role_status_and_redis_revocation_are_integrated(
 	caplog: pytest.LogCaptureFixture,
 	cleanup_state: _CleanupState,
 ) -> None:
+	"""管理者によるロール変更(PATCH /api/admin/users/{user_id}/role )と
+	状態変更(PATCH /api/admin/users/{user_id}/status )が、
+	実DB上のrole・is_activeを更新し、対象ユーザーの既存リフレッシュトークン/CSRFトークンを実Redisから
+	失効させ、対象ユーザーの以後のリクエスト(GET /api/auth/me )が認証モードに応じたエラー
+	（sessionはUNAUTHENTICATED/SESSION_EXPIRED、jwtはUSER_INACTIVE）になり、
+	監査ログ(app.audit)に操作内容と失効件数が記録されることを検証する。
+	"""
 	admin = await _create_user(db_session, cleanup_state, "admin")
 	target = await _create_user(db_session, cleanup_state)
 	await _authenticate(admin_api_client, admin.id, cleanup_state)
@@ -242,6 +308,10 @@ async def test_jwt_refresh_rejects_replayed_old_token(
 	db_session: AsyncSession,
 	cleanup_state: _CleanupState,
 ) -> None:
+	"""jwtモードのみが対象。一度ローテーションしたリフレッシュトークン（古いトークン）を再度
+	POST /api/auth/refresh で使い回した場合、ステータス401・エラーコードTOKEN_REVOKEDで
+	拒否されることを検証する（現在の認証モードがjwtでない場合はスキップする）。
+	"""
 	if get_backend_settings().auth_mode != "jwt":
 		pytest.skip("refresh token rotationはJWT方式のみで検証する")
 	user = await _create_user(db_session, cleanup_state)
@@ -275,6 +345,12 @@ async def test_admin_force_logout_revokes_all_auth_state_but_preserves_user(
 	caplog: pytest.LogCaptureFixture,
 	cleanup_state: _CleanupState,
 ) -> None:
+	"""管理者による強制ログアウト(POST /api/admin/users/{user_id}/force-logout )が、対象ユーザーの
+	is_activeは変更しない（アカウント自体は維持する）まま、実Redis上の全セッション・
+	リフレッシュトークンを失効させ、sessionモードでは対象ユーザーの以後のリクエストが
+	認証エラーになる一方、jwtモードではアクセストークン自体は失効しないため200のまま応答すること、
+	監査ログに失効件数が記録されることを検証する。
+	"""
 	admin = await _create_user(db_session, cleanup_state, "admin")
 	target = await _create_user(db_session, cleanup_state)
 	await _authenticate(admin_api_client, admin.id, cleanup_state)
@@ -317,6 +393,12 @@ async def test_admin_project_and_login_history_endpoints_use_real_db_contracts(
 	admin_api_client: httpx.AsyncClient,
 	cleanup_state: _CleanupState,
 ) -> None:
+	"""GET /api/admin/projects が実DBのプロジェクト・オーナー情報を返すこと、
+	GET /api/admin/login-history が1回のクエリでfn_admin_list_login_history関数のみを呼び
+	（N+1や別テーブルへの直接SELECTが無い）2件のログイン履歴とユーザー情報を返すこと、
+	DELETE /api/admin/projects/{project_id} によるプロジェクト無効化がis_active=Falseへの更新のみで
+	行われ、プロジェクトメンバー・関連タスク・タスクコメントは削除されずそのまま残ることを検証する。
+	"""
 	admin = await _create_user(db_session, cleanup_state, "admin")
 	owner = await _create_user(db_session, cleanup_state)
 	await _authenticate(admin_api_client, admin.id, cleanup_state)
@@ -389,6 +471,11 @@ async def test_admin_guard_and_not_found_responses_hide_admin_targets(
 	admin_api_client: httpx.AsyncClient,
 	cleanup_state: _CleanupState,
 ) -> None:
+	"""memberロールのユーザーが管理者向け全7エンドポイントを呼んだ場合、ステータス403・
+	エラーコードFORBIDDENで一律拒否されること、また管理者が存在しないIDに対して
+	ユーザー/プロジェクト操作系エンドポイントを呼んだ場合、ステータス404・エラーコードNOT_FOUNDで
+	応答し、レスポンス本文に対象IDの文字列自体が含まれない（存在有無を推測されない）ことを検証する。
+	"""
 	admin = await _create_user(db_session, cleanup_state, "admin")
 	member = await _create_user(db_session, cleanup_state)
 	await _authenticate(admin_api_client, admin.id, cleanup_state)
@@ -428,6 +515,11 @@ async def test_admin_status_redis_failure_returns_503_and_keeps_database_inactiv
 	caplog: pytest.LogCaptureFixture,
 	cleanup_state: _CleanupState,
 ) -> None:
+	"""ユーザー状態変更後のセッション失効処理（redis_store.delete_all_sessions）がRedisErrorを
+	送出する場合、ステータス503・エラーコードSERVICE_UNAVAILABLEで応答しつつも、実DB上のis_active
+	更新自体は既にコミット済みのため取り消されない（is_active=Falseのまま残る）こと、
+	監査ログに失効失敗の記録が残ることを検証する。
+	"""
 	admin = await _create_user(db_session, cleanup_state, "admin")
 	target = await _create_user(db_session, cleanup_state)
 	await _authenticate(admin_api_client, admin.id, cleanup_state)

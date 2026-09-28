@@ -1,3 +1,9 @@
+"""app.repository.admin_repository（管理者向けユーザー/プロジェクト/ログイン履歴の一覧・件数取得・更新）に対する
+単体テスト、および対応するAlembicマイグレーション・db/functions・db/proceduresのSQL定義が
+期待する契約（total_countをwindow関数で返す、行ロックしてFOR UPDATEする等）を満たしているかの静的検査。
+DB接続はAsyncMockで模擬し、SQL検査はファイル読み取りのみで実DBには接続しない。
+"""
+
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -27,6 +33,10 @@ PROCEDURE_FILES = (
 
 
 def test_admin_migration_references_existing_sql_sources() -> None:
+	"""管理者機能用の各Alembicマイグレーションファイルが実在し、それらが参照するSQL関数・
+	レガシー版関数・ストアドプロシージャの各ファイルもdb/functions・db/functions/legacy・
+	db/procedures配下に実在することを検証する（マイグレーションとSQL資産の対応漏れ検知）。
+	"""
 	assert ADMIN_MIGRATION.is_file()
 	assert ADMIN_TOTAL_COUNT_MIGRATION.is_file()
 	assert ADMIN_AGGREGATE_MIGRATION.is_file()
@@ -39,6 +49,10 @@ def test_admin_migration_references_existing_sql_sources() -> None:
 
 
 def test_admin_list_functions_return_total_count_via_window_function() -> None:
+	"""管理者向け一覧取得SQL関数（users/projects/login_history）が、別途count用関数を呼ばずとも
+	ウィンドウ関数count(*) OVER ()で総件数(total_count BIGINT)を1回のクエリで返せる定義に
+	なっていることを検証する。
+	"""
 	for filename in ("fn_admin_list_users.sql", "fn_admin_list_projects.sql", "fn_admin_list_login_history.sql"):
 		sql = (REPOSITORY_ROOT / "db/functions" / filename).read_text(encoding="utf-8")
 		assert "count(*) OVER ()" in sql
@@ -46,6 +60,10 @@ def test_admin_list_functions_return_total_count_via_window_function() -> None:
 
 
 def test_admin_list_functions_return_aggregates_and_joined_user() -> None:
+	"""fn_admin_list_projectsがproject_members由来のmember_countとtasksテーブルを
+	ステータス別にFILTER集計したtask_count_todo等を持つこと、fn_admin_list_login_historyが
+	usersテーブルをLEFT JOINしてログイン主体のユーザー情報を含めて返す定義になっていることを検証する。
+	"""
 	projects_sql = (REPOSITORY_ROOT / "db/functions/fn_admin_list_projects.sql").read_text(encoding="utf-8")
 	assert "member_count BIGINT" in projects_sql
 	assert "task_count_todo BIGINT" in projects_sql
@@ -59,6 +77,10 @@ def test_admin_list_functions_return_aggregates_and_joined_user() -> None:
 
 
 def test_admin_user_update_procedures_lock_target_rows_and_detect_not_found() -> None:
+	"""sp_admin_update_user_role・sp_admin_update_user_statusの両ストアドプロシージャが、
+	更新前の値をOUTパラメータへ退避しつつFOR UPDATEで対象行をロックしていること、
+	対象ユーザーが存在しない場合はIF NOT FOUNDでエラーコードP0010を送出する定義になっていることを検証する。
+	"""
 	role_sql = (REPOSITORY_ROOT / "db/procedures/sp_admin_update_user_role.sql").read_text(encoding="utf-8")
 	assert "SELECT role, is_active INTO p_old_role, v_current_is_active" in role_sql
 	assert "FOR UPDATE;" in role_sql
@@ -75,23 +97,44 @@ def test_admin_user_update_procedures_lock_target_rows_and_detect_not_found() ->
 
 
 class _MappingsResult:
+	"""SQLAlchemyのCursorResult風インターフェース（mappings()・イテレーション・one()・scalar_one()）を
+	模擬するダミー結果セット。
+	"""
+
 	def __init__(self, rows: list[dict[str, object]]) -> None:
+		"""返却する行データを保持する。
+
+		Args:
+			rows: mappings()経由で返す辞書のリスト。one()は先頭行、scalar_one()は先頭行のcount列を返す。
+		"""
 		self._rows = rows
 
 	def mappings(self) -> "_MappingsResult":
+		"""SQLAlchemyのResult.mappings()と同様、自身を返してメソッドチェーンを可能にする。"""
 		return self
 
 	def __iter__(self):
+		"""保持している全行を順にイテレートする。"""
 		return iter(self._rows)
 
 	def one(self) -> dict[str, object]:
+		"""先頭行を返す（ちょうど1件のみ期待するクエリの戻り値を模擬）。"""
 		return self._rows[0]
 
 	def scalar_one(self) -> object:
+		"""先頭行のcount列の値を返す（件数取得クエリの戻り値を模擬）。"""
 		return self._rows[0]["count"]
 
 
 def _user_row(**overrides: object) -> dict[str, object]:
+	"""fn_admin_list_usersの戻り値行を模擬する、ユーザー1件分の辞書を作る。
+
+	Args:
+		**overrides: 既定値を上書きしたいカラム（例: total_count）。
+
+	Returns:
+		既定値にoverridesを反映した行データの辞書。
+	"""
 	defaults: dict[str, object] = {
 		"id": uuid4(),
 		"username": "taro",
@@ -114,6 +157,14 @@ def _user_row(**overrides: object) -> dict[str, object]:
 
 
 def _project_row(**overrides: object) -> dict[str, object]:
+	"""fn_admin_list_projectsの戻り値行を模擬する、プロジェクト1件分（オーナー情報・タスク件数集計込み）の辞書を作る。
+
+	Args:
+		**overrides: 既定値を上書きしたいカラム（例: total_count）。
+
+	Returns:
+		既定値にoverridesを反映した行データの辞書。
+	"""
 	owner_id = uuid4()
 	defaults: dict[str, object] = {
 		"id": uuid4(),
@@ -150,6 +201,14 @@ def _project_row(**overrides: object) -> dict[str, object]:
 
 
 def _login_history_row(**overrides: object) -> dict[str, object]:
+	"""fn_admin_list_login_historyの戻り値行を模擬する、ログイン履歴1件分（ユーザー情報込み）の辞書を作る。
+
+	Args:
+		**overrides: 既定値を上書きしたいカラム（例: total_count）。
+
+	Returns:
+		既定値にoverridesを反映した行データの辞書。
+	"""
 	defaults: dict[str, object] = {
 		"id": uuid4(),
 		"user_id": uuid4(),
@@ -172,6 +231,9 @@ def _login_history_row(**overrides: object) -> dict[str, object]:
 
 @pytest.mark.asyncio
 async def test_admin_repository_list_users_maps_total_count() -> None:
+	"""list_usersが検索条件（query・role・is_active・limit・offset）をfn_admin_list_users関数へ
+	そのまま渡し、戻り値の各行が持つtotal_countとユーザー情報が結果オブジェクトへ正しくマッピングされることを検証する。
+	"""
 	db = AsyncMock()
 	db.execute.return_value = _MappingsResult([_user_row(total_count=25)])
 
@@ -192,6 +254,7 @@ async def test_admin_repository_list_users_maps_total_count() -> None:
 
 @pytest.mark.asyncio
 async def test_admin_repository_count_users_calls_fallback_function() -> None:
+	"""count_usersが件数専用のfn_count_admin_users関数を呼び、0件の場合は0を返すことを検証する。"""
 	db = AsyncMock()
 	db.execute.return_value = _MappingsResult([{"count": 0}])
 
@@ -204,6 +267,10 @@ async def test_admin_repository_count_users_calls_fallback_function() -> None:
 
 @pytest.mark.asyncio
 async def test_admin_repository_list_projects_maps_total_count() -> None:
+	"""list_projectsが検索条件をfn_admin_list_projects関数（member_count・タスクステータス別件数を
+	含むSELECT列）へそのまま渡し、戻り値の1回のクエリからtotal_count・集計件数・オーナー情報が
+	正しくマッピングされることを検証する。
+	"""
 	db = AsyncMock()
 	db.execute.return_value = _MappingsResult([_project_row(total_count=3)])
 
@@ -229,6 +296,7 @@ async def test_admin_repository_list_projects_maps_total_count() -> None:
 
 @pytest.mark.asyncio
 async def test_admin_repository_count_projects_calls_fallback_function() -> None:
+	"""count_projectsが件数専用のfn_count_admin_projects関数を呼び、0件の場合は0を返すことを検証する。"""
 	db = AsyncMock()
 	db.execute.return_value = _MappingsResult([{"count": 0}])
 
@@ -241,6 +309,10 @@ async def test_admin_repository_count_projects_calls_fallback_function() -> None
 
 @pytest.mark.asyncio
 async def test_admin_repository_list_login_history_maps_total_count() -> None:
+	"""list_login_historyが検索条件（user_id・query・login_method・success・作成日時範囲・
+	limit・offset）をfn_admin_list_login_history関数へそのまま渡し、戻り値のtotal_countと
+	紐づくユーザー情報が正しくマッピングされることを検証する。
+	"""
 	db = AsyncMock()
 	user_id = uuid4()
 	db.execute.return_value = _MappingsResult([_login_history_row(total_count=7)])
@@ -267,6 +339,7 @@ async def test_admin_repository_list_login_history_maps_total_count() -> None:
 
 @pytest.mark.asyncio
 async def test_admin_repository_count_login_history_calls_fallback_function() -> None:
+	"""count_login_historyが件数専用のfn_count_admin_login_history関数を呼び、0件の場合は0を返すことを検証する。"""
 	db = AsyncMock()
 	db.execute.return_value = _MappingsResult([{"count": 0}])
 
@@ -279,6 +352,10 @@ async def test_admin_repository_count_login_history_calls_fallback_function() ->
 
 @pytest.mark.asyncio
 async def test_admin_repository_update_user_role_passes_out_param_placeholder() -> None:
+	"""update_user_roleが、actor_id・target_id・new_roleを引数にOUTパラメータ用のNULLプレースホルダーを
+	含めてsp_admin_update_user_roleストアドプロシージャをCALLし、変更前のロール（OUTパラメータ）を
+	戻り値として返すことを検証する。
+	"""
 	db = AsyncMock()
 	actor_id = uuid4()
 	target_id = uuid4()
@@ -299,6 +376,10 @@ async def test_admin_repository_update_user_role_passes_out_param_placeholder() 
 
 @pytest.mark.asyncio
 async def test_admin_repository_update_user_status_passes_out_param_placeholder() -> None:
+	"""update_user_statusが、actor_id・target_id・is_activeを引数にOUTパラメータ用のNULL
+	プレースホルダーを含めてsp_admin_update_user_statusストアドプロシージャをCALLし、
+	変更前の有効状態（OUTパラメータ）を戻り値として返すことを検証する。
+	"""
 	db = AsyncMock()
 	actor_id = uuid4()
 	target_id = uuid4()
@@ -320,6 +401,9 @@ async def test_admin_repository_update_user_status_passes_out_param_placeholder(
 
 @pytest.mark.asyncio
 async def test_admin_repository_deactivate_project_passes_arguments_to_procedure() -> None:
+	"""deactivate_projectが、project_id・is_activeを引数にsp_admin_deactivate_projectストアドプロシージャを
+	CALLしていることを検証する。
+	"""
 	db = AsyncMock()
 	target_id = uuid4()
 

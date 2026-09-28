@@ -1,3 +1,5 @@
+"""app.auth.factory.get_auth_strategy（AUTH_MODE環境変数に応じたAuthStrategyの解決とキャッシュ）に対する単体テスト。"""
+
 from app.auth.factory import get_auth_strategy
 from app.auth.jwt_auth import JwtAuthStrategy
 from app.auth.session_auth import SessionAuthStrategy
@@ -5,6 +7,12 @@ from app.core.config import get_backend_settings
 
 
 def test_factory_returns_cached_strategy_for_configured_mode(monkeypatch):
+	"""AUTH_MODEが"session"の場合はSessionAuthStrategyを、"jwt"の場合はJwtAuthStrategyを返し、
+	同一モード内での呼び出しはlru_cacheにより同一インスタンスを返す（再生成されない）ことを検証する。
+
+	Args:
+		monkeypatch: AUTH_MODE環境変数を一時的に書き換えるためのpytest fixture。
+	"""
 	try:
 		get_auth_strategy.cache_clear()
 		monkeypatch.setenv("AUTH_MODE", "session")

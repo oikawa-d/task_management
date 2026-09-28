@@ -36,10 +36,17 @@ USER_ID = uuid4()
 
 
 def _current_user() -> CurrentUser:
+	"""get_current_userの差し替え先。固定のUSER_IDを持つ検証用CurrentUserを返す。"""
 	return CurrentUser(id=USER_ID, username="alice", role="member", is_active=True, email_verified_at=None)
 
 
 def _build_app() -> FastAPI:
+	"""notifications_routerのみを組み込み、認証とDBセッションをダミーに差し替えたFastAPIアプリを組み立てる。
+
+	Returns:
+		get_current_user・get_db_sessionの依存関係をオーバーライド済みのFastAPIアプリ
+		（get_auth_strategyのオーバーライドは呼び出し側で設定する）。
+	"""
 	app = FastAPI()
 	register_error_handling(app)
 	app.include_router(router_module.router)
@@ -50,6 +57,9 @@ def _build_app() -> FastAPI:
 
 @pytest.fixture
 def app_and_mocks(monkeypatch: pytest.MonkeyPatch):
+	"""_build_appのアプリに認証モードjwtを設定し、レート制限チェックを許可(1回目)扱いに
+	モックした状態で提供するfixture。後片付けとしてdependency_overridesをクリアする。
+	"""
 	app = _build_app()
 	app.dependency_overrides[get_auth_strategy] = lambda: SimpleNamespace(mode="jwt")
 	monkeypatch.setattr(deps.redis_store, "check_rate_limit", AsyncMock(return_value=1))
@@ -60,11 +70,15 @@ def app_and_mocks(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture
 def client(app_and_mocks: FastAPI) -> TestClient:
+	"""app_and_mocksのアプリを起動するTestClientを提供する。後片付けは行わない（app_and_mocks側で行う）。"""
 	with TestClient(app_and_mocks) as test_client:
 		yield test_client
 
 
 def test_notifications_router_registers_expected_paths() -> None:
+	"""notifications_routerが、通知一覧取得(GET)・未読件数取得(GET)・既読化(PATCH)・
+	一括既読化(POST)の4エンドポイントをすべて登録していることを検証する。
+	"""
 	routes = {
 		(route.path, method)
 		for route in router_module.router.routes
@@ -79,6 +93,9 @@ def test_notifications_router_registers_expected_paths() -> None:
 
 
 def test_list_notifications_returns_service_result(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""クエリパラメータ無しでGET /api/notifications を呼んだ場合、200でservice層の結果をそのまま返し、
+	認証済みユーザー・page=1・per_page=20・unread_only=Falseという既定値でservice層を呼び出すことを検証する。
+	"""
 	expected = NotificationListResponse(
 		items=[], meta=NotificationMeta(page=1, per_page=20, total=0, total_pages=0), unread_count=0
 	)
@@ -97,6 +114,7 @@ def test_list_notifications_returns_service_result(client: TestClient, monkeypat
 def test_list_notifications_forwards_paging_and_unread_only(
 	client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+	"""page・per_page・unread_onlyクエリパラメータで指定した値が、そのままservice層へ渡されることを検証する。"""
 	expected = NotificationListResponse(
 		items=[], meta=NotificationMeta(page=2, per_page=5, total=0, total_pages=0), unread_count=0
 	)
@@ -111,6 +129,9 @@ def test_list_notifications_forwards_paging_and_unread_only(
 
 
 def test_list_notifications_rejects_per_page_over_limit(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""per_pageクエリパラメータが上限(100)を超える場合、service層を呼び出す前にステータス422・
+	エラーコードVALIDATION_ERRORで拒否することを検証する。
+	"""
 	mock_list = AsyncMock()
 	monkeypatch.setattr(router_module.notification_service, "list_notifications", mock_list)
 
@@ -122,7 +143,12 @@ def test_list_notifications_rejects_per_page_over_limit(client: TestClient, monk
 
 
 def test_list_notifications_unauthenticated_returns_401(app_and_mocks: FastAPI) -> None:
+	"""get_current_userがUnauthenticatedErrorを送出する（未認証）状態でGET /api/notifications を呼ぶと、
+	ステータス401・エラーコードUNAUTHENTICATEDで応答することを検証する。
+	"""
+
 	def _raise() -> CurrentUser:
+		"""get_current_userの差し替え先。常にUnauthenticatedErrorを送出し、未認証状態を模擬する。"""
 		raise UnauthenticatedError()
 
 	app_and_mocks.dependency_overrides[get_current_user] = _raise
@@ -134,6 +160,9 @@ def test_list_notifications_unauthenticated_returns_401(app_and_mocks: FastAPI) 
 
 
 def test_list_notifications_rate_limited_returns_429(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""読み取り系レート制限の上限を超えた場合、service層を呼び出す前にステータス429・
+	エラーコードTOO_MANY_ATTEMPTSで応答し、Retry-Afterヘッダーに残りTTL秒数が設定されることを検証する。
+	"""
 	monkeypatch.setattr(deps.redis_store, "check_rate_limit", AsyncMock(return_value=121))
 	monkeypatch.setattr(deps.redis_store, "get_rate_limit_ttl", AsyncMock(return_value=42))
 	mock_list = AsyncMock()
@@ -164,6 +193,10 @@ def test_all_notification_rate_limited_endpoints_return_positive_retry_after_whe
 	headers: dict[str, str],
 	ttl: int,
 ) -> None:
+	"""notifications_router配下の全4エンドポイントについて、レート制限超過かつRedisのTTL取得が
+	0以下（未設定を示す0・-1・-2）を返す場合でも、Retry-Afterヘッダーには0や負値ではなく
+	設定上のレート制限ウィンドウ秒数（正の値）にフォールバックしてステータス429で応答することを検証する。
+	"""
 	monkeypatch.setattr(deps.redis_store, "check_rate_limit", AsyncMock(return_value=121))
 	monkeypatch.setattr(deps.redis_store, "get_rate_limit_ttl", AsyncMock(return_value=ttl))
 
@@ -175,6 +208,9 @@ def test_all_notification_rate_limited_endpoints_return_positive_retry_after_whe
 
 
 def test_notification_rate_limit_ttl_failure_returns_503(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""レート制限超過後のRetry-After算出に必要なget_rate_limit_ttlが例外を送出する場合、
+	ステータス503・エラーコードSERVICE_UNAVAILABLEでfail-closeすることを検証する。
+	"""
 	monkeypatch.setattr(deps.redis_store, "check_rate_limit", AsyncMock(return_value=121))
 	monkeypatch.setattr(
 		deps.redis_store,
@@ -189,6 +225,7 @@ def test_notification_rate_limit_ttl_failure_returns_503(client: TestClient, mon
 
 
 def test_get_unread_count_returns_service_result(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""GET /api/notifications/unread-count が、service層の戻り値（未読件数）をそのままJSONで返すことを検証する。"""
 	mock_count = AsyncMock(return_value=UnreadCountResponse(unread_count=3))
 	monkeypatch.setattr(router_module.notification_service, "get_unread_count", mock_count)
 
@@ -199,6 +236,9 @@ def test_get_unread_count_returns_service_result(client: TestClient, monkeypatch
 
 
 def test_mark_notification_read_returns_service_result(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""PATCH /api/notifications/{notification_id}/read が、パスパラメータのnotification_idと
+	認証済みユーザーをservice層へ渡し、その戻り値をそのまま返すことを検証する。
+	"""
 	notification_id = uuid4()
 	expected = NotificationReadResponse(id=notification_id, read_at=datetime.now(timezone.utc), unread_count=2)
 	mock_mark = AsyncMock(return_value=expected)
@@ -217,6 +257,9 @@ def test_mark_notification_read_returns_service_result(client: TestClient, monke
 def test_mark_notification_read_other_users_notification_returns_404(
 	client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+	"""service層が他人の通知への操作としてNotFoundErrorを送出した場合、
+	ステータス404・エラーコードNOT_FOUNDで応答する（本人以外の通知の存在を推測されないようにする）ことを検証する。
+	"""
 	mock_mark = AsyncMock(side_effect=NotFoundError())
 	monkeypatch.setattr(router_module.notification_service, "mark_notification_read", mock_mark)
 
@@ -230,6 +273,9 @@ def test_mark_notification_read_other_users_notification_returns_404(
 
 
 def test_mark_notification_read_rejects_disallowed_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""sessionモードで許可されないOriginヘッダーからPATCHした場合、service層を呼び出す前に
+	ステータス403・エラーコードCSRF_INVALIDで拒否することを検証する。
+	"""
 	app = _build_app()
 	app.dependency_overrides[get_auth_strategy] = lambda: SimpleNamespace(mode="session")
 	monkeypatch.setattr(deps.redis_store, "check_rate_limit", AsyncMock(return_value=1))
@@ -249,6 +295,9 @@ def test_mark_notification_read_rejects_disallowed_origin(monkeypatch: pytest.Mo
 
 
 def test_mark_notification_read_session_mode_requires_csrf_header(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""sessionモードでX-CSRF-Tokenヘッダーが無い場合、service層を呼び出す前にステータス403・
+	エラーコードCSRF_INVALIDで拒否することを検証する。
+	"""
 	app = _build_app()
 	app.dependency_overrides[get_auth_strategy] = lambda: SimpleNamespace(mode="session")
 	monkeypatch.setattr(deps.redis_store, "check_rate_limit", AsyncMock(return_value=1))
@@ -269,6 +318,9 @@ def test_mark_notification_read_session_mode_requires_csrf_header(monkeypatch: p
 
 
 def test_mark_notification_read_session_mode_passes_with_matching_csrf(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""sessionモードでX-CSRF-Tokenヘッダーの値がRedis保存値と一致する場合、
+	ステータス200でservice層の結果が返ることを検証する。
+	"""
 	app = _build_app()
 	app.dependency_overrides[get_auth_strategy] = lambda: SimpleNamespace(mode="session")
 	monkeypatch.setattr(deps.redis_store, "check_rate_limit", AsyncMock(return_value=1))
@@ -292,6 +344,9 @@ def test_mark_notification_read_session_mode_passes_with_matching_csrf(monkeypat
 def test_mark_notification_read_jwt_mode_does_not_require_csrf_header(
 	client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+	"""jwtモードではCSRF検証自体が適用されないため、X-CSRF-Tokenヘッダーが無くても
+	ステータス200で応答することを検証する。
+	"""
 	notification_id = uuid4()
 	expected = NotificationReadResponse(id=notification_id, read_at=datetime.now(timezone.utc), unread_count=0)
 	mock_mark = AsyncMock(return_value=expected)
@@ -308,6 +363,9 @@ def test_mark_notification_read_jwt_mode_does_not_require_csrf_header(
 def test_mark_all_notifications_read_returns_service_result(
 	client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+	"""POST /api/notifications/read-all が、認証済みユーザーをservice層へ渡し、
+	その戻り値（更新件数・未読件数）をそのまま返すことを検証する。
+	"""
 	expected = NotificationReadAllResponse(updated_count=3, unread_count=0)
 	mock_mark_all = AsyncMock(return_value=expected)
 	monkeypatch.setattr(router_module.notification_service, "mark_all_notifications_read", mock_mark_all)
@@ -323,6 +381,9 @@ def test_mark_all_notifications_read_returns_service_result(
 def test_mark_all_notifications_read_write_rate_limited_returns_429(
 	client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+	"""一括既読化（書き込み系）のレート制限上限を超えた場合、service層を呼び出す前にステータス429・
+	エラーコードTOO_MANY_ATTEMPTSで応答し、Retry-Afterヘッダーに残りTTL秒数が設定されることを検証する。
+	"""
 	monkeypatch.setattr(deps.redis_store, "check_rate_limit", AsyncMock(return_value=61))
 	monkeypatch.setattr(deps.redis_store, "get_rate_limit_ttl", AsyncMock(return_value=42))
 	mock_mark_all = AsyncMock()
