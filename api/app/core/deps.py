@@ -418,6 +418,16 @@ def enforce_rate_limit(scope: str, max_requests_field: str, window_field: str) -
 		request: Request,
 		settings: BackendSettings = Depends(get_backend_settings),
 	) -> None:
+		"""クライアントIP単位で、`enforce_rate_limit`が生成時に受け取った上限・時間窓のレート制限を強制する。
+
+		Args:
+			request: レート制限対象のHTTPリクエスト。
+			settings: 上限・時間窓・信頼済みプロキシ設定を保持するバックエンド設定。
+
+		Raises:
+			TooManyAttemptsError: 上限を超えた場合。
+			ServiceUnavailableError: Redis障害時（fail-close）。
+		"""
 		max_requests: int = getattr(settings, max_requests_field)
 		window: int = getattr(settings, window_field)
 		client_ip = resolve_client_ip(request, settings.trusted_proxy_cidrs).client_ip

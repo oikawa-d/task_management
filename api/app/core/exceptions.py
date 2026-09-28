@@ -31,6 +31,14 @@ class AppError(Exception):
 	retry_after: int | None = None
 
 	def __init__(self, message: str | None = None, details: Any = None) -> None:
+		"""例外を初期化する。
+
+		Args:
+			message: クライアントへ返すエラーメッセージ。省略時はクラス属性`message`
+				（デフォルトメッセージ）を使用する。
+			details: エラーの詳細情報（バリデーション内容等）。レスポンスの`error.details`
+				へそのまま含める。
+		"""
 		super().__init__(message or self.message)
 		if message is not None:
 			self.message = message
@@ -237,6 +245,14 @@ class TooManyAttemptsError(AppError):
 	message = "試行回数が多いため、しばらく待ってから再度お試しください"
 
 	def __init__(self, message: str | None = None, details: Any = None, retry_after: int | None = None) -> None:
+		"""例外を初期化する。
+
+		Args:
+			message: クライアントへ返すエラーメッセージ。省略時はデフォルトメッセージを使用する。
+			details: エラーの詳細情報。
+			retry_after: クライアントに再試行を待たせる秒数。`app_error_handler`が
+				`Retry-After`レスポンスヘッダへ設定する。
+		"""
 		super().__init__(message, details)
 		self.retry_after = retry_after
 
@@ -274,6 +290,17 @@ class ServiceUnavailableError(AppError):
 
 
 def _build_error_body(code: str, message: str, details: Any, request_id: str) -> dict[str, Any]:
+	"""API共通のエラーレスポンス形状（`{"error": {...}}`）を組み立てる。
+
+	Args:
+		code: エラーコード（例: `"NOT_FOUND"`）。クライアント側の分岐に使う安定識別子。
+		message: 利用者向けの日本語エラーメッセージ。
+		details: バリデーションエラー等の詳細情報。無ければNone。
+		request_id: リクエストを一意に識別するID（ログとの突き合わせに使う）。
+
+	Returns:
+		`error`キー配下にcode/message/details/request_idをまとめた辞書。
+	"""
 	return {
 		"error": {
 			"code": code,
@@ -285,6 +312,19 @@ def _build_error_body(code: str, message: str, details: Any, request_id: str) ->
 
 
 def _is_connection_operational_error(exc: OperationalError) -> bool:
+	"""PostgreSQLのSQLSTATEから、接続断・再接続可能な障害による`OperationalError`かを判定する。
+
+	SQLSTATEクラス`08`（接続例外）、または個別に再試行可能と定義したコード
+	（`_POSTGRES_RETRYABLE_CONNECTION_STATES`、例: `57P03` = クールダウン中）を対象とする。
+	アプリのバグに起因するその他の`OperationalError`（構文エラー等）は対象外とし、
+	誤って503へ丸めないようにする。
+
+	Args:
+		exc: 判定対象のSQLAlchemy `OperationalError`。
+
+	Returns:
+		接続断系の障害と判定できればTrue。
+	"""
 	sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
 	return isinstance(sqlstate, str) and (
 		sqlstate.startswith(_POSTGRES_CONNECTION_SQLSTATE_PREFIX) or sqlstate in _POSTGRES_RETRYABLE_CONNECTION_STATES
@@ -308,6 +348,19 @@ def raise_database_error(exc: DBAPIError) -> NoReturn:
 
 
 def _infrastructure_error_response(exc: Exception) -> tuple[int, str, str]:
+	"""Redis/DBインフラ例外を、`infra_error_handler`が返すべきステータス・コード・メッセージへ変換する。
+
+	接続断系のDB障害と判定できる場合は503（サービス利用不可）とし、それ以外の
+	`DBAPIError`（アプリのバグ等に起因しうるもの）は500として隠蔽する。
+	それ以外（主にRedisの例外）は503として扱う。
+
+	Args:
+		exc: `app.exception_handler(RedisError)`経由で捕捉された例外
+			（DB系の`add_exception_handler`登録分も含む）。
+
+	Returns:
+		`(status_code, error_code, message)`のタプル。
+	"""
 	if is_service_unavailable_database_error(exc):
 		return 503, ServiceUnavailableError.code, ServiceUnavailableError.message
 	if isinstance(exc, DBAPIError):
@@ -316,8 +369,38 @@ def _infrastructure_error_response(exc: Exception) -> tuple[int, str, str]:
 
 
 def register_error_handling(app: FastAPI) -> None:
+	"""共通エラーハンドリング一式をFastAPIアプリへ登録する。
+
+	以下を登録する。
+
+	- `request_id_middleware`: 全リクエストにリクエストIDを付与し、レスポンスヘッダ
+		（`X-Request-ID`）へ反映する。他のエラーハンドラがこのIDをログ・レスポンスへ
+		含めるため、他のハンドラより先に（ミドルウェアとして最初に）動作する必要がある。
+	- `app_error_handler`: `AppError`系（アプリ定義の例外）を、そのcode/status_codeに
+		基づくJSONレスポンスへ変換する。
+	- `infra_error_handler`: Redis例外、およびSQLAlchemyのDB接続系例外
+		（`OperationalError`/`DBAPIError`/`InterfaceError`/`SQLAlchemyTimeoutError`/
+		`DisconnectionError`）を、503（またはDBAPIErrorのバグ由来は500）へ変換する。
+	- `validation_error_handler`/`pydantic_validation_error_handler`: リクエスト/
+		スキーマのバリデーションエラーを422へ変換する。
+	- `unhandled_exception_handler`: 上記のいずれにも該当しない未捕捉例外を500へ
+		変換する（最後のフォールバック）。
+
+	Args:
+		app: ハンドラ・ミドルウェアを登録する対象のFastAPIアプリケーション。
+	"""
+
 	@app.middleware("http")
 	async def request_id_middleware(request: Request, call_next: Any) -> Any:
+		"""リクエストへ一意なリクエストIDを割り当て、レスポンスヘッダ`X-Request-ID`へ反映する。
+
+		Args:
+			request: 処理対象のHTTPリクエスト。
+			call_next: 後続のミドルウェア/ルートハンドラを呼び出す関数。
+
+		Returns:
+			`X-Request-ID`ヘッダを付与したレスポンス。
+		"""
 		request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
 		request.state.request_id = request_id
 		response = await call_next(request)
@@ -326,6 +409,18 @@ def register_error_handling(app: FastAPI) -> None:
 
 	@app.exception_handler(AppError)
 	async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
+		"""`AppError`系の例外を、そのcode/status_code/messageに基づくJSONレスポンスへ変換する。
+
+		5xx系はサーバー側の異常としてログへ記録する。`TooManyAttemptsError`で
+		`retry_after`が指定されている場合は`Retry-After`ヘッダを付与する。
+
+		Args:
+			request: 例外が発生したHTTPリクエスト。
+			exc: 捕捉された`AppError`（またはそのサブクラス）。
+
+		Returns:
+			`exc.status_code`を持つ、共通エラーボディ形式のJSONレスポンス。
+		"""
 		request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
 		if exc.status_code >= 500:
 			event = (
@@ -361,6 +456,17 @@ def register_error_handling(app: FastAPI) -> None:
 
 	@app.exception_handler(RequestValidationError)
 	async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+		"""FastAPIのリクエストバリデーションエラーを422のJSONレスポンスへ変換する。
+
+		各エラーをフィールドパス（`.`区切り）とメッセージの組へ整形し、`details`へ含める。
+
+		Args:
+			request: 例外が発生したHTTPリクエスト。
+			exc: パス/クエリ/ボディのバリデーションに失敗した際の例外。
+
+		Returns:
+			ステータス422、`VALIDATION_ERROR`コードのJSONレスポンス。
+		"""
 		request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
 		details = [{"field": ".".join(str(part) for part in err["loc"]), "message": err["msg"]} for err in exc.errors()]
 		return JSONResponse(
@@ -370,6 +476,18 @@ def register_error_handling(app: FastAPI) -> None:
 
 	@app.exception_handler(PydanticValidationError)
 	async def pydantic_validation_error_handler(request: Request, exc: PydanticValidationError) -> JSONResponse:
+		"""ルートハンドラ内で送出されたpydanticの`ValidationError`を422のJSONレスポンスへ変換する。
+
+		FastAPIのリクエストバリデーション（`RequestValidationError`）とは別に、
+		サービス層等で明示的にpydanticモデルを検証した際の失敗を同じ形式で返す。
+
+		Args:
+			request: 例外が発生したHTTPリクエスト。
+			exc: pydanticモデルの検証失敗による例外。
+
+		Returns:
+			ステータス422、`VALIDATION_ERROR`コードのJSONレスポンス。
+		"""
 		request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
 		details = [{"field": ".".join(str(part) for part in err["loc"]), "message": err["msg"]} for err in exc.errors()]
 		return JSONResponse(
@@ -379,6 +497,18 @@ def register_error_handling(app: FastAPI) -> None:
 
 	@app.exception_handler(Exception)
 	async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+		"""他のどのハンドラにも該当しない未捕捉例外を、内部情報を隠したまま500へ変換する最終フォールバック。
+
+		詳細はクライアントへ返さず、スタックトレースをログへ記録することで
+		調査可能性を確保する。
+
+		Args:
+			request: 例外が発生したHTTPリクエスト。
+			exc: 想定外の未捕捉例外。
+
+		Returns:
+			ステータス500、`INTERNAL_ERROR`コードのJSONレスポンス。
+		"""
 		request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
 		logger.exception("unhandled exception", extra={"event": "unhandled_exception", "request_id": request_id})
 		return JSONResponse(
