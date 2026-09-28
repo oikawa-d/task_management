@@ -1,4 +1,6 @@
-"""通知APIの認証依存性・障害境界をrouter経由で検証する。"""
+"""通知APIの認証依存性・障害境界をrouter経由で検証する。
+DB/Redisはいずれもモック（AsyncMock・OperationalError注入）で代替しており、実インフラへの接続は行わない。
+"""
 
 from __future__ import annotations
 
@@ -36,15 +38,29 @@ NOTIFICATION_ENDPOINTS = [
 
 
 class _AuthenticatedStrategy:
+	"""常に指定したユーザーIDで認証成功を返す、認証済み状態を模擬するダミーAuthStrategy。"""
+
 	def __init__(self, mode: str, user_id: UUID) -> None:
+		"""認証モードと、認証成功時に返すユーザーIDを保持する。"""
 		self.mode = mode
 		self._user_id = user_id
 
 	async def authenticate(self, _request: object) -> AuthContext:
+		"""常に保持しているuser_idを持つAuthContextを返す（リクエスト内容は使わない）。"""
 		return AuthContext(user_id=self._user_id)
 
 
 def _build_app(monkeypatch: pytest.MonkeyPatch, strategy: object, db: object) -> FastAPI:
+	"""notifications_routerのみを組み込み、認証Strategy・DBセッションを差し替えたFastAPIアプリを組み立てる。
+
+	Args:
+		monkeypatch: user_repository.get_by_idの差し替えに使うpytest fixture。
+		strategy: get_auth_strategyの差し替え先とするAuthStrategy。
+		db: get_db_sessionの差し替え先とするダミーDBセッション（AsyncMock等）。
+
+	Returns:
+		認証・DBセッション・user_repository.get_by_idをオーバーライド済みのFastAPIアプリ。
+	"""
 	app = FastAPI()
 	register_error_handling(app)
 	app.include_router(notifications_router.router)
@@ -73,6 +89,10 @@ def test_notifications_router_rejects_missing_and_invalid_jwt_authentication(
 	method: str,
 	path: str,
 ) -> None:
+	"""notifications_router配下の全4エンドポイントについて、jwtモードでAuthorizationヘッダーが
+	無い場合・不正なbearerトークンの場合のいずれも、ステータス401・エラーコードUNAUTHENTICATEDで
+	応答することを検証する。
+	"""
 	strategy = JwtAuthStrategy(get_backend_settings())
 	app = _build_app(monkeypatch, strategy, None)
 	monkeypatch.setattr(deps.redis_store, "check_rate_limit", AsyncMock(return_value=1))
@@ -90,6 +110,10 @@ def test_notifications_router_rejects_missing_and_invalid_session_authentication
 	method: str,
 	path: str,
 ) -> None:
+	"""notifications_router配下の全4エンドポイントについて、sessionモードでセッションCookieが
+	無い場合はステータス401・エラーコードUNAUTHENTICATED、Cookieはあるが対応するセッションが
+	Redis上に存在しない場合はステータス401・エラーコードSESSION_EXPIREDで応答することを検証する。
+	"""
 	strategy = SessionAuthStrategy(get_backend_settings())
 	app = _build_app(monkeypatch, strategy, None)
 	monkeypatch.setattr(deps.redis_store, "get_session", AsyncMock(return_value=None))
@@ -115,6 +139,10 @@ def test_session_notification_mutations_reject_missing_or_invalid_csrf(
 	path: str,
 	csrf_header: str | None,
 ) -> None:
+	"""既読化(PATCH)・一括既読化(POST)の状態変更系エンドポイントについて、sessionモードで
+	X-CSRF-Tokenヘッダーが無い場合・Redis保存値と一致しない場合のいずれも、service層を
+	呼び出す前にステータス403・エラーコードCSRF_INVALIDで拒否することを検証する。
+	"""
 	strategy = SessionAuthStrategy(get_backend_settings())
 	app = _build_app(monkeypatch, strategy, None)
 	monkeypatch.setattr(
@@ -146,6 +174,10 @@ def test_session_notification_mutations_reject_missing_or_invalid_csrf(
 def test_session_notification_mutations_reject_disallowed_origin(
 	monkeypatch: pytest.MonkeyPatch, method: str, path: str
 ) -> None:
+	"""既読化(PATCH)・一括既読化(POST)の状態変更系エンドポイントについて、sessionモードでOriginヘッダーが
+	許可オリジンに含まれない場合、CSRFトークン自体は正しくてもステータス403・エラーコードCSRF_INVALIDで
+	拒否することを検証する。
+	"""
 	strategy = SessionAuthStrategy(get_backend_settings())
 	app = _build_app(monkeypatch, strategy, None)
 	monkeypatch.setattr(
@@ -174,6 +206,10 @@ def test_notification_router_returns_503_for_postgresql_failure_instead_of_empty
 	method: str,
 	path: str,
 ) -> None:
+	"""notifications_router配下の全4エンドポイントについて、DB接続エラー（sqlstate=08006）が
+	発生した場合、空の一覧や0件のような正常応答ではなく、ステータス503・エラーコード
+	SERVICE_UNAVAILABLEで応答し、レスポンスボディにitemsキーを含まないことを検証する。
+	"""
 	db = AsyncMock()
 	db.execute.side_effect = OperationalError("SELECT notifications", {}, SimpleNamespace(sqlstate="08006"))
 	app = _build_app(monkeypatch, _AuthenticatedStrategy("jwt", USER_ID), db)
@@ -193,6 +229,10 @@ def test_notification_router_returns_503_for_redis_failure_instead_of_zero_resul
 	method: str,
 	path: str,
 ) -> None:
+	"""notifications_router配下の全4エンドポイントについて、レート制限チェック自体（Redis）が
+	例外を送出する場合、0件のような正常応答ではなくステータス503・エラーコードSERVICE_UNAVAILABLEで
+	fail-closeし、service層（list_notifications等）は一切呼び出されないことを検証する。
+	"""
 	app = _build_app(monkeypatch, _AuthenticatedStrategy("jwt", USER_ID), None)
 	monkeypatch.setattr(deps.redis_store, "check_rate_limit", AsyncMock(side_effect=RuntimeError("redis down")))
 	mock_list = AsyncMock()

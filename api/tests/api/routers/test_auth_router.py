@@ -63,6 +63,14 @@ class _StubStrategy:
 
 
 def _build_app(auth_mode: str = "session") -> FastAPI:
+	"""auth_routerのみを組み込み、DBセッションと認証Strategyをダミーに差し替えたFastAPIアプリを組み立てる。
+
+	Args:
+		auth_mode: get_auth_strategyの差し替え先とする_StubStrategyの認証モード。
+
+	Returns:
+		get_db_session・get_auth_strategyの依存関係をオーバーライド済みのFastAPIアプリ。
+	"""
 	app = FastAPI()
 	register_error_handling(app)
 	app.include_router(router)
@@ -73,6 +81,9 @@ def _build_app(auth_mode: str = "session") -> FastAPI:
 
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch):
+	"""許可オリジンを設定し、sessionモードに固定した_build_appのアプリを起動するTestClientを提供する。
+	後片付けとしてdependency_overridesをクリアする。
+	"""
 	monkeypatch.setenv("CORS_ALLOW_ORIGINS", ALLOWED_ORIGIN)
 	get_backend_settings.cache_clear()
 	app = _build_app()
@@ -82,6 +93,9 @@ def client(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_auth_router_registers_all_endpoints() -> None:
+	"""auth_routerが、register・login・logout・me・config・refresh・verify-email・
+	verify-email/resend・password/forgot・password/resetの全10エンドポイントを登録していることを検証する。
+	"""
 	routes = {
 		(route.path, method) for route in router.routes if isinstance(route, APIRoute) for method in route.methods
 	}
@@ -99,9 +113,13 @@ def test_auth_router_registers_all_endpoints() -> None:
 
 
 def test_register_returns_201_without_auth_cookie(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""正常な登録リクエストがステータス201・登録受付メッセージを返し、登録時点ではまだログイン
+	扱いにしない（認証Cookieを発行しない）ことを検証する。
+	"""
 	user_id = uuid4()
 
 	async def _register(*_args: Any, **_kwargs: Any) -> SimpleNamespace:
+		"""auth_service.registerの差し替え先。固定のユーザーID・emailを持つ結果を返す。"""
 		return SimpleNamespace(id=user_id, email="taro@example.com")
 
 	monkeypatch.setattr(auth_router_module.auth_service, "register", _register)
@@ -118,6 +136,9 @@ def test_register_returns_201_without_auth_cookie(client: TestClient, monkeypatc
 
 
 def test_register_rejects_disallowed_origin(client: TestClient) -> None:
+	"""Originヘッダーが許可オリジンに含まれない場合、service層を呼び出す前にステータス403・
+	エラーコードCSRF_INVALIDで拒否することを検証する。
+	"""
 	response = client.post("/api/auth/register", json=_REGISTER_PAYLOAD, headers={"Origin": "http://evil.example"})
 
 	assert response.status_code == 403
@@ -125,6 +146,10 @@ def test_register_rejects_disallowed_origin(client: TestClient) -> None:
 
 
 def test_register_duplicate_username_returns_409(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""service層のregisterがDuplicateUsernameErrorを送出した場合、ステータス409・
+	エラーコードDUPLICATE_USERNAMEで応答することを検証する。
+	"""
+
 	async def _register(*_args: Any, **_kwargs: Any) -> SimpleNamespace:
 		raise DuplicateUsernameError()
 
@@ -155,6 +180,11 @@ def test_register_converts_database_errors(
 	expected_status: int,
 	expected_code: str,
 ) -> None:
+	"""register時に発生したDB例外の種類に応じて、汎用DBAPIErrorはステータス500・
+	エラーコードINTERNAL_ERRORへ、接続断を示すOperationalError(sqlstate=08006)は
+	ステータス503・エラーコードSERVICE_UNAVAILABLEへ変換されることを検証する。
+	"""
+
 	async def _register(*_args: Any, **_kwargs: Any) -> Any:
 		raise register_error
 
@@ -168,6 +198,9 @@ def test_register_converts_database_errors(
 
 
 def test_register_validation_error_returns_422(client: TestClient) -> None:
+	"""password_confirmがpasswordと一致しない場合、service層を呼び出す前にステータス422・
+	エラーコードVALIDATION_ERRORで拒否することを検証する。
+	"""
 	payload = {**_REGISTER_PAYLOAD, "password_confirm": "Different1!"}
 
 	response = client.post("/api/auth/register", json=payload, headers={"Origin": ALLOWED_ORIGIN})
@@ -177,10 +210,14 @@ def test_register_validation_error_returns_422(client: TestClient) -> None:
 
 
 def test_login_session_mode_returns_204_with_cookies(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""sessionモードでのログイン成功が、ステータス204・空ボディで応答し、
+	レスポンスにcerberus_sid・cerberus_csrfの両Cookieが設定されることを検証する。
+	"""
 	monkeypatch.setenv("CORS_ALLOW_ORIGINS", ALLOWED_ORIGIN)
 	get_backend_settings.cache_clear()
 
 	async def _login(_identifier: str, _password: str, _request: Any, response: Any, *_args: Any) -> LoginResult:
+		"""auth_service.loginの差し替え先。sessionモードのCookieを設定しつつ固定のLoginResultを返す。"""
 		response.set_cookie("cerberus_sid", "session-id")
 		response.set_cookie("cerberus_csrf", "csrf-token")
 		return LoginResult("session", csrf_token="csrf-token", expires_in=1800, session_id="session-id")
@@ -202,6 +239,9 @@ def test_login_session_mode_returns_204_with_cookies(monkeypatch: pytest.MonkeyP
 
 
 def test_login_jwt_mode_returns_access_token(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""jwtモードでのログイン成功が、ステータス200でアクセストークン・token_type・expires_inを
+	JSONで返し、リフレッシュトークンはレスポンスボディに一切含まれないことを検証する。
+	"""
 	monkeypatch.setenv("CORS_ALLOW_ORIGINS", ALLOWED_ORIGIN)
 	get_backend_settings.cache_clear()
 
@@ -233,6 +273,10 @@ def test_login_jwt_mode_returns_access_token(monkeypatch: pytest.MonkeyPatch) ->
 def test_login_error_codes(
 	client: TestClient, monkeypatch: pytest.MonkeyPatch, error: Exception, status_code: int, code: str
 ) -> None:
+	"""service層のloginが送出する各例外（認証情報不正・メール未確認・試行回数過多）に対応する
+	HTTPステータス・エラーコードへ正しく変換されることを検証する。
+	"""
+
 	async def _login(*_args: Any, **_kwargs: Any) -> LoginResult:
 		raise error
 
@@ -249,9 +293,13 @@ def test_login_error_codes(
 
 
 def test_logout_without_cookie_returns_204(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""sessionモードで認証Cookieを持たないログアウトリクエストが、CSRF検証をスキップして
+	service層のlogoutを1回呼び、ステータス204で応答することを検証する。
+	"""
 	calls: list[str] = []
 
 	async def _logout(*_args: Any, **_kwargs: Any) -> None:
+		"""auth_service.logoutの差し替え先。呼び出されたことをcallsへ記録するだけのスタブ。"""
 		calls.append("logout")
 
 	monkeypatch.setattr(auth_router_module.auth_service, "logout", _logout)
@@ -263,6 +311,9 @@ def test_logout_without_cookie_returns_204(client: TestClient, monkeypatch: pyte
 
 
 def test_logout_with_session_cookie_requires_csrf_header(client: TestClient) -> None:
+	"""sessionモードで認証Cookieを持つログアウトリクエストにX-CSRF-Tokenヘッダーが無い場合、
+	ステータス403・エラーコードCSRF_INVALIDで拒否することを検証する。
+	"""
 	client.cookies.set("cerberus_sid", "session-id")
 
 	response = client.post("/api/auth/logout", headers={"Origin": ALLOWED_ORIGIN})
@@ -272,6 +323,7 @@ def test_logout_with_session_cookie_requires_csrf_header(client: TestClient) -> 
 
 
 def _profile() -> UserProfileResponse:
+	"""user_service.get_profileの戻り値を模擬する、検証用のUserProfileResponseを作る。"""
 	return UserProfileResponse(
 		id=uuid4(),
 		username="taro",
@@ -289,6 +341,9 @@ def _profile() -> UserProfileResponse:
 
 
 def test_me_returns_profile_with_auth_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""認証済みユーザーでGET /api/auth/me を呼ぶと、200でプロフィールと現在の認証モード(auth_mode)を
+	併せて返すことを検証する。
+	"""
 	monkeypatch.setenv("AUTH_MODE", "jwt")
 	get_backend_settings.cache_clear()
 	profile = _profile()
@@ -310,6 +365,7 @@ def test_me_returns_profile_with_auth_mode(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_me_requires_authentication(client: TestClient) -> None:
+	"""未認証状態でGET /api/auth/me を呼ぶと、ステータス401・エラーコードUNAUTHENTICATEDで応答することを検証する。"""
 	response = client.get("/api/auth/me")
 
 	assert response.status_code == 401
@@ -317,6 +373,10 @@ def test_me_requires_authentication(client: TestClient) -> None:
 
 
 def test_config_returns_public_settings_without_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""GET /api/auth/config が、auth_mode・google_login_enabled・csrf_cookie_nameという公開して
+	問題ない設定値のみを返し、Google OAuthのクライアントシークレット等の機微情報を含まないこと、
+	レスポンスにCache-Control: no-storeが設定されることを検証する。
+	"""
 	monkeypatch.setenv("AUTH_MODE", "session")
 	monkeypatch.setenv("GOOGLE_CLIENT_ID", "google-client-id")
 	monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "google-client-secret")
@@ -336,6 +396,9 @@ def test_config_returns_public_settings_without_secrets(monkeypatch: pytest.Monk
 
 
 def test_config_reports_google_login_disabled_when_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""GOOGLE_CLIENT_ID・GOOGLE_CLIENT_SECRETが共に未設定の場合、google_login_enabledがFalseに
+	なることを検証する。
+	"""
 	monkeypatch.setenv("GOOGLE_CLIENT_ID", "")
 	monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "")
 	get_backend_settings.cache_clear()
@@ -379,6 +442,9 @@ def test_config_reports_google_login_enabled_when_flag_on_and_configured(monkeyp
 def test_config_reports_google_login_disabled_when_one_client_setting_is_missing(
 	monkeypatch: pytest.MonkeyPatch, missing_setting: str
 ) -> None:
+	"""GOOGLE_LOGIN_ENABLED=trueでも、GOOGLE_CLIENT_IDまたはGOOGLE_CLIENT_SECRETの
+	いずれか片方が空の場合、google_login_enabledがFalseになることを検証する。
+	"""
 	monkeypatch.setenv("GOOGLE_LOGIN_ENABLED", "true")
 	monkeypatch.setenv("GOOGLE_CLIENT_ID", "google-client-id")
 	monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "google-client-secret")
@@ -393,6 +459,9 @@ def test_config_reports_google_login_disabled_when_one_client_setting_is_missing
 
 
 def test_auth_endpoints_are_published_in_openapi() -> None:
+	"""app.mainの実アプリのOpenAPIスキーマに、auth_routerの全10エンドポイントが
+	期待するHTTPメソッドで登録されていることを検証する。
+	"""
 	from app.main import app as main_app
 
 	paths = main_app.openapi()["paths"]
@@ -421,6 +490,9 @@ def _allow_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_refresh_returns_new_access_token(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""jwtモードでのリフレッシュ成功が、ステータス200で新しいアクセストークン・token_type・
+	expires_inを返し、新しいリフレッシュトークンはレスポンスボディに含まれないことを検証する。
+	"""
 	monkeypatch.setenv("CORS_ALLOW_ORIGINS", ALLOWED_ORIGIN)
 	get_backend_settings.cache_clear()
 
@@ -439,6 +511,9 @@ def test_refresh_returns_new_access_token(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_refresh_in_session_mode_returns_405(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""sessionモードではリフレッシュ機能自体が提供されないため、service層がNotSupportedInModeErrorを
+	送出した場合、ステータス405・エラーコードNOT_SUPPORTED_IN_MODEで応答することを検証する。
+	"""
 	monkeypatch.setenv("CORS_ALLOW_ORIGINS", ALLOWED_ORIGIN)
 	get_backend_settings.cache_clear()
 
@@ -456,6 +531,9 @@ def test_refresh_in_session_mode_returns_405(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_refresh_requires_csrf_token(client: TestClient) -> None:
+	"""X-CSRF-Tokenヘッダーが無い状態でPOST /api/auth/refresh を呼ぶと、ステータス403・
+	エラーコードCSRF_INVALIDで拒否することを検証する。
+	"""
 	response = client.post("/api/auth/refresh", headers={"Origin": ALLOWED_ORIGIN})
 
 	assert response.status_code == 403
@@ -463,9 +541,13 @@ def test_refresh_requires_csrf_token(client: TestClient) -> None:
 
 
 def test_verify_email_returns_204(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""正常なメール確認トークンでPOST /api/auth/verify-email を呼ぶと、ステータス204・空ボディで
+	応答し、送信したトークンがそのままservice層へ渡されることを検証する。
+	"""
 	tokens: list[str] = []
 
 	async def _verify_email(token: str, _db: Any) -> None:
+		"""email_verification_service.verify_emailの差し替え先。渡されたトークンをtokensへ記録する。"""
 		tokens.append(token)
 
 	monkeypatch.setattr(email_verification_service, "verify_email", _verify_email)
@@ -478,6 +560,10 @@ def test_verify_email_returns_204(client: TestClient, monkeypatch: pytest.Monkey
 
 
 def test_verify_email_invalid_token_returns_400(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""service層のverify_emailがInvalidVerifyTokenErrorを送出した場合（トークン不正・使用済み等）、
+	ステータス400・エラーコードINVALID_VERIFY_TOKENで応答することを検証する。
+	"""
+
 	async def _verify_email(*_args: Any, **_kwargs: Any) -> None:
 		raise InvalidVerifyTokenError()
 
@@ -490,6 +576,9 @@ def test_verify_email_invalid_token_returns_400(client: TestClient, monkeypatch:
 
 
 def test_verify_email_rejects_empty_token(client: TestClient) -> None:
+	"""空文字のtokenを送信した場合、service層を呼び出す前にステータス422・
+	エラーコードVALIDATION_ERRORで拒否することを検証する。
+	"""
 	response = client.post("/api/auth/verify-email", json={"token": ""})
 
 	assert response.status_code == 422
@@ -499,6 +588,10 @@ def test_verify_email_rejects_empty_token(client: TestClient) -> None:
 def test_resend_verify_email_returns_202_with_fixed_message(
 	client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+	"""確認メール再送リクエストが、宛先メールアドレスの実在有無に関わらずステータス202・
+	固定の受付メッセージで応答する（メールアドレスの存在を推測されないようにする）ことを検証する。
+	"""
+
 	async def _resend(*_args: Any, **_kwargs: Any) -> None:
 		return None
 
@@ -511,6 +604,10 @@ def test_resend_verify_email_returns_202_with_fixed_message(
 
 
 def test_password_forgot_returns_202_for_unknown_email(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""パスワードリセット申請が、宛先メールアドレスが未登録であってもステータス202・固定の
+	受付メッセージで応答する（メールアドレスの存在を推測されないようにする）ことを検証する。
+	"""
+
 	async def _request_password_reset(*_args: Any, **_kwargs: Any) -> None:
 		return None
 
@@ -523,9 +620,13 @@ def test_password_forgot_returns_202_for_unknown_email(client: TestClient, monke
 
 
 def test_password_reset_returns_204(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""正常なパスワードリセットリクエストがステータス204・空ボディで応答し、
+	トークンと新パスワードがそのままservice層へ渡されることを検証する。
+	"""
 	calls: list[tuple[str, str]] = []
 
 	async def _reset_password(token: str, new_password: str, _db: Any) -> None:
+		"""email_verification_service.reset_passwordの差し替え先。渡された引数をcallsへ記録する。"""
 		calls.append((token, new_password))
 
 	monkeypatch.setattr(email_verification_service, "reset_password", _reset_password)
@@ -540,6 +641,10 @@ def test_password_reset_returns_204(client: TestClient, monkeypatch: pytest.Monk
 
 
 def test_password_reset_invalid_token_returns_400(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""service層のreset_passwordがInvalidResetTokenErrorを送出した場合（トークン不正・使用済み等）、
+	ステータス400・エラーコードINVALID_RESET_TOKENで応答することを検証する。
+	"""
+
 	async def _reset_password(*_args: Any, **_kwargs: Any) -> None:
 		raise InvalidResetTokenError()
 
@@ -555,6 +660,9 @@ def test_password_reset_invalid_token_returns_400(client: TestClient, monkeypatc
 
 
 def test_password_reset_rejects_mismatched_confirmation(client: TestClient) -> None:
+	"""new_passwordとpassword_confirmが一致しない場合、service層を呼び出す前にステータス422・
+	エラーコードVALIDATION_ERRORで拒否することを検証する。
+	"""
 	response = client.post(
 		"/api/auth/password/reset",
 		json={"token": "reset-token", "new_password": "NewPassw0rd!", "password_confirm": "Other1234!"},

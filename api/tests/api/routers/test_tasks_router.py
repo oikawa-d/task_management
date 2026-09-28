@@ -1,3 +1,8 @@
+"""app.api.routers.tasks_router（タスクCRUD・一覧・カレンダー表示）のルーティング定義と、
+GET /api/tasks、GET /api/tasks/calendar のクエリパラメータ解釈・エラーハンドリングに対する単体テスト。
+task_serviceはモックし、実DBには接続しない。
+"""
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -20,10 +25,16 @@ USER_ID = uuid4()
 
 
 def _current_user() -> CurrentUser:
+	"""get_current_userの差し替え先。固定のUSER_IDを持つ検証用CurrentUserを返す。"""
 	return CurrentUser(id=USER_ID, username="alice", role="member", is_active=True, email_verified_at=None)
 
 
 def _build_app() -> FastAPI:
+	"""tasks_routerのみを組み込み、認証とDBセッションをダミーに差し替えたFastAPIアプリを組み立てる。
+
+	Returns:
+		get_current_user・get_db_sessionの依存関係をオーバーライド済みのFastAPIアプリ。
+	"""
 	app = FastAPI()
 	register_error_handling(app)
 	app.include_router(router)
@@ -34,6 +45,7 @@ def _build_app() -> FastAPI:
 
 @pytest.fixture
 def client() -> TestClient:
+	"""_build_appのアプリを起動するTestClientを提供する。後片付けとしてdependency_overridesをクリアする。"""
 	app = _build_app()
 	with TestClient(app) as test_client:
 		yield test_client
@@ -41,6 +53,9 @@ def client() -> TestClient:
 
 
 def test_task_router_registers_task_endpoints() -> None:
+	"""tasks_routerが、プロジェクト配下タスクの一覧取得・作成、タスク全体の一覧取得・カレンダー表示・
+	作成、タスク単体の取得・更新・削除の各エンドポイントをすべて登録していることを検証する。
+	"""
 	routes = {
 		(route.path, method) for route in router.routes if isinstance(route, APIRoute) for method in route.methods
 	}
@@ -56,6 +71,10 @@ def test_task_router_registers_task_endpoints() -> None:
 
 
 def test_list_tasks_forwards_default_query(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""クエリパラメータ無しでGET /api/tasks を呼んだ場合、200でtask_service.list_tasksの結果を
+	そのまま返し、project_id=None・status=None・unassigned=False・page=1・per_page=20という
+	既定値でservice層を呼び出すことを検証する。
+	"""
 	expected = TaskListResponse(items=[], meta=TaskListMeta(page=1, per_page=20, total=0, total_pages=0))
 	mock_list = AsyncMock(return_value=expected)
 	monkeypatch.setattr(router_module.task_service, "list_tasks", mock_list)
@@ -68,6 +87,9 @@ def test_list_tasks_forwards_default_query(client: TestClient, monkeypatch: pyte
 
 
 def test_calendar_router_accepts_from_and_to_query_aliases(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""GET /api/tasks/calendar が、クエリパラメータ"from"/"to"（Python予約語のため別名のエイリアス）を
+	CalendarTaskQueryのfrom_date/to_dateへ正しくマッピングして200を返すことを検証する。
+	"""
 	mock_list = AsyncMock(return_value=[])
 	monkeypatch.setattr(router_module.task_service, "list_calendar_tasks", mock_list)
 
@@ -83,6 +105,9 @@ def test_calendar_router_accepts_from_and_to_query_aliases(client: TestClient, m
 
 
 def test_list_tasks_rejects_non_member_project(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""指定したproject_idに対してtask_service.list_tasksがNotFoundErrorを送出した場合、
+	ステータス404・エラーコードNOT_FOUNDで応答し、指定したproject_idがservice層へ渡されていることを検証する。
+	"""
 	mock_list = AsyncMock(side_effect=NotFoundError())
 	monkeypatch.setattr(router_module.task_service, "list_tasks", mock_list)
 	project_id = uuid4()
@@ -95,6 +120,9 @@ def test_list_tasks_rejects_non_member_project(client: TestClient, monkeypatch: 
 
 
 def test_list_tasks_normalizes_null_project_filter(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""project_idクエリに文字列"null"を指定した場合、200で応答し、それをUUIDとしてではなく
+	"unassigned"（プロジェクト未割り当てフィルタ）としてservice層へ渡すことを検証する。
+	"""
 	mock_list = AsyncMock(
 		return_value=TaskListResponse(items=[], meta=TaskListMeta(page=1, per_page=20, total=0, total_pages=0))
 	)
@@ -107,6 +135,9 @@ def test_list_tasks_normalizes_null_project_filter(client: TestClient, monkeypat
 
 
 def test_list_tasks_rejects_invalid_project_id(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""project_idクエリにUUIDとして解釈できない値を指定した場合、service層を呼び出す前に
+	ステータス422・エラーコードVALIDATION_ERRORで拒否することを検証する。
+	"""
 	mock_list = AsyncMock()
 	monkeypatch.setattr(router_module.task_service, "list_tasks", mock_list)
 
@@ -118,6 +149,9 @@ def test_list_tasks_rejects_invalid_project_id(client: TestClient, monkeypatch: 
 
 
 def test_list_tasks_forwards_status_filter(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""statusクエリパラメータで指定した値（例: "done"）が、そのままservice層のフィルタ条件として
+	渡されることを検証する。
+	"""
 	mock_list = AsyncMock(
 		return_value=TaskListResponse(items=[], meta=TaskListMeta(page=1, per_page=20, total=0, total_pages=0))
 	)
@@ -130,6 +164,9 @@ def test_list_tasks_forwards_status_filter(client: TestClient, monkeypatch: pyte
 
 
 def test_list_tasks_forwards_pagination(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""page・per_pageクエリパラメータで指定した値が、そのままservice層のページネーション条件として
+	渡されることを検証する。
+	"""
 	mock_list = AsyncMock(
 		return_value=TaskListResponse(items=[], meta=TaskListMeta(page=2, per_page=5, total=0, total_pages=0))
 	)

@@ -1,3 +1,5 @@
+"""app.core.history_middleware（APIリクエスト履歴記録ミドルウェア）に対する単体テスト。"""
+
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
@@ -9,6 +11,12 @@ from httpx2 import ASGITransport, AsyncClient
 
 
 def _settings() -> MagicMock:
+	"""履歴ミドルウェアが参照する設定値のうち、テストで必要な項目だけを持つ最小限のMagicMockを作る。
+
+	Returns:
+		api_history_body_max_bytes・api_history_error_detail_max_length・trusted_proxy_cidrsを
+		属性として持つMagicMock（get_backend_settingsの差し替え先）。
+	"""
 	return MagicMock(
 		api_history_body_max_bytes=4096,
 		api_history_error_detail_max_length=100,
@@ -18,6 +26,11 @@ def _settings() -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_api_request_is_recorded_with_redacted_body_and_request_id(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""正常系のPOSTリクエストで、パスワード系フィールド（password/current_password/new_password/password_confirm/
+	ネストしたaccess_token）がリクエストボディの記録時に'[REDACTED]'へマスキングされ、
+	一方でvisibleなど非機微フィールドはそのまま保存され、レスポンスヘッダーのx-request-idと
+	記録データのrequest_idが一致し、記録上のstatusが'success'になることを検証する。
+	"""
 	app = FastAPI()
 	history_middleware.register_history_middleware(app)
 
@@ -60,6 +73,9 @@ async def test_api_request_is_recorded_with_redacted_body_and_request_id(monkeyp
 
 @pytest.mark.asyncio
 async def test_error_response_is_recorded_with_error_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""ステータス409のエラーレスポンス（{"error": {"code", "message"}}形式）を返すルートで、
+	記録データのerror_codeとerror_detailがレスポンスのエラーコード・メッセージと一致することを検証する。
+	"""
 	app = FastAPI()
 	history_middleware.register_history_middleware(app)
 
@@ -83,6 +99,9 @@ async def test_error_response_is_recorded_with_error_contract(monkeypatch: pytes
 
 @pytest.mark.asyncio
 async def test_history_insert_failure_does_not_change_api_response(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""履歴保存用のDBセッション取得・api_history_repository.createが例外（RuntimeError）を送出する状況でも、
+	その例外が呼び出し元へ伝播せず、APIとしてのレスポンス（200・{"ok": True}）が変化しないことを検証する。
+	"""
 	app = FastAPI()
 	history_middleware.register_history_middleware(app)
 
@@ -99,6 +118,8 @@ async def test_history_insert_failure_does_not_change_api_response(monkeypatch: 
 	)
 
 	class Session:
+		"""非同期コンテキストマネージャとして最小限のDBセッションを模擬するテスト用ダミークラス。"""
+
 		async def __aenter__(self) -> MagicMock:
 			return MagicMock()
 

@@ -1,3 +1,8 @@
+"""app.api.routers.admin_router（管理者向けユーザー/プロジェクト/ログイン履歴API）の
+ルーティング定義・依存関係配線・各エンドポイント関数がservice層へ引数を委譲する挙動に対する単体テスト。
+DB接続はAsyncMock(spec=AsyncSession)で模擬し、実DBには接続しない。
+"""
+
 from datetime import datetime, timezone
 from inspect import signature
 from unittest.mock import AsyncMock
@@ -24,16 +29,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def _current_admin() -> CurrentUser:
+	"""adminロールを持つ検証用CurrentUser（操作者/actor）を作る。"""
 	return CurrentUser(id=uuid4(), username="admin", role="admin", is_active=True, email_verified_at=None)
 
 
 def _request(request_id: str = "request-123") -> Request:
+	"""request.state.request_idを設定した検証用のASGIリクエストを組み立てる。
+
+	Args:
+		request_id: request.state.request_idに設定する監査ログ用の相関ID。
+
+	Returns:
+		指定したrequest_idを持つRequestインスタンス。
+	"""
 	request = Request({"type": "http", "method": "PATCH", "path": "/"})
 	request.state.request_id = request_id
 	return request
 
 
 def _user_detail() -> AdminUserDetailResponse:
+	"""admin_user_serviceの戻り値を模擬する、検証用のAdminUserDetailResponseを作る。"""
 	now = datetime.now(timezone.utc)
 	return AdminUserDetailResponse(
 		id=uuid4(),
@@ -49,6 +64,11 @@ def _user_detail() -> AdminUserDetailResponse:
 
 
 def _routes() -> dict[tuple[str, str], APIRoute]:
+	"""admin_router配下の全APIRouteを(パス, HTTPメソッド)をキーにした辞書へまとめる。
+
+	Returns:
+		(path, method)をキー、APIRouteを値とする辞書。
+	"""
 	return {
 		(route.path, method): route
 		for route in admin_router.router.routes
@@ -58,6 +78,10 @@ def _routes() -> dict[tuple[str, str], APIRoute]:
 
 
 def test_admin_router_registers_contracts() -> None:
+	"""admin_routerが登録する7エンドポイント（ユーザー一覧・ロール変更・状態変更・強制ログアウト・
+	プロジェクト一覧・プロジェクト無効化・ログイン履歴一覧）それぞれについて、期待するパス・
+	HTTPメソッド・response_model・status_codeの組み合わせと過不足なく一致することを検証する。
+	"""
 	routes = _routes()
 	expected = {
 		("/api/admin/users", "GET"): (AdminUserListResponse, None),
@@ -77,6 +101,10 @@ def test_admin_router_registers_contracts() -> None:
 
 
 def test_admin_router_applies_admin_and_csrf_dependencies() -> None:
+	"""admin_router配下の全エンドポイントがrequire_admin依存を持つこと、
+	状態変更を伴うメソッド（PATCH/POST/DELETE）にはverify_origin・verify_csrfも
+	配線されている一方、それ以外（GET）には配線されていないことを検証する。
+	"""
 	for route in admin_router.router.routes:
 		if not isinstance(route, APIRoute):
 			continue
@@ -91,6 +119,9 @@ def test_admin_router_applies_admin_and_csrf_dependencies() -> None:
 
 
 def test_main_registers_admin_router() -> None:
+	"""app.mainの実アプリのOpenAPIスキーマに、admin_routerの代表的なパスが登録されていることを検証する
+	（admin_routerがinclude_routerされていることの確認）。
+	"""
 	from app.main import app
 
 	routes = set(app.openapi()["paths"])
@@ -102,6 +133,9 @@ def test_main_registers_admin_router() -> None:
 
 @pytest.mark.asyncio
 async def test_list_admin_users_forwards_query_and_db(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""list_admin_usersが、受け取ったquery・dbをそのままadmin_user_service.list_usersへ渡し、
+	戻り値をそのまま返すことを検証する。
+	"""
 	query = AdminUserListQuery(page=3, per_page=7, q="taro", role="admin", is_active=False)
 	db = AsyncMock(spec=AsyncSession)
 	service = AsyncMock(
@@ -117,6 +151,9 @@ async def test_list_admin_users_forwards_query_and_db(monkeypatch: pytest.Monkey
 
 @pytest.mark.asyncio
 async def test_patch_admin_user_role_forwards_path_payload_actor_and_db(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""patch_admin_user_roleが、パスパラメータのuser_id・リクエストボディのrole・操作者(actor)・db、
+	および監査ログ用のrequest_idをadmin_user_service.change_roleへ正しく渡し、戻り値をそのまま返すことを検証する。
+	"""
 	user_id = uuid4()
 	actor = _current_admin()
 	db = AsyncMock(spec=AsyncSession)
@@ -133,6 +170,9 @@ async def test_patch_admin_user_role_forwards_path_payload_actor_and_db(monkeypa
 
 @pytest.mark.asyncio
 async def test_patch_admin_user_status_forwards_path_payload_actor_and_db(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""patch_admin_user_statusが、パスパラメータのuser_id・リクエストボディのis_active・操作者(actor)・db、
+	および監査ログ用のrequest_idをadmin_user_service.change_statusへ正しく渡し、戻り値をそのまま返すことを検証する。
+	"""
 	user_id = uuid4()
 	actor = _current_admin()
 	db = AsyncMock(spec=AsyncSession)
@@ -149,6 +189,9 @@ async def test_patch_admin_user_status_forwards_path_payload_actor_and_db(monkey
 
 @pytest.mark.asyncio
 async def test_post_admin_user_force_logout_returns_no_content(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""post_admin_user_force_logoutが、user_id・actor・db・request_idをadmin_user_service.force_logoutへ
+	渡したうえで、ステータス204・空ボディのResponseを返すことを検証する。
+	"""
 	user_id = uuid4()
 	actor = _current_admin()
 	db = AsyncMock(spec=AsyncSession)
@@ -165,6 +208,9 @@ async def test_post_admin_user_force_logout_returns_no_content(monkeypatch: pyte
 
 @pytest.mark.asyncio
 async def test_list_admin_projects_forwards_query_and_db(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""list_admin_projectsが、受け取ったquery・dbをそのままadmin_project_service.list_projectsへ渡し、
+	戻り値をそのまま返すことを検証する。
+	"""
 	query = AdminProjectListQuery(page=2, per_page=5, q="cerberus")
 	db = AsyncMock(spec=AsyncSession)
 	service = AsyncMock(
@@ -180,6 +226,9 @@ async def test_list_admin_projects_forwards_query_and_db(monkeypatch: pytest.Mon
 
 @pytest.mark.asyncio
 async def test_delete_admin_project_returns_no_content(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""delete_admin_projectが、project_id・actor・db・request_idをadmin_project_service.deactivate_projectへ
+	渡したうえで、ステータス204・空ボディのResponseを返すことを検証する。
+	"""
 	project_id = uuid4()
 	actor = _current_admin()
 	db = AsyncMock(spec=AsyncSession)
@@ -196,6 +245,9 @@ async def test_delete_admin_project_returns_no_content(monkeypatch: pytest.Monke
 
 @pytest.mark.asyncio
 async def test_list_admin_login_history_forwards_all_paging_filters(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""list_admin_login_historyが、ページング・検索語・ログイン方式・成否・作成日時範囲を含む
+	全フィルタ条件のqueryをそのままadmin_login_history_service.searchへ渡し、戻り値をそのまま返すことを検証する。
+	"""
 	query = AdminLoginHistoryQuery(
 		page=4,
 		per_page=6,
@@ -220,6 +272,10 @@ async def test_list_admin_login_history_forwards_all_paging_filters(monkeypatch:
 
 
 def test_router_signatures_keep_query_and_path_parameters() -> None:
+	"""admin_router内の各エンドポイント関数のシグネチャが、期待するパラメータ名の集合
+	（パスパラメータ・query・request・actor・CSRF/Origin検証用のプレースホルダー引数・db）から
+	過不足なく一致していることを検証する（依存関係配線の意図しない変更を検知する）。
+	"""
 	for function_name, parameter_names in {
 		"list_admin_users": {"query", "user", "db"},
 		"patch_admin_user_role": {"user_id", "payload", "request", "actor", "_", "__csrf", "db"},

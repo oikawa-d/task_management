@@ -1,3 +1,7 @@
+"""app.auth.jwt_auth.JwtAuthStrategy（JWTモードの認証：ログイン・認証・リフレッシュ・ログアウト・
+ロールバック）に対する単体テスト。
+"""
+
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -15,6 +19,11 @@ from starlette.requests import Request
 
 
 def _settings() -> BackendSettings:
+	"""JwtAuthStrategyの生成に必要な値を満たした最小限のBackendSettingsを作る。
+
+	Returns:
+		JWT秘密鍵・トークンTTL等を固定値で設定したBackendSettings。
+	"""
 	return BackendSettings(
 		database_url="postgresql+asyncpg://test:test@localhost/test",
 		jwt_secret_key="test-secret",
@@ -30,6 +39,15 @@ def _settings() -> BackendSettings:
 
 
 def _request(headers: list[tuple[bytes, bytes]] | None = None, cookie: str | None = None) -> Request:
+	"""検証用のASGIリクエストを組み立てる。
+
+	Args:
+		headers: 付与するHTTPヘッダー（authorization等）。
+		cookie: Cookieヘッダーの値（例: "cerberus_rt=old"）。Noneの場合は付与しない。
+
+	Returns:
+		指定した条件のRequestインスタンス。
+	"""
 	request_headers = headers or []
 	if cookie is not None:
 		request_headers = [*request_headers, (b"cookie", cookie.encode())]
@@ -37,14 +55,25 @@ def _request(headers: list[tuple[bytes, bytes]] | None = None, cookie: str | Non
 
 
 def _user() -> SimpleNamespace:
+	"""IDのみを持つダミーユーザーを作る。
+
+	Returns:
+		id属性のみを持つSimpleNamespace。
+	"""
 	return SimpleNamespace(id=uuid4())
 
 
 @pytest.mark.asyncio
 async def test_login_issues_access_token_and_refresh_cookie(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""ログイン成功時に、typ=accessのJWTアクセストークンが発行され、リフレッシュトークンがRedisへ1件保存され、
+	レスポンスのSet-CookieにリフレッシュCookie（cerberus_rt: HttpOnly・SameSite=strict・Path=/api/auth・
+	Max-Age=refresh_ttl_seconds）とCSRF Cookie（cerberus_csrf: 非HttpOnly・Path=/・同一Max-Age）の
+	両方が正しい属性で設定されることを検証する。
+	"""
 	stored: dict[str, tuple[object, object, int]] = {}
 
 	async def store(token: str, user_id: object, family_id: str, ttl: int) -> None:
+		"""redis_store.store_refresh_tokenの差し替え先。呼び出し引数をstoredへ記録するだけのスタブ。"""
 		stored[token] = (user_id, family_id, ttl)
 
 	monkeypatch.setattr("app.auth.jwt_auth.redis_store.store_refresh_token", store)
@@ -76,6 +105,10 @@ async def test_login_issues_access_token_and_refresh_cookie(monkeypatch: pytest.
 
 @pytest.mark.asyncio
 async def test_authenticate_accepts_only_valid_access_bearer_token() -> None:
+	"""Authorizationヘッダーのbearerトークンについて、typ=accessかつ有効期限内・正しい署名のトークンのみを
+	認証成功として扱い、typ不一致・期限切れ・署名不一致のトークンはいずれも認証コンテキストNoneを返す
+	（例外を送出しない）ことを検証する。
+	"""
 	strategy = JwtAuthStrategy(_settings())
 	user_id = uuid4()
 	token = jwt.encode(
@@ -136,11 +169,16 @@ async def test_authenticate_accepts_only_valid_access_bearer_token() -> None:
 
 @pytest.mark.asyncio
 async def test_refresh_rotates_token_and_reuse_revokes_family(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""正常なリフレッシュではトークンがローテーション（新トークン発行）されること、
+	そのローテーション済みトークンで再度リフレッシュ（=トークン再利用）を試みた場合は
+	トークンファミリー全体が失効し、TokenRevokedErrorが送出されることを検証する。
+	"""
 	user_id = uuid4()
 	metadata = RefreshData(user_id, datetime.now(UTC), "family-1")
 	rotated_token: list[str] = []
 
 	async def rotate(*args: object) -> RefreshData:
+		"""redis_store.rotate_refresh_tokenの差し替え先。呼び出されたトークンを記録し、正常系のRefreshDataを返す。"""
 		rotated_token.append(str(args[1]))
 		return metadata
 
@@ -160,15 +198,23 @@ async def test_refresh_rotates_token_and_reuse_revokes_family(monkeypatch: pytes
 
 
 async def _reused(*args: object, metadata: RefreshData) -> TokenReused:
+	"""redis_store.rotate_refresh_tokenの差し替え先。トークン再利用が検知された状況を模擬し、
+	該当メタデータのuser_id・family_idを持つTokenReusedを返す。
+	"""
 	return TokenReused(metadata.user_id, metadata.family_id)
 
 
 async def _revoke_family(*args: object) -> int:
+	"""redis_store.revoke_token_familyの差し替え先。失効件数1件を返す固定スタブ。"""
 	return 1
 
 
 @pytest.mark.asyncio
 async def test_refresh_without_cookie_is_invalid_and_logout_clears_cookies(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""リフレッシュCookieが無い状態でのリフレッシュはTokenInvalidErrorを送出すること、
+	また存在しない（Redis未検出の）リフレッシュトークンでのログアウトでも例外を送出せず、
+	リフレッシュCookieとCSRF Cookieの2つの削除用Set-Cookieが返されることを検証する。
+	"""
 	strategy = JwtAuthStrategy(_settings())
 	with pytest.raises(TokenInvalidError):
 		await strategy.refresh(_request(), Response())
@@ -181,6 +227,10 @@ async def test_refresh_without_cookie_is_invalid_and_logout_clears_cookies(monke
 
 @pytest.mark.asyncio
 async def test_rollback_login_revokes_refresh_token_and_clears_cookies(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""登録直後のロールバック時に、発行済みのリフレッシュトークンがRedisから失効され、
+	既にセットされていたリフレッシュ/CSRF Cookieに対して、Max-Age=0の削除用Set-Cookieが
+	新たに2件追加されることを検証する。
+	"""
 	revoke = AsyncMock()
 	monkeypatch.setattr("app.auth.jwt_auth.redis_store.revoke_refresh_token", revoke)
 	strategy = JwtAuthStrategy(_settings())
@@ -200,10 +250,14 @@ async def test_rollback_login_revokes_refresh_token_and_clears_cookies(monkeypat
 
 @pytest.mark.asyncio
 async def test_refresh_with_expired_or_deleted_token_is_revoked(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""ローテーション対象のリフレッシュトークンがRedis上に存在しない（期限切れ・削除済み）場合、
+	TokenRevokedErrorを送出することを検証する。
+	"""
 	monkeypatch.setattr("app.auth.jwt_auth.redis_store.rotate_refresh_token", lambda *args: _missing(args))
 	with pytest.raises(TokenRevokedError):
 		await JwtAuthStrategy(_settings()).refresh(_request(cookie="cerberus_rt=expired"), Response())
 
 
 async def _missing(token: object) -> RefreshData | None:
+	"""redis_store側の差し替え先。トークンが見つからない状況を模擬してNoneを返す固定スタブ。"""
 	return None
