@@ -96,7 +96,10 @@ class AdminUserListResponse(StrictSchema):
 
 
 class AdminUserDetailResponse(AdminUserItem):
-	"""`GET /api/admin/users/{user_id}` のレスポンスDTO。更新日時を追加で保持する。"""
+	"""`PATCH /api/admin/users/{user_id}/role` と `PATCH /api/admin/users/{user_id}/status` のレスポンスDTO。
+
+	更新日時を追加で保持する。
+	"""
 
 	updated_at: datetime
 
