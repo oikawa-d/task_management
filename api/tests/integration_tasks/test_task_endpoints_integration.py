@@ -1,3 +1,11 @@
+"""タスクAPI（`/api/tasks`・`/api/projects/{project_id}/tasks`・`/api/tasks/calendar`系）の
+router→service→repository→実DB結合テスト。
+
+`tests/integration_tasks/conftest.py`の`scenario`が作成するmember/outsiderの2ユーザーと
+プロジェクト・タスクを前提データとして使い、`authenticate`で実ログインしたうえで
+実際のHTTPリクエストを送る。DB/Redisはモックしない。
+"""
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -12,12 +20,17 @@ from tests.integration_tasks.conftest import TaskScenario, write_headers
 
 
 def _items(response) -> list[dict[str, object]]:
+	"""一覧系レスポンスのJSONから`items`配列を取り出す。"""
 	return response.json()["items"]
 
 
 async def test_task_crud_updates_position_and_rejects_stale_version(
 	client: TestClient, scenario: TaskScenario, authenticate
 ) -> None:
+	"""memberとして`POST /api/projects/{project_id}/tasks`で2件作成→`PATCH`でpositionを移動→
+	古いversionでの再PATCHは409 TASK_CONFLICT→`DELETE`で1件削除、という一連の操作を実APIで行い、
+	最終的なボード（`GET /api/projects/{project_id}/tasks`）のtodo列の並びが期待どおりになることを検証する。
+	"""
 	auth_headers = authenticate()
 
 	created = []
@@ -68,6 +81,10 @@ async def test_task_crud_updates_position_and_rejects_stale_version(
 async def test_task_comment_count_is_aggregated_for_detail_board_list_and_calendar(
 	client: TestClient, scenario: TaskScenario, authenticate, db_session: AsyncSession
 ) -> None:
+	"""既存タスクへ`POST /api/tasks/{task_id}/comments`で2件コメントを追加した後、
+	詳細（`GET /api/tasks/{task_id}`）・ボード・一覧（`GET /api/tasks`）・カレンダー
+	（`GET /api/tasks/calendar`）のいずれもcomment_count=2を返す（集計が一致する）ことを検証する。
+	"""
 	auth_headers = authenticate()
 	write_auth_headers = write_headers(client, auth_headers)
 	detail = client.get(f"/api/tasks/{scenario.member_project_task_id}", headers=auth_headers)
@@ -111,6 +128,9 @@ async def test_task_comment_count_is_aggregated_for_detail_board_list_and_calend
 async def test_list_tasks_member_scope_includes_shared_and_own_unassigned_only(
 	client: TestClient, scenario: TaskScenario, authenticate
 ) -> None:
+	"""memberとして`GET /api/tasks`を呼ぶと、自身のプロジェクトのタスク・共有プロジェクトのタスク・
+	自身のプロジェクト非アサインタスクは含み、outsider単独の非アサインタスクは含まないことを検証する。
+	"""
 	response = client.get("/api/tasks", params={"per_page": 20}, headers=authenticate())
 
 	assert response.status_code == 200, response.text
@@ -126,6 +146,9 @@ async def test_list_tasks_member_scope_includes_shared_and_own_unassigned_only(
 async def test_list_tasks_filters_by_status_using_database(
 	client: TestClient, scenario: TaskScenario, authenticate
 ) -> None:
+	"""`GET /api/tasks?status=done`が実DB側の絞り込みでstatus=doneのタスクのみを返し、
+	meta（page/per_page/total/total_pages）が件数どおりであることを検証する。
+	"""
 	response = client.get("/api/tasks", params={"status": "done", "per_page": 20}, headers=authenticate())
 
 	assert response.status_code == 200, response.text
@@ -135,6 +158,9 @@ async def test_list_tasks_filters_by_status_using_database(
 
 
 async def test_list_tasks_paginates_using_database(client: TestClient, scenario: TaskScenario, authenticate) -> None:
+	"""`GET /api/tasks`をper_page=2で2ページ取得し、実DB側のページネーションで重複無く
+	全件（可視な3件）を分割して返すこと、meta.page/per_pageが要求どおりであることを検証する。
+	"""
 	visible_ids = {
 		str(scenario.member_project_task_id),
 		str(scenario.shared_project_task_id),
@@ -162,6 +188,10 @@ async def test_list_tasks_paginates_using_database(client: TestClient, scenario:
 async def test_list_tasks_project_id_filter_scopes_to_unassigned_member_and_non_member(
 	client: TestClient, scenario: TaskScenario, authenticate
 ) -> None:
+	"""`GET /api/tasks?project_id=...`のフィルタが、`"null"`指定では非アサインタスクのみ、
+	memberが所属するプロジェクトIDでは当該プロジェクトのタスクのみを返し、memberが所属しない
+	private_projectのIDを指定すると404 NOT_FOUNDになることを検証する。
+	"""
 	auth_headers = authenticate()
 
 	unassigned = client.get("/api/tasks", params={"project_id": "null", "per_page": 20}, headers=auth_headers)
@@ -187,6 +217,9 @@ async def test_list_tasks_project_id_filter_scopes_to_unassigned_member_and_non_
 async def test_list_tasks_excludes_inactive_by_default_and_can_include_it(
 	client: TestClient, scenario: TaskScenario, authenticate, db_session: AsyncSession
 ) -> None:
+	"""実DBで対象タスクをis_active=falseにした後、既定の`GET /api/tasks`ではそのタスクを除外し、
+	`include_inactive=true`を付けると同タスクがis_active=falseのまま含まれることを検証する。
+	"""
 	await task_repository.set_active(db_session, scenario.member_project_task_id, False)
 	await db_session.commit()
 	auth_headers = authenticate()
@@ -202,6 +235,7 @@ async def test_list_tasks_excludes_inactive_by_default_and_can_include_it(
 
 
 def test_list_tasks_requires_authentication(client: TestClient) -> None:
+	"""Cookie/Authorizationヘッダ無しで`GET /api/tasks`を呼ぶと401 UNAUTHENTICATEDを返すことを検証する。"""
 	response = client.get("/api/tasks")
 
 	assert response.status_code == 401
@@ -210,6 +244,9 @@ def test_list_tasks_requires_authentication(client: TestClient) -> None:
 
 @pytest.mark.parametrize("invalid_project_id", ["not-a-uuid", "unassigned"])
 def test_list_tasks_rejects_invalid_project_filter(client: TestClient, authenticate, invalid_project_id: str) -> None:
+	"""`GET /api/tasks?project_id=...`にUUIDでも`"null"`でもない値（不正な文字列/`"unassigned"`）を
+	渡すと422を返すことを検証する。
+	"""
 	response = client.get(
 		"/api/tasks", params={"project_id": invalid_project_id, "per_page": 20}, headers=authenticate()
 	)
@@ -220,6 +257,9 @@ def test_list_tasks_rejects_invalid_project_filter(client: TestClient, authentic
 def test_list_tasks_returns_503_when_database_is_unavailable(
 	client: TestClient, scenario: TaskScenario, authenticate, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+	"""`task_repository.list_for_user_with_total`にOperationalErrorを注入し、`GET /api/tasks`が
+	503 SERVICE_UNAVAILABLEを返すこと（fail-close）を検証する。
+	"""
 	database_error = OperationalError("SELECT fn_list_tasks", {}, SimpleNamespace(sqlstate="08006"))
 	monkeypatch.setattr(task_repository, "list_for_user_with_total", AsyncMock(side_effect=database_error))
 

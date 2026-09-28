@@ -1,3 +1,11 @@
+"""コメントAPI結合テスト共通フィクスチャ。
+
+router→service→repository→実DB/実Redisまでを通しで検証するため、`app.main.app`を
+そのままTestClientへ渡し、DB/Redisをモックしない。`scenario`でプロジェクト・タスク・
+既存コメントを含む前提データを実DBに作成し、`authenticate`で実ログインしてCookie/JWTを
+取得する。テスト終了後は`scenario`・`auth_artifacts`がそれぞれ作成したDB行・Redisキーを削除する。
+"""
+
 from __future__ import annotations
 
 import uuid
@@ -27,6 +35,8 @@ PASSWORD = "Passw0rd!123"
 
 @dataclass(frozen=True)
 class CommentScenario:
+	"""`scenario`フィクスチャが実DBに作成した前提データ（ユーザー・プロジェクト・タスク・コメント）の識別子一式。"""
+
 	author_username: str
 	peer_username: str
 	outsider_username: str
@@ -42,6 +52,8 @@ class CommentScenario:
 
 @dataclass(frozen=True)
 class AuthArtifact:
+	"""`authenticate`で実ログインした結果、実Redisに作成された認証状態（後片付け対象）。"""
+
 	user_id: uuid.UUID
 	session_id: str | None = None
 	refresh_token: str | None = None
@@ -49,6 +61,13 @@ class AuthArtifact:
 
 @pytest.fixture
 def client(apply_migrations: None) -> Iterator[TestClient]:
+	"""実app・実DB・実Redisを使う結合テスト用クライアント。
+
+	`apply_migrations`（`api/tests/conftest.py`、実DBへスキーマ適用）に依存し、テストごとに
+	キャッシュ済みの認証戦略・DBエンジン・Redisクライアントをクリアしてから起動する。
+	TestClientの接続元をINET列（login_history.ip_address）へ書き込める有効なループバックIPに
+	固定し、初回リクエストの温め（`/api/health`）を行ってから返す。
+	"""
 	from app.auth.factory import get_auth_strategy
 	from app.db import get_db_engine, get_session_factory
 	from app.main import app
@@ -71,6 +90,13 @@ def client(apply_migrations: None) -> Iterator[TestClient]:
 
 @pytest_asyncio.fixture
 async def scenario(db_session: AsyncSession) -> Iterator[CommentScenario]:
+	"""コメントAPI結合テストの前提データを実DBに作成する。
+
+	author/peer/outsider/adminの4ユーザー、authorが所有するプロジェクト（peerをメンバー追加）、
+	コメント対象タスク（既存コメント1件付き）・後続テストがis_active=falseへ更新して使う
+	inactive_task_id（既存コメント1件付き）・プロジェクト非アサインのunassigned_task_idを作成する。
+	テスト終了後は作成したtasks/projects/usersを削除する。
+	"""
 	suffix = uuid.uuid4().hex[:12]
 	password_hash = hash_password(PASSWORD)
 	users = {}
@@ -129,6 +155,7 @@ async def scenario(db_session: AsyncSession) -> Iterator[CommentScenario]:
 
 @pytest_asyncio.fixture
 async def redis_conn() -> AsyncIterator[Redis]:
+	"""結合テストの検証・後始末専用の実Redisクライアント（アプリ内部のキャッシュ済みクライアントとは別）。"""
 	settings = get_backend_settings()
 	client = Redis.from_url(settings.redis_url, decode_responses=True)
 	try:
@@ -139,6 +166,9 @@ async def redis_conn() -> AsyncIterator[Redis]:
 
 @pytest_asyncio.fixture
 async def auth_artifacts(redis_conn: Redis) -> AsyncIterator[list[AuthArtifact]]:
+	"""`authenticate`が積み上げるログイン結果を保持し、テスト終了後に実Redisのsession/refresh
+	トークンをまとめて削除する（`user_sessions`/`user_refresh`集合からの除去も含む）。
+	"""
 	artifacts: list[AuthArtifact] = []
 	yield artifacts
 	settings = get_backend_settings()
@@ -157,7 +187,22 @@ async def auth_artifacts(redis_conn: Redis) -> AsyncIterator[list[AuthArtifact]]
 
 @pytest.fixture
 def authenticate(client: TestClient, scenario: CommentScenario, auth_artifacts: list[AuthArtifact]):
+	"""`scenario`のユーザーで実際に`/api/auth/login`を呼び、後続リクエスト用ヘッダを返す関数を提供する。
+
+	返す`_authenticate`は、AUTH_MODEに応じた成功ステータス（session=204/jwt=200）を確認したうえで、
+	sessionモードなら空辞書（Cookieで認証）、jwtモードならAuthorizationヘッダを返す。
+	発行したsession_id/refresh_tokenは`auth_artifacts`へ積み、テスト終了後に削除される。
+	"""
+
 	def _authenticate(user: str = "author") -> dict[str, str]:
+		"""`scenario`の指定ロール（author/peer/outsider/admin）でログインする。
+
+		Args:
+			user: `CommentScenario`の`{user}_username`に対応するロール名。
+
+		Returns:
+			dict[str, str]: 後続リクエストにそのまま付与できる認証ヘッダ（sessionモードでは空辞書）。
+		"""
 		username = getattr(scenario, f"{user}_username")
 		response = client.post(
 			"/api/auth/login",
@@ -182,6 +227,16 @@ def authenticate(client: TestClient, scenario: CommentScenario, auth_artifacts: 
 
 
 def write_headers(client: TestClient, auth_headers: dict[str, str]) -> dict[str, str]:
+	"""状態変更系リクエスト（POST/PATCH/DELETE）用に、認証ヘッダへOriginと（sessionモードのみ）
+	X-CSRF-Tokenを追加する。
+
+	Args:
+		client: 結合テスト用TestClient（CSRF Cookie参照に使う）。
+		auth_headers: `authenticate`が返した認証ヘッダ。
+
+	Returns:
+		dict[str, str]: リクエストにそのまま渡せるヘッダ一式。
+	"""
 	headers = {**auth_headers, "Origin": ALLOWED_ORIGIN}
 	if get_backend_settings().auth_mode == "session":
 		headers["X-CSRF-Token"] = client.cookies.get(get_backend_settings().cookie_name_csrf) or ""

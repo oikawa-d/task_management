@@ -1,3 +1,12 @@
+"""タスクAPI（`/api/tasks`・`/api/projects/{project_id}/tasks`系）結合テスト共通フィクスチャ。
+
+router→service→repository→実DB/実Redisまでを通しで検証するため、`app.main.app`をそのまま
+TestClientへ渡し、DB/Redisをモックしない。`scenario`でmember/outsiderの2ユーザーと、
+memberが所有するプロジェクト・memberとoutsiderが共有するプロジェクト・outsider単独の
+非公開プロジェクト・各種タスクを実DBに作成する。`authenticate`で実ログインしてCookie/JWTを
+取得する。テスト終了後は`scenario`が作成したtasks/projects/usersを削除する。
+"""
+
 from __future__ import annotations
 
 import uuid
@@ -19,6 +28,8 @@ PASSWORD = "Passw0rd!123"
 
 @dataclass(frozen=True)
 class TaskScenario:
+	"""`scenario`フィクスチャが実DBに作成した前提データ（ユーザー・プロジェクト・タスク）の識別子一式。"""
+
 	member_id: uuid.UUID
 	outsider_id: uuid.UUID
 	member_username: str
@@ -34,6 +45,13 @@ class TaskScenario:
 
 @pytest.fixture
 def client(apply_migrations: None) -> Iterator[TestClient]:
+	"""実app・実DB・実Redisを使う結合テスト用クライアント。
+
+	`apply_migrations`（`api/tests/conftest.py`、実DBへスキーマ適用）に依存し、テストごとに
+	キャッシュ済みの認証戦略・DBエンジン・Redisクライアントをクリアしてから起動する。
+	TestClientの接続元をINET列（login_history.ip_address）へ書き込める有効なループバックIPに
+	固定し、初回リクエストの温め（`/api/health`）を行ってから返す。
+	"""
 	from app.auth.factory import get_auth_strategy
 	from app.db import get_db_engine, get_session_factory
 	from app.main import app
@@ -57,6 +75,14 @@ def client(apply_migrations: None) -> Iterator[TestClient]:
 
 @pytest_asyncio.fixture
 async def scenario(db_session: AsyncSession) -> Iterator[TaskScenario]:
+	"""タスクAPI結合テストの前提データを実DBに作成する。
+
+	member/outsiderの2ユーザー、memberが所有するmember_project（自身のタスク1件付き）、
+	outsiderが所有しmemberをメンバー追加したshared_project（outsider作成のタスク1件付き）、
+	outsider単独のprivate_project（member非アサインで意図的にタスクは作らない）、
+	member/outsiderそれぞれのプロジェクト非アサインタスクを作成する。
+	テスト終了後は作成したtasks/projects/usersを削除する。
+	"""
 	suffix = uuid.uuid4().hex[:12]
 	member_id = await user_repository.create(
 		db_session, f"member_{suffix}", f"member_{suffix}@example.com", hash_password(PASSWORD)
@@ -115,7 +141,19 @@ async def scenario(db_session: AsyncSession) -> Iterator[TaskScenario]:
 
 @pytest.fixture
 def authenticate(client: TestClient, scenario: TaskScenario):
+	"""`scenario`のmember/outsiderで実際に`/api/auth/login`を呼び、後続リクエスト用ヘッダを返す
+	関数を提供する。sessionモードは空辞書（Cookieで認証）、jwtモードはAuthorizationヘッダを返す。
+	"""
+
 	def _authenticate(user: str = "member") -> dict[str, str]:
+		"""`scenario`のmember/outsiderいずれかでログインする。
+
+		Args:
+			user: `"member"`または`"member"以外`（outsider扱い）。
+
+		Returns:
+			dict[str, str]: 後続リクエストにそのまま付与できる認証ヘッダ（sessionモードでは空辞書）。
+		"""
 		username = scenario.member_username if user == "member" else scenario.outsider_username
 		response = client.post(
 			"/api/auth/login",
@@ -134,6 +172,16 @@ def authenticate(client: TestClient, scenario: TaskScenario):
 
 
 def write_headers(client: TestClient, auth_headers: dict[str, str]) -> dict[str, str]:
+	"""状態変更系リクエスト（POST/PATCH/DELETE）用に、認証ヘッダへOriginと（sessionモードのみ）
+	X-CSRF-Tokenを追加する。
+
+	Args:
+		client: 結合テスト用TestClient（CSRF Cookie参照に使う）。
+		auth_headers: `authenticate`が返した認証ヘッダ。
+
+	Returns:
+		dict[str, str]: リクエストにそのまま渡せるヘッダ一式。
+	"""
 	headers = {**auth_headers, "Origin": ALLOWED_ORIGIN}
 	if get_backend_settings().auth_mode == "session":
 		headers["X-CSRF-Token"] = client.cookies.get(get_backend_settings().cookie_name_csrf) or ""

@@ -134,10 +134,25 @@ async def created_user_ids(db_session: AsyncSession) -> AsyncIterator[list[uuid.
 
 
 def unique_suffix() -> str:
+	"""結合テスト間でusername/emailが衝突しないよう、呼び出しごとに一意な短い文字列を生成する。
+
+	Returns:
+		str: UUID4を16進化し先頭12文字に切り詰めた識別子。
+	"""
 	return uuid.uuid4().hex[:12]
 
 
 def register_payload(username: str, email: str, *, password: str = _REGISTER_PASSWORD) -> dict[str, str]:
+	"""`/api/auth/register`へ送る有効なリクエストボディを組み立てる。
+
+	Args:
+		username: 登録するusername。
+		email: 登録するemail。
+		password: password/password_confirmに設定する値（既定は本モジュール共通のテスト用パスワード）。
+
+	Returns:
+		dict[str, str]: register APIのバリデーションを通過する固定の氏名・生年月日を含むペイロード。
+	"""
 	return {
 		"username": username,
 		"email": email,
