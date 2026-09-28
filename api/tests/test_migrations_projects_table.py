@@ -1,3 +1,5 @@
+"""Migrations Projects Tableテスト。"""
+
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
@@ -25,6 +27,7 @@ async def _create_project(db: AsyncSession, owner_id: str, name: str = "proj") -
 
 
 async def test_projects_default_is_active_true(db_session: AsyncSession) -> None:
+	"""test_projects_default_is_active_true。"""
 	owner_id = await _create_user(db_session, "owner1")
 
 	row = (
@@ -42,6 +45,7 @@ async def test_projects_default_is_active_true(db_session: AsyncSession) -> None
 
 
 async def test_ck_projects_period_rejects_end_before_start(db_session: AsyncSession) -> None:
+	"""test_ck_projects_period_rejects_end_before_start。"""
 	owner_id = await _create_user(db_session, "owner2")
 
 	with pytest.raises(DBAPIError):
@@ -55,6 +59,7 @@ async def test_ck_projects_period_rejects_end_before_start(db_session: AsyncSess
 
 
 async def test_ck_projects_period_allows_partial_or_null(db_session: AsyncSession) -> None:
+	"""test_ck_projects_period_allows_partial_or_null。"""
 	owner_id = await _create_user(db_session, "owner3")
 
 	await db_session.execute(
@@ -71,6 +76,7 @@ async def test_ck_projects_period_allows_partial_or_null(db_session: AsyncSessio
 
 
 async def test_projects_owner_restrict_prevents_user_delete(db_session: AsyncSession) -> None:
+	"""test_projects_owner_restrict_prevents_user_delete。"""
 	owner_id = await _create_user(db_session, "owner4")
 	await _create_project(db_session, owner_id, "p4")
 
@@ -79,6 +85,7 @@ async def test_projects_owner_restrict_prevents_user_delete(db_session: AsyncSes
 
 
 async def test_project_deactivation_does_not_cascade(db_session: AsyncSession) -> None:
+	"""test_project_deactivation_does_not_cascade。"""
 	owner_id = await _create_user(db_session, "owner5")
 	project_id = await _create_project(db_session, owner_id, "p5")
 	await db_session.execute(
@@ -115,6 +122,7 @@ async def test_project_deactivation_does_not_cascade(db_session: AsyncSession) -
 
 
 async def test_trg_projects_set_updated_at(db_session: AsyncSession) -> None:
+	"""test_trg_projects_set_updated_at。"""
 	owner_id = await _create_user(db_session, "owner13")
 	project_id = await _create_project(db_session, owner_id, "p13")
 	await db_session.commit()

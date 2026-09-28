@@ -1,3 +1,5 @@
+"""Repository Adminテスト。"""
+
 import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -17,6 +19,7 @@ async def _make_admin(db: AsyncSession, username: str) -> uuid.UUID:
 
 
 async def test_list_users_filters_by_query_role_and_is_active(db_session: AsyncSession) -> None:
+	"""test_list_users_filters_by_query_role_and_is_active。"""
 	admin_id = await _make_admin(db_session, "admin-list1")
 	member_id = await user_repository.create(db_session, "member-list1", "member-list1@example.com", "hash")
 	inactive_id = await user_repository.create(db_session, "inactive-list1", "inactive-list1@example.com", "hash")
@@ -37,6 +40,7 @@ async def test_list_users_filters_by_query_role_and_is_active(db_session: AsyncS
 
 
 async def test_list_projects_filters_by_query_and_is_active(db_session: AsyncSession) -> None:
+	"""test_list_projects_filters_by_query_and_is_active。"""
 	owner_id = await user_repository.create(db_session, "owner-list1", "owner-list1@example.com", "hash")
 	active_id = await project_repository.create(db_session, owner_id, "Alpha Project", None, None, None)
 	inactive_id = await project_repository.create(db_session, owner_id, "Beta Project", None, None, None)
@@ -58,6 +62,7 @@ async def test_list_projects_filters_by_query_and_is_active(db_session: AsyncSes
 
 
 async def test_list_login_history_filters_by_user_method_and_success(db_session: AsyncSession) -> None:
+	"""test_list_login_history_filters_by_user_method_and_success。"""
 	user_id = await user_repository.create(db_session, "hist-user1", "hist-user1@example.com", "hash")
 	other_id = await user_repository.create(db_session, "hist-user2", "hist-user2@example.com", "hash")
 	await login_history_repository.create(db_session, user_id, "hist-user1", "session", None, None, True, None)
@@ -88,6 +93,7 @@ async def test_list_login_history_filters_by_user_method_and_success(db_session:
 
 
 async def test_list_login_history_filters_by_created_at_range(db_session: AsyncSession) -> None:
+	"""test_list_login_history_filters_by_created_at_range。"""
 	user_id = await user_repository.create(db_session, "hist-range1", "hist-range1@example.com", "hash")
 	await login_history_repository.create(db_session, user_id, "hist-range1", "session", None, None, True, None)
 	await db_session.execute(
@@ -123,6 +129,7 @@ async def test_list_login_history_filters_by_created_at_range(db_session: AsyncS
 
 
 async def test_update_user_role_self_modification_raises_p0007(db_session: AsyncSession) -> None:
+	"""test_update_user_role_self_modification_raises_p0007。"""
 	admin_id = await _make_admin(db_session, "self-role1")
 
 	with pytest.raises(DBAPIError) as exc_info:
@@ -131,6 +138,7 @@ async def test_update_user_role_self_modification_raises_p0007(db_session: Async
 
 
 async def test_update_user_role_last_admin_raises_p0008(db_session: AsyncSession) -> None:
+	"""test_update_user_role_last_admin_raises_p0008。"""
 	actor_id = await user_repository.create(db_session, "actor-role1", "actor-role1@example.com", "hash")
 	last_admin_id = await _make_admin(db_session, "last-admin-role1")
 
@@ -140,6 +148,7 @@ async def test_update_user_role_last_admin_raises_p0008(db_session: AsyncSession
 
 
 async def test_update_user_role_succeeds_when_another_admin_remains(db_session: AsyncSession) -> None:
+	"""test_update_user_role_succeeds_when_another_admin_remains。"""
 	actor_id = await _make_admin(db_session, "actor-role2")
 	target_id = await _make_admin(db_session, "target-role2")
 
@@ -150,6 +159,7 @@ async def test_update_user_role_succeeds_when_another_admin_remains(db_session: 
 
 
 async def test_update_user_status_self_modification_raises_p0007(db_session: AsyncSession) -> None:
+	"""test_update_user_status_self_modification_raises_p0007。"""
 	admin_id = await _make_admin(db_session, "self-status1")
 
 	with pytest.raises(DBAPIError) as exc_info:
@@ -158,6 +168,7 @@ async def test_update_user_status_self_modification_raises_p0007(db_session: Asy
 
 
 async def test_update_user_status_last_admin_raises_p0008(db_session: AsyncSession) -> None:
+	"""test_update_user_status_last_admin_raises_p0008。"""
 	actor_id = await user_repository.create(db_session, "actor-status1", "actor-status1@example.com", "hash")
 	last_admin_id = await _make_admin(db_session, "last-admin-status1")
 
@@ -167,6 +178,7 @@ async def test_update_user_status_last_admin_raises_p0008(db_session: AsyncSessi
 
 
 async def test_update_user_status_succeeds_when_another_admin_remains(db_session: AsyncSession) -> None:
+	"""test_update_user_status_succeeds_when_another_admin_remains。"""
 	actor_id = await _make_admin(db_session, "actor-status2")
 	target_id = await _make_admin(db_session, "target-status2")
 
@@ -181,6 +193,7 @@ async def test_update_user_status_succeeds_when_another_admin_remains(db_session
 
 
 async def test_deactivate_project_toggles_is_active(db_session: AsyncSession) -> None:
+	"""test_deactivate_project_toggles_is_active。"""
 	owner_id = await user_repository.create(db_session, "owner-deact1", "owner-deact1@example.com", "hash")
 	project_id = await project_repository.create(db_session, owner_id, "P", None, None, None)
 
@@ -196,6 +209,7 @@ async def test_deactivate_project_toggles_is_active(db_session: AsyncSession) ->
 
 
 async def test_concurrent_role_demotion_of_two_admins_only_one_succeeds(db_session: AsyncSession) -> None:
+	"""test_concurrent_role_demotion_of_two_admins_only_one_succeeds。"""
 	admin_a = await _make_admin(db_session, "concurrent-role-a")
 	admin_b = await _make_admin(db_session, "concurrent-role-b")
 	actor_id = await user_repository.create(
@@ -240,6 +254,7 @@ async def test_concurrent_role_demotion_of_two_admins_only_one_succeeds(db_sessi
 
 
 async def test_concurrent_status_deactivation_of_two_admins_only_one_succeeds(db_session: AsyncSession) -> None:
+	"""test_concurrent_status_deactivation_of_two_admins_only_one_succeeds。"""
 	admin_a = await _make_admin(db_session, "concurrent-status-a")
 	admin_b = await _make_admin(db_session, "concurrent-status-b")
 	actor_id = await user_repository.create(

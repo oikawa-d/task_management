@@ -1,3 +1,5 @@
+"""Migrations Auth Tablesテスト。"""
+
 import re
 from pathlib import Path
 
@@ -24,6 +26,7 @@ def _login_history_design_comments() -> tuple[str, dict[str, str]]:
 
 
 async def test_users_table_created_with_default_role_and_active(db_session: AsyncSession) -> None:
+	"""test_users_table_created_with_default_role_and_active。"""
 	result = await db_session.execute(
 		text(
 			"INSERT INTO users (username, email, password_hash) "
@@ -74,6 +77,7 @@ async def test_users_email_accepts_254_characters_and_rejects_255(db_session: As
 
 
 async def test_users_username_uniqueness_is_case_insensitive(db_session: AsyncSession) -> None:
+	"""test_users_username_uniqueness_is_case_insensitive。"""
 	await db_session.execute(
 		text("INSERT INTO users (username, email, password_hash) VALUES ('Bob', 'b1@example.com', 'h')")
 	)
@@ -85,6 +89,7 @@ async def test_users_username_uniqueness_is_case_insensitive(db_session: AsyncSe
 
 
 async def test_users_role_check_constraint_rejects_invalid_value(db_session: AsyncSession) -> None:
+	"""test_users_role_check_constraint_rejects_invalid_value。"""
 	with pytest.raises(DBAPIError):
 		await db_session.execute(
 			text(
@@ -95,6 +100,7 @@ async def test_users_role_check_constraint_rejects_invalid_value(db_session: Asy
 
 
 async def test_oauth_accounts_cascade_delete_on_user_delete(db_session: AsyncSession) -> None:
+	"""test_oauth_accounts_cascade_delete_on_user_delete。"""
 	user_id = (
 		await db_session.execute(
 			text(
@@ -119,6 +125,7 @@ async def test_oauth_accounts_cascade_delete_on_user_delete(db_session: AsyncSes
 
 
 async def test_login_history_user_id_set_null_on_user_delete(db_session: AsyncSession) -> None:
+	"""test_login_history_user_id_set_null_on_user_delete。"""
 	user_id = (
 		await db_session.execute(
 			text(
@@ -146,6 +153,7 @@ async def test_login_history_user_id_set_null_on_user_delete(db_session: AsyncSe
 
 
 async def test_users_updated_at_trigger_updates_timestamp(db_session: AsyncSession) -> None:
+	"""test_users_updated_at_trigger_updates_timestamp。"""
 	created = (
 		(
 			await db_session.execute(
@@ -176,6 +184,7 @@ async def test_users_updated_at_trigger_updates_timestamp(db_session: AsyncSessi
 
 
 async def test_login_history_failure_reason_consistency_check(db_session: AsyncSession) -> None:
+	"""test_login_history_failure_reason_consistency_check。"""
 	with pytest.raises(DBAPIError):
 		await db_session.execute(
 			text(
@@ -186,6 +195,7 @@ async def test_login_history_failure_reason_consistency_check(db_session: AsyncS
 
 
 async def test_login_history_column_comments_match_design(db_session: AsyncSession) -> None:
+	"""test_login_history_column_comments_match_design。"""
 	expected_table_comment, expected_column_comments = _login_history_design_comments()
 	table_comment = (
 		await db_session.execute(text("SELECT obj_description('login_history'::regclass, 'pg_class')"))

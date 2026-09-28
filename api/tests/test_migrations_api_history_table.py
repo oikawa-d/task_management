@@ -1,3 +1,5 @@
+"""Migrations Api History Tableテスト。"""
+
 import uuid
 
 import pytest
@@ -17,6 +19,7 @@ async def _insert_success(db: AsyncSession, request_id: uuid.UUID) -> None:
 
 
 async def test_api_history_request_id_is_unique(db_session: AsyncSession) -> None:
+	"""test_api_history_request_id_is_unique。"""
 	request_id = uuid.uuid4()
 	await _insert_success(db_session, request_id)
 
@@ -25,6 +28,7 @@ async def test_api_history_request_id_is_unique(db_session: AsyncSession) -> Non
 
 
 async def test_api_history_status_check_rejects_invalid_value(db_session: AsyncSession) -> None:
+	"""test_api_history_status_check_rejects_invalid_value。"""
 	with pytest.raises(DBAPIError):
 		await db_session.execute(
 			text(
@@ -36,6 +40,7 @@ async def test_api_history_status_check_rejects_invalid_value(db_session: AsyncS
 
 
 async def test_api_history_status_consistency_rejects_success_with_error_status_code(db_session: AsyncSession) -> None:
+	"""test_api_history_status_consistency_rejects_success_with_error_status_code。"""
 	with pytest.raises(DBAPIError):
 		await db_session.execute(
 			text(
@@ -47,6 +52,7 @@ async def test_api_history_status_consistency_rejects_success_with_error_status_
 
 
 async def test_api_history_error_row_requires_error_code_or_detail(db_session: AsyncSession) -> None:
+	"""test_api_history_error_row_requires_error_code_or_detail。"""
 	with pytest.raises(DBAPIError):
 		await db_session.execute(
 			text(
@@ -58,6 +64,7 @@ async def test_api_history_error_row_requires_error_code_or_detail(db_session: A
 
 
 async def test_api_history_duration_ms_non_negative_check(db_session: AsyncSession) -> None:
+	"""test_api_history_duration_ms_non_negative_check。"""
 	with pytest.raises(DBAPIError):
 		await db_session.execute(
 			text(
@@ -69,6 +76,7 @@ async def test_api_history_duration_ms_non_negative_check(db_session: AsyncSessi
 
 
 async def test_api_history_user_id_set_null_on_user_delete(db_session: AsyncSession) -> None:
+	"""test_api_history_user_id_set_null_on_user_delete。"""
 	user_id = (
 		await db_session.execute(
 			text(

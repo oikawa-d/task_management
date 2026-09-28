@@ -1,3 +1,5 @@
+"""Migrationsテスト。"""
+
 import logging
 import os
 from pathlib import Path
@@ -132,10 +134,12 @@ def _reset_schema():
 
 
 def test_migration_upgrade_head_succeeds() -> None:
+	"""test_migration_upgrade_head_succeeds。"""
 	command.upgrade(_alembic_config(), "head")
 
 
 def test_migration_keeps_application_loggers_enabled() -> None:
+	"""test_migration_keeps_application_loggers_enabled。"""
 	application_logger = logging.getLogger("app.audit")
 	application_logger.disabled = False
 
@@ -145,12 +149,14 @@ def test_migration_keeps_application_loggers_enabled() -> None:
 
 
 def test_migration_pgcrypto_extension_enabled_after_upgrade() -> None:
+	"""test_migration_pgcrypto_extension_enabled_after_upgrade。"""
 	command.upgrade(_alembic_config(), "head")
 
 	assert _pgcrypto_installed() is True
 
 
 def test_migration_downgrade_full_chain() -> None:
+	"""test_migration_downgrade_full_chain。"""
 	cfg = _alembic_config()
 	command.upgrade(cfg, "head")
 
@@ -160,6 +166,7 @@ def test_migration_downgrade_full_chain() -> None:
 
 
 def test_migration_upgrade_downgrade_upgrade_roundtrip() -> None:
+	"""test_migration_upgrade_downgrade_upgrade_roundtrip。"""
 	cfg = _alembic_config()
 	command.upgrade(cfg, "head")
 	command.downgrade(cfg, "base")
@@ -170,6 +177,7 @@ def test_migration_upgrade_downgrade_upgrade_roundtrip() -> None:
 
 
 def test_login_history_comment_migration_downgrade_restores_previous_comment() -> None:
+	"""test_login_history_comment_migration_downgrade_restores_previous_comment。"""
 	cfg = _alembic_config()
 	command.upgrade(cfg, "head")
 
@@ -181,6 +189,7 @@ def test_login_history_comment_migration_downgrade_restores_previous_comment() -
 
 
 def test_notification_procedure_contract_is_restored_by_0023_downgrade() -> None:
+	"""test_notification_procedure_contract_is_restored_by_0023_downgrade。"""
 	cfg = _alembic_config()
 	command.upgrade(cfg, "head")
 	command.downgrade(cfg, "0022")
@@ -197,6 +206,7 @@ def test_notification_procedure_contract_is_restored_by_0023_downgrade() -> None
 
 
 def test_migration_0027_backfills_uppercase_failure_reason_to_lowercase() -> None:
+	"""test_migration_0027_backfills_uppercase_failure_reason_to_lowercase。"""
 	cfg = _alembic_config()
 	command.upgrade(cfg, "0025")
 	_insert_login_history_with_failure_reason("INVALID_CREDENTIALS")
@@ -208,6 +218,7 @@ def test_migration_0027_backfills_uppercase_failure_reason_to_lowercase() -> Non
 
 
 def test_migration_0027_downgrade_is_noop_and_keeps_lowercased_value() -> None:
+	"""test_migration_0027_downgrade_is_noop_and_keeps_lowercased_value。"""
 	cfg = _alembic_config()
 	command.upgrade(cfg, "0025")
 	_insert_login_history_with_failure_reason("EMAIL_NOT_VERIFIED")

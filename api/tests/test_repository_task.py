@@ -1,3 +1,5 @@
+"""Repository Taskテスト。"""
+
 import asyncio
 import uuid
 
@@ -16,6 +18,7 @@ async def _setup_project(db: AsyncSession, username: str) -> tuple[uuid.UUID, uu
 
 
 async def test_create_task_defaults_applied(db_session: AsyncSession) -> None:
+	"""test_create_task_defaults_applied。"""
 	owner_id, project_id = await _setup_project(db_session, "alice")
 
 	task_id = await task_repository.create(db_session, project_id, owner_id, None, "task1", None, "todo", None, None)
@@ -29,6 +32,7 @@ async def test_create_task_defaults_applied(db_session: AsyncSession) -> None:
 
 
 async def test_create_task_without_project_succeeds(db_session: AsyncSession) -> None:
+	"""test_create_task_without_project_succeeds。"""
 	owner_id = await user_repository.create(db_session, "bob", "bob@example.com", "hash")
 
 	task_id = await task_repository.create(db_session, None, owner_id, None, "task1", None, "todo", None, None)
@@ -39,6 +43,7 @@ async def test_create_task_without_project_succeeds(db_session: AsyncSession) ->
 
 
 async def test_create_task_position_increments_within_status(db_session: AsyncSession) -> None:
+	"""test_create_task_position_increments_within_status。"""
 	owner_id, project_id = await _setup_project(db_session, "carol")
 
 	id1 = await task_repository.create(db_session, project_id, owner_id, None, "t1", None, "todo", None, None)
@@ -51,6 +56,7 @@ async def test_create_task_position_increments_within_status(db_session: AsyncSe
 
 
 async def test_create_task_with_explicit_position_shifts_existing_tasks(db_session: AsyncSession) -> None:
+	"""test_create_task_with_explicit_position_shifts_existing_tasks。"""
 	owner_id, project_id = await _setup_project(db_session, "carol2")
 	id0 = await task_repository.create(db_session, project_id, owner_id, None, "t0", None, "todo", None, None)
 	id1 = await task_repository.create(db_session, project_id, owner_id, None, "t1", None, "todo", None, None)
@@ -67,6 +73,7 @@ async def test_create_task_with_explicit_position_shifts_existing_tasks(db_sessi
 
 
 async def test_create_task_with_inactive_assignee_raises_p0006(db_session: AsyncSession) -> None:
+	"""test_create_task_with_inactive_assignee_raises_p0006。"""
 	owner_id, project_id = await _setup_project(db_session, "dave2")
 	assignee_id = await user_repository.create(db_session, "inactive-assignee1", "ia1@example.com", "hash")
 
@@ -77,6 +84,7 @@ async def test_create_task_with_inactive_assignee_raises_p0006(db_session: Async
 
 
 async def test_update_task_with_inactive_assignee_raises_p0006(db_session: AsyncSession) -> None:
+	"""test_update_task_with_inactive_assignee_raises_p0006。"""
 	owner_id, project_id = await _setup_project(db_session, "dave3")
 	assignee_id = await user_repository.create(db_session, "inactive-assignee2", "ia2@example.com", "hash")
 	task_id = await task_repository.create(db_session, project_id, owner_id, None, "t1", None, "todo", None, None)
@@ -88,6 +96,7 @@ async def test_update_task_with_inactive_assignee_raises_p0006(db_session: Async
 
 
 async def test_update_task_version_conflict_raises_p0005(db_session: AsyncSession) -> None:
+	"""test_update_task_version_conflict_raises_p0005。"""
 	owner_id, project_id = await _setup_project(db_session, "dave")
 	task_id = await task_repository.create(db_session, project_id, owner_id, None, "t1", None, "todo", None, None)
 
@@ -96,6 +105,7 @@ async def test_update_task_version_conflict_raises_p0005(db_session: AsyncSessio
 
 
 async def test_update_task_success_increments_version(db_session: AsyncSession) -> None:
+	"""test_update_task_success_increments_version。"""
 	owner_id, project_id = await _setup_project(db_session, "erin")
 	task_id = await task_repository.create(db_session, project_id, owner_id, None, "t1", None, "todo", None, None)
 
@@ -108,6 +118,7 @@ async def test_update_task_success_increments_version(db_session: AsyncSession) 
 
 
 async def test_reorder_within_status_keeps_positions_contiguous(db_session: AsyncSession) -> None:
+	"""test_reorder_within_status_keeps_positions_contiguous。"""
 	owner_id, project_id = await _setup_project(db_session, "frank")
 	id0 = await task_repository.create(db_session, project_id, owner_id, None, "t0", None, "todo", None, None)
 	id1 = await task_repository.create(db_session, project_id, owner_id, None, "t1", None, "todo", None, None)
@@ -128,6 +139,7 @@ async def test_reorder_within_status_keeps_positions_contiguous(db_session: Asyn
 
 
 async def test_move_status_appends_to_tail_of_new_column(db_session: AsyncSession) -> None:
+	"""test_move_status_appends_to_tail_of_new_column。"""
 	owner_id, project_id = await _setup_project(db_session, "grace")
 	id0 = await task_repository.create(db_session, project_id, owner_id, None, "t0", None, "todo", None, None)
 	id1 = await task_repository.create(db_session, project_id, owner_id, None, "t1", None, "todo", None, None)
@@ -148,6 +160,7 @@ async def test_move_status_appends_to_tail_of_new_column(db_session: AsyncSessio
 
 
 async def test_deactivate_task_does_not_compact_positions(db_session: AsyncSession) -> None:
+	"""test_deactivate_task_does_not_compact_positions。"""
 	owner_id, project_id = await _setup_project(db_session, "heidi")
 	id0 = await task_repository.create(db_session, project_id, owner_id, None, "t0", None, "todo", None, None)
 	id1 = await task_repository.create(db_session, project_id, owner_id, None, "t1", None, "todo", None, None)
@@ -164,6 +177,7 @@ async def test_deactivate_task_does_not_compact_positions(db_session: AsyncSessi
 
 
 async def test_reactivate_task_restores_is_active(db_session: AsyncSession) -> None:
+	"""test_reactivate_task_restores_is_active。"""
 	owner_id, project_id = await _setup_project(db_session, "ivan")
 	task_id = await task_repository.create(db_session, project_id, owner_id, None, "t0", None, "todo", None, None)
 	await task_repository.set_active(db_session, task_id, False)
@@ -176,6 +190,7 @@ async def test_reactivate_task_restores_is_active(db_session: AsyncSession) -> N
 
 
 async def test_list_board_excludes_inactive_by_default(db_session: AsyncSession) -> None:
+	"""test_list_board_excludes_inactive_by_default。"""
 	owner_id, project_id = await _setup_project(db_session, "judy")
 	active_id = await task_repository.create(db_session, project_id, owner_id, None, "a", None, "todo", None, None)
 	inactive_id = await task_repository.create(db_session, project_id, owner_id, None, "b", None, "todo", None, None)
@@ -189,6 +204,7 @@ async def test_list_board_excludes_inactive_by_default(db_session: AsyncSession)
 
 
 async def test_advisory_lock_prevents_position_collision_under_concurrency(db_session: AsyncSession) -> None:
+	"""test_advisory_lock_prevents_position_collision_under_concurrency。"""
 	owner_id, project_id = await _setup_project(db_session, "karen")
 	await db_session.commit()
 
@@ -219,6 +235,7 @@ async def test_advisory_lock_prevents_position_collision_under_concurrency(db_se
 
 
 async def test_concurrent_status_moves_do_not_deadlock(db_session: AsyncSession) -> None:
+	"""test_concurrent_status_moves_do_not_deadlock。"""
 	owner_id, project_id = await _setup_project(db_session, "concurrent-move")
 	first_id = await task_repository.create(db_session, project_id, owner_id, None, "first", None, "todo", None, None)
 	second_id = await task_repository.create(db_session, project_id, owner_id, None, "second", None, "todo", None, None)

@@ -1,3 +1,5 @@
+"""Repository Api Historyテスト。"""
+
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -27,6 +29,7 @@ def _input(request_id: uuid.UUID, **overrides: object) -> ApiHistoryCreateInput:
 
 
 async def test_create_inserts_success_row(db_session: AsyncSession) -> None:
+	"""test_create_inserts_success_row。"""
 	request_id = uuid.uuid4()
 
 	await api_history_repository.create(db_session, _input(request_id))
@@ -38,6 +41,7 @@ async def test_create_inserts_success_row(db_session: AsyncSession) -> None:
 
 
 async def test_create_inserts_error_row_with_body_json(db_session: AsyncSession) -> None:
+	"""test_create_inserts_error_row_with_body_json。"""
 	request_id = uuid.uuid4()
 
 	await api_history_repository.create(
@@ -60,6 +64,7 @@ async def test_create_inserts_error_row_with_body_json(db_session: AsyncSession)
 
 
 async def test_create_uses_explicit_created_at_when_given(db_session: AsyncSession) -> None:
+	"""test_create_uses_explicit_created_at_when_given。"""
 	request_id = uuid.uuid4()
 	explicit_created_at = datetime.now(timezone.utc) - timedelta(days=1)
 
@@ -74,11 +79,13 @@ async def test_create_uses_explicit_created_at_when_given(db_session: AsyncSessi
 
 
 async def test_list_by_request_id_returns_none_when_not_found(db_session: AsyncSession) -> None:
+	"""test_list_by_request_id_returns_none_when_not_found。"""
 	history = await api_history_repository.list_by_request_id(db_session, uuid.uuid4())
 	assert history is None
 
 
 async def test_purge_api_history_deletes_expired_rows(db_session: AsyncSession) -> None:
+	"""test_purge_api_history_deletes_expired_rows。"""
 	old_request_id = uuid.uuid4()
 	recent_request_id = uuid.uuid4()
 	await db_session.execute(

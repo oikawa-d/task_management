@@ -1,3 +1,5 @@
+"""Migrations Batch History Tableテスト。"""
+
 import uuid
 
 import pytest
@@ -17,6 +19,7 @@ async def _start(db: AsyncSession, run_id: uuid.UUID) -> None:
 
 
 async def test_batch_history_run_id_is_unique(db_session: AsyncSession) -> None:
+	"""test_batch_history_run_id_is_unique。"""
 	run_id = uuid.uuid4()
 	await _start(db_session, run_id)
 
@@ -25,6 +28,7 @@ async def test_batch_history_run_id_is_unique(db_session: AsyncSession) -> None:
 
 
 async def test_batch_history_inprogress_requires_null_end(db_session: AsyncSession) -> None:
+	"""test_batch_history_inprogress_requires_null_end。"""
 	with pytest.raises(DBAPIError):
 		await db_session.execute(
 			text(
@@ -36,6 +40,7 @@ async def test_batch_history_inprogress_requires_null_end(db_session: AsyncSessi
 
 
 async def test_batch_history_complete_requires_no_error_fields(db_session: AsyncSession) -> None:
+	"""test_batch_history_complete_requires_no_error_fields。"""
 	with pytest.raises(DBAPIError):
 		await db_session.execute(
 			text(
@@ -47,6 +52,7 @@ async def test_batch_history_complete_requires_no_error_fields(db_session: Async
 
 
 async def test_batch_history_trigger_type_check_rejects_invalid_value(db_session: AsyncSession) -> None:
+	"""test_batch_history_trigger_type_check_rejects_invalid_value。"""
 	with pytest.raises(DBAPIError):
 		await db_session.execute(
 			text(
@@ -58,6 +64,7 @@ async def test_batch_history_trigger_type_check_rejects_invalid_value(db_session
 
 
 async def test_batch_history_ended_at_must_not_precede_started_at(db_session: AsyncSession) -> None:
+	"""test_batch_history_ended_at_must_not_precede_started_at。"""
 	with pytest.raises(DBAPIError):
 		await db_session.execute(
 			text(
@@ -69,6 +76,7 @@ async def test_batch_history_ended_at_must_not_precede_started_at(db_session: As
 
 
 async def test_trg_batch_history_set_updated_at(db_session: AsyncSession) -> None:
+	"""test_trg_batch_history_set_updated_at。"""
 	run_id = uuid.uuid4()
 	await _start(db_session, run_id)
 	await db_session.commit()

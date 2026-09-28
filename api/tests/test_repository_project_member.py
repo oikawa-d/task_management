@@ -1,3 +1,5 @@
+"""Repository Project Memberテスト。"""
+
 import pytest
 from app.core.exceptions import AlreadyMemberError
 from app.repository import project_member_repository, project_repository, task_repository, user_repository
@@ -7,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def test_owner_is_registered_as_member_on_project_creation(db_session: AsyncSession) -> None:
+	"""test_owner_is_registered_as_member_on_project_creation。"""
 	owner_id = await user_repository.create(db_session, "alice", "alice@example.com", "hash")
 	project_id = await project_repository.create(db_session, owner_id, "P", None, None, None)
 
@@ -18,6 +21,7 @@ async def test_owner_is_registered_as_member_on_project_creation(db_session: Asy
 
 
 async def test_add_member_duplicate_raises_already_member(db_session: AsyncSession) -> None:
+	"""test_add_member_duplicate_raises_already_member。"""
 	owner_id = await user_repository.create(db_session, "bob", "bob@example.com", "hash")
 	invitee_id = await user_repository.create(db_session, "invitee1", "invitee1@example.com", "hash")
 	project_id = await project_repository.create(db_session, owner_id, "P", None, None, None)
@@ -28,6 +32,7 @@ async def test_add_member_duplicate_raises_already_member(db_session: AsyncSessi
 
 
 async def test_exists_true_for_member_false_for_non_member(db_session: AsyncSession) -> None:
+	"""test_exists_true_for_member_false_for_non_member。"""
 	owner_id = await user_repository.create(db_session, "carol", "carol@example.com", "hash")
 	stranger_id = await user_repository.create(db_session, "stranger1", "stranger1@example.com", "hash")
 	project_id = await project_repository.create(db_session, owner_id, "P", None, None, None)
@@ -37,6 +42,7 @@ async def test_exists_true_for_member_false_for_non_member(db_session: AsyncSess
 
 
 async def test_list_members_includes_inactive_members(db_session: AsyncSession) -> None:
+	"""test_list_members_includes_inactive_members。"""
 	owner_id = await user_repository.create(db_session, "inactive_owner", "inactive-owner@example.com", "hash")
 	member_id = await user_repository.create(db_session, "inactive_member", "inactive-member@example.com", "hash")
 	project_id = await project_repository.create(db_session, owner_id, "P", None, None, None)
@@ -49,6 +55,7 @@ async def test_list_members_includes_inactive_members(db_session: AsyncSession) 
 
 
 async def test_remove_owner_returns_p0004(db_session: AsyncSession) -> None:
+	"""test_remove_owner_returns_p0004。"""
 	owner_id = await user_repository.create(db_session, "dave", "dave@example.com", "hash")
 	project_id = await project_repository.create(db_session, owner_id, "P", None, None, None)
 
@@ -58,6 +65,7 @@ async def test_remove_owner_returns_p0004(db_session: AsyncSession) -> None:
 
 
 async def test_remove_member_nullifies_assigned_tasks(db_session: AsyncSession) -> None:
+	"""test_remove_member_nullifies_assigned_tasks。"""
 	owner_id = await user_repository.create(db_session, "erin", "erin@example.com", "hash")
 	member_id = await user_repository.create(db_session, "member1", "member1@example.com", "hash")
 	project_id = await project_repository.create(db_session, owner_id, "P", None, None, None)
@@ -75,6 +83,7 @@ async def test_remove_member_nullifies_assigned_tasks(db_session: AsyncSession) 
 
 
 async def test_search_candidates_excludes_existing_members(db_session: AsyncSession) -> None:
+	"""test_search_candidates_excludes_existing_members。"""
 	owner_id = await user_repository.create(db_session, "frank", "frank@example.com", "hash")
 	candidate_id = await user_repository.create(db_session, "candidate_zzz", "candidate_zzz@example.com", "hash")
 	project_id = await project_repository.create(db_session, owner_id, "P", None, None, None)
@@ -89,6 +98,7 @@ async def test_search_candidates_excludes_existing_members(db_session: AsyncSess
 
 
 async def test_search_candidates_excludes_inactive_users(db_session: AsyncSession) -> None:
+	"""test_search_candidates_excludes_inactive_users。"""
 	owner_id = await user_repository.create(db_session, "gina", "gina@example.com", "hash")
 	inactive_id = await user_repository.create(db_session, "inactive_candidate", "inactive@example.com", "hash")
 	project_id = await project_repository.create(db_session, owner_id, "P", None, None, None)
@@ -100,6 +110,7 @@ async def test_search_candidates_excludes_inactive_users(db_session: AsyncSessio
 
 
 async def test_search_candidates_matches_display_name_prefix(db_session: AsyncSession) -> None:
+	"""test_search_candidates_matches_display_name_prefix。"""
 	owner_id = await user_repository.create(db_session, "hannah", "hannah@example.com", "hash")
 	candidate_id = await user_repository.create(db_session, "display_candidate", "display@example.com", "hash")
 	project_id = await project_repository.create(db_session, owner_id, "P", None, None, None)

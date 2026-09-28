@@ -1,3 +1,5 @@
+"""Alembic Revision Historyテスト。"""
+
 import ast
 import re
 from pathlib import Path
@@ -42,6 +44,7 @@ def _down_revision(path: Path) -> str | None:
 
 
 def test_migration_filename_prefix_matches_revision_id() -> None:
+	"""test_migration_filename_prefix_matches_revision_id。"""
 	violations: list[str] = []
 	seen_revisions: dict[str, Path] = {}
 
@@ -64,6 +67,7 @@ def test_migration_filename_prefix_matches_revision_id() -> None:
 
 
 def test_migration_history_has_single_head() -> None:
+	"""test_migration_history_has_single_head。"""
 	config = Config()
 	config.set_main_option("script_location", str(VERSIONS_DIR.parent))
 
@@ -71,6 +75,7 @@ def test_migration_history_has_single_head() -> None:
 
 
 def test_migration_history_is_a_contiguous_single_chain() -> None:
+	"""test_migration_history_is_a_contiguous_single_chain。"""
 	records = []
 	for path in sorted(VERSIONS_DIR.glob("*.py")):
 		match = REVISION_FILENAME_PATTERN.fullmatch(path.name)
@@ -92,6 +97,7 @@ def test_migration_history_is_a_contiguous_single_chain() -> None:
 
 
 def test_migration_filename_naming_convention_is_documented() -> None:
+	"""test_migration_filename_naming_convention_is_documented。"""
 	document = MIGRATION_DOCUMENT.read_text(encoding="utf-8")
 
 	assert "ファイル名の4桁接頭辞は `revision` ID と一致させる" in document

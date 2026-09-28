@@ -1,3 +1,5 @@
+"""Repository Projectテスト。"""
+
 import uuid
 from datetime import datetime, timezone
 
@@ -13,6 +15,7 @@ async def _create_owner(db: AsyncSession, username: str) -> uuid.UUID:
 
 
 async def test_create_project_registers_owner_as_member(db_session: AsyncSession) -> None:
+	"""test_create_project_registers_owner_as_member。"""
 	owner_id = await _create_owner(db_session, "alice")
 
 	project_id = await project_repository.create(db_session, owner_id, "Project A", "desc", None, None)
@@ -28,11 +31,13 @@ async def test_create_project_registers_owner_as_member(db_session: AsyncSession
 
 
 async def test_get_by_id_not_found_returns_none(db_session: AsyncSession) -> None:
+	"""test_get_by_id_not_found_returns_none。"""
 	project = await project_repository.get_by_id(db_session, uuid.uuid4())
 	assert project is None
 
 
 async def test_is_member_true_for_member_admin_false_for_stranger(db_session: AsyncSession) -> None:
+	"""test_is_member_true_for_member_admin_false_for_stranger。"""
 	owner_id = await _create_owner(db_session, "judy")
 	stranger_id = await user_repository.create(db_session, "stranger2", "stranger2@example.com", "hash")
 	admin_id = await user_repository.create(db_session, "admin2", "admin2@example.com", "hash")
@@ -45,6 +50,7 @@ async def test_is_member_true_for_member_admin_false_for_stranger(db_session: As
 
 
 async def test_create_project_invalid_period_raises_p0009(db_session: AsyncSession) -> None:
+	"""test_create_project_invalid_period_raises_p0009。"""
 	owner_id = await _create_owner(db_session, "bob")
 	start = datetime(2026, 2, 1, tzinfo=timezone.utc)
 	end = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -55,6 +61,7 @@ async def test_create_project_invalid_period_raises_p0009(db_session: AsyncSessi
 
 
 async def test_update_project_changes_fields(db_session: AsyncSession) -> None:
+	"""test_update_project_changes_fields。"""
 	owner_id = await _create_owner(db_session, "carol")
 	project_id = await project_repository.create(db_session, owner_id, "Project C", "old", None, None)
 
@@ -67,6 +74,7 @@ async def test_update_project_changes_fields(db_session: AsyncSession) -> None:
 
 
 async def test_update_project_invalid_period_raises_p0009(db_session: AsyncSession) -> None:
+	"""test_update_project_invalid_period_raises_p0009。"""
 	owner_id = await _create_owner(db_session, "dave")
 	project_id = await project_repository.create(db_session, owner_id, "Project D", None, None, None)
 	start = datetime(2026, 2, 1, tzinfo=timezone.utc)
@@ -78,6 +86,7 @@ async def test_update_project_invalid_period_raises_p0009(db_session: AsyncSessi
 
 
 async def test_set_active_deactivates_and_reactivates_project(db_session: AsyncSession) -> None:
+	"""test_set_active_deactivates_and_reactivates_project。"""
 	owner_id = await _create_owner(db_session, "erin")
 	project_id = await project_repository.create(db_session, owner_id, "Project E", None, None, None)
 
@@ -93,6 +102,7 @@ async def test_set_active_deactivates_and_reactivates_project(db_session: AsyncS
 
 
 async def test_list_for_user_scoped_to_membership_with_counts(db_session: AsyncSession) -> None:
+	"""test_list_for_user_scoped_to_membership_with_counts。"""
 	from app.repository import task_repository
 
 	owner_id = await _create_owner(db_session, "frank")
@@ -116,6 +126,7 @@ async def test_list_for_user_scoped_to_membership_with_counts(db_session: AsyncS
 
 
 async def test_list_for_user_include_inactive(db_session: AsyncSession) -> None:
+	"""test_list_for_user_include_inactive。"""
 	owner_id = await _create_owner(db_session, "heidi")
 	project_id = await project_repository.create(db_session, owner_id, "Project H", None, None, None)
 	await project_repository.set_active(db_session, project_id, False)
@@ -143,6 +154,7 @@ async def test_list_for_user_include_inactive_excludes_project_owned_by_other_us
 
 
 async def test_list_for_user_applies_paging_and_returns_total_count(db_session: AsyncSession) -> None:
+	"""test_list_for_user_applies_paging_and_returns_total_count。"""
 	owner_id = await _create_owner(db_session, "paged-owner")
 	for suffix in ("1", "2", "3"):
 		await project_repository.create(db_session, owner_id, f"Paged project {suffix}", None, None, None)
@@ -154,6 +166,7 @@ async def test_list_for_user_applies_paging_and_returns_total_count(db_session: 
 
 
 async def test_create_project_converts_timezone_aware_period_to_utc(db_session: AsyncSession) -> None:
+	"""test_create_project_converts_timezone_aware_period_to_utc。"""
 	from zoneinfo import ZoneInfo
 
 	owner_id = await _create_owner(db_session, "period-owner")
@@ -169,6 +182,7 @@ async def test_create_project_converts_timezone_aware_period_to_utc(db_session: 
 
 
 async def test_list_for_user_admin_sees_all_projects(db_session: AsyncSession) -> None:
+	"""test_list_for_user_admin_sees_all_projects。"""
 	owner_id = await _create_owner(db_session, "ivan")
 	await project_repository.create(db_session, owner_id, "Project I", None, None, None)
 
