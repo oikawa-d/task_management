@@ -1,3 +1,15 @@
+"""プロジェクトメンバー管理(member_service・メンバーAPI)の実DB(PostgreSQL)結合テスト。
+
+member_serviceの候補検索・追加・一覧・削除のライフサイクル、メンバーAPIの
+認可境界(owner/member/admin/outsider)、DBエラー時のロールバックを、実DBセッションと
+実際のHTTP経路(TestClient)を通して検証する。
+
+ファイル名の`test_z_`接頭辞について: 各テストは一意なユーザー名・プロジェクトを
+自ら作成するため他テストの結果には依存しないが、実DB接続を要する結合テストであり、
+他のservice単体テストと同じプロセスでモック状態が混在しないよう、実DB結合テスト群
+(test_z_*)としてまとめて実行順・実行グループを制御する対象に区別している。
+"""
+
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -19,6 +31,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 
 async def test_project_member_lifecycle_uses_database_contract(db_session: AsyncSession) -> None:
+	"""実DBセッションを用いて、候補検索(search_candidates)・メンバー追加・一覧取得・
+	削除、およびオーナーは削除できない(OwnerCannotBeRemovedError)という制約までの
+	一連のライフサイクルが、実際のDB契約と整合して動作することを検証する。
+	"""
 	owner_id = await user_repository.create(db_session, "member-lifecycle-owner", "member-owner@example.com", "hash")
 	member_id = await user_repository.create(db_session, "member-lifecycle-user", "member-user@example.com", "hash")
 	candidate_id = await user_repository.create(
@@ -46,6 +62,7 @@ async def test_project_member_lifecycle_uses_database_contract(db_session: Async
 
 
 async def _create_router_user(db: AsyncSession, username: str, role: str = "member") -> UUID:
+	"""実DBに指定ユーザー名・ロールでユーザーを1件作成し、そのIDを返す。"""
 	user_id = await user_repository.create(db, username, f"{username}@example.com", "hash")
 	if role != "member":
 		await db.execute(text("UPDATE users SET role = :role WHERE id = :user_id"), {"role": role, "user_id": user_id})
@@ -53,6 +70,7 @@ async def _create_router_user(db: AsyncSession, username: str, role: str = "memb
 
 
 def _access_token(user_id: UUID) -> str:
+	"""指定ユーザーIDをsubに持つ、有効期限900秒のアクセストークン(JWT)を発行する。"""
 	settings = get_backend_settings()
 	now = datetime.now(UTC)
 	return security.encode_jwt(
@@ -64,7 +82,15 @@ def _access_token(user_id: UUID) -> str:
 
 @pytest.fixture
 def api_client():
+	"""実DBセッションとJWT認証を組み込んだFastAPIアプリ(app.main.app)のTestClientを提供する
+	フィクスチャ。get_db_session・get_auth_strategyの依存性を実DB向けにオーバーライドし、
+	テスト終了時にoverrideをクリアする(専用エンジンの破棄含めた後片付けあり)。
+	"""
+
 	async def override_db_session():
+		"""get_db_sessionの依存性オーバーライド用に、専用のDBエンジンから新規セッションを
+		生成して提供するジェネレータ。使用後はエンジンを破棄する。
+		"""
 		engine = create_async_engine(get_backend_settings().database_url)
 		factory = async_sessionmaker(bind=engine, expire_on_commit=False)
 		try:
@@ -81,6 +107,7 @@ def api_client():
 
 
 def _auth(user_id: UUID) -> dict[str, str]:
+	"""指定ユーザーのアクセストークンを含むAuthorizationヘッダー辞書を生成する。"""
 	return {"Authorization": f"Bearer {_access_token(user_id)}"}
 
 
@@ -88,6 +115,13 @@ def _auth(user_id: UUID) -> dict[str, str]:
 async def test_project_member_api_enforces_authentication_and_role_boundaries(
 	db_session: AsyncSession, api_client: TestClient
 ) -> None:
+	"""実DBとJWT認証を通したメンバー関連APIで、owner/member/adminはメンバー一覧を
+	参照できるがoutsiderは404になること、候補検索(member-candidates)はowner/adminのみ
+	許可されmemberは403・outsiderは404になること、メンバー追加はowner/adminのみ許可
+	され重複追加は409(ALREADY_MEMBER)になること、メンバー削除はowner/adminのみ許可され
+	オーナー自身の削除は409(OWNER_CANNOT_BE_REMOVED)になること、未認証は
+	UNAUTHENTICATEDになることを検証する。
+	"""
 	owner_id = await _create_router_user(db_session, "router-member-owner")
 	member_id = await _create_router_user(db_session, "router-member-member")
 	admin_id = await _create_router_user(db_session, "router-member-admin", "admin")
@@ -166,6 +200,10 @@ async def test_project_member_api_enforces_authentication_and_role_boundaries(
 async def test_project_member_api_rolls_back_real_insert_on_database_failure(
 	db_session: AsyncSession, api_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+	"""メンバー追加のINSERT自体は実DBに成功した後、後続処理で強制的にDBAPIErrorを
+	発生させた場合、APIが500を返し、実DB上にはメンバー行が残らない(rollbackされる)
+	ことを検証する。
+	"""
 	owner_id = await _create_router_user(db_session, "router-member-rollback-owner")
 	target_id = await _create_router_user(db_session, "router-member-rollback-target")
 	project_id = await project_repository.create(db_session, owner_id, "Rollback project", None, None, None)
@@ -173,6 +211,7 @@ async def test_project_member_api_rolls_back_real_insert_on_database_failure(
 	original_create = project_member_repository.create
 
 	async def create_then_fail(*args: object, **kwargs: object) -> None:
+		"""実際のproject_member_repository.createを呼んだ後に必ずDBAPIErrorを送出するラッパー。"""
 		await original_create(*args, **kwargs)  # type: ignore[arg-type]
 		raise DBAPIError("forced member failure", {}, RuntimeError("forced"))
 
@@ -190,6 +229,10 @@ async def test_project_member_api_rolls_back_real_insert_on_database_failure(
 async def test_project_member_api_rolls_back_real_delete_on_database_failure(
 	db_session: AsyncSession, api_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+	"""メンバー削除のDELETE自体は実DBに成功した後、後続処理で強制的にDBAPIErrorを
+	発生させた場合、APIが500を返し、実DB上のメンバー行・そのメンバーへの
+	タスク割当がロールバックされて残ったままであることを検証する。
+	"""
 	owner_id = await _create_router_user(db_session, "router-member-delete-owner")
 	target_id = await _create_router_user(db_session, "router-member-delete-target")
 	project_id = await project_repository.create(db_session, owner_id, "Delete rollback project", None, None, None)
@@ -201,6 +244,7 @@ async def test_project_member_api_rolls_back_real_delete_on_database_failure(
 	original_delete = project_member_repository.delete
 
 	async def delete_then_fail(*args: object, **kwargs: object) -> None:
+		"""実際のproject_member_repository.deleteを呼んだ後に必ずDBAPIErrorを送出するラッパー。"""
 		await original_delete(*args, **kwargs)  # type: ignore[arg-type]
 		raise DBAPIError("forced member delete failure", {}, RuntimeError("forced"))
 

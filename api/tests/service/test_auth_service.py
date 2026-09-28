@@ -1,3 +1,10 @@
+"""app.service.auth_service（ユーザー登録・ログイン・ログアウト・トークンリフレッシュ）の単体テスト。
+
+DB・Redis・認証ストラテジー（session/JWT）・メール送信をすべてスタブ/モックに置き換え、
+正常系に加えてSQLState変換や接続断・Redis障害時のフェイルクローズ挙動、
+機微情報（パスワード・メールアドレス）がログへ漏えいしないことを検証する。
+"""
+
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -19,53 +26,72 @@ from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 
 class _FakeRequest:
+	"""FastAPIのRequestを模したスタブ。headers/client.host/stateのみをテストに必要な範囲で提供する。"""
+
 	def __init__(self, headers: dict[str, str] | None = None) -> None:
+		"""指定されたheadersと固定のクライアントIP・空のstateを持つリクエストスタブを初期化する。"""
 		self.headers = headers or {}
 		self.client = SimpleNamespace(host="203.0.113.10")
 		self.state = SimpleNamespace()
 
 
 class _FakeBackgroundTasks:
+	"""FastAPIのBackgroundTasksを模したスタブ。add_task呼び出しの記録のみ行い、実際には実行しない。"""
+
 	def __init__(self) -> None:
+		"""登録されたタスクを記録するための空リストを用意する。"""
 		self.tasks: list[tuple[object, tuple[object, ...]]] = []
 
 	def add_task(self, func: object, *args: object) -> None:
+		"""タスクを実行せず、呼び出された関数と引数の組をtasksへ記録する。"""
 		self.tasks.append((func, args))
 
 
 class _FakeStrategy:
+	"""session/JWTなど認証ストラテジーを模したスタブ。login/logout/rollback_loginの呼び出し履歴を記録する。"""
+
 	def __init__(self, mode: str = "session") -> None:
+		"""指定したauth_mode（既定はsession）と、各メソッドの呼び出し履歴を初期化する。"""
 		self.mode = mode
 		self.login_calls: list[object] = []
 		self.logout_calls = 0
 		self.rollback_calls: list[tuple[object, object]] = []
 
 	async def login(self, user: object, _request: object, _response: object) -> str:
+		"""ログイン処理を模し、呼び出されたuserを記録して固定の成功結果文字列を返す。"""
 		self.login_calls.append(user)
 		return "login-result"
 
 	async def logout(self, _request: object, _response: object) -> None:
+		"""ログアウト処理を模し、呼び出し回数のみをカウントする。"""
 		self.logout_calls += 1
 
 	async def rollback_login(self, user: object, result: object, _response: object) -> None:
+		"""ログイン後処理（login_history書き込み等）失敗時のロールバック呼び出しを記録する。"""
 		self.rollback_calls.append((user, result))
 
 
 class _RegisterDb:
+	"""DBセッションを模したスタブ。commit/rollback呼び出し順序を記録し、任意でcommit時に例外を送出できる。"""
+
 	def __init__(self, commit_error: Exception | None = None) -> None:
+		"""呼び出し履歴を空で初期化し、commit_errorが指定された場合はcommit時にその例外を送出するよう設定する。"""
 		self.calls: list[str] = []
 		self.commit_error = commit_error
 
 	async def commit(self) -> None:
+		"""commit呼び出しを記録し、commit_errorが設定されていればそれを送出する。"""
 		self.calls.append("db.commit")
 		if self.commit_error is not None:
 			raise self.commit_error
 
 	async def rollback(self) -> None:
+		"""rollback呼び出しを記録する。"""
 		self.calls.append("db.rollback")
 
 
 def _register_payload(**overrides: object) -> auth_service.RegisterRequest:
+	"""register用のRegisterRequestを既定値から生成する。overridesで一部フィールドを上書きできる。"""
 	values: dict[str, object] = {
 		"username": "taro",
 		"email": "taro@example.com",
@@ -82,6 +108,7 @@ def _register_payload(**overrides: object) -> auth_service.RegisterRequest:
 
 
 def _login_user(*, is_active: bool = True, verified: bool = True, password_hash: str | None = "hash"):
+	"""login用のユーザースタブ（SimpleNamespace）を生成する。is_active/verified/password_hashで各状態を切り替えられる。"""
 	return SimpleNamespace(
 		id=uuid4(),
 		username="taro",
@@ -93,6 +120,7 @@ def _login_user(*, is_active: bool = True, verified: bool = True, password_hash:
 
 
 async def test_register_creates_user_and_schedules_verification(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""重複が無い正常系でregisterを呼ぶと、平文パスワードを保存せずユーザーを作成し、メール確認発行まで行われることを検証する。"""
 	user_id = uuid4()
 	created = SimpleNamespace(id=user_id, email="taro@example.com")
 	monkeypatch.setattr(auth_service.user_repository, "get_by_login_identifier", AsyncMock(return_value=None))
@@ -142,6 +170,7 @@ async def test_register_emits_user_registered_structured_log(
 
 
 async def test_register_duplicate_username_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""既存ユーザー名と重複する場合にDuplicateUsernameErrorを送出し、user_repository.createが呼ばれないことを検証する。"""
 	monkeypatch.setattr(auth_service.user_repository, "get_by_login_identifier", AsyncMock(return_value=object()))
 	create_mock = AsyncMock()
 	monkeypatch.setattr(auth_service.user_repository, "create", create_mock)
@@ -153,6 +182,7 @@ async def test_register_duplicate_username_raises(monkeypatch: pytest.MonkeyPatc
 
 
 async def test_register_duplicate_email_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""既存メールアドレスと重複する場合にDuplicateEmailErrorが送出されることを検証する。"""
 	monkeypatch.setattr(auth_service.user_repository, "get_by_login_identifier", AsyncMock(return_value=None))
 	monkeypatch.setattr(auth_service.user_repository, "get_by_email", AsyncMock(return_value=object()))
 
@@ -167,6 +197,9 @@ async def test_register_duplicate_email_raises(monkeypatch: pytest.MonkeyPatch) 
 async def test_register_converts_sqlstate_to_conflict(
 	monkeypatch: pytest.MonkeyPatch, sqlstate: str, expected: type[Exception]
 ) -> None:
+	"""ストアドプロシージャがsqlstate P0001/P0002で失敗した場合、それぞれ重複ユーザー名/
+	重複メールの例外へ変換されrollbackされることを検証する。
+	"""
 	monkeypatch.setattr(auth_service.user_repository, "get_by_login_identifier", AsyncMock(return_value=None))
 	monkeypatch.setattr(auth_service.user_repository, "get_by_email", AsyncMock(return_value=None))
 	error = OperationalError("CALL sp_register_user", {}, SimpleNamespace(sqlstate=sqlstate))
@@ -180,6 +213,7 @@ async def test_register_converts_sqlstate_to_conflict(
 
 
 async def test_register_reraises_unknown_sqlstate(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""未知のsqlstate（P0009）はアプリ固有の例外に変換されず、元のDBAPIErrorがそのまま再送出されrollbackされることを検証する。"""
 	monkeypatch.setattr(auth_service.user_repository, "get_by_login_identifier", AsyncMock(return_value=None))
 	monkeypatch.setattr(auth_service.user_repository, "get_by_email", AsyncMock(return_value=None))
 	error = DBAPIError("CALL sp_register_user", {}, SimpleNamespace(sqlstate="P0009"))  # type: ignore[arg-type]
@@ -196,6 +230,9 @@ async def test_register_reraises_unknown_sqlstate(monkeypatch: pytest.MonkeyPatc
 async def test_record_login_attempt_converts_database_connection_failure_and_rolls_back(
 	monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+	"""_record_login_attempt内でcommit時に接続断（sqlstate 08006）が起きた場合、
+	ServiceUnavailableErrorへ変換されcommit後にrollbackされることを検証する。
+	"""
 	monkeypatch.setattr(auth_service.login_history_repository, "create", AsyncMock())
 	db = _RegisterDb(OperationalError("login history", {}, SimpleNamespace(sqlstate="08006")))
 
@@ -218,6 +255,7 @@ async def test_record_login_attempt_converts_database_connection_failure_and_rol
 async def test_register_converts_connection_sqlstate_to_service_unavailable(
 	monkeypatch: pytest.MonkeyPatch, sqlstate: str
 ) -> None:
+	"""register時のDB接続系エラー（08006/57P03）がServiceUnavailableErrorへ変換されrollbackされることを検証する。"""
 	monkeypatch.setattr(auth_service.user_repository, "get_by_login_identifier", AsyncMock(return_value=None))
 	monkeypatch.setattr(auth_service.user_repository, "get_by_email", AsyncMock(return_value=None))
 	error = OperationalError("CALL sp_register_user", {}, SimpleNamespace(sqlstate=sqlstate))
@@ -231,6 +269,7 @@ async def test_register_converts_connection_sqlstate_to_service_unavailable(
 
 
 async def test_login_success_records_history_and_resets_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""資格情報が正しい場合にストラテジーへログイン委譲し、login_historyを成功記録・Redis失敗カウントをリセットすることを検証する。"""
 	user = _login_user()
 	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
 	reset_mock = AsyncMock()
@@ -254,6 +293,7 @@ async def test_login_success_records_history_and_resets_failures(monkeypatch: py
 async def test_login_rolls_back_auth_state_when_history_write_fails(
 	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+	"""ログイン成功後にlogin_history書き込みが失敗した場合、ストラテジーのrollback_loginが呼ばれ、ServiceUnavailableErrorへ変換されログにパスワードが含まれないことを検証する。"""
 	user = _login_user()
 	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
 	monkeypatch.setattr(auth_service.redis_store, "reset_login_failure", AsyncMock())
@@ -280,6 +320,7 @@ async def test_login_rolls_back_auth_state_when_history_write_fails(
 async def test_login_returns_service_unavailable_when_auth_state_rollback_fails(
 	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+	"""history書き込み失敗後のrollback_login自体も失敗した場合、二重障害としてauth_state_revoke_failedがログされServiceUnavailableErrorが送出されることを検証する。"""
 	user = _login_user()
 	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
 	monkeypatch.setattr(auth_service.redis_store, "reset_login_failure", AsyncMock())
@@ -302,6 +343,7 @@ async def test_login_returns_service_unavailable_when_auth_state_rollback_fails(
 
 
 async def test_login_unknown_user_records_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""存在しないユーザー名でログインした場合にInvalidCredentialsErrorを送出し、Redis失敗カウント増加とuser_id=Noneでの失敗記録が行われることを検証する。"""
 	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
 	incr_mock = AsyncMock(return_value=1)
 	monkeypatch.setattr(auth_service.redis_store, "incr_login_failure", incr_mock)
@@ -321,6 +363,7 @@ async def test_login_unknown_user_records_failure(monkeypatch: pytest.MonkeyPatc
 
 
 async def test_login_wrong_password_records_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""パスワードが誤っている場合にInvalidCredentialsErrorを送出し、正しいuser_idとともに失敗理由invalid_credentialsが記録されることを検証する。"""
 	user = _login_user()
 	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
 	monkeypatch.setattr(auth_service.redis_store, "incr_login_failure", AsyncMock(return_value=1))
@@ -337,6 +380,10 @@ async def test_login_wrong_password_records_failure(monkeypatch: pytest.MonkeyPa
 
 
 async def test_login_oauth_only_account_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""password_hashが未設定のOAuth専用アカウントへパスワードログインを試みた場合、
+	InvalidCredentialsErrorが送出され、かつダミーハッシュでの検証(タイミング攻撃対策)が
+	実際に行われることを検証する。
+	"""
 	user = _login_user(password_hash=None)
 	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
 	monkeypatch.setattr(auth_service.redis_store, "incr_login_failure", AsyncMock(return_value=1))
@@ -344,6 +391,7 @@ async def test_login_oauth_only_account_is_rejected(monkeypatch: pytest.MonkeyPa
 	verify_calls: list[tuple[str, str]] = []
 
 	def _verify(plain: str, password_hash: str) -> bool:
+		"""verify_passwordの代わりに、呼び出し引数を記録して常にFalseを返すスタブ。"""
 		verify_calls.append((plain, password_hash))
 		return False
 
@@ -358,6 +406,10 @@ async def test_login_oauth_only_account_is_rejected(monkeypatch: pytest.MonkeyPa
 
 
 async def test_login_inactive_user_raises_after_password_check(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""パスワード自体は正しいが、アカウントが無効化(is_active=False)されている場合に
+	UserInactiveErrorが送出され、認証戦略のログイン処理が呼ばれず、
+	ログイン履歴のfailure_reasonが"user_inactive"になることを検証する。
+	"""
 	user = _login_user(is_active=False)
 	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
 	monkeypatch.setattr(auth_service.redis_store, "reset_login_failure", AsyncMock())
@@ -375,6 +427,10 @@ async def test_login_inactive_user_raises_after_password_check(monkeypatch: pyte
 
 
 async def test_login_unverified_email_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""パスワードは正しいがメールアドレスが未認証のユーザーがログインした場合、
+	EmailNotVerifiedErrorが送出され、ログイン履歴のfailure_reasonが
+	"email_not_verified"になることを検証する。
+	"""
 	user = _login_user(verified=False)
 	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
 	monkeypatch.setattr(auth_service.redis_store, "reset_login_failure", AsyncMock())
@@ -390,6 +446,9 @@ async def test_login_unverified_email_raises(monkeypatch: pytest.MonkeyPatch) ->
 
 
 async def test_login_rate_limited_before_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""ログイン失敗回数が上限に達している場合、ユーザー検索(get_by_login_identifier)を
+	一切呼び出す前にTooManyAttemptsErrorが送出されることを検証する。
+	"""
 	settings = auth_service.get_backend_settings()
 	monkeypatch.setattr(
 		auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=settings.login_max_attempts)
@@ -516,6 +575,11 @@ async def test_login_history_write_failure_on_account_state_path_is_logged(
 	caplog: pytest.LogCaptureFixture,
 	user: SimpleNamespace,
 ) -> None:
+	"""アカウント無効・メール未認証それぞれの拒否経路(パスワード検証後にアカウント状態で
+	弾かれる経路)でログイン履歴の書き込みが失敗した場合も、ServiceUnavailableErrorが
+	送出され、app.oauthロガーへlogin_history_write_failedイベントとして
+	user_id/login_method/failure_reasonが記録されることを検証する。
+	"""
 	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
 	monkeypatch.setattr(auth_service.redis_store, "reset_login_failure", AsyncMock())
 	monkeypatch.setattr(auth_service.user_repository, "get_by_login_identifier", AsyncMock(return_value=user))
@@ -539,6 +603,11 @@ async def test_login_history_write_failure_on_account_state_path_is_logged(
 async def test_login_fails_closed_when_user_lookup_raises(
 	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+	"""ユーザー検索がServiceUnavailableErrorを送出した場合、ログインはそのまま
+	ServiceUnavailableErrorとして失敗し(フェイルクローズ)、login_attemptログの
+	failure_reasonが"service_unavailable"となり、user_idはNoneで
+	入力されたユーザー名("ghost")がログに残らないことを検証する。
+	"""
 	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
 	monkeypatch.setattr(
 		auth_service.user_repository,
@@ -561,6 +630,10 @@ async def test_login_fails_closed_when_user_lookup_raises(
 async def test_login_propagates_non_connection_user_lookup_operational_error(
 	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+	"""ユーザー検索が接続エラー以外のsqlstate(40P01: デッドロック)を持つOperationalErrorを
+	送出した場合、ServiceUnavailableErrorへ変換せず元の例外をそのまま再送出し、
+	login_attemptログも出力しないことを検証する。
+	"""
 	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
 	monkeypatch.setattr(
 		auth_service.user_repository,
@@ -589,6 +662,11 @@ async def test_login_propagates_non_connection_user_lookup_operational_error(
 async def test_login_logs_and_fails_closed_for_connection_user_lookup_errors(
 	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, error: Exception
 ) -> None:
+	"""ユーザー検索がDB接続断・接続プールタイムアウト・切断など各種の接続系エラー
+	(InterfaceError/sqlstate 08006のOperationalError/SQLAlchemyTimeoutError/
+	DisconnectionError)を送出した場合、いずれもServiceUnavailableErrorへ変換されて
+	フェイルクローズすることを検証する。
+	"""
 	monkeypatch.setattr(auth_service.redis_store, "get_login_failure_count", AsyncMock(return_value=0))
 	monkeypatch.setattr(
 		auth_service.user_repository,
@@ -708,6 +786,7 @@ async def test_login_attempt_structured_log_emitted_on_failure(
 
 
 async def test_logout_delegates_to_strategy() -> None:
+	"""auth_service.logoutが認証戦略(strategy)のlogout処理へ委譲され、1回呼ばれることを検証する。"""
 	strategy = _FakeStrategy()
 
 	await auth_service.logout(_FakeRequest(), SimpleNamespace(), strategy)  # type: ignore[arg-type]
@@ -716,6 +795,11 @@ async def test_logout_delegates_to_strategy() -> None:
 
 
 async def test_register_missing_user_after_insert_is_service_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""ユーザー作成(create)は成功したにもかかわらず、直後のget_by_idで
+	作成したはずのユーザーが取得できない(None)場合、ServiceUnavailableErrorが
+	送出され、メール確認トークンの発行(issue_email_verify_token)が
+	呼ばれないことを検証する。
+	"""
 	monkeypatch.setattr(auth_service.user_repository, "get_by_login_identifier", AsyncMock(return_value=None))
 	monkeypatch.setattr(auth_service.user_repository, "get_by_email", AsyncMock(return_value=None))
 	monkeypatch.setattr(auth_service.user_repository, "create", AsyncMock(return_value=uuid4()))
@@ -731,11 +815,19 @@ async def test_register_missing_user_after_insert_is_service_unavailable(monkeyp
 
 
 async def test_refresh_delegates_to_strategy() -> None:
+	"""auth_service.refreshが認証戦略(strategy)のrefresh処理へ委譲され、
+	その戻り値をそのまま返し、1回呼ばれることを検証する。
+	"""
+
 	class _RefreshStrategy:
+		"""refresh呼び出し回数を記録し固定文字列を返すダミー認証戦略。"""
+
 		def __init__(self) -> None:
+			"""呼び出し回数カウンタを0で初期化する。"""
 			self.calls = 0
 
 		async def refresh(self, _request: object, _response: object) -> str:
+			"""呼び出し回数を1増やし、固定文字列"refreshed"を返す。"""
 			self.calls += 1
 			return "refreshed"
 
@@ -748,8 +840,15 @@ async def test_refresh_delegates_to_strategy() -> None:
 
 
 async def test_refresh_propagates_not_supported_in_session_mode() -> None:
+	"""セッション認証モードの戦略がNotSupportedInModeErrorを送出する場合、
+	auth_service.refreshがその例外をそのまま伝播させることを検証する。
+	"""
+
 	class _SessionStrategy:
+		"""refreshが常にNotSupportedInModeErrorを送出するダミーのセッション認証戦略。"""
+
 		async def refresh(self, _request: object, _response: object) -> None:
+			"""セッション認証モードではリフレッシュ非対応であることを示す例外を送出する。"""
 			raise NotSupportedInModeError()
 
 	with pytest.raises(NotSupportedInModeError):

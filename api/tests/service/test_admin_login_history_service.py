@@ -1,3 +1,9 @@
+"""app.service.admin_login_history_service (管理者向けログイン履歴検索サービス)のテスト。
+
+admin_repositoryをモック化し、ユーザー紐付け・ページネーション・
+DB接続エラー時のフォールバック挙動を検証する。
+"""
+
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -15,6 +21,14 @@ from sqlalchemy.exc import OperationalError
 
 
 def _user(**overrides: object) -> User:
+	"""テスト用のUserモデルインスタンスを生成するヘルパー。
+
+	Args:
+		**overrides: デフォルト値に対して上書きしたいフィールドと値。
+
+	Returns:
+		上書き後の値で構築されたUserインスタンス。
+	"""
 	defaults: dict[str, object] = {
 		"id": uuid4(),
 		"username": "taro",
@@ -27,6 +41,14 @@ def _user(**overrides: object) -> User:
 
 
 def _history(**overrides: object) -> LoginHistory:
+	"""テスト用のLoginHistoryモデルインスタンスを生成するヘルパー。
+
+	Args:
+		**overrides: デフォルト値に対して上書きしたいフィールドと値。
+
+	Returns:
+		上書き後の値で構築されたLoginHistoryインスタンス。
+	"""
 	defaults: dict[str, object] = {
 		"id": uuid4(),
 		"user_id": uuid4(),
@@ -43,6 +65,14 @@ def _history(**overrides: object) -> LoginHistory:
 
 
 def _connection_error(statement: str = "x") -> OperationalError:
+	"""DB接続エラー(SQLSTATE 08006)を模したOperationalErrorを生成するヘルパー。
+
+	Args:
+		statement: エラーに紐付けるダミーのSQL文字列。
+
+	Returns:
+		SQLSTATEが接続エラーを示すOperationalErrorインスタンス。
+	"""
 	return OperationalError(statement, {}, SimpleNamespace(sqlstate="08006"))
 
 
@@ -50,6 +80,7 @@ def _connection_error(statement: str = "x") -> OperationalError:
 async def test_list_admin_login_history_null_user_for_unregistered_identifier(
 	monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+	"""未登録の識別子によるログイン失敗履歴(user_id=None)を検索した場合、対応するuserがNoneになることを検証する。"""
 	history = _history(user_id=None, success=False, failure_reason="user_not_found")
 	monkeypatch.setattr(
 		admin_repository, "list_login_history", AsyncMock(return_value=[AdminLoginHistoryListItem(history, 1)])
@@ -62,6 +93,10 @@ async def test_list_admin_login_history_null_user_for_unregistered_identifier(
 
 @pytest.mark.asyncio
 async def test_list_admin_login_history_returns_all_users(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""複数ユーザーの履歴を検索した場合、それぞれのユーザー情報(表示名を含む)が正しく紐付けられて返ることを検証する。
+
+	last_name/first_nameが未設定のユーザーでは、display_nameがusernameにフォールバックすることも確認する。
+	"""
 	user_a = _user()
 	user_b = _user(id=uuid4(), username="jiro", last_name=None, first_name=None)
 	history_a = _history(user_id=user_a.id)
@@ -89,6 +124,7 @@ async def test_list_admin_login_history_returns_all_users(monkeypatch: pytest.Mo
 
 @pytest.mark.asyncio
 async def test_list_admin_login_history_uses_user_info_from_list_query(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""list_login_historyが返す行に同梱されたユーザー情報がそのまま各itemのuserとして使われることを検証する。"""
 	user = _user()
 	rows = [AdminLoginHistoryListItem(_history(user_id=user.id), 3, user) for _ in range(3)]
 	monkeypatch.setattr(admin_repository, "list_login_history", AsyncMock(return_value=rows))
@@ -102,6 +138,10 @@ async def test_list_admin_login_history_uses_user_info_from_list_query(monkeypat
 async def test_list_admin_login_history_pagination_uses_total_count_from_window_function(
 	monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+	"""検索結果が1ページ分埋まる場合、list_login_historyが返す行に含まれる
+	ウィンドウ関数由来の総件数からmeta.totalを算出し、count_login_historyを
+	別途呼び出さないことを検証する。
+	"""
 	rows = [AdminLoginHistoryListItem(_history(user_id=None), 25) for _ in range(20)]
 	monkeypatch.setattr(admin_repository, "list_login_history", AsyncMock(return_value=rows))
 	count_login_history = AsyncMock()
@@ -119,6 +159,10 @@ async def test_list_admin_login_history_pagination_uses_total_count_from_window_
 async def test_list_admin_login_history_falls_back_to_count_when_page_is_empty(
 	monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+	"""指定ページの検索結果が0件の場合、list_login_historyの戻り値からは
+	総件数を算出できないため、count_login_historyを呼び出して総件数を
+	補完することを検証する。
+	"""
 	monkeypatch.setattr(admin_repository, "list_login_history", AsyncMock(return_value=[]))
 	monkeypatch.setattr(admin_repository, "count_login_history", AsyncMock(return_value=25))
 
@@ -130,6 +174,9 @@ async def test_list_admin_login_history_falls_back_to_count_when_page_is_empty(
 
 @pytest.mark.asyncio
 async def test_list_admin_login_history_invalid_date_range_rejected_by_schema() -> None:
+	"""AdminLoginHistoryQueryにfrom > toの日付範囲を渡した場合、スキーマのバリデーションで
+	ValueErrorが送出されることを検証する。
+	"""
 	now = datetime.now(timezone.utc)
 	with pytest.raises(ValueError):
 		AdminLoginHistoryQuery(**{"from": now, "to": now - timedelta(days=1)})
@@ -138,6 +185,9 @@ async def test_list_admin_login_history_invalid_date_range_rejected_by_schema() 
 @pytest.mark.asyncio
 @pytest.mark.asyncio
 async def test_list_admin_login_history_service_unavailable_on_db_error(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""list_login_historyがDB接続エラー(sqlstate 08006)を送出した場合、
+	ServiceUnavailableErrorへ変換されることを検証する。
+	"""
 	monkeypatch.setattr(admin_repository, "list_login_history", AsyncMock(side_effect=_connection_error()))
 
 	with pytest.raises(ServiceUnavailableError):

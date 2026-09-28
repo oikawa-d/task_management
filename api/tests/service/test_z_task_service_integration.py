@@ -24,10 +24,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 
 async def _create_user(db: AsyncSession, username: str) -> UUID:
+	"""実DBに指定ユーザー名でユーザーを1件作成し、そのIDを返す。"""
 	return await user_repository.create(db, username, f"{username}@example.com", "hash")
 
 
 def _access_token(user_id: UUID) -> str:
+	"""指定ユーザーIDをsubに持つ、有効期限900秒のアクセストークン(JWT)を発行する。"""
 	settings = get_backend_settings()
 	now = datetime.now(UTC)
 	return security.encode_jwt(
@@ -38,12 +40,22 @@ def _access_token(user_id: UUID) -> str:
 
 
 def _auth(user_id: UUID) -> dict[str, str]:
+	"""指定ユーザーのアクセストークンを含むAuthorizationヘッダー辞書を生成する。"""
 	return {"Authorization": f"Bearer {_access_token(user_id)}"}
 
 
 @pytest.fixture
 def api_client():
+	"""db_sessionとは別のDBエンジン/接続でリクエストを処理するFastAPIアプリの
+	TestClientを提供するフィクスチャ。get_db_session・get_auth_strategyの依存性を
+	実DB向けにオーバーライドし、テスト終了時にoverrideをクリアする
+	(専用エンジンの破棄含めた後片付けあり)。
+	"""
+
 	async def override_db_session():
+		"""get_db_sessionの依存性オーバーライド用に、専用のDBエンジンから新規セッションを
+		生成して提供するジェネレータ。使用後はエンジンを破棄する。
+		"""
 		engine = create_async_engine(get_backend_settings().database_url)
 		factory = async_sessionmaker(bind=engine, expire_on_commit=False)
 		try:
@@ -61,6 +73,10 @@ def api_client():
 
 @pytest.mark.asyncio
 async def test_task_api_persists_writes_after_http_response(db_session: AsyncSession, api_client: TestClient) -> None:
+	"""別接続のapi_client経由でタスクの作成・更新・削除(論理削除)を行った場合、
+	各操作がHTTPレスポンス返却前に実DBへcommit済みであり、別セッション(db_session)
+	からの読み戻しでその内容(タイトル・バージョン・is_active)が確認できることを検証する。
+	"""
 	owner_id = await _create_user(db_session, f"task-http-owner-{uuid4().hex[:8]}")
 	project_id = await project_repository.create(db_session, owner_id, "Task HTTP persistence", None, None, None)
 	await db_session.commit()
@@ -102,11 +118,16 @@ async def test_task_api_persists_writes_after_http_response(db_session: AsyncSes
 async def test_task_creation_rolls_back_when_post_write_verification_fails(
 	db_session: AsyncSession, api_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+	"""タスク作成のINSERT自体は実DBに成功した後、書き込み後の検証取得(get_by_id)が
+	DBAPIErrorで失敗した場合、APIが500を返し、実DB上にはタスク行が
+	1件も残らない(rollbackされる)ことを検証する。
+	"""
 	owner_id = await _create_user(db_session, f"task-create-rollback-{uuid4().hex[:8]}")
 	project_id = await project_repository.create(db_session, owner_id, "Task create rollback", None, None, None)
 	await db_session.commit()
 
 	async def failing_get_by_id(*_args: object, **_kwargs: object) -> None:
+		"""検証取得(task_service.task_repository.get_by_id)の代わりに必ずDBAPIErrorを送出するスタブ。"""
 		raise DBAPIError("forced task create verification failure", {}, RuntimeError("forced"))
 
 	monkeypatch.setattr(task_service.task_repository, "get_by_id", failing_get_by_id)
@@ -127,6 +148,10 @@ async def test_task_creation_rolls_back_when_post_write_verification_fails(
 async def test_task_update_rolls_back_when_post_write_verification_fails(
 	db_session: AsyncSession, api_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+	"""タスク更新のUPDATE自体は実DBに成功した後、書き込み後の検証取得(2回目の
+	get_by_id呼び出し)がDBAPIErrorで失敗した場合、APIが500を返し、実DB上の
+	タイトル・バージョンが更新前の値のまま残る(rollbackされる)ことを検証する。
+	"""
 	owner_id = await _create_user(db_session, f"task-update-rollback-{uuid4().hex[:8]}")
 	project_id = await project_repository.create(db_session, owner_id, "Task update rollback", None, None, None)
 	task_id = await task_repository.create(
@@ -138,6 +163,9 @@ async def test_task_update_rolls_back_when_post_write_verification_fails(
 	calls = {"count": 0}
 
 	async def flaky_get_by_id(db_: AsyncSession, task_id_: UUID) -> object:
+		"""1回目の呼び出しは実際のget_by_idへ委譲し、2回目以降(検証取得)は
+		必ずDBAPIErrorを送出するスタブ。
+		"""
 		calls["count"] += 1
 		if calls["count"] == 1:
 			return await original_get_by_id(db_, task_id_)

@@ -1,3 +1,10 @@
+"""Google OAuthログイン機能(app.service.oauth_service)の単体テスト。
+
+認可URL生成・PKCE検証・IDトークン検証・stateとhandoffのRedis連携・レート制限・
+ユーザー解決/新規作成・ログイン履歴記録・ロールバック処理を、実DB/Redis/HTTP通信を
+モックに差し替えて検証する。
+"""
+
 import base64
 import hashlib
 import json
@@ -33,6 +40,10 @@ from starlette.responses import Response
 
 
 def _settings(**overrides: object) -> BackendSettings:
+	"""テスト用の最小限の環境変数一式を持つBackendSettingsを組み立てる。
+
+	`overrides` で渡した値を既定値に上書きし、各テストで必要な設定差分だけを指定できるようにする。
+	"""
 	values: dict[str, object] = {
 		"database_url": "postgresql+asyncpg://test",
 		"jwt_secret_key": "jwt-secret",
@@ -48,36 +59,56 @@ def _settings(**overrides: object) -> BackendSettings:
 
 
 def _request(peer: str = "127.0.0.1", forwarded: str | None = None) -> Request:
+	"""クライアントIP判定に使うstarlette Requestを組み立てる。
+
+	`peer` を直接の接続元IP、`forwarded` を指定した場合は `X-Forwarded-For` ヘッダとして
+	付与し、プロキシ経由のIP解決ロジックをテストできるようにする。
+	"""
 	headers = [] if forwarded is None else [(b"x-forwarded-for", forwarded.encode())]
 	return Request({"type": "http", "method": "GET", "path": "/", "headers": headers, "client": (peer, 1)})
 
 
 @pytest.fixture(autouse=True)
 def _oauth_rate_limit_success(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""全テストで`redis_store.check_rate_limit`を常に許可(戻り値1)扱いにする自動適用fixture。
+
+	各テストがレート制限超過の分岐を明示的に検証したい場合は、
+	テスト側で改めて`monkeypatch.setattr`し直すことで上書きできる。monkeypatchは
+	テスト終了時に自動的に元へ戻るため、後片付け処理は不要。
+	"""
 	monkeypatch.setattr(auth_service.redis_store, "check_rate_limit", AsyncMock(return_value=1))
 
 
 class _HttpResponse:
+	"""OAuthプロバイダへのHTTPリクエストに対するダミーレスポンス。"""
+
 	def __init__(self, status_code: int, body: dict[str, object]) -> None:
+		"""ステータスコードとJSONボディを保持するダミーレスポンスを生成する。"""
 		self.status_code = status_code
 		self._body = body
 
 	def json(self) -> dict[str, object]:
+		"""保持しているレスポンスボディをそのまま返す。"""
 		return self._body
 
 
 class _OAuthHttpClient:
+	"""Google OAuthのトークン交換・userinfo・JWKS取得先を差し替えるスタブHTTPクライアント。"""
+
 	def __init__(self, token: dict[str, object], userinfo: dict[str, object], jwks: dict[str, object]) -> None:
+		"""トークンエンドポイント・userinfoエンドポイント・JWKSそれぞれの応答内容を保持する。"""
 		self.token = token
 		self.userinfo = userinfo
 		self.jwks = jwks
 		self.posted: list[tuple[str, dict[str, str]]] = []
 
 	async def post(self, url: str, *, data: dict[str, str]) -> _HttpResponse:
+		"""POST先URLと送信データを記録し、あらかじめ設定したトークン応答を返す。"""
 		self.posted.append((url, data))
 		return _HttpResponse(200, self.token)
 
 	async def get(self, url: str, *, headers: dict[str, str] | None = None) -> _HttpResponse:
+		"""アクセストークン付与ヘッダを検証しつつ、URLに応じてJWKSかuserinfoの応答を返す。"""
 		if headers is not None:
 			assert headers == {"Authorization": "Bearer access-token"}
 		return _HttpResponse(200, self.jwks if "certs" in url else self.userinfo)
@@ -93,6 +124,11 @@ def _signed_id_token(
 	expires_in: int = 60,
 	header_kid: str = "key-1",
 ) -> tuple[str, dict[str, object]]:
+	"""RS256で自己署名したGoogle風IDトークンと、それを検証できるJWKSを生成する。
+
+	`audience`・`azp`・`issuer`・`expires_in`・`header_kid` を差し替えることで、
+	正常系だけでなく不正なaud/azp/iss/exp/kidを持つIDトークンの検証失敗ケースも作成できる。
+	"""
 	private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 	public_jwk = json.loads(RSAAlgorithm.to_jwk(private_key.public_key()))
 	public_jwk["kid"] = "key-1"
@@ -117,6 +153,9 @@ def _signed_id_token(
 
 
 def test_normalize_redirect_to_rejects_external_and_protocol_relative_urls() -> None:
+	"""外部ドメイン・プロトコル相対URL・バックスラッシュ混入・改行注入・長すぎるパスを
+	すべて既定のリダイレクト先("/dashboard")へ丸め、相対パスのみを許可することを検証する。
+	"""
 	settings = _settings()
 
 	assert auth_service.normalize_redirect_to("/projects/1", settings) == "/projects/1"
@@ -131,6 +170,9 @@ def test_normalize_redirect_to_rejects_external_and_protocol_relative_urls() -> 
 
 
 def test_build_authorize_url_contains_contract_parameters() -> None:
+	"""認可URLにclient_id・scope・PKCEのcode_challenge/method・nonceが
+	契約通りのクエリパラメータとして含まれることを検証する。
+	"""
 	provider = GoogleOAuthProvider(_settings())
 	query = parse_qs(urlparse(provider.build_authorize_url("state", "challenge", "nonce")).query)
 
@@ -143,6 +185,9 @@ def test_build_authorize_url_contains_contract_parameters() -> None:
 
 @pytest.mark.asyncio
 async def test_provider_exchanges_code_with_pkce_parameters() -> None:
+	"""認可コード交換時、PKCEのcode_verifierを含む契約通りのパラメータで
+	トークンエンドポイントにPOSTし、応答のid_tokenを取得できることを検証する。
+	"""
 	settings = _settings()
 	client = _OAuthHttpClient({"id_token": "id", "access_token": "access-token"}, {}, {})
 	provider = GoogleOAuthProvider(settings, client)
@@ -167,6 +212,10 @@ async def test_provider_exchanges_code_with_pkce_parameters() -> None:
 
 @pytest.mark.asyncio
 async def test_provider_logs_token_exchange_failure_without_sensitive_values(caplog: pytest.LogCaptureFixture) -> None:
+	"""トークン交換が失敗(400応答)した場合にOAuthFailedErrorを送出し、
+	operation="token_exchange"のoauth_failureログを出力しつつ、認可コードや
+	verifierといった機微情報がログ本文に含まれないことを検証する。
+	"""
 	client = SimpleNamespace(post=AsyncMock(return_value=_HttpResponse(400, {})))
 	provider = GoogleOAuthProvider(_settings(), client)
 
@@ -180,6 +229,10 @@ async def test_provider_logs_token_exchange_failure_without_sensitive_values(cap
 
 @pytest.mark.asyncio
 async def test_provider_logs_userinfo_failure_without_sensitive_values(caplog: pytest.LogCaptureFixture) -> None:
+	"""userinfoエンドポイントが失敗(500応答)した場合にOAuthFailedErrorを送出し、
+	operation="userinfo"のoauth_failureログを出力しつつ、アクセストークンが
+	ログ本文に含まれないことを検証する。
+	"""
 	client = SimpleNamespace(get=AsyncMock(return_value=_HttpResponse(500, {})))
 	provider = GoogleOAuthProvider(_settings(), client)
 
@@ -192,6 +245,9 @@ async def test_provider_logs_userinfo_failure_without_sensitive_values(caplog: p
 
 @pytest.mark.asyncio
 async def test_provider_rejects_id_token_with_wrong_nonce() -> None:
+	"""IDトークンに埋め込まれたnonceと検証時に渡すnonceが一致しない場合、
+	リプレイ攻撃対策としてOAuthFailedErrorが送出されることを検証する。
+	"""
 	settings = _settings()
 	token, jwks = _signed_id_token(settings, "expected")
 	client = _OAuthHttpClient({}, {}, jwks)
@@ -205,6 +261,10 @@ async def test_provider_rejects_id_token_with_wrong_nonce() -> None:
 async def test_provider_logs_id_token_verification_failure_without_sensitive_values(
 	caplog: pytest.LogCaptureFixture,
 ) -> None:
+	"""nonce不一致によるIDトークン検証失敗時、OAuthFailedErrorを送出し、
+	operation="id_token_verify"のoauth_failureログを出力しつつ、IDトークン本体が
+	ログ本文に含まれないことを検証する。
+	"""
 	settings = _settings()
 	token, jwks = _signed_id_token(settings, "expected")
 	provider = GoogleOAuthProvider(settings, _OAuthHttpClient({}, {}, jwks))
@@ -218,6 +278,9 @@ async def test_provider_logs_id_token_verification_failure_without_sensitive_val
 
 @pytest.mark.asyncio
 async def test_provider_logs_jwks_failure_without_sensitive_values(caplog: pytest.LogCaptureFixture) -> None:
+	"""JWKS取得(500応答)が失敗した場合にOAuthFailedErrorを送出し、
+	operation="jwks"のoauth_failureログが出力されることを検証する。
+	"""
 	settings = _settings(google_jwks_uri="https://jwks.example.test/unique")
 	client = SimpleNamespace(get=AsyncMock(return_value=_HttpResponse(500, {})))
 	provider = GoogleOAuthProvider(settings, client)
@@ -230,6 +293,9 @@ async def test_provider_logs_jwks_failure_without_sensitive_values(caplog: pytes
 
 @pytest.mark.asyncio
 async def test_provider_rejects_id_token_with_wrong_audience() -> None:
+	"""IDトークンのaudienceが自クライアントID以外の場合、OAuthFailedErrorが
+	送出されることを検証する。
+	"""
 	settings = _settings()
 	token, jwks = _signed_id_token(settings, "nonce", audience="other-client")
 	provider = GoogleOAuthProvider(settings, _OAuthHttpClient({}, {}, jwks))
@@ -240,6 +306,9 @@ async def test_provider_rejects_id_token_with_wrong_audience() -> None:
 
 @pytest.mark.asyncio
 async def test_provider_rejects_multiple_audience_with_wrong_azp() -> None:
+	"""audienceが複数存在する場合、azp(authorized party)が自クライアントIDと
+	一致しないとOAuthFailedErrorが送出されることを検証する。
+	"""
 	settings = _settings()
 	token, jwks = _signed_id_token(
 		settings,
@@ -256,6 +325,9 @@ async def test_provider_rejects_multiple_audience_with_wrong_azp() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("audience", ["client-id", ["client-id"]])
 async def test_provider_rejects_single_audience_with_wrong_azp(audience: str | list[str]) -> None:
+	"""audienceが単一値・単一要素リストのいずれの形式でも、azpが自クライアントIDと
+	一致しない場合はOAuthFailedErrorが送出されることを検証する。
+	"""
 	settings = _settings()
 	token, jwks = _signed_id_token(settings, "nonce", audience=audience, azp="other-client")
 	provider = GoogleOAuthProvider(settings, _OAuthHttpClient({}, {}, jwks))
@@ -266,6 +338,9 @@ async def test_provider_rejects_single_audience_with_wrong_azp(audience: str | l
 
 @pytest.mark.asyncio
 async def test_provider_rejects_invalid_azp_type() -> None:
+	"""azpクレームが文字列以外の型(数値など)で渡された場合、OAuthFailedErrorが
+	送出されることを検証する。
+	"""
 	settings = _settings()
 	token, jwks = _signed_id_token(settings, "nonce", azp=123)
 	provider = GoogleOAuthProvider(settings, _OAuthHttpClient({}, {}, jwks))
@@ -276,6 +351,9 @@ async def test_provider_rejects_invalid_azp_type() -> None:
 
 @pytest.mark.asyncio
 async def test_provider_accepts_multiple_audience_with_matching_azp() -> None:
+	"""audienceが複数存在してもazpが自クライアントIDと一致していれば検証を通過し、
+	IDトークンのクレーム(sub)を取得できることを検証する。
+	"""
 	settings = _settings(google_jwks_uri="https://jwks.example.test/certs/matching")
 	token, jwks = _signed_id_token(
 		settings,
@@ -300,6 +378,9 @@ async def test_provider_accepts_multiple_audience_with_matching_azp() -> None:
 	],
 )
 async def test_provider_rejects_invalid_issuer_exp_or_kid(issuer: str, expires_in: int, header_kid: str) -> None:
+	"""不正なissuer・失効済みexp・未知のkidのいずれかを持つIDトークンについて、
+	それぞれ個別にOAuthFailedErrorが送出されることを検証する。
+	"""
 	settings = _settings(google_jwks_uri=f"https://jwks.example.test/{uuid4()}")
 	token, jwks = _signed_id_token(settings, "nonce", issuer=issuer, expires_in=expires_in, header_kid=header_kid)
 	provider = GoogleOAuthProvider(settings, _OAuthHttpClient({}, {}, jwks))
@@ -310,6 +391,10 @@ async def test_provider_rejects_invalid_issuer_exp_or_kid(issuer: str, expires_i
 
 @pytest.mark.asyncio
 async def test_oauth_start_saves_state_and_pkce_cookie(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""oauth_startがstate/リダイレクト先/PKCEベリファイア/nonceをRedisへ保存し、
+	認可URLにPKCEのcode_challenge・nonceが含まれ、state保護用Cookieが
+	レスポンスへ設定されることを検証する。
+	"""
 	settings = _settings(auth_token_max_length=TOKEN_URLSAFE_LENGTH)
 	save_state = AsyncMock()
 	monkeypatch.setattr(auth_service.redis_store, "save_oauth_state", save_state)
@@ -335,6 +420,9 @@ async def test_oauth_start_saves_state_and_pkce_cookie(monkeypatch: pytest.Monke
 
 @pytest.mark.asyncio
 async def test_oauth_start_applies_rate_limit_to_request_ip(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""oauth_startがリクエスト元IPを鍵として"oauth_start"スコープのレート制限
+	(check_rate_limit)を、設定された上限回数・時間窓で呼び出すことを検証する。
+	"""
 	settings = _settings()
 	check_rate_limit = AsyncMock(return_value=1)
 	monkeypatch.setattr(auth_service.redis_store, "check_rate_limit", check_rate_limit)
@@ -350,6 +438,10 @@ async def test_oauth_start_applies_rate_limit_to_request_ip(monkeypatch: pytest.
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["start", "callback", "exchange"])
 async def test_oauth_rate_limit_rejects_excess_requests(operation: str, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""oauth_start/oauth_callback/oauth_exchangeのいずれも、レート制限の上限を
+	超過した場合にTooManyAttemptsErrorを送出し、その例外のretry_afterが
+	get_rate_limit_ttlの戻り値になることを検証する。
+	"""
 	settings = _settings(auth_mode="jwt")
 	monkeypatch.setattr(
 		auth_service.redis_store, "check_rate_limit", AsyncMock(return_value=settings.rate_limit_oauth_max_requests + 1)
@@ -371,6 +463,10 @@ async def test_oauth_rate_limit_rejects_excess_requests(operation: str, monkeypa
 async def test_oauth_rate_limit_redis_failure_returns_service_unavailable(
 	operation: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+	"""oauth_start/oauth_callback/oauth_exchangeのいずれも、レート制限チェック中に
+	Redisエラー(RuntimeError)が発生した場合、ServiceUnavailableErrorへ
+	変換されることを検証する。
+	"""
 	settings = _settings(auth_mode="jwt")
 	monkeypatch.setattr(
 		auth_service.redis_store, "check_rate_limit", AsyncMock(side_effect=RuntimeError("redis unavailable"))
@@ -389,6 +485,10 @@ async def test_oauth_rate_limit_redis_failure_returns_service_unavailable(
 async def test_oauth_rate_limit_log_contains_audit_fields(
 	caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+	"""レート制限超過時、app.oauthロガーへrate_limit_rejectedイベントとして
+	route/scope/limit/window・信頼済みプロキシ経由で解決されたclient_ip/proxy_peer_ip/
+	ip_source・request_idが記録されることを検証する。
+	"""
 	settings = _settings(auth_mode="jwt", trusted_proxy_cidrs=["10.0.0.0/8"])
 	request = _request("10.0.0.1", "198.51.100.4, 10.0.0.2")
 	request.state.request_id = "request-123"
@@ -415,6 +515,10 @@ async def test_oauth_rate_limit_log_contains_audit_fields(
 
 @pytest.mark.asyncio
 async def test_oauth_callback_denied_consumes_state_and_deletes_cookie(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""OAuth認可がユーザーに拒否された場合の通知経路(oauth_callback_denied)が、
+	レート制限チェック後にstateをRedisから消費(consume_oauth_state)し、
+	state用CookieをMax-Age=0で削除することを検証する。
+	"""
 	settings = _settings()
 	check_rate_limit = AsyncMock(return_value=1)
 	consume_state = AsyncMock(return_value=OAuthStateData("/dashboard", "verifier", "nonce", None))
@@ -438,6 +542,9 @@ async def test_oauth_callback_denied_consumes_state_and_deletes_cookie(monkeypat
 
 @pytest.mark.asyncio
 async def test_oauth_callback_denied_deletes_cookie_when_rate_limited(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""oauth_callback_deniedがレート制限超過でTooManyAttemptsErrorを送出する場合でも、
+	state用Cookieの削除(Max-Age=0)がレスポンスに反映されることを検証する。
+	"""
 	settings = _settings()
 	monkeypatch.setattr(
 		auth_service.redis_store,
@@ -459,6 +566,9 @@ async def test_oauth_callback_denied_deletes_cookie_when_rate_limited(monkeypatc
 
 @pytest.mark.asyncio
 async def test_oauth_callback_rejects_state_cookie_mismatch() -> None:
+	"""クエリパラメータのstateとCookieのstateが一致しない場合、InvalidStateErrorが
+	送出されることを検証する。
+	"""
 	with pytest.raises(InvalidStateError):
 		await auth_service.oauth_callback("code", "state", "different", _request(), Response())
 
@@ -467,6 +577,9 @@ async def test_oauth_callback_rejects_state_cookie_mismatch() -> None:
 async def test_oauth_callback_consumes_state_before_rejecting_missing_code(
 	monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+	"""認可コード(code)が渡されなかった場合でも、stateの消費(consume_oauth_state)は
+	先に行われたうえでOAuthFailedErrorが送出されることを検証する。
+	"""
 	consume_state = AsyncMock(return_value=OAuthStateData("/dashboard", "verifier", "nonce", None))
 	monkeypatch.setattr(auth_service.redis_store, "consume_oauth_state", consume_state)
 
@@ -480,6 +593,10 @@ async def test_oauth_callback_consumes_state_before_rejecting_missing_code(
 async def test_oauth_callback_session_logs_success_and_deletes_state_cookie(
 	monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+	"""セッション認証モードでのOAuthコールバックが成功した場合、認証戦略のlogin・
+	ログイン履歴の記録(login_history_repository.create)がそれぞれ1回呼ばれ、
+	結果のauth_mode/redirect_toが正しく、state用Cookieが削除されることを検証する。
+	"""
 	user = SimpleNamespace(id=uuid4(), email="alice@example.com", is_active=True)
 	provider = SimpleNamespace(
 		exchange_code=AsyncMock(return_value=OAuthTokenResponse("id", "access")),
@@ -524,6 +641,10 @@ async def test_oauth_callback_session_logs_success_and_deletes_state_cookie(
 
 @pytest.mark.asyncio
 async def test_oauth_callback_rejects_inactive_resolved_user(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""OAuthで解決されたユーザーが無効化(is_active=False)されている場合、
+	UserInactiveErrorが送出され、認証戦略のloginが呼ばれず、かつstate用Cookieの
+	削除は行われることを検証する。
+	"""
 	user = SimpleNamespace(id=uuid4(), email="alice@example.com", is_active=False)
 	provider = SimpleNamespace(
 		exchange_code=AsyncMock(return_value=OAuthTokenResponse("id", "access")),
@@ -559,6 +680,11 @@ async def test_oauth_callback_rejects_inactive_resolved_user(monkeypatch: pytest
 async def test_oauth_callback_rolls_back_login_when_history_recording_fails(
 	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+	"""ログイン自体は成功したがログイン履歴の記録が失敗(RuntimeError)した場合、
+	認証戦略のrollback_loginが呼ばれてセッションが取り消され、ServiceUnavailableErrorが
+	送出されること、監査ログに機密情報(例外メッセージ)を含めずuser_id/login_method/
+	client_ip/request_idが記録されることを検証する。
+	"""
 	user = SimpleNamespace(id=uuid4(), email="alice@example.com", is_active=True)
 	provider = SimpleNamespace(
 		exchange_code=AsyncMock(return_value=OAuthTokenResponse("id", "access")),
@@ -609,6 +735,11 @@ async def test_oauth_callback_rolls_back_login_when_history_recording_fails(
 async def test_oauth_callback_logs_rollback_failure_without_sensitive_values(
 	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+	"""ログイン履歴の記録失敗に続けてrollback_login自体も失敗した場合、
+	ServiceUnavailableErrorが送出され、auth_state_revoke_failedイベントとして
+	user_id/operationが記録され、両例外のメッセージ(機密情報)がログに
+	残らないことを検証する。
+	"""
 	user = SimpleNamespace(id=uuid4(), email="alice@example.com", is_active=True)
 	provider = SimpleNamespace(
 		exchange_code=AsyncMock(return_value=OAuthTokenResponse("id", "access")),
@@ -658,6 +789,9 @@ async def test_oauth_callback_logs_rollback_failure_without_sensitive_values(
 async def test_oauth_callback_jwt_issues_handoff_without_recording_history(
 	monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+	"""JWT認証モードでのOAuthコールバックでは、その場でログイン履歴を記録せず、
+	後続のoauth_exchangeで使うハンドオフトークンを発行することを検証する。
+	"""
 	settings = _settings(auth_mode="jwt", auth_token_max_length=TOKEN_URLSAFE_LENGTH)
 	user = SimpleNamespace(id=uuid4(), email="alice@example.com", is_active=True)
 	provider = SimpleNamespace(
@@ -698,6 +832,9 @@ async def test_oauth_callback_jwt_issues_handoff_without_recording_history(
 
 @pytest.mark.asyncio
 async def test_resolve_user_rejects_unverified_email_link(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""OAuthアカウント未連携で、同メールアドレスの既存ユーザーがメール未認証の場合、
+	自動連携を行わずOAuthEmailUnverifiedErrorが送出されることを検証する。
+	"""
 	existing = SimpleNamespace(id=uuid4(), email="alice@example.com", email_verified_at=None, is_active=True)
 	monkeypatch.setattr(auth_service.oauth_account_repository, "get_by_provider_identity", AsyncMock(return_value=None))
 	monkeypatch.setattr(auth_service.user_repository, "get_by_email", AsyncMock(return_value=existing))
@@ -710,6 +847,10 @@ async def test_resolve_user_rejects_unverified_email_link(monkeypatch: pytest.Mo
 
 @pytest.mark.asyncio
 async def test_resolve_user_links_verified_existing_email(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""OAuthアカウント未連携で、同メールアドレスの既存ユーザーがGoogle側で
+	メール確認済みの場合、そのユーザーへOAuthアカウントを紐付け(upsert)、
+	未認証だったメールをmark_email_verifiedで確認済みにし、commitされることを検証する。
+	"""
 	user = SimpleNamespace(id=uuid4(), email="alice@example.com", email_verified_at=None, is_active=True)
 	upsert = AsyncMock()
 	mark_email_verified = AsyncMock()
@@ -732,6 +873,9 @@ async def test_resolve_user_links_verified_existing_email(monkeypatch: pytest.Mo
 async def test_resolve_user_converts_database_connection_failure_and_rolls_back(
 	monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+	"""OAuthアカウント連携処理のcommit時にDB接続エラー(sqlstate 08006)が発生した場合、
+	ServiceUnavailableErrorへ変換されrollbackが呼ばれることを検証する。
+	"""
 	user = SimpleNamespace(id=uuid4(), email="alice@example.com", email_verified_at=None, is_active=True)
 	commit = AsyncMock(side_effect=OperationalError("oauth account", {}, SimpleNamespace(sqlstate="08006")))
 	rollback = AsyncMock()
@@ -753,6 +897,9 @@ async def test_resolve_user_converts_database_connection_failure_and_rolls_back(
 async def test_record_oauth_login_converts_database_connection_failure_and_rolls_back(
 	monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+	"""record_oauth_loginがログイン履歴commit時にDB接続エラー(sqlstate 08006)を
+	受けた場合、ServiceUnavailableErrorへ変換されrollbackが呼ばれることを検証する。
+	"""
 	commit = AsyncMock(side_effect=OperationalError("oauth login history", {}, SimpleNamespace(sqlstate="08006")))
 	rollback = AsyncMock()
 	user = SimpleNamespace(id=uuid4(), email="alice@example.com")
@@ -766,6 +913,9 @@ async def test_record_oauth_login_converts_database_connection_failure_and_rolls
 
 @pytest.mark.asyncio
 async def test_resolve_user_does_not_update_already_verified_email(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""同メールアドレスの既存ユーザーが既にメール確認済みの場合、mark_email_verifiedを
+	重ねて呼び出さないことを検証する。
+	"""
 	user = SimpleNamespace(id=uuid4(), email="alice@example.com", email_verified_at="verified", is_active=True)
 	upsert = AsyncMock()
 	mark_email_verified = AsyncMock()
@@ -783,6 +933,9 @@ async def test_resolve_user_does_not_update_already_verified_email(monkeypatch: 
 
 @pytest.mark.asyncio
 async def test_resolve_user_rejects_inactive_oauth_account_user(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""既にOAuthアカウントが連携済みのユーザーが無効化(is_active=False)されている場合、
+	UserInactiveErrorが送出されることを検証する。
+	"""
 	user = SimpleNamespace(id=uuid4(), email="alice@example.com", is_active=False)
 	account = SimpleNamespace(user=user, user_id=user.id)
 	monkeypatch.setattr(
@@ -795,6 +948,9 @@ async def test_resolve_user_rejects_inactive_oauth_account_user(monkeypatch: pyt
 
 @pytest.mark.asyncio
 async def test_resolve_user_rejects_inactive_existing_email(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""OAuthアカウント未連携で、同メールアドレスの既存ユーザーが無効化されている場合、
+	UserInactiveErrorが送出されることを検証する。
+	"""
 	user = SimpleNamespace(id=uuid4(), email="alice@example.com", is_active=False)
 	monkeypatch.setattr(auth_service.oauth_account_repository, "get_by_provider_identity", AsyncMock(return_value=None))
 	monkeypatch.setattr(auth_service.user_repository, "get_by_email", AsyncMock(return_value=user))
@@ -805,6 +961,9 @@ async def test_resolve_user_rejects_inactive_existing_email(monkeypatch: pytest.
 
 @pytest.mark.asyncio
 async def test_resolve_user_rejects_inactive_newly_created_user(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""該当ユーザーが存在せず新規作成した直後に取得し直したユーザーが
+	is_active=Falseだった場合、UserInactiveErrorが送出されることを検証する。
+	"""
 	db = SimpleNamespace(commit=AsyncMock())
 	user_id = uuid4()
 	created_user = SimpleNamespace(id=user_id, email="new@example.com", is_active=False)
@@ -821,6 +980,10 @@ async def test_resolve_user_rejects_inactive_newly_created_user(monkeypatch: pyt
 
 @pytest.mark.asyncio
 async def test_resolve_user_creates_google_user_and_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""該当するOAuthアカウント・既存メールがどちらも見つからない場合、"google_"接頭辞の
+	仮ユーザー名で新規ユーザーを作成し、OAuthアカウントを紐付け、メール確認済みとし、
+	Google側の氏名情報でプロフィール(update_profile)を更新したうえでcommitされることを検証する。
+	"""
 	db = SimpleNamespace(commit=AsyncMock())
 	user_id = uuid4()
 	created_user = SimpleNamespace(id=user_id, email="new@example.com", is_active=True)
@@ -851,6 +1014,9 @@ async def test_resolve_user_creates_google_user_and_profile(monkeypatch: pytest.
 
 @pytest.mark.asyncio
 async def test_oauth_exchange_rejects_unknown_handoff() -> None:
+	"""ハンドオフコードがRedisに存在しない(消費できない)場合、
+	OAuthHandoffInvalidErrorが送出されることを検証する。
+	"""
 	monkey = pytest.MonkeyPatch()
 	monkey.setattr(auth_service.redis_store, "consume_oauth_handoff", AsyncMock(return_value=None))
 	try:
@@ -864,6 +1030,10 @@ async def test_oauth_exchange_rejects_unknown_handoff() -> None:
 
 @pytest.mark.asyncio
 async def test_oauth_exchange_returns_token_and_records_login_history(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""正当なハンドオフコードでoauth_exchangeを呼んだ場合、認証戦略のloginが発行した
+	アクセストークン・リダイレクト先を含むOAuthExchangeResponseが返り、
+	ログイン履歴がユーザーのemailをlogin_identifierとして記録されることを検証する。
+	"""
 	user_id = uuid4()
 	user = SimpleNamespace(id=user_id, email="alice@example.com", is_active=True)
 	settings = _settings(auth_mode="jwt", auth_token_max_length=TOKEN_URLSAFE_LENGTH)
@@ -904,6 +1074,10 @@ async def test_oauth_exchange_returns_token_and_records_login_history(monkeypatc
 
 @pytest.mark.asyncio
 async def test_oauth_login_history_uses_resolved_client_ip(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""信頼済みプロキシ経由のX-Forwarded-Forを持つリクエストでoauth_exchangeを実行した場合、
+	ログイン履歴のip_addressに（プロキシのpeer IPではなく）解決されたクライアントIPが
+	記録されることを検証する。
+	"""
 	user_id = uuid4()
 	user = SimpleNamespace(id=user_id, email="alice@example.com", is_active=True)
 	settings = _settings(auth_mode="jwt", trusted_proxy_cidrs=["10.0.0.0/8"])
@@ -937,6 +1111,10 @@ async def test_oauth_login_history_uses_resolved_client_ip(monkeypatch: pytest.M
 
 @pytest.mark.asyncio
 async def test_oauth_exchange_rolls_back_login_when_history_recording_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""oauth_exchangeでログイン自体は成功したがログイン履歴の記録が失敗
+	(RuntimeError)した場合、認証戦略のrollback_loginが発行済みトークン情報とともに
+	呼ばれ、ServiceUnavailableErrorが送出されることを検証する。
+	"""
 	user_id = uuid4()
 	user = SimpleNamespace(id=user_id, email="alice@example.com", is_active=True)
 	monkeypatch.setattr(
@@ -972,6 +1150,11 @@ async def test_oauth_exchange_rolls_back_login_when_history_recording_fails(monk
 async def test_oauth_exchange_rolls_back_when_login_result_is_incomplete(
 	monkeypatch: pytest.MonkeyPatch, missing_field: str
 ) -> None:
+	"""認証戦略のloginが返すLoginResultからaccess_token/refresh_token/csrf_token/
+	expires_inのいずれか1つでも欠落(None)している場合、その不整合な結果を
+	クライアントへ渡す前にrollback_loginで取り消し、ログイン履歴も記録せずに
+	OAuthFailedErrorへ変換することを検証する。
+	"""
 	user_id = uuid4()
 	user = SimpleNamespace(id=user_id, email="alice@example.com", is_active=True)
 	monkeypatch.setattr(
@@ -1031,6 +1214,11 @@ async def test_oauth_exchange_rolls_back_when_login_result_is_incomplete(
 async def test_oauth_exchange_rolls_back_for_invalid_login_result_values(
 	monkeypatch: pytest.MonkeyPatch, field: str, invalid_value: object
 ) -> None:
+	"""認証戦略のloginが返すLoginResultの各フィールドが型・値として不正
+	(auth_modeが"jwt"以外や欠落、トークン類が空文字や数値、expires_inが0以下・
+	文字列・bool等)な場合、いずれもrollback_loginで取り消したうえで
+	OAuthFailedErrorへ変換し、ログイン履歴も記録しないことを検証する。
+	"""
 	user_id = uuid4()
 	user = SimpleNamespace(id=user_id, email="alice@example.com", is_active=True)
 	monkeypatch.setattr(

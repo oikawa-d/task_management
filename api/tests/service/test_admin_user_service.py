@@ -1,3 +1,10 @@
+"""admin_user_service のユニットテスト。
+
+管理者向けユーザー一覧取得・ロール変更・有効/無効切替・強制ログアウトの各サービス関数について、
+リポジトリ層やRedisをmonkeypatchでスタブ化し、正常系・異常系（DBエラー、SPのsqlstate分岐、
+Redis失効失敗時の挙動、監査ログ出力内容）を検証する。
+"""
+
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -16,20 +23,26 @@ from sqlalchemy.exc import DBAPIError, OperationalError
 
 
 class _Orig(Exception):
+	"""DBAPIErrorが内部に保持する元例外を模したダミー例外。sqlstateを保持する。"""
+
 	def __init__(self, sqlstate: str | None) -> None:
+		"""指定されたsqlstateを持つ元例外を生成する。"""
 		super().__init__("boom")
 		self.sqlstate = sqlstate
 
 
 def _dbapi_error(sqlstate: str | None) -> DBAPIError:
+	"""指定のsqlstateを持つDBAPIErrorを生成する。ストアドプロシージャ呼び出し失敗を模擬するために使う。"""
 	return DBAPIError("CALL sp_admin_update_user_role()", {}, _Orig(sqlstate))
 
 
 def _connection_error(statement: str = "x") -> OperationalError:
+	"""接続断（sqlstate=08006）を表すOperationalErrorを生成する。"""
 	return OperationalError(statement, {}, SimpleNamespace(sqlstate="08006"))
 
 
 def _user(**overrides: object) -> User:
+	"""テスト用のUserモデルインスタンスを、既定値にoverridesを上書きして生成する。"""
 	defaults: dict[str, object] = {
 		"id": uuid4(),
 		"username": "taro",
@@ -47,11 +60,13 @@ def _user(**overrides: object) -> User:
 
 
 def _actor() -> CurrentUser:
+	"""操作を行う管理者役のCurrentUserを生成する。"""
 	return CurrentUser(id=uuid4(), username="admin", role="admin", is_active=True, email_verified_at=None)
 
 
 @pytest.mark.asyncio
 async def test_list_admin_users_display_name_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""氏名が揃っているユーザーは「姓 名」形式、姓名が未設定のユーザーはusernameが表示名になることを検証する。"""
 	named = _user()
 	fallback = _user(id=uuid4(), username="jiro", last_name=None, first_name=None)
 	monkeypatch.setattr(
@@ -71,6 +86,9 @@ async def test_list_admin_users_display_name_fallback(monkeypatch: pytest.Monkey
 async def test_list_admin_users_pagination_uses_total_count_from_window_function(
 	monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+	"""list_usersが返す行に含まれるウィンドウ関数由来の総件数からmeta.totalを算出し、
+	count_usersを別途呼び出さないことを検証する。
+	"""
 	rows = [AdminUserListItem(_user(id=uuid4(), username=f"user{i}"), 25) for i in range(20)]
 	monkeypatch.setattr(admin_repository, "list_users", AsyncMock(return_value=rows))
 	count_users = AsyncMock()
@@ -98,6 +116,7 @@ async def test_list_admin_users_falls_back_to_count_when_page_is_empty(monkeypat
 
 @pytest.mark.asyncio
 async def test_list_admin_users_service_unavailable_on_db_error(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""list_usersがDB接続エラーを送出した場合、ServiceUnavailableErrorへ変換されることを検証する。"""
 	monkeypatch.setattr(admin_repository, "list_users", AsyncMock(side_effect=_connection_error()))
 
 	with pytest.raises(ServiceUnavailableError):
@@ -106,7 +125,9 @@ async def test_list_admin_users_service_unavailable_on_db_error(monkeypatch: pyt
 
 @pytest.mark.asyncio
 async def test_change_role_target_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
-	"""SPが対象不存在（P0010）を返す。事前の存在確認SELECTは行わない（#347レビュー対応）。"""
+	"""SPがP0010（対象不存在）を返した場合にNotFoundErrorへ変換され、
+	事前の存在確認SELECT（get_by_id）が呼ばれないことを検証する（#347レビュー対応）。
+	"""
 	get_by_id = AsyncMock()
 	monkeypatch.setattr(user_repository, "get_by_id", get_by_id)
 	monkeypatch.setattr(admin_repository, "update_user_role", AsyncMock(side_effect=_dbapi_error("P0010")))
@@ -127,6 +148,7 @@ async def test_change_role_self_modification_checked_before_last_admin(monkeypat
 
 @pytest.mark.asyncio
 async def test_change_role_last_admin_required(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""SPがP0008（最後の管理者）を返した場合にLastAdminRequiredErrorへ変換されることを検証する。"""
 	monkeypatch.setattr(admin_repository, "update_user_role", AsyncMock(side_effect=_dbapi_error("P0008")))
 
 	with pytest.raises(LastAdminRequiredError):
@@ -135,6 +157,7 @@ async def test_change_role_last_admin_required(monkeypatch: pytest.MonkeyPatch) 
 
 @pytest.mark.asyncio
 async def test_change_role_promotion_success(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""ロール昇格が成功した場合、update_user_roleが1回呼ばれ、応答のroleが更新後の値になることを検証する。"""
 	target_id = uuid4()
 	updated = _user(id=target_id, role="admin")
 	monkeypatch.setattr(user_repository, "get_by_id", AsyncMock(return_value=updated))
@@ -175,6 +198,7 @@ async def test_change_role_unknown_sqlstate_is_reraised(monkeypatch: pytest.Monk
 async def test_change_role_logs_old_role_new_role_and_result_on_success(
 	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+	"""ロール変更成功時、app.auditロガーへactor/target/old_role/new_role/resultが記録されることを検証する。"""
 	target_id = uuid4()
 	monkeypatch.setattr(user_repository, "get_by_id", AsyncMock(return_value=_user(id=target_id, role="admin")))
 	monkeypatch.setattr(admin_repository, "update_user_role", AsyncMock(return_value="member"))
@@ -195,6 +219,7 @@ async def test_change_role_logs_old_role_new_role_and_result_on_success(
 async def test_change_role_logs_result_on_conflict(
 	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+	"""最後の管理者エラー（P0008）発生時、監査ログのresultが"LAST_ADMIN_REQUIRED"になることを検証する。"""
 	monkeypatch.setattr(admin_repository, "update_user_role", AsyncMock(side_effect=_dbapi_error("P0008")))
 	actor = _actor()
 
@@ -207,6 +232,7 @@ async def test_change_role_logs_result_on_conflict(
 
 @pytest.mark.asyncio
 async def test_change_status_target_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""SPがP0010（対象不存在）を返した場合にNotFoundErrorへ変換されることを検証する。"""
 	monkeypatch.setattr(admin_repository, "update_user_status", AsyncMock(side_effect=_dbapi_error("P0010")))
 
 	with pytest.raises(NotFoundError):
@@ -215,6 +241,7 @@ async def test_change_status_target_not_found(monkeypatch: pytest.MonkeyPatch) -
 
 @pytest.mark.asyncio
 async def test_change_status_last_admin_required(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""SPがP0008（最後の管理者）を返した場合にLastAdminRequiredErrorへ変換されることを検証する。"""
 	monkeypatch.setattr(admin_repository, "update_user_status", AsyncMock(side_effect=_dbapi_error("P0008")))
 
 	with pytest.raises(LastAdminRequiredError):
@@ -230,22 +257,26 @@ async def test_change_status_deactivate_db_then_redis_order(monkeypatch: pytest.
 	monkeypatch.setattr(user_repository, "get_by_id", AsyncMock(return_value=_user(id=target_id, is_active=False)))
 
 	async def _update_status(*args: object, **kwargs: object) -> bool:
+		"""admin_repository.update_user_statusの代わりに呼び出し順序を記録するスタブ。"""
 		call_order.append("db_update")
 		return True
 
 	db = AsyncMock()
 
 	async def _commit() -> None:
+		"""db.commitの代わりに呼び出し順序を記録するスタブ。"""
 		call_order.append("db_commit")
 
 	db.commit = _commit
 	monkeypatch.setattr(admin_repository, "update_user_status", _update_status)
 
 	async def _delete_all_sessions(*args: object, **kwargs: object) -> int:
+		"""redis_store.delete_all_sessionsの代わりに呼び出し順序を記録するスタブ。"""
 		call_order.append("delete_all_sessions")
 		return 0
 
 	async def _revoke_all_refresh_tokens(*args: object, **kwargs: object) -> int:
+		"""redis_store.revoke_all_refresh_tokensの代わりに呼び出し順序を記録するスタブ。"""
 		call_order.append("revoke_all_refresh_tokens")
 		return 0
 
@@ -259,6 +290,7 @@ async def test_change_status_deactivate_db_then_redis_order(monkeypatch: pytest.
 
 @pytest.mark.asyncio
 async def test_change_status_reactivate_skips_redis_revocation(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""アカウントを再有効化する場合はRedisのセッション削除・リフレッシュトークン失効を呼ばないことを検証する。"""
 	target_id = uuid4()
 	monkeypatch.setattr(user_repository, "get_by_id", AsyncMock(return_value=_user(id=target_id, is_active=True)))
 	monkeypatch.setattr(admin_repository, "update_user_status", AsyncMock(return_value=False))
@@ -290,6 +322,10 @@ async def test_change_status_redis_failure_does_not_rollback_db(monkeypatch: pyt
 async def test_change_status_redis_failure_logs_error_with_actor_target_and_operation(
 	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+	"""セッション削除(delete_all_sessions)でRedis接続エラーが起きた場合、
+	app.auditロガーにERRORレベルでactor_user_id/target_user_id/operationが
+	記録されることを検証する。
+	"""
 	target_id = uuid4()
 	actor = _actor()
 	monkeypatch.setattr(admin_repository, "update_user_status", AsyncMock(return_value=True))
@@ -309,6 +345,10 @@ async def test_change_status_redis_failure_logs_error_with_actor_target_and_oper
 async def test_change_status_second_redis_call_failure_is_logged_with_its_own_operation(
 	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+	"""セッション削除(delete_all_sessions)は成功しリフレッシュトークン失効
+	(revoke_all_refresh_tokens)側でRedis接続エラーが起きた場合、監査ログの
+	operationが"revoke_all_refresh_tokens"として記録されることを検証する。
+	"""
 	monkeypatch.setattr(admin_repository, "update_user_status", AsyncMock(return_value=True))
 	monkeypatch.setattr(redis_store, "delete_all_sessions", AsyncMock(return_value=1))
 	monkeypatch.setattr(
@@ -326,6 +366,9 @@ async def test_change_status_second_redis_call_failure_is_logged_with_its_own_op
 async def test_change_status_logs_old_is_active_new_is_active_and_redis_counts(
 	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+	"""ステータス変更成功時、監査ログに変更前後のis_active値(old_is_active/new_is_active)と
+	Redisで失効させたセッション数・リフレッシュトークン数が記録されることを検証する。
+	"""
 	target_id = uuid4()
 	monkeypatch.setattr(user_repository, "get_by_id", AsyncMock(return_value=_user(id=target_id, is_active=False)))
 	monkeypatch.setattr(admin_repository, "update_user_status", AsyncMock(return_value=True))
@@ -345,6 +388,7 @@ async def test_change_status_logs_old_is_active_new_is_active_and_redis_counts(
 
 @pytest.mark.asyncio
 async def test_force_logout_target_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""強制ログアウト対象のユーザーが存在しない場合にNotFoundErrorが送出されることを検証する。"""
 	monkeypatch.setattr(user_repository, "get_by_id", AsyncMock(return_value=None))
 
 	with pytest.raises(NotFoundError):
@@ -353,15 +397,20 @@ async def test_force_logout_target_not_found(monkeypatch: pytest.MonkeyPatch) ->
 
 @pytest.mark.asyncio
 async def test_force_logout_calls_redis_revocation_functions_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""強制ログアウト実行時、セッション削除(delete_all_sessions)の後に
+	リフレッシュトークン失効(revoke_all_refresh_tokens)がこの順で呼ばれることを検証する。
+	"""
 	target = _user()
 	monkeypatch.setattr(user_repository, "get_by_id", AsyncMock(return_value=target))
 	call_order: list[str] = []
 
 	async def _delete_all_sessions(*args: object, **kwargs: object) -> int:
+		"""redis_store.delete_all_sessionsの代わりに呼び出し順序を記録するスタブ。"""
 		call_order.append("delete_all_sessions")
 		return 0
 
 	async def _revoke_all_refresh_tokens(*args: object, **kwargs: object) -> int:
+		"""redis_store.revoke_all_refresh_tokensの代わりに呼び出し順序を記録するスタブ。"""
 		call_order.append("revoke_all_refresh_tokens")
 		return 0
 
@@ -375,6 +424,9 @@ async def test_force_logout_calls_redis_revocation_functions_in_order(monkeypatc
 
 @pytest.mark.asyncio
 async def test_force_logout_idempotent_when_no_active_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""有効なセッション・リフレッシュトークンが既に0件のユーザーに対して強制ログアウトを
+	実行しても、例外を送出せず正常に完了することを検証する。
+	"""
 	target = _user()
 	monkeypatch.setattr(user_repository, "get_by_id", AsyncMock(return_value=target))
 	monkeypatch.setattr(redis_store, "delete_all_sessions", AsyncMock(return_value=0))
@@ -387,6 +439,10 @@ async def test_force_logout_idempotent_when_no_active_sessions(monkeypatch: pyte
 async def test_force_logout_logs_mode_and_access_token_delay(
 	monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+	"""強制ログアウト成功時、監査ログにactor/target/request_id・認証モード(mode)・
+	アクセストークンの失効までの遅延秒数(ACCESS_TOKEN_TTL_SECONDS由来)・
+	Redisで失効させたセッション数とリフレッシュトークン数が記録されることを検証する。
+	"""
 	target = _user()
 	actor = _actor()
 	monkeypatch.setattr(user_repository, "get_by_id", AsyncMock(return_value=target))
@@ -412,6 +468,9 @@ async def test_force_logout_logs_mode_and_access_token_delay(
 
 @pytest.mark.asyncio
 async def test_force_logout_service_unavailable_on_redis_error(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""セッション削除でRedis接続エラー(RedisConnectionError)が発生した場合、
+	ServiceUnavailableErrorへ変換されることを検証する。
+	"""
 	target = _user()
 	monkeypatch.setattr(user_repository, "get_by_id", AsyncMock(return_value=target))
 	monkeypatch.setattr(redis_store, "delete_all_sessions", AsyncMock(side_effect=RedisConnectionError("redis down")))
@@ -433,6 +492,9 @@ async def test_force_logout_does_not_catch_non_redis_exceptions(monkeypatch: pyt
 
 @pytest.mark.asyncio
 async def test_get_existing_user_service_unavailable_on_db_error(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""対象ユーザー取得時にDB接続エラー(_connection_error)が発生した場合、
+	ServiceUnavailableErrorへ変換されることを検証する。
+	"""
 	monkeypatch.setattr(user_repository, "get_by_id", AsyncMock(side_effect=_connection_error()))
 
 	with pytest.raises(ServiceUnavailableError):
