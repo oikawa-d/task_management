@@ -1,3 +1,10 @@
+"""Issue #425: メール確認・パスワードリセット・JWTリフレッシュのrouter→service→repository→
+実DB/実Redis結合テスト。
+
+`app.main.app`をそのままTestClientへ渡し、DB/Redisをモックしない。メール送信は`mail_outbox`で
+SMTP手前の`mail_service`関数をモックし、送信されたtoken自体は実Redisに保存されたものを使う。
+"""
+
 import json
 import time
 from dataclasses import dataclass
@@ -25,16 +32,20 @@ ORIGIN = "http://localhost:5173"
 
 @dataclass
 class _CleanupState:
+	"""テストが作成したuser_idを蓄積し、`clean_auth_state`での後片付け対象を伝える入れ物。"""
+
 	user_ids: list[str]
 
 
 @pytest.fixture
 def cleanup_state() -> _CleanupState:
+	"""空の`_CleanupState`を用意する（テスト側が登録のたびにuser_idを追記する）。"""
 	return _CleanupState([])
 
 
 @pytest.fixture
 def redis_conn() -> SyncRedis:
+	"""結合テストの検証・後始末専用の実Redis同期クライアント（アプリ内部の非同期クライアントとは別）。"""
 	client = SyncRedis.from_url(get_backend_settings().redis_url, decode_responses=True)
 	try:
 		yield client
@@ -44,6 +55,13 @@ def redis_conn() -> SyncRedis:
 
 @pytest.fixture(scope="module")
 def auth_client(apply_migrations: None) -> TestClient:
+	"""実app・実DB・実Redisを使う結合テスト用クライアント。
+
+	`apply_migrations`（実DBへスキーマ適用）に依存し、キャッシュ済みの認証戦略・DBエンジン・
+	Redisクライアントをテスト前後でクリアする。TestClientの接続元をINET列
+	（login_history.ip_address）へ書き込める有効なループバックIPに固定する。
+	モジュールスコープのため、本ファイル内のテストは同一クライアント（＝同一ポータル）を使い回す。
+	"""
 	get_auth_strategy.cache_clear()
 	get_db_engine.cache_clear()
 	get_session_factory.cache_clear()
@@ -63,6 +81,9 @@ def clean_auth_state(
 	redis_conn: SyncRedis,
 	mail_outbox: list[tuple[str, str, str]],
 ) -> None:
+	"""各テスト前後でCookieをクリアし、テスト後は`cleanup_state`/`mail_outbox`に記録された
+	user_id・発行済みtoken・レート制限キーに対応する実Redisキーとusers行を削除する。
+	"""
 	settings = get_backend_settings()
 	auth_client.cookies.clear()
 	yield
@@ -107,12 +128,19 @@ def clean_auth_state(
 
 @pytest.fixture
 def mail_outbox(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, str]]:
+	"""SMTP送信手前の`mail_service`関数をモックし、実際に生成されたtokenを送信内容から取り出せるようにする。
+
+	実Redisへのtoken保存自体はモックしない。テストは、ここへ積まれた`(種別, 宛先, token)`から
+	トークンを取得し、実APIへ渡して検証する。
+	"""
 	outbox: list[tuple[str, str, str]] = []
 
 	async def record_verification(to: str, token: str, _expires_hours: int) -> None:
+		"""確認メール送信をモックし、送信されるはずのtokenをoutboxへ記録する。"""
 		outbox.append(("verification", to, token))
 
 	async def record_password_reset(to: str, token: str, _expires_minutes: int) -> None:
+		"""パスワードリセットメール送信をモックし、送信されるはずのtokenをoutboxへ記録する。"""
 		outbox.append(("password_reset", to, token))
 
 	monkeypatch.setattr(email_verification_service.mail_service, "send_email_verification_mail", record_verification)
@@ -123,6 +151,16 @@ def mail_outbox(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, str]]:
 def _register(
 	client: TestClient, outbox: list[tuple[str, str, str]], cleanup_state: _CleanupState
 ) -> tuple[str, str, str]:
+	"""`POST /api/auth/register`で実DBにユーザーを作成し、確認メールが1通送信されたことを確認する。
+
+	Args:
+		client: 結合テスト用TestClient。
+		outbox: `mail_outbox`（送信されたメールの記録）。
+		cleanup_state: 作成したuser_idを後片付け用に積み上げる状態。
+
+	Returns:
+		tuple[str, str, str]: 作成したuser_id・email・確認メールのtoken。
+	"""
 	identifier = uuid4().hex[:12]
 	email = f"issue425-{identifier}@example.com"
 	response = client.post(
@@ -148,14 +186,30 @@ def _register(
 
 
 def _error_code(response: object) -> str:
+	"""エラーレスポンスのJSONから`error.code`を取り出す。"""
 	return response.json()["error"]["code"]  # type: ignore[union-attr]
 
 
 def _redis() -> SyncRedis:
+	"""検証用に都度接続する実Redis同期クライアントを生成する（呼び出し側でcloseすること）。"""
 	return SyncRedis.from_url(get_backend_settings().redis_url)
 
 
 def _post_with_cookies(client: TestClient, path: str, headers: dict[str, str], cookies: dict[str, str]) -> object:
+	"""TestClientの保持するCookieとは独立に、明示的なCookieヘッダを付けてPOSTする。
+
+	refreshトークンの再利用・欠落を検証するテストで、`auth_client`の現在のCookieを上書きせず
+	任意のrefresh/csrf値を指定するために使う。
+
+	Args:
+		client: 結合テスト用TestClient。
+		path: リクエスト先パス。
+		headers: Origin・X-CSRF-Token等の追加ヘッダ。
+		cookies: 明示的に送るCookie（名前→値）。
+
+	Returns:
+		object: レスポンス。
+	"""
 	request_headers = {**headers, "Cookie": "; ".join(f"{name}={value}" for name, value in cookies.items())}
 	return client.post(path, headers=request_headers)
 
@@ -163,6 +217,9 @@ def _post_with_cookies(client: TestClient, path: str, headers: dict[str, str], c
 def test_email_verification_flow_is_one_time_and_enables_login(
 	auth_client: TestClient, mail_outbox: list[tuple[str, str, str]], cleanup_state: _CleanupState
 ) -> None:
+	"""register→`POST /api/auth/verify-email`で発行済みtokenを使うと204で確認が完了し、
+	同じtokenの再利用は400 INVALID_VERIFY_TOKENとなり、確認済みユーザーはログインできることを検証する。
+	"""
 	_, email, token = _register(auth_client, mail_outbox, cleanup_state)
 
 	verified = auth_client.post("/api/auth/verify-email", json={"token": token})
@@ -183,6 +240,9 @@ def test_email_verification_flow_is_one_time_and_enables_login(
 def test_email_verification_expiry_is_rejected_at_api_boundary(
 	auth_client: TestClient, mail_outbox: list[tuple[str, str, str]], cleanup_state: _CleanupState
 ) -> None:
+	"""実Redis上の確認tokenキーのTTLを1秒に短縮し失効させたうえで、`POST /api/auth/verify-email`が
+	400 INVALID_VERIFY_TOKENを返すことを検証する。
+	"""
 	_, _, token = _register(auth_client, mail_outbox, cleanup_state)
 	redis = _redis()
 	try:
@@ -201,6 +261,10 @@ def test_email_verification_expiry_is_rejected_at_api_boundary(
 def test_resend_replaces_old_token_and_new_token_verifies(
 	auth_client: TestClient, mail_outbox: list[tuple[str, str, str]], cleanup_state: _CleanupState
 ) -> None:
+	"""実Redisの再送クールダウンキー（emailverify_sent）を削除したうえで
+	`POST /api/auth/verify-email/resend`を呼ぶと202・新メール送信となり、旧tokenは
+	400 INVALID_VERIFY_TOKEN・新tokenは204で確認できることを検証する。
+	"""
 	user_id, _, old_token = _register(auth_client, mail_outbox, cleanup_state)
 	settings = get_backend_settings()
 	redis = _redis()
@@ -227,6 +291,11 @@ def test_resend_replaces_old_token_and_new_token_verifies(
 def test_password_forgot_reset_flow_consumes_token_and_revokes_auth_state(
 	auth_client: TestClient, mail_outbox: list[tuple[str, str, str]], cleanup_state: _CleanupState
 ) -> None:
+	"""confirm済みユーザーでログイン後、`POST /api/auth/password/forgot`を2回呼ぶと最新tokenのみが
+	有効になり（古いtokenは400 INVALID_RESET_TOKEN）、`POST /api/auth/password/reset`で新パスワードへの
+	変更が204で成功し、旧認証状態（jwtならrefresh、sessionならCookie）が失効し、旧パスワードでの
+	ログインが401・新パスワードでのログインが成功することを検証する。
+	"""
 	_, email, verification_token = _register(auth_client, mail_outbox, cleanup_state)
 	auth_client.post("/api/auth/verify-email", json={"token": verification_token})
 	login = auth_client.post(
@@ -299,6 +368,9 @@ def test_password_forgot_reset_flow_consumes_token_and_revokes_auth_state(
 def test_password_reset_expiry_is_rejected_at_api_boundary(
 	auth_client: TestClient, mail_outbox: list[tuple[str, str, str]], cleanup_state: _CleanupState
 ) -> None:
+	"""実Redis上のリセットtokenキーのTTLを1秒に短縮し失効させたうえで、
+	`POST /api/auth/password/reset`が400 INVALID_RESET_TOKENを返すことを検証する。
+	"""
 	_, email, verification_token = _register(auth_client, mail_outbox, cleanup_state)
 	auth_client.post("/api/auth/verify-email", json={"token": verification_token})
 	forgot = auth_client.post("/api/auth/password/forgot", json={"email": email})
@@ -324,6 +396,11 @@ def test_password_reset_expiry_is_rejected_at_api_boundary(
 def test_jwt_refresh_rotation_rejects_missing_and_reused_tokens(
 	auth_client: TestClient, mail_outbox: list[tuple[str, str, str]], cleanup_state: _CleanupState
 ) -> None:
+	"""AUTH_MODE=jwt限定で、`POST /api/auth/refresh`を検証する。refresh Cookie無しは401
+	TOKEN_INVALID、正常なrotationは200で新しいrefresh/csrfを発行し実Redisの旧tokenを無効化
+	（`refresh_used`へ記録）し、rotation後の旧token・rotationで得た新tokenの再利用はいずれも
+	401 TOKEN_REVOKED（family全体の失効）となることを確認する。
+	"""
 	settings = get_backend_settings()
 	if settings.auth_mode != "jwt":
 		pytest.skip("refreshはjwtモードのみのAPI")
@@ -383,6 +460,10 @@ def test_jwt_refresh_rotation_rejects_missing_and_reused_tokens(
 
 
 def test_verify_email_redis_failure_is_fail_closed(auth_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""`redis_store.consume_email_verify_token`にConnectionErrorを注入し、
+	`POST /api/auth/verify-email`が503 SERVICE_UNAVAILABLEを返すこと（fail-close）を検証する。
+	"""
+
 	async def fail_consume(_token: str) -> None:
 		raise RedisConnectionError("redis unavailable")
 
@@ -399,6 +480,10 @@ def test_verify_email_db_failure_is_fail_closed(
 	redis_conn: SyncRedis,
 	monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+	"""`user_repository.mark_email_verified`にOperationalErrorを注入し、
+	`POST /api/auth/verify-email`が503 SERVICE_UNAVAILABLEを返し、実Redis側のtokenが
+	消費されずに残る（fail-closeでロールバックされる）ことを検証する。
+	"""
 	_, _, token = _register(auth_client, mail_outbox, cleanup_state)
 
 	async def fail_update(*_args: object, **_kwargs: object) -> None:
@@ -419,6 +504,11 @@ def test_password_reset_redis_failure_is_fail_closed(
 	redis_conn: SyncRedis,
 	monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+	"""`redis_store.revoke_all_refresh_tokens`にConnectionErrorを注入し、
+	`POST /api/auth/password/reset`が503 SERVICE_UNAVAILABLEを返し、パスワード更新
+	（`user_repository.update_password`）が呼ばれず、実Redis側のリセットtokenも消費されずに
+	残る（fail-closeでロールバックされる）ことを検証する。
+	"""
 	_, email, verification_token = _register(auth_client, mail_outbox, cleanup_state)
 	auth_client.post("/api/auth/verify-email", json={"token": verification_token})
 	auth_client.post("/api/auth/password/forgot", json={"email": email})

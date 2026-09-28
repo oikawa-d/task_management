@@ -53,16 +53,44 @@ from tests.integration.conftest import ALLOWED_ORIGIN, register_payload, registe
 
 
 def _login_body(identifier: str, password: str) -> dict[str, str]:
+	"""`/api/auth/login`へ送るリクエストボディを組み立てる。
+
+	Args:
+		identifier: username/emailなどログイン識別子。
+		password: 平文パスワード。
+
+	Returns:
+		dict[str, str]: login APIのリクエストボディ。
+	"""
 	return {"identifier": identifier, "password": password}
 
 
 def _login(client: TestClient, username: str, password: str) -> Any:
+	"""実APIへログインし、成功（200/204）を確認したうえでレスポンスを返す。
+
+	Args:
+		client: 結合テスト用TestClient。
+		username: ログインするusername。
+		password: 平文パスワード。
+
+	Returns:
+		Any: ログイン成功時のレスポンス（Set-Cookie等の後続検証に使う）。
+	"""
 	response = client.post("/api/auth/login", json=_login_body(username, password), headers={"Origin": ALLOWED_ORIGIN})
 	assert response.status_code in (200, 204), response.text
 	return response
 
 
 def _auth_headers_for(response: Any) -> dict[str, str]:
+	"""ログインレスポンスから、AUTH_MODE=jwtのときのみ後続リクエスト用のAuthorizationヘッダを組み立てる。
+
+	Args:
+		response: ログイン成功時のレスポンス。
+
+	Returns:
+		dict[str, str]: jwtモードでは`Authorization: Bearer <access_token>`、
+			sessionモードでは空辞書（Cookie側で認証されるため不要）。
+	"""
 	if get_backend_settings().auth_mode == "jwt":
 		return {"Authorization": f"Bearer {response.json()['access_token']}"}
 	return {}

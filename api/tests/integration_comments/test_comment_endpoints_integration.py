@@ -1,3 +1,11 @@
+"""コメントAPI（`GET/POST /api/tasks/{task_id}/comments`・`PATCH/DELETE /api/comments/{comment_id}`）の
+router→service→repository→実DB結合テスト。
+
+`tests/integration_comments/conftest.py`の`scenario`が作成するauthor/peer/outsider/adminの4ユーザーと
+プロジェクト・タスク・既存コメントを前提データとして使い、`authenticate`で実ログインしたうえで
+実際のHTTPリクエストを送る。DB/Redisはモックしない。
+"""
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -12,6 +20,7 @@ from tests.integration_comments.conftest import ALLOWED_ORIGIN, CommentScenario,
 
 
 def _error() -> Exception:
+	"""commit失敗を再現するための`OperationalError`（DB接続断相当）を生成する。"""
 	from sqlalchemy.exc import OperationalError
 
 	return OperationalError("comment transaction", {}, SimpleNamespace(sqlstate="08006"))
@@ -33,6 +42,9 @@ async def test_comment_endpoints_require_authentication(
 	path: str,
 	body: dict[str, str] | None,
 ) -> None:
+	"""Cookie/Authorizationヘッダ無しでコメントの一覧取得・作成・更新・削除4パターンを呼ぶと、
+	いずれも401 UNAUTHENTICATEDを返すことを検証する（`scenario`の前提データのみ使用しログインしない）。
+	"""
 	url = f"/api/tasks/{scenario.task_id}/comments" if path == "comments" else f"/api/comments/{scenario.comment_id}"
 	response = client.request(
 		method.upper(),
@@ -47,6 +59,9 @@ async def test_comment_endpoints_require_authentication(
 async def test_comment_mutations_require_csrf_in_session_mode(
 	client: TestClient, scenario: CommentScenario, authenticate
 ) -> None:
+	"""AUTH_MODE=session限定で、X-CSRF-Tokenヘッダを付けずにコメントの作成・更新・削除を送ると、
+	いずれも403 CSRF_INVALIDを返すことを検証する（authorとしてログイン済み）。
+	"""
 	if get_backend_settings().auth_mode != "session":
 		pytest.skip("CSRFはsession方式のみで検証する")
 	authenticate()
@@ -63,6 +78,9 @@ async def test_comment_mutations_require_csrf_in_session_mode(
 async def test_comment_crud_round_trip_at_api_boundary(
 	client: TestClient, scenario: CommentScenario, authenticate
 ) -> None:
+	"""authorとして、コメントの作成（前後空白除去）→一覧取得→更新→削除を一連の実APIリクエストで行い、
+	各段階のレスポンスと最終的な一覧に削除済みコメントが含まれないことを検証する。
+	"""
 	auth_headers = authenticate()
 	created = client.post(
 		f"/api/tasks/{scenario.task_id}/comments",
@@ -96,6 +114,10 @@ async def test_comment_crud_round_trip_at_api_boundary(
 async def test_comment_authorization_boundary_for_peer_outsider_and_admin(
 	client: TestClient, scenario: CommentScenario, authenticate
 ) -> None:
+	"""プロジェクトメンバー(peer)・非メンバー(outsider)・admin各ロールでの認可境界を検証する。
+	peerは一覧取得はできるが他者のコメント更新・削除は403、outsiderはタスクの存在自体を隠す404、
+	adminは他者のコメントでも更新・削除が200/204で成功することを確認する。
+	"""
 	peer_headers = authenticate("peer")
 	assert client.get(f"/api/tasks/{scenario.task_id}/comments", headers=peer_headers).status_code == 200
 	for method in ("patch", "delete"):
@@ -140,6 +162,10 @@ async def test_comment_authorization_boundary_for_peer_outsider_and_admin(
 async def test_comment_task_scope_handles_inactive_unassigned_and_missing_resources(
 	client: TestClient, scenario: CommentScenario, authenticate, db_session: AsyncSession
 ) -> None:
+	"""タスクのスコープに関する境界値を検証する。実DBでis_active=falseへ更新したタスクとその
+	既存コメントへの操作は404、プロジェクト非アサインタスクではauthorのみ操作でき他者は404、
+	存在しないtask_id/comment_idへの操作は404を返すことを確認する。
+	"""
 	auth_headers = authenticate()
 	await db_session.execute(
 		text("UPDATE tasks SET is_active = false WHERE id = :task_id"), {"task_id": scenario.inactive_task_id}
@@ -195,6 +221,10 @@ async def test_comment_task_scope_handles_inactive_unassigned_and_missing_resour
 async def test_comment_create_transaction_failure_leaves_no_partial_row(
 	client: TestClient, scenario: CommentScenario, authenticate, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+	"""コメント作成中の最初の`AsyncSession.commit`にOperationalErrorを注入し、
+	`POST /api/tasks/{task_id}/comments`が503を返したうえで、実DBへ部分的な行が残らない
+	（一覧に該当bodyが現れない）ことを検証する。
+	"""
 	auth_headers = authenticate()
 	from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -225,6 +255,10 @@ async def test_comment_create_transaction_failure_leaves_no_partial_row(
 async def test_comment_update_and_delete_transaction_failure_leave_original_state(
 	client: TestClient, scenario: CommentScenario, authenticate, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+	"""コメント更新・削除それぞれで最初の`AsyncSession.commit`にOperationalErrorを注入し、
+	どちらも503を返したうえで、実DB上のコメントが元の内容のまま残っている
+	（更新は反映されず、削除もされていない）ことを検証する。
+	"""
 	auth_headers = authenticate()
 	from sqlalchemy.ext.asyncio import AsyncSession
 
