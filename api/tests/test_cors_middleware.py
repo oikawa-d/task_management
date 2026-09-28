@@ -20,6 +20,12 @@ DISALLOWED_ORIGIN = "http://evil.example"
 
 @pytest.fixture
 def client_with_mocks():
+	"""DBエンジンとRedisクライアントをモックに差し替えたFastAPIの`TestClient`を用意するfixture。
+
+	CORSミドルウェアの挙動検証に必要な最小限の依存（DB接続・Redis ping成功）のみをモック化し、
+	`TestClient`とDB接続モックのタプルを提供する。後片付けとして、テスト終了後に
+	`app.dependency_overrides`をクリアし、他テストへ影響を残さない。
+	"""
 	mock_connection = AsyncMock()
 	mock_connect_ctx = MagicMock()
 	mock_connect_ctx.__aenter__.return_value = mock_connection
@@ -38,6 +44,10 @@ def client_with_mocks():
 
 
 def test_preflight_from_allowed_origin_returns_cors_headers(client_with_mocks) -> None:
+	"""許可済みOriginからのCORSプリフライト（OPTIONS）が200を返し、
+	`Access-Control-Allow-Origin`・`Allow-Credentials`・`Max-Age`ヘッダーが
+	設定値どおりに付与されることを検証する。
+	"""
 	client, _ = client_with_mocks
 	settings = get_backend_settings()
 
@@ -56,6 +66,9 @@ def test_preflight_from_allowed_origin_returns_cors_headers(client_with_mocks) -
 
 
 def test_actual_request_from_allowed_origin_includes_cors_headers(client_with_mocks) -> None:
+	"""許可済みOriginからの実リクエスト（GET）が200を返し、
+	`Access-Control-Allow-Origin`・`Allow-Credentials`ヘッダーが付与されることを検証する。
+	"""
 	client, mock_connection = client_with_mocks
 	mock_connection.execute.return_value = None
 
@@ -67,6 +80,9 @@ def test_actual_request_from_allowed_origin_includes_cors_headers(client_with_mo
 
 
 def test_preflight_from_disallowed_origin_has_no_cors_headers(client_with_mocks) -> None:
+	"""`CORS_ALLOW_ORIGINS`に含まれないOriginからのプリフライトでは、
+	`Access-Control-Allow-Origin`ヘッダーが付与されないことを検証する。
+	"""
 	client, _ = client_with_mocks
 
 	res = client.options(
@@ -81,6 +97,10 @@ def test_preflight_from_disallowed_origin_has_no_cors_headers(client_with_mocks)
 
 
 def test_actual_request_from_disallowed_origin_has_no_cors_headers(client_with_mocks) -> None:
+	"""不許可Originからの実リクエストでは、アプリ自体は200を返しつつも
+	`Access-Control-Allow-Origin`ヘッダーが付与されないため、ブラウザ側では
+	レスポンスを読み取れない状態になることを検証する。
+	"""
 	client, mock_connection = client_with_mocks
 	mock_connection.execute.return_value = None
 

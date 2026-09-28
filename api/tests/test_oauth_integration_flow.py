@@ -68,15 +68,28 @@ def _new_identity() -> tuple[str, str]:
 
 
 def _userinfo(sub: str, email: str, *, email_verified: bool = True) -> dict[str, Any]:
+	"""Google userinfoエンドポイントのレスポンス相当の辞書を組み立てるヘルパー関数。
+
+	Returns:
+		dict[str, Any]: `sub`・`email`・`email_verified`を持つuserinfo相当の辞書。
+	"""
 	return {"sub": sub, "email": email, "email_verified": email_verified}
 
 
 class _HttpResponse:
+	"""`_GoogleBoundary`が返す、ステータスコードとJSON本体のみを持つ最小限のHTTPレスポンススタブ。"""
+
 	def __init__(self, status_code: int, body: dict[str, Any]) -> None:
+		"""レスポンスのステータスコードとJSON本体を保持する。"""
 		self.status_code = status_code
 		self._body = body
 
 	def json(self) -> dict[str, Any]:
+		"""保持しているJSON本体をそのまま返す。
+
+		Returns:
+			dict[str, Any]: コンストラクタで渡された本体。
+		"""
 		return self._body
 
 
@@ -98,6 +111,9 @@ class _GoogleBoundary:
 		userinfo_status: int = 200,
 		jwks_status: int = 200,
 	) -> None:
+		"""各エンドポイントが返すレスポンス本体・ステータスコードを保持し、
+		token交換で送信されたPOSTボディを記録する`posted`リストを初期化する。
+		"""
 		self.token = token or {}
 		self.userinfo = userinfo or {}
 		self.jwks = jwks or {}
@@ -107,10 +123,22 @@ class _GoogleBoundary:
 		self.posted: list[dict[str, str]] = []
 
 	async def post(self, _url: str, *, data: dict[str, str]) -> _HttpResponse:
+		"""Google tokenエンドポイント宛のPOSTを模し、送信データを`posted`へ記録したうえで
+		設定済みの`token`・`token_status`を返す。
+
+		Returns:
+			_HttpResponse: 設定済みのtokenレスポンス相当のスタブ。
+		"""
 		self.posted.append(data)
 		return _HttpResponse(self.token_status, self.token)
 
 	async def get(self, url: str, *, headers: dict[str, str] | None = None) -> _HttpResponse:
+		"""URLに"certs"を含む場合はJWKSエンドポイント、それ以外はuserinfoエンドポイント宛の
+		GETとみなし、それぞれ設定済みのレスポンスを返す。
+
+		Returns:
+			_HttpResponse: URLに応じたJWKSまたはuserinfoレスポンス相当のスタブ。
+		"""
 		if "certs" in url:
 			return _HttpResponse(self.jwks_status, self.jwks)
 		return _HttpResponse(self.userinfo_status, self.userinfo)
@@ -142,6 +170,11 @@ def _signed_id_token(
 
 
 def _build_app() -> FastAPI:
+	"""OAuthルーター・認証ルーターを組み込み、共通エラーハンドリングを登録した検証用アプリを構築する。
+
+	Returns:
+		FastAPI: `/api/auth/oauth/*`・`/api/auth/*`のエンドポイントを持つアプリ。
+	"""
 	app = FastAPI()
 	register_error_handling(app)
 	app.include_router(oauth_router_module.router)
@@ -150,6 +183,13 @@ def _build_app() -> FastAPI:
 
 
 def _configure(monkeypatch: pytest.MonkeyPatch, db_session: AsyncSession, *, auth_mode: str, jwks_uri: str) -> FastAPI:
+	"""CORS・フロントエンドURL・認証モード・JWKS URI・レート制限上限を環境変数で設定し、
+	設定キャッシュ・認証ストラテジーキャッシュをクリアしたうえで、`get_db_session`を
+	渡された`db_session`へ差し替えた検証用アプリを構築するヘルパー関数。
+
+	Returns:
+		FastAPI: 設定・依存差し替え済みの検証用アプリ。
+	"""
 	monkeypatch.setenv("CORS_ALLOW_ORIGINS", ALLOWED_ORIGIN)
 	monkeypatch.setenv("FRONTEND_BASE_URL", FRONTEND_BASE_URL)
 	monkeypatch.setenv("AUTH_MODE", auth_mode)
@@ -165,6 +205,11 @@ def _configure(monkeypatch: pytest.MonkeyPatch, db_session: AsyncSession, *, aut
 
 
 def _client(app: FastAPI) -> AsyncClient:
+	"""検証用アプリに対する、リダイレクトを自動追従しない`httpx2.AsyncClient`を生成するヘルパー関数。
+
+	Returns:
+		AsyncClient: `ASGITransport`経由でテスト関数と同一イベントループ上で動作するクライアント。
+	"""
 	return AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver", follow_redirects=False)
 
 
@@ -194,6 +239,16 @@ def _assert_pkce_verifier_matches_challenge(boundary: _GoogleBoundary, code_chal
 
 
 async def _create_existing_user(db_session: AsyncSession, email: str, *, verified: bool) -> uuid.UUID:
+	"""OAuth連携前から存在するユーザーを1件作成するヘルパー関数（パスワード未設定）。
+
+	Args:
+		db_session: 作成・コミットに使う`AsyncSession`。
+		email: 作成するユーザーのメールアドレス。
+		verified: Trueの場合、作成直後にメール確認済みとしてマークする。
+
+	Returns:
+		uuid.UUID: 作成したユーザーのid。
+	"""
 	username = f"oauth-existing-{uuid.uuid4().hex[:10]}"
 	user_id = await user_repository.create(db_session, username, email, None)
 	if verified:
@@ -203,11 +258,17 @@ async def _create_existing_user(db_session: AsyncSession, email: str, *, verifie
 
 
 async def _count_users_by_email(db_session: AsyncSession, email: str) -> int:
+	"""指定メールアドレスを持つ`users`行の件数を返すヘルパー関数（重複作成が無いことの確認用）。
+
+	Returns:
+		int: 該当するユーザー数。
+	"""
 	result = await db_session.execute(text("SELECT count(*) FROM users WHERE email = :email"), {"email": email})
 	return int(result.scalar_one())
 
 
 async def _delete_user(db_session: AsyncSession, user_id: uuid.UUID) -> None:
+	"""テストで作成した既存ユーザーを片付けるためのヘルパー関数。指定idの`users`行を削除しコミットする。"""
 	await db_session.execute(text("DELETE FROM users WHERE id = :user_id"), {"user_id": user_id})
 	await db_session.commit()
 
@@ -215,6 +276,11 @@ async def _delete_user(db_session: AsyncSession, user_id: uuid.UUID) -> None:
 async def test_full_session_flow_creates_user_and_establishes_authenticated_session(
 	monkeypatch: pytest.MonkeyPatch, db_session: AsyncSession
 ) -> None:
+	"""sessionモードで、開始→callback→session確立までの一連の流れにより、新規ユーザーが
+	作成されメール確認済みとなること、`oauth_accounts`にGoogleとの紐付けが1件作成されること、
+	`login_history`に`login_method='oauth_google'`・本人のemailで記録されること、
+	確立したsessionで`/api/auth/me`が200を返すことを検証する。
+	"""
 	app = _configure(
 		monkeypatch, db_session, auth_mode="session", jwks_uri="https://jwks.example.test/certs/session-happy"
 	)
@@ -255,6 +321,9 @@ async def test_full_session_flow_creates_user_and_establishes_authenticated_sess
 async def test_oauth_callback_links_existing_verified_email(
 	monkeypatch: pytest.MonkeyPatch, db_session: AsyncSession
 ) -> None:
+	"""同一メールアドレスを持つ確認済みの既存ユーザーがいる場合、OAuthコールバックで
+	新規ユーザーを重複作成せず、その既存ユーザーへ`oauth_accounts`の紐付けを作成することを検証する。
+	"""
 	app = _configure(
 		monkeypatch, db_session, auth_mode="session", jwks_uri="https://jwks.example.test/certs/existing-verified"
 	)
@@ -296,6 +365,10 @@ async def test_oauth_callback_links_existing_verified_email(
 async def test_oauth_callback_rejects_unverified_email(
 	monkeypatch: pytest.MonkeyPatch, db_session: AsyncSession
 ) -> None:
+	"""同一メールアドレスを持つ未確認の既存ユーザーがいる場合、Google側もemail未確認を返す状況では、
+	`error=oauth_email_unverified`へリダイレクトし、既存ユーザーの確認状態やユーザー数を変更せず、
+	`oauth_accounts`の紐付けも作成しないことを検証する。
+	"""
 	app = _configure(
 		monkeypatch, db_session, auth_mode="session", jwks_uri="https://jwks.example.test/certs/existing-unverified"
 	)
@@ -337,6 +410,11 @@ async def test_oauth_callback_rejects_unverified_email(
 async def test_full_jwt_flow_exchanges_handoff_and_establishes_bearer_authentication(
 	monkeypatch: pytest.MonkeyPatch, db_session: AsyncSession
 ) -> None:
+	"""jwtモードで、開始→callback（handoffコード発行）→`/api/auth/oauth/exchange`による
+	アクセストークン取得までの流れを検証し、取得したBearerトークンで`/api/auth/me`が200を返すこと、
+	同一handoffコードの再利用（リプレイ）は400・`code="OAUTH_HANDOFF_INVALID"`で拒否されること、
+	`login_history`に`login_method='oauth_google'`で記録されることを検証する。
+	"""
 	app = _configure(monkeypatch, db_session, auth_mode="jwt", jwks_uri="https://jwks.example.test/certs/jwt-happy")
 	client_id = get_backend_settings().google_client_id
 	sub, email = _new_identity()
@@ -381,6 +459,9 @@ async def test_full_jwt_flow_exchanges_handoff_and_establishes_bearer_authentica
 async def test_callback_rejects_state_cookie_mismatch_without_creating_user(
 	monkeypatch: pytest.MonkeyPatch, db_session: AsyncSession
 ) -> None:
+	"""`cerberus_oauth_state`Cookieの値を開始時に発行されたstateと異なる値へ改ざんした場合、
+	callbackが`error=invalid_state`へリダイレクトし、ユーザーが作成されないことを検証する。
+	"""
 	app = _configure(
 		monkeypatch, db_session, auth_mode="session", jwks_uri="https://jwks.example.test/certs/state-mismatch"
 	)
@@ -400,6 +481,9 @@ async def test_callback_rejects_state_cookie_mismatch_without_creating_user(
 async def test_callback_rejects_nonce_mismatch_without_creating_user(
 	monkeypatch: pytest.MonkeyPatch, db_session: AsyncSession
 ) -> None:
+	"""IDトークンに、開始時に発行したnonceと異なる値（"unexpected-nonce"）を埋め込んだ場合、
+	callbackが`error=oauth_failed`へリダイレクトし、ユーザーが作成されないことを検証する。
+	"""
 	app = _configure(
 		monkeypatch, db_session, auth_mode="session", jwks_uri="https://jwks.example.test/certs/nonce-mismatch"
 	)
@@ -426,6 +510,9 @@ async def test_callback_rejects_nonce_mismatch_without_creating_user(
 async def test_callback_rejects_userinfo_sub_mismatch_without_creating_user(
 	monkeypatch: pytest.MonkeyPatch, db_session: AsyncSession
 ) -> None:
+	"""IDトークンの`sub`とuserinfoエンドポイントが返す`sub`が一致しない場合、
+	callbackが`error=oauth_failed`へリダイレクトし、ユーザーが作成されないことを検証する。
+	"""
 	app = _configure(
 		monkeypatch, db_session, auth_mode="session", jwks_uri="https://jwks.example.test/certs/sub-mismatch"
 	)
@@ -455,6 +542,10 @@ async def test_callback_rejects_userinfo_sub_mismatch_without_creating_user(
 async def test_callback_fails_closed_when_google_token_endpoint_is_unavailable(
 	monkeypatch: pytest.MonkeyPatch, db_session: AsyncSession
 ) -> None:
+	"""Google tokenエンドポイントが503を返す場合、callbackが`error=oauth_failed`へ
+	リダイレクトしフェイルクローズすること、失敗時点でstateが既に消費されているため
+	同一stateでの再試行が`error=invalid_state`になること、ユーザーが作成されないことを検証する。
+	"""
 	app = _configure(
 		monkeypatch, db_session, auth_mode="session", jwks_uri="https://jwks.example.test/certs/token-down"
 	)
@@ -484,6 +575,9 @@ async def test_callback_fails_closed_when_google_token_endpoint_is_unavailable(
 async def test_callback_fails_closed_when_google_jwks_endpoint_is_unavailable(
 	monkeypatch: pytest.MonkeyPatch, db_session: AsyncSession
 ) -> None:
+	"""Google JWKSエンドポイントが503を返す場合、callbackが`error=oauth_failed`へ
+	リダイレクトしフェイルクローズし、ユーザーが作成されないことを検証する。
+	"""
 	app = _configure(monkeypatch, db_session, auth_mode="session", jwks_uri="https://jwks.example.test/certs/jwks-down")
 	_sub, email = _new_identity()
 	async with _client(app) as client:
@@ -506,6 +600,10 @@ async def test_callback_fails_closed_when_google_jwks_endpoint_is_unavailable(
 async def test_start_normalizes_disallowed_redirect_to_across_the_full_roundtrip(
 	monkeypatch: pytest.MonkeyPatch, db_session: AsyncSession
 ) -> None:
+	"""開始時に外部ドメインへの`redirect_to`（"https://evil.example/steal"）を指定しても、
+	その値がstateへ紐づいたままcallbackまで往復し、最終的には安全な既定値
+	"/dashboard"へ正規化されてリダイレクトされることを検証する。
+	"""
 	app = _configure(
 		monkeypatch, db_session, auth_mode="session", jwks_uri="https://jwks.example.test/certs/redirect-guard"
 	)
