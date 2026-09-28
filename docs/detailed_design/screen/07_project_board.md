@@ -56,11 +56,13 @@
 
 レスポンシブ：3列は `flex` で横並びを維持し、画面幅が狭い場合は列内を `overflow-x: auto` で横スクロールさせる（列を縦積みにはしない。カンバンの列対応関係を保つため）。列の最小幅は `min-width: 16rem` とする。
 
+共通ナビは`AppLayout`のローカルstate（初期`false`）で表示を制御する。開いているデスクトップ幅ではメイン領域をサイドバー幅ぶん調整し、狭幅では左ドロワーとして重ねる。閉じた状態では全画面幅で非表示とし、状態はlocalStorageや`uiStore`へ保存しない（サイドバー幅は`--size-sidebar-width`トークン）。
+
 ## 3. UI要素仕様
 
 | No | 要素 | 種別 | 初期値 | 入力制約 | 活性条件 | イベント／遷移 |
 |----|------|------|--------|----------|----------|----------------|
-| ① | ハンバーガー | button | `uiStore.sidebarOpen` | - | 常時 | サイドバー開閉 |
+| ① | ハンバーガー | button | `AppLayout`のローカルstate（初期`false`） | - | 常時 | 共通ナビを開閉。状態はlocalStorageや`uiStore`へ保存しない |
 | ② | プロジェクト名見出し | text | `board.project.name` | - | - | - |
 | ③ | タスク作成ボタン | button | - | - | 常時活性 | `TaskCreateModal` を開く |
 | ④⑤⑥ | 列ヘッダー | text + badge | 固定ラベル + `columns[status].length` | - | - | - |

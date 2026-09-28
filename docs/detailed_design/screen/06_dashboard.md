@@ -53,20 +53,20 @@
 └────────────────────────────────────────────────────────────┘
 ```
 
-- ①ハンバーガー：サイドバー開閉（`uiStore.sidebarOpen`、localStorage永続）
+- ①ハンバーガー：`AppLayout`のローカルstate（初期`false`）で共通ナビを開閉する（localStorageへ永続化しない）。全画面幅でstateが表示状態を決め、閉じている間は非表示とする。デスクトップ幅で開いている間はメイン領域をサイドバー幅ぶん右へ配置し、狭幅ではメイン領域に重なる左ドロワーとして表示する。
 - ②Sidebar：`home` / `管理`（`role==='admin'` のみ描画） / `設定` / `ログアウト`。共通仕様は [05_frontend.md §3](../../basic_design/05_frontend.md#3-共通レイアウト)
 - ③④ヘッダー行：見出しと新規作成ボタン
 - ⑤カード：プロジェクト名、説明の先頭、オーナー表示名
 - ⑥メンバー数バッジ、⑦ステータス別タスク件数バッジ（todo/in_progress/done）
 - ⑧空状態：`items.length === 0` のとき表示
 
-レスポンシブ：カードグリッドは `grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr))` とし、幅に応じて列数が自動で変わる。狭幅ではサイドバーは既定で閉じ、ハンバーガーで開閉する（開閉判定は `uiStore` の値をそのまま使い、画面幅による自動制御は行わない。要検討：初期表示時のブレークポイント別デフォルト値は基本設計に定めがなく未定義）。
+レスポンシブ：カードグリッドは `grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr))` とし、幅に応じて列数が自動で変わる。共通ナビは`AppLayout`のローカルstateで開閉し、localStorageへ保存しない。初期状態は全画面幅で閉じ、ハンバーガーで開いた時だけ表示する。サイドバー幅は`--size-sidebar-width`トークンに従う。
 
 ## 3. UI要素仕様
 
 | No | 要素 | 種別 | 初期値 | 入力制約 | 活性条件 | イベント／遷移 |
 |----|------|------|--------|----------|----------|----------------|
-| ① | ハンバーガー | button | `uiStore.sidebarOpen` | - | 常時 | クリックで `uiStore.toggleSidebar()` |
+| ① | ハンバーガー | button | `AppLayout`のローカルstate（初期`false`） | - | 常時 | クリックで共通ナビを開閉。`aria-expanded`/`aria-controls`を更新し、状態は永続化しない |
 | ② | Sidebar項目 | nav link | - | - | 「管理」は `role==='admin'` のみ表示 | クリックで各パスへ`navigate` |
 | ③ | 見出し | text | 「プロジェクト」固定 | - | - | - |
 | ④ | 新規プロジェクトボタン | button | - | - | 常時活性 | クリックで `ProjectCreateForm` を開く（`isCreateOpen=true`） |
@@ -102,7 +102,7 @@
 | ローカルstate | `page` / `perPage` | `number` | `1` / `20` | ⑬操作。作成成功時は`page=1`へ戻して再取得 | なし |
 | React Hook Form | `ProjectCreateForm`（`name`, `description`） | `zod` スキーマ由来 | `{name:'', description:''}` | 入力・送信・リセット | なし |
 | Zustand（`projectStore`） | `selectedProjectId` | `string \| null` | `null` | カードクリック、作成成功（201）時に作成したプロジェクトIDを選択。ログアウト時にクリア | メモリのみ |
-| Zustand（`uiStore`） | `sidebarOpen`, `fontScale` | `boolean` / `number` | localStorage復元値、無ければ `true` / `1.0` | ①操作、設定画面での変更 | localStorage |
+| Zustand（`uiStore`） | `fontScale`, `theme` | `number` / `"light" \| "dark" \| "system"` | localStorage復元値、無ければ `1.0` / `"system"` | 設定画面での変更 | localStorage（`cerberus.ui`） |
 | Zustand（`authStore`） | `user.role` | `'member'\|'admin'` | `/auth/me` 由来 | ログイン/ログアウト | メモリのみ |
 | TanStack Query | `['projects', {page, perPage}]` | `Page<ProjectSummary>` | 未取得 | `page` / `perPage`変更時fetch、`createProject`成功時に`invalidate` | しない（[05_frontend.md §5](../../basic_design/05_frontend.md#5-状態管理)） |
 | TanStack Query | `['notifications', 'unread-count']` / `['notifications', page]` | 件数 / `NotificationListResponse` | 未取得 | ポーリング、パネル開閉、既読操作時 | しない |
@@ -407,5 +407,5 @@ flowchart LR
 | なし | ページングは`meta.page` / `meta.total_pages`を⑬として定義済み | - |
 | 確定 | 409はプロジェクトAPIに発生契機・エラーコードの定義がないため本画面では扱わない。Issue #159の受入条件をAPI契約に合わせて訂正する | - |
 | 確定 | `description` の文字数上限はissue #40で0〜2000文字（Unicodeコードポイント数で判定）に確定（[04_api.md §3.2](../../basic_design/04_api.md#32-プロジェクトタスク)） | - |
-| 要検討 | サイドバー開閉の画面幅によるデフォルト値切り替え（狭幅時の自動折りたたみ等）の要否が [05_frontend.md](../../basic_design/05_frontend.md) に明記されていない | レスポンシブ挙動の実装方針 |
+| 決定済み | 共通ナビは`AppLayout`のローカルstate（初期`false`）で管理し、全画面幅で閉じた時は非表示、開いた時だけ表示する。デスクトップ幅ではメイン領域をサイドバー幅ぶん調整し、狭幅では左ドロワーとして重ねる。localStorageや`uiStore`には保持しない | [05_frontend.md §3](../../basic_design/05_frontend.md#3-共通レイアウト)に合わせる |
 | 要検討 | ユーザー単位のタイムゾーン設定を将来導入する場合のカレンダー日付キー | `due_date`の算出元とAPI契約の再設計 |

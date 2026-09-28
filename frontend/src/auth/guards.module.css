@@ -1,0 +1,1 @@
+.guard { display: grid; min-height: var(--size-guard-min-height); place-items: center; }

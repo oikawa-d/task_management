@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { getConfiguredCommentBodyMaxLength, isPromiseLike } from "../formConfig";
+import styles from "./CommentList.module.css";
 
 export interface CommentAuthor {
 	id: string;
@@ -74,37 +75,38 @@ export function CommentList({
 	};
 
 	return (
-		<section aria-label="コメント一覧">
-			{error && <p role="alert">{error}</p>}
-			{!error && sortedComments.length === 0 && <p>コメントはありません</p>}
+		<section className={styles.listSection} aria-label="コメント一覧">
+			{error && <p className={styles.error} role="alert">{error}</p>}
+			{!error && sortedComments.length === 0 && <p className={styles.empty}>コメントはありません</p>}
 			{sortedComments.length > 0 && (
-				<ul>
+					<ul className={styles.list}>
 					{sortedComments.map((comment) => {
 						const canModify =
 							comment.author.id === currentUserId || currentUserRole === "admin";
 						return (
-							<li key={comment.id} role="article">
-								<div>
+							<li className={styles.item} key={comment.id} role="article">
+								<div className={styles.meta}>
 									<span>{comment.author.display_name}</span>
 									<time dateTime={comment.created_at}>{comment.created_at}</time>
 								</div>
 								{editingCommentId === comment.id ? (
 									<>
-										<label>
+										<label className={styles.editor}>
 											コメントを編集
 											<textarea value={draft} onChange={(event) => setDraft(event.target.value)} />
 										</label>
-										{validationError && <p role="alert">{validationError}</p>}
-										<button type="button" onClick={save}>保存</button>
+										{validationError && <p className={styles.error} role="alert">{validationError}</p>}
+										<div className={styles.actions}><button type="button" onClick={save}>保存</button>
 										<button type="button" onClick={() => setEditingCommentId(null)}>
 											キャンセル
 										</button>
+										</div>
 									</>
 								) : (
-									<p>{comment.body}</p>
+									<p className={styles.body}>{comment.body}</p>
 								)}
 								{canModify && editingCommentId !== comment.id && (
-									<div>
+									<div className={styles.actions}>
 										<button type="button" onClick={() => startEditing(comment)}>
 											編集
 										</button>

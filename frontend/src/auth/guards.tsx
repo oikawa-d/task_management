@@ -3,12 +3,13 @@ import { Navigate, Outlet } from "react-router-dom";
 import { AuthLoading } from "./AuthLoading";
 import { useAuthStore } from "./authStore";
 import { ROUTES } from "../routes";
+import styles from "./guards.module.css";
 
 export function RequireAuth() {
 	const status = useAuthStore((state) => state.status);
 
 	if (status === "loading") {
-		return <AuthLoading />;
+		return <div className={styles.guard}><AuthLoading /></div>;
 	}
 
 	if (status === "unauthenticated") {
@@ -22,7 +23,7 @@ export function RequireGuest() {
 	const status = useAuthStore((state) => state.status);
 
 	if (status === "loading") {
-		return <AuthLoading />;
+		return <div className={styles.guard}><AuthLoading /></div>;
 	}
 
 	if (status === "authenticated") {
@@ -37,7 +38,7 @@ export function RequireAdmin() {
 	const user = useAuthStore((state) => state.user);
 
 	if (status === "loading") {
-		return <AuthLoading />;
+		return <div className={styles.guard}><AuthLoading /></div>;
 	}
 
 	if (status === "unauthenticated") {

@@ -7,6 +7,7 @@ import { Calendar } from "../components/Calendar";
 import type { ProjectSummary } from "../api/types";
 import { useDashboard } from "../hooks/useDashboard";
 import { ROUTES } from "../../../routes";
+import styles from "./DashboardPage.module.css";
 
 function formatLocalDate(value: Date): string {
 	return [value.getFullYear(), value.getMonth() + 1, value.getDate()]
@@ -47,15 +48,15 @@ export function DashboardPage() {
 	};
 
 	return (
-		<section>
-			<header>
+		<section className={styles.page}>
+			<header className={styles.header}>
 				<h1>ダッシュボード</h1>
 				<button type="button" onClick={() => setCreateOpen(true)}>
 					プロジェクトを作成
 				</button>
 			</header>
 			{isCreateOpen && <ProjectCreateForm onSubmit={handleCreate} onCancel={() => setCreateOpen(false)} />}
-			<section aria-labelledby="project-list-heading">
+			<section className={styles.section} aria-labelledby="project-list-heading">
 				<h2 id="project-list-heading">プロジェクト一覧</h2>
 				<ProjectList
 					isLoading={projectsQuery.isLoading}
@@ -68,7 +69,7 @@ export function DashboardPage() {
 					onCreateClick={() => setCreateOpen(true)}
 				/>
 			</section>
-			<section aria-labelledby="calendar-heading">
+			<section className={styles.section} aria-labelledby="calendar-heading">
 				<h2 id="calendar-heading">期限カレンダー</h2>
 				<Calendar
 					month={calendarMonth}

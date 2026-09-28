@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
 import { ROUTES } from "../../../routes";
+import styles from "./AuthPage.module.css";
 
 export type PasswordForgotFormSlotProps = {
 	onSent: () => void;
@@ -49,7 +50,7 @@ export function PasswordForgotPage({
 	}, [sent]);
 
 	return (
-		<section aria-labelledby="password-forgot-heading">
+		<section className={styles.page} aria-labelledby="password-forgot-heading">
 			<h1 id="password-forgot-heading">パスワードをお忘れの方</h1>
 			{sent ? (
 				<div>

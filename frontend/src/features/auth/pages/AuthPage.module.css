@@ -1,0 +1,6 @@
+.page { display: grid; gap: var(--space-5); }
+.page h1, .page h2 { margin: 0; line-height: var(--line-height-tight); }
+.page h1 { font-size: var(--font-size-2xl); }
+.page h2 { font-size: var(--font-size-lg); }
+.page p { margin: 0; }
+.page > a { justify-self: start; }

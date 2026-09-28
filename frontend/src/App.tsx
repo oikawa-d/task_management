@@ -6,6 +6,7 @@ import { AuthFormsProvider, type AuthFormSlots } from "./features/auth/pages/aut
 import { SettingsFormsProvider, type SettingsFormSlots } from "./features/settings/pages/SettingsPage";
 import { queryClient } from "./lib/queryClient";
 import { router } from "./router";
+import styles from "./App.module.css";
 
 type AppProps = {
 	bootstrap?: AuthBootstrap;
@@ -15,6 +16,7 @@ type AppProps = {
 
 function App({ bootstrap, settingsForms, authForms }: AppProps) {
 	return (
+		<div className={styles.app}>
 		<QueryClientProvider client={queryClient}>
 			<AuthProvider bootstrap={bootstrap}>
 				<AuthFormsProvider slots={authForms}>
@@ -24,6 +26,7 @@ function App({ bootstrap, settingsForms, authForms }: AppProps) {
 				</AuthFormsProvider>
 			</AuthProvider>
 		</QueryClientProvider>
+		</div>
 	);
 }
 

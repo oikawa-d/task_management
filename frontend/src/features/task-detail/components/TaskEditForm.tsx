@@ -1,6 +1,7 @@
 import { useEffect, useState, type Ref } from "react";
 import { TASK_DESCRIPTION_MAX_LENGTH } from "../config/taskConfig";
 import { countCodePoints } from "../../../lib/validation/stringLength";
+import styles from "./TaskEditForm.module.css";
 
 export type TaskStatus = "todo" | "in_progress" | "done";
 export type TaskEditableField = "title" | "description" | "assignee_id" | "due_at" | "status";
@@ -96,8 +97,8 @@ export function TaskEditForm({
 	const errorFor = (field: TaskEditableField) => localErrors[field] ?? fieldErrors[field];
 
 	return (
-		<form aria-label="タスク編集" onSubmit={(event) => event.preventDefault()}>
-			<label>
+		<form className={styles.form} aria-label="タスク編集" onSubmit={(event) => event.preventDefault()}>
+			<label className={styles.field}>
 				タイトル
 				<input
 					ref={titleInputRef}
@@ -109,9 +110,9 @@ export function TaskEditForm({
 					disabled={isSaving}
 				/>
 			</label>
-			{errorFor("title") && <p role="alert">{errorFor("title")}</p>}
+			{errorFor("title") && <p className={styles.error} role="alert">{errorFor("title")}</p>}
 
-			<label>
+			<label className={styles.field}>
 				説明
 				<textarea
 					value={description}
@@ -122,9 +123,9 @@ export function TaskEditForm({
 					disabled={isSaving}
 				/>
 			</label>
-			{errorFor("description") && <p role="alert">{errorFor("description")}</p>}
+			{errorFor("description") && <p className={styles.error} role="alert">{errorFor("description")}</p>}
 
-			<label>
+			<label className={styles.field}>
 				担当者
 				<select
 					value={task.assignee_id ?? ""}
@@ -139,9 +140,9 @@ export function TaskEditForm({
 					))}
 				</select>
 			</label>
-			{errorFor("assignee_id") && <p role="alert">{errorFor("assignee_id")}</p>}
+			{errorFor("assignee_id") && <p className={styles.error} role="alert">{errorFor("assignee_id")}</p>}
 
-			<label>
+			<label className={styles.field}>
 				期限
 				<input
 					type="datetime-local"
@@ -151,9 +152,9 @@ export function TaskEditForm({
 					aria-invalid={Boolean(errorFor("due_at"))}
 				/>
 			</label>
-			{errorFor("due_at") && <p role="alert">{errorFor("due_at")}</p>}
+			{errorFor("due_at") && <p className={styles.error} role="alert">{errorFor("due_at")}</p>}
 
-			<label>
+			<label className={styles.field}>
 				ステータス
 				<select
 					value={task.status}
@@ -167,7 +168,7 @@ export function TaskEditForm({
 					))}
 				</select>
 			</label>
-			{errorFor("status") && <p role="alert">{errorFor("status")}</p>}
+			{errorFor("status") && <p className={styles.error} role="alert">{errorFor("status")}</p>}
 		</form>
 	);
 }

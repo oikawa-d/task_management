@@ -7,6 +7,7 @@ import { useBoard } from "./hooks/useBoard";
 import { useUpdateTaskMutation } from "./hooks/useUpdateTaskMutation";
 import { TaskDetailModal } from "./components/TaskDetailModal";
 import { taskDetailStore } from "../../stores/taskDetailStore";
+import styles from "./BoardPage.module.css";
 
 export function BoardPage() {
 	const { projectId, taskId } = useParams();
@@ -29,12 +30,12 @@ export function BoardPage() {
 		() => setMutationMessage("他のユーザーが更新したため最新の状態を表示しました。"),
 		() => setMutationMessage("タスクの移動に失敗しました。元の状態へ戻しました。"),
 	);
-	if (!projectId) return <p>プロジェクトが見つかりません</p>;
+	if (!projectId) return <p className={styles.state}>プロジェクトが見つかりません</p>;
 	return (
-		<section>
-			<h1>プロジェクト</h1>
-			{isLoading && <p role="status">ボードを読み込み中...</p>}
-			<KanbanBoard
+		<section className={styles.page}>
+			<header className={styles.header}><h1>プロジェクト</h1></header>
+			{isLoading && <p className={styles.state} role="status">ボードを読み込み中...</p>}
+			<div className={styles.board}><KanbanBoard
 				columns={board.columns}
 				onTaskMove={(move) => {
 					setMutationMessage(null);
@@ -42,7 +43,7 @@ export function BoardPage() {
 				}}
 				onCardClick={(id) => navigate(ROUTES.TASK(projectId, id))}
 				errorMessage={mutationMessage ?? (error ? "ボードを読み込めませんでした。" : null)}
-			/>
+			/></div>
 			{taskId && <TaskDetailModal projectId={projectId} taskId={taskId} onClose={() => navigate(ROUTES.PROJECT(projectId))} />}
 		</section>
 	);

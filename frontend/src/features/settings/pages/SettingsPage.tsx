@@ -9,6 +9,7 @@ import { ApiError } from "../../../api/errors";
 import { ROUTES } from "../../../routes";
 import styles from "./SettingsPage.module.css";
 import { FontSizeSelector } from "../components/FontSizeSelector";
+import { ThemeSelector } from "../components/ThemeSelector";
 import { LoginHistoryTable } from "../components/LoginHistoryTable";
 import { PasswordChangeForm } from "../PasswordChangeForm";
 import { ProfileForm } from "../ProfileForm";
@@ -192,7 +193,7 @@ export function SettingsPage({
 				<h2 id={`${activeTab}-heading`}>{activeLabel}</h2>
 				{activeTab === "profile" ? renderedProfileForm : null}
 				{activeTab === "password" ? renderedPasswordChangeForm : null}
-				{activeTab === "display" ? <FontSizeSelector /> : null}
+				{activeTab === "display" ? <div className={styles.displaySettings}><FontSizeSelector /><ThemeSelector /></div> : null}
 				{activeTab === "history" ? <LoginHistoryTable /> : null}
 			</div>
 		</section>

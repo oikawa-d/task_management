@@ -9,6 +9,7 @@ import { useAuthMeQuery } from "../hooks/useAuthMeQuery";
 import { useOAuthExchange } from "../hooks/useOAuthExchange";
 import { isSafeRelativePath } from "../utils/url";
 import { oauthExchangeSchema } from "../validation";
+import styles from "./AuthPage.module.css";
 
 type CallbackState = "processing" | "failed";
 
@@ -121,7 +122,7 @@ export function OAuthCallbackPage() {
 	}, [callbackState]);
 
 	return (
-		<section>
+		<section className={styles.page}>
 			{callbackState === "processing" && (
 				<p role="status" aria-live="polite">
 					ログイン処理中です…

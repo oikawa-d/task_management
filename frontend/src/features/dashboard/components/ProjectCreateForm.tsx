@@ -5,6 +5,7 @@ import { ApiError } from "../../../api/errors";
 import type { ProjectCreateRequest } from "../api/types";
 import { resolveForbiddenMessage } from "../errors";
 import { createZodResolver, projectCreateSchema, type ProjectCreateFormValues } from "../validation";
+import styles from "./ProjectCreateForm.module.css";
 
 const GENERIC_ERROR_MESSAGE = "プロジェクトの作成に失敗しました。しばらくしてから再度お試しください";
 
@@ -71,10 +72,10 @@ export function ProjectCreateForm({ onSubmit, onCancel }: ProjectCreateFormProps
 	const nameRegistration = register("name");
 
 	return (
-		<form onSubmit={handleSubmit(submit)} noValidate aria-labelledby="create-project-title">
+		<form className={styles.form} onSubmit={handleSubmit(submit)} noValidate aria-labelledby="create-project-title">
 			<h2 id="create-project-title">新規プロジェクトの作成</h2>
 
-			<div>
+			<div className={styles.field}>
 				<label htmlFor="project-name">プロジェクト名</label>
 				<input
 					id="project-name"
@@ -94,7 +95,7 @@ export function ProjectCreateForm({ onSubmit, onCancel }: ProjectCreateFormProps
 				)}
 			</div>
 
-			<div>
+			<div className={styles.field}>
 				<label htmlFor="project-description">説明</label>
 				<textarea
 					id="project-description"
@@ -110,17 +111,19 @@ export function ProjectCreateForm({ onSubmit, onCancel }: ProjectCreateFormProps
 			</div>
 
 			{errors.root && (
-				<p role="alert" aria-live="assertive">
+				<p className={styles.error} role="alert" aria-live="assertive">
 					{errors.root.message}
 				</p>
 			)}
 
+			<div className={styles.actions}>
 			<button type="submit" disabled={isSubmitting}>
 				作成
 			</button>
 			<button type="button" onClick={onCancel}>
 				キャンセル
 			</button>
+			</div>
 		</form>
 	);
 }

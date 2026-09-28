@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 
 import { ROUTES } from "../../../routes";
 import { useHashToken } from "../hooks/useHashToken";
+import styles from "./AuthPage.module.css";
 
 export type PasswordResetFormSlotProps = {
 	token: string;
@@ -36,7 +37,7 @@ export function PasswordResetPage({
 	const { token, ready } = useHashToken();
 
 	return (
-		<section aria-labelledby="password-reset-heading">
+		<section className={styles.page} aria-labelledby="password-reset-heading">
 			<h1 id="password-reset-heading">新しいパスワードを設定</h1>
 			{!ready ? null : token ? (
 				form({ token })

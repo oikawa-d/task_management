@@ -1,0 +1,1 @@
+.state { display: grid; gap: var(--space-3); padding: var(--space-4); border: var(--border-width-thin) solid var(--color-border); border-radius: var(--radius-md); color: var(--color-text-secondary); background: var(--color-surface); }

@@ -7,6 +7,7 @@ import { VerifyEmailPanel, type VerifyEmailPhase } from "../components/VerifyEma
 import { EMAIL_VERIFY_REDIRECT_DELAY_MS } from "../config/pageConfig";
 import { useHashToken } from "../hooks/useHashToken";
 import { authTokenSchema } from "../validation";
+import styles from "./AuthPage.module.css";
 
 /**
  * メール認証画面（/verify-email#token=...）。
@@ -64,7 +65,7 @@ export function VerifyEmailPage() {
 	const redirectNow = () => navigate(ROUTES.LOGIN, { state: { emailVerified: true } });
 
 	return (
-		<section aria-labelledby="verify-email-heading">
+		<section className={styles.page} aria-labelledby="verify-email-heading">
 			<h1 id="verify-email-heading">メールアドレスを確認中です</h1>
 			{ready ? (
 				<VerifyEmailPanel phase={phase} errorMessage={errorMessage} onRedirectNow={redirectNow} />
