@@ -1,3 +1,5 @@
+"""Repository Notificationテスト。"""
+
 import uuid
 
 from app.repository import notification_repository, user_repository
@@ -20,6 +22,7 @@ async def _create_notification(db: AsyncSession, user_id, dedupe_key: str, read_
 
 
 async def test_list_by_user_returns_created_at_desc(db_session: AsyncSession) -> None:
+	"""test_list_by_user_returns_created_at_desc。"""
 	user_id = await user_repository.create(db_session, "notiflist1", "notiflist1@example.com", "hash")
 	await db_session.execute(
 		text(
@@ -42,6 +45,7 @@ async def test_list_by_user_returns_created_at_desc(db_session: AsyncSession) ->
 
 
 async def test_list_by_user_handles_deleted_task_gracefully(db_session: AsyncSession) -> None:
+	"""test_list_by_user_handles_deleted_task_gracefully。"""
 	user_id = await user_repository.create(db_session, "notiflist2", "notiflist2@example.com", "hash")
 	task_id = (
 		await db_session.execute(
@@ -66,6 +70,7 @@ async def test_list_by_user_handles_deleted_task_gracefully(db_session: AsyncSes
 
 
 async def test_list_by_user_includes_current_task_title_and_project(db_session: AsyncSession) -> None:
+	"""test_list_by_user_includes_current_task_title_and_project。"""
 	user_id = await user_repository.create(db_session, "notiflist4", "notiflist4@example.com", "hash")
 	project_id = (
 		await db_session.execute(
@@ -97,6 +102,7 @@ async def test_list_by_user_includes_current_task_title_and_project(db_session: 
 
 
 async def test_list_by_user_unread_only_excludes_read(db_session: AsyncSession) -> None:
+	"""test_list_by_user_unread_only_excludes_read。"""
 	user_id = await user_repository.create(db_session, "notiflist3", "notiflist3@example.com", "hash")
 	await _create_notification(db_session, user_id, "k4", read_at_expr="now()")
 	await _create_notification(db_session, user_id, "k5")
@@ -108,6 +114,7 @@ async def test_list_by_user_unread_only_excludes_read(db_session: AsyncSession) 
 
 
 async def test_list_by_user_total_count_reflects_all_matching_rows_not_page_size(db_session: AsyncSession) -> None:
+	"""test_list_by_user_total_count_reflects_all_matching_rows_not_page_size。"""
 	user_id = await user_repository.create(db_session, "notiflist5", "notiflist5@example.com", "hash")
 	for i in range(25):
 		await _create_notification(db_session, user_id, f"page-{i}")
@@ -141,6 +148,7 @@ async def test_list_by_user_returns_empty_and_count_notifications_still_reports_
 
 
 async def test_count_notifications_respects_unread_only_filter(db_session: AsyncSession) -> None:
+	"""test_count_notifications_respects_unread_only_filter。"""
 	user_id = await user_repository.create(db_session, "notiflist7", "notiflist7@example.com", "hash")
 	for i in range(2):
 		await _create_notification(db_session, user_id, f"count-unread-{i}")
@@ -154,6 +162,7 @@ async def test_count_notifications_respects_unread_only_filter(db_session: Async
 
 
 async def test_count_unread_returns_unread_only(db_session: AsyncSession) -> None:
+	"""test_count_unread_returns_unread_only。"""
 	user_id = await user_repository.create(db_session, "notifcount1", "notifcount1@example.com", "hash")
 	for i in range(3):
 		await _create_notification(db_session, user_id, f"unread-{i}")
@@ -166,6 +175,7 @@ async def test_count_unread_returns_unread_only(db_session: AsyncSession) -> Non
 
 
 async def test_mark_read_is_idempotent(db_session: AsyncSession) -> None:
+	"""test_mark_read_is_idempotent。"""
 	user_id = await user_repository.create(db_session, "notifread1", "notifread1@example.com", "hash")
 	notification_id = await _create_notification(db_session, user_id, "k6")
 
@@ -186,6 +196,7 @@ async def test_mark_read_is_idempotent(db_session: AsyncSession) -> None:
 
 
 async def test_mark_read_other_users_notification_does_not_update(db_session: AsyncSession) -> None:
+	"""test_mark_read_other_users_notification_does_not_update。"""
 	owner_id = await user_repository.create(db_session, "notifread2", "notifread2@example.com", "hash")
 	other_id = await user_repository.create(db_session, "notifread3", "notifread3@example.com", "hash")
 	notification_id = await _create_notification(db_session, owner_id, "k7")
@@ -200,6 +211,7 @@ async def test_mark_read_other_users_notification_does_not_update(db_session: As
 
 
 async def test_mark_all_read_only_updates_unread_rows(db_session: AsyncSession) -> None:
+	"""test_mark_all_read_only_updates_unread_rows。"""
 	user_id = await user_repository.create(db_session, "notifreadall1", "notifreadall1@example.com", "hash")
 	already_read_id = await _create_notification(db_session, user_id, "k8", read_at_expr="now() - interval '1 day'")
 	unread_id = await _create_notification(db_session, user_id, "k9")
@@ -222,6 +234,7 @@ async def test_mark_all_read_only_updates_unread_rows(db_session: AsyncSession) 
 
 
 async def test_purge_expired_deletes_regardless_of_read_state(db_session: AsyncSession) -> None:
+	"""test_purge_expired_deletes_regardless_of_read_state。"""
 	user_id = await user_repository.create(db_session, "notifpurge1", "notifpurge1@example.com", "hash")
 	await db_session.execute(
 		text(

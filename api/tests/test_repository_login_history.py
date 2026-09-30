@@ -1,9 +1,12 @@
+"""Repository Login Historyテスト。"""
+
 from app.repository import login_history_repository, user_repository
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def test_create_records_successful_login(db_session: AsyncSession) -> None:
+	"""test_create_records_successful_login。"""
 	user_id = await user_repository.create(db_session, "alice", "alice@example.com", "hash")
 
 	await login_history_repository.create(
@@ -24,6 +27,7 @@ async def test_create_records_successful_login(db_session: AsyncSession) -> None
 
 
 async def test_oauth_session_callback_records_user_email(db_session: AsyncSession) -> None:
+	"""test_oauth_session_callback_records_user_email。"""
 	user_id = await user_repository.create(db_session, "alice", "alice@example.com", None)
 	user = await user_repository.get_by_id(db_session, user_id)
 	assert user is not None
@@ -46,6 +50,7 @@ async def test_oauth_session_callback_records_user_email(db_session: AsyncSessio
 
 
 async def test_oauth_jwt_exchange_records_user_email(db_session: AsyncSession) -> None:
+	"""test_oauth_jwt_exchange_records_user_email。"""
 	user_id = await user_repository.create(db_session, "bob", "bob@example.com", None)
 	user = await user_repository.get_by_id(db_session, user_id)
 	assert user is not None
@@ -68,6 +73,7 @@ async def test_oauth_jwt_exchange_records_user_email(db_session: AsyncSession) -
 
 
 async def test_create_records_failed_login_with_unregistered_identifier(db_session: AsyncSession) -> None:
+	"""test_create_records_failed_login_with_unregistered_identifier。"""
 	await login_history_repository.create(
 		db_session,
 		user_id=None,
@@ -94,6 +100,7 @@ async def test_create_records_failed_login_with_unregistered_identifier(db_sessi
 
 
 async def test_list_by_user_id_orders_by_created_at_desc(db_session: AsyncSession) -> None:
+	"""test_list_by_user_id_orders_by_created_at_desc。"""
 	user_id = await user_repository.create(db_session, "bob", "bob@example.com", "hash")
 	for i in range(3):
 		await db_session.execute(
@@ -111,6 +118,7 @@ async def test_list_by_user_id_orders_by_created_at_desc(db_session: AsyncSessio
 
 
 async def test_purge_expired_deletes_only_old_rows(db_session: AsyncSession) -> None:
+	"""test_purge_expired_deletes_only_old_rows。"""
 	user_id = await user_repository.create(db_session, "carol", "carol@example.com", "hash")
 	await db_session.execute(
 		text(

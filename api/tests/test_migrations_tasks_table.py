@@ -1,3 +1,5 @@
+"""Migrations Tasks Tableテスト。"""
+
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, IntegrityError
@@ -25,6 +27,7 @@ async def _create_project(db: AsyncSession, owner_id: str, name: str = "proj") -
 
 
 async def test_direct_physical_project_delete_cascades_as_defensive_constraint(db_session: AsyncSession) -> None:
+	"""test_direct_physical_project_delete_cascades_as_defensive_constraint。"""
 	owner_id = await _create_user(db_session, "owner6")
 	project_id = await _create_project(db_session, owner_id, "p6")
 	await db_session.execute(
@@ -61,6 +64,7 @@ async def test_direct_physical_project_delete_cascades_as_defensive_constraint(d
 
 
 async def test_direct_physical_task_delete_cascades_comments(db_session: AsyncSession) -> None:
+	"""test_direct_physical_task_delete_cascades_comments。"""
 	owner_id = await _create_user(db_session, "owner7")
 	project_id = await _create_project(db_session, owner_id, "p7")
 	task_id = (
@@ -83,6 +87,7 @@ async def test_direct_physical_task_delete_cascades_comments(db_session: AsyncSe
 
 
 async def test_tasks_check_constraints_reject_invalid_values(db_session: AsyncSession) -> None:
+	"""test_tasks_check_constraints_reject_invalid_values。"""
 	owner_id = await _create_user(db_session, "owner8")
 	project_id = await _create_project(db_session, owner_id, "p8")
 
@@ -94,6 +99,7 @@ async def test_tasks_check_constraints_reject_invalid_values(db_session: AsyncSe
 
 
 async def test_tasks_position_non_negative_check(db_session: AsyncSession) -> None:
+	"""test_tasks_position_non_negative_check。"""
 	owner_id = await _create_user(db_session, "owner9")
 	project_id = await _create_project(db_session, owner_id, "p9")
 
@@ -105,6 +111,7 @@ async def test_tasks_position_non_negative_check(db_session: AsyncSession) -> No
 
 
 async def test_tasks_project_id_null_allowed(db_session: AsyncSession) -> None:
+	"""test_tasks_project_id_null_allowed。"""
 	owner_id = await _create_user(db_session, "owner10")
 
 	row = (
@@ -122,6 +129,7 @@ async def test_tasks_project_id_null_allowed(db_session: AsyncSession) -> None:
 
 
 async def test_uq_tasks_project_status_position_is_deferred_within_transaction(db_session: AsyncSession) -> None:
+	"""test_uq_tasks_project_status_position_is_deferred_within_transaction。"""
 	owner_id = await _create_user(db_session, "owner11")
 	project_id = await _create_project(db_session, owner_id, "p11")
 	task1_id = (
@@ -174,6 +182,7 @@ async def test_uq_tasks_project_status_position_rejects_unresolved_duplicate_on_
 
 
 async def test_trg_tasks_set_updated_at(db_session: AsyncSession) -> None:
+	"""test_trg_tasks_set_updated_at。"""
 	owner_id = await _create_user(db_session, "owner14")
 	project_id = await _create_project(db_session, owner_id, "p14")
 	task_id = (
@@ -195,6 +204,7 @@ async def test_trg_tasks_set_updated_at(db_session: AsyncSession) -> None:
 
 
 async def test_trg_task_comments_set_updated_at(db_session: AsyncSession) -> None:
+	"""test_trg_task_comments_set_updated_at。"""
 	owner_id = await _create_user(db_session, "owner15")
 	project_id = await _create_project(db_session, owner_id, "p15")
 	task_id = (

@@ -1,3 +1,5 @@
+"""Migrations Notifications Tableテスト。"""
+
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, IntegrityError
@@ -15,6 +17,7 @@ async def _create_user(db: AsyncSession, username: str) -> str:
 
 
 async def test_notification_check_constraint_rejects_invalid_type(db_session: AsyncSession) -> None:
+	"""test_notification_check_constraint_rejects_invalid_type。"""
 	user_id = await _create_user(db_session, "notif1")
 
 	with pytest.raises(DBAPIError):
@@ -27,6 +30,7 @@ async def test_notification_check_constraint_rejects_invalid_type(db_session: As
 
 
 async def test_create_if_absent_ignores_duplicate_dedupe_key(db_session: AsyncSession) -> None:
+	"""test_create_if_absent_ignores_duplicate_dedupe_key。"""
 	user_id = await _create_user(db_session, "notif2")
 
 	first = (
@@ -57,6 +61,7 @@ async def test_create_if_absent_ignores_duplicate_dedupe_key(db_session: AsyncSe
 
 
 async def test_delete_user_cascades_notifications(db_session: AsyncSession) -> None:
+	"""test_delete_user_cascades_notifications。"""
 	user_id = await _create_user(db_session, "notif3")
 	notification_id = (
 		await db_session.execute(
@@ -77,6 +82,7 @@ async def test_delete_user_cascades_notifications(db_session: AsyncSession) -> N
 
 
 async def test_delete_task_sets_notification_task_id_null(db_session: AsyncSession) -> None:
+	"""test_delete_task_sets_notification_task_id_null。"""
 	user_id = await _create_user(db_session, "notif4")
 	task_id = (
 		await db_session.execute(
@@ -103,6 +109,7 @@ async def test_delete_task_sets_notification_task_id_null(db_session: AsyncSessi
 
 
 async def test_uq_notifications_user_dedupe_rejects_duplicate_without_on_conflict(db_session: AsyncSession) -> None:
+	"""test_uq_notifications_user_dedupe_rejects_duplicate_without_on_conflict。"""
 	user_id = await _create_user(db_session, "notif5")
 	await db_session.execute(
 		text(

@@ -1,8 +1,11 @@
+"""Repository Oauth Accountテスト。"""
+
 from app.repository import oauth_account_repository, user_repository
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def test_upsert_creates_link_and_verifies_email(db_session: AsyncSession) -> None:
+	"""test_upsert_creates_link_and_verifies_email。"""
 	user_id = await user_repository.create(db_session, "alice", "alice@example.com", None)
 
 	await oauth_account_repository.upsert(db_session, user_id, "google", "google-sub-1")
@@ -17,6 +20,7 @@ async def test_upsert_creates_link_and_verifies_email(db_session: AsyncSession) 
 
 
 async def test_upsert_does_not_overwrite_existing_verified_at(db_session: AsyncSession) -> None:
+	"""test_upsert_does_not_overwrite_existing_verified_at。"""
 	user_id = await user_repository.create(db_session, "bob", "bob@example.com", "hash")
 	await user_repository.mark_email_verified(db_session, user_id)
 	user_before = await user_repository.get_by_id(db_session, user_id)
@@ -30,12 +34,14 @@ async def test_upsert_does_not_overwrite_existing_verified_at(db_session: AsyncS
 
 
 async def test_get_by_provider_identity_not_found_returns_none(db_session: AsyncSession) -> None:
+	"""test_get_by_provider_identity_not_found_returns_none。"""
 	link = await oauth_account_repository.get_by_provider_identity(db_session, "google", "unknown-sub")
 
 	assert link is None
 
 
 async def test_list_by_user_id_returns_linked_accounts(db_session: AsyncSession) -> None:
+	"""test_list_by_user_id_returns_linked_accounts。"""
 	user_id = await user_repository.create(db_session, "carol", "carol@example.com", "hash")
 	await oauth_account_repository.upsert(db_session, user_id, "google", "google-sub-3")
 

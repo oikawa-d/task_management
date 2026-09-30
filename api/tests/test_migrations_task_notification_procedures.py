@@ -1,3 +1,5 @@
+"""Migrations Task Notification Proceduresテスト。"""
+
 import os
 from pathlib import Path
 
@@ -26,6 +28,7 @@ def _reset_schema():
 
 
 def test_task_procedures_keep_legacy_signature_until_notification_tables_exist() -> None:
+	"""test_task_procedures_keep_legacy_signature_until_notification_tables_exist。"""
 	cfg = _alembic_config()
 	command.upgrade(cfg, "0010")
 
@@ -63,6 +66,7 @@ def test_task_procedures_keep_legacy_signature_until_notification_tables_exist()
 
 
 def test_task_notification_procedure_revision_is_reversible() -> None:
+	"""test_task_notification_procedure_revision_is_reversible。"""
 	cfg = _alembic_config()
 	command.upgrade(cfg, "head")
 
@@ -89,6 +93,7 @@ def test_task_notification_procedure_revision_is_reversible() -> None:
 
 
 def test_task_api_contract_revision_is_reversible() -> None:
+	"""test_task_api_contract_revision_is_reversible。"""
 	cfg = _alembic_config()
 	command.upgrade(cfg, "head")
 	count_signature = "fn_count_tasks(uuid,uuid,character varying,boolean,boolean)"

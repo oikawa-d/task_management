@@ -1,3 +1,5 @@
+"""Repository Task Commentテスト。"""
+
 from app.repository import project_repository, task_comment_repository, task_repository, user_repository
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +12,7 @@ async def _setup_task(db: AsyncSession, username: str):
 
 
 async def test_add_comment_success(db_session: AsyncSession) -> None:
+	"""test_add_comment_success。"""
 	owner_id, task_id = await _setup_task(db_session, "alice")
 
 	comment_id = await task_comment_repository.create(db_session, task_id, owner_id, "hello")
@@ -21,6 +24,7 @@ async def test_add_comment_success(db_session: AsyncSession) -> None:
 
 
 async def test_get_by_id_not_found_returns_none(db_session: AsyncSession) -> None:
+	"""test_get_by_id_not_found_returns_none。"""
 	import uuid
 
 	comment = await task_comment_repository.get_by_id(db_session, uuid.uuid4())
@@ -28,6 +32,7 @@ async def test_get_by_id_not_found_returns_none(db_session: AsyncSession) -> Non
 
 
 async def test_list_comments_ordered_by_created_at_asc(db_session: AsyncSession) -> None:
+	"""test_list_comments_ordered_by_created_at_asc。"""
 	owner_id, task_id = await _setup_task(db_session, "bob")
 	other_task_id = await task_repository.create(db_session, None, owner_id, None, "other", None, "todo", None, None)
 	first_id = await task_comment_repository.create(db_session, task_id, owner_id, "first")
@@ -42,6 +47,7 @@ async def test_list_comments_ordered_by_created_at_asc(db_session: AsyncSession)
 
 
 async def test_list_comments_loads_author_for_the_target_task(db_session: AsyncSession) -> None:
+	"""test_list_comments_loads_author_for_the_target_task。"""
 	owner_id, task_id = await _setup_task(db_session, "comment-author")
 	comment_id = await task_comment_repository.create(db_session, task_id, owner_id, "with author")
 
@@ -54,6 +60,7 @@ async def test_list_comments_loads_author_for_the_target_task(db_session: AsyncS
 
 
 async def test_get_by_id_loads_task_project_and_author(db_session: AsyncSession) -> None:
+	"""test_get_by_id_loads_task_project_and_author。"""
 	owner_id, task_id = await _setup_task(db_session, "comment-relation")
 	comment_id = await task_comment_repository.create(db_session, task_id, owner_id, "with relations")
 
@@ -71,6 +78,7 @@ async def test_get_by_id_loads_task_project_and_author(db_session: AsyncSession)
 
 
 async def test_update_comment_changes_body(db_session: AsyncSession) -> None:
+	"""test_update_comment_changes_body。"""
 	owner_id, task_id = await _setup_task(db_session, "carol")
 	comment_id = await task_comment_repository.create(db_session, task_id, owner_id, "original")
 	other_comment_id = await task_comment_repository.create(db_session, task_id, owner_id, "untouched")
@@ -86,6 +94,7 @@ async def test_update_comment_changes_body(db_session: AsyncSession) -> None:
 
 
 async def test_delete_comment_removes_row(db_session: AsyncSession) -> None:
+	"""test_delete_comment_removes_row。"""
 	owner_id, task_id = await _setup_task(db_session, "dave")
 	comment_id = await task_comment_repository.create(db_session, task_id, owner_id, "to delete")
 	other_comment_id = await task_comment_repository.create(db_session, task_id, owner_id, "to keep")
@@ -100,6 +109,7 @@ async def test_delete_comment_removes_row(db_session: AsyncSession) -> None:
 
 
 async def test_deactivate_task_does_not_delete_comments(db_session: AsyncSession) -> None:
+	"""test_deactivate_task_does_not_delete_comments。"""
 	owner_id, task_id = await _setup_task(db_session, "erin")
 	comment_id = await task_comment_repository.create(db_session, task_id, owner_id, "still here")
 
