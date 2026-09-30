@@ -1,3 +1,21 @@
+-- 状態: 現役（根拠: alembic api/alembic/versions/0010_create_project_task_functions_and_triggers.py の
+--       upgrade()、および 0016_update_task_notification_procedures.py の downgrade() から参照される。
+--       同名の現役オブジェクトが db/procedures/sp_create_task.sql に存在する）
+-- 概要: タスクを新規作成する。通知発行導入前の版。担当者が有効ユーザーであることを検証し、
+--       同一プロジェクト・ステータス列のロックを取得したうえで、
+--       指定位置(position)が未指定なら末尾へ、指定ありなら既存タスクをずらして挿入する。
+-- 引数: p_project_id UUID — 所属プロジェクトID（NULLで個人タスク）
+--       p_created_by UUID — 作成者のユーザーID
+--       p_assignee_id UUID — 担当者のユーザーID（NULLで未割当）
+--       p_title VARCHAR — タスクタイトル
+--       p_body TEXT — タスク本文（tasks.descriptionに格納）
+--       p_status VARCHAR — 初期ステータス
+--       p_due_at TIMESTAMPTZ — 期限日時（NULLで未設定）
+--       p_position INTEGER — 挿入位置（NULLで同一列の末尾に自動採番）
+--       OUT p_task_id UUID — 作成したタスクのID
+-- 戻り値: なし（OUT引数 p_task_id に作成したタスクIDを設定）
+-- 副作用: tasksテーブルへのINSERT。p_position指定時はtasksテーブルの同一プロジェクト・
+--       ステータス列で挿入位置以降のposition値をUPDATEでずらす。
 CREATE OR REPLACE PROCEDURE sp_create_task(
     p_project_id UUID,
     p_created_by UUID,

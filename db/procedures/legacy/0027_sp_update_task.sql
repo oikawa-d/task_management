@@ -1,3 +1,27 @@
+-- 状態: 現役（根拠: alembic api/alembic/versions/0028_align_task_api_contracts.py の
+--       downgrade() で DB_DIR / "procedures/legacy/0027_sp_update_task.sql" として参照される。
+--       同名の現役オブジェクトが db/procedures/sp_update_task.sql に存在する）
+-- 概要: タスクを楽観ロック(version)付きで更新し、期限が当日範囲内に変更された場合は
+--       担当者への通知を発行する。p_is_active引数を持たない、契約統一前の版。
+--       ステータス変更やposition変更に伴うアドバイザリロックの取得順序はdeadlock回避のため
+--       常に文字列順で固定する。
+-- 引数: p_task_id UUID — 更新対象のタスクID
+--       p_editor_id UUID — 編集者のユーザーID（本版では権限チェックに未使用）
+--       p_version INTEGER — 楽観ロック用の現在バージョン
+--       p_title VARCHAR — 新しいタイトル
+--       p_body TEXT — 新しい本文（tasks.descriptionに格納）
+--       p_status VARCHAR — 新しいステータス
+--       p_assignee_id UUID — 新しい担当者のユーザーID（NULLで未割当）
+--       p_due_at TIMESTAMPTZ — 新しい期限日時
+--       p_position INTEGER — 新しい挿入位置（NULLで移動先列の末尾に自動採番）
+--       p_day_start_utc TIMESTAMPTZ — 「当日」とみなす期間の開始（UTC、以上）
+--       p_day_end_utc TIMESTAMPTZ — 「当日」とみなす期間の終了（UTC、未満）
+-- 戻り値: なし
+-- 副作用: tasksテーブルの対象行をUPDATE（タイトル・本文・ステータス・担当者・期限・position・version）。
+--       ステータス変更やposition変更に伴い、同一プロジェクト・ステータス列内の他タスクのpositionもUPDATEでずらす。
+--       担当者が設定されており、かつ期限が変更されたうえで変更後の期限が当日範囲内の場合は
+--       notificationsテーブルへ'due_today_updated'通知をINSERTする（dedupe_keyでの重複はDO NOTHING）。
+--       担当者が有効ユーザーでない場合、またはversion不一致の場合は例外(P0006/P0005)を送出する。
 CREATE OR REPLACE PROCEDURE sp_update_task(
     p_task_id UUID,
     p_editor_id UUID,

@@ -1,3 +1,23 @@
+-- 状態: 現役（根拠: alembic api/alembic/versions/0010_create_project_task_functions_and_triggers.py の
+--       upgrade()、および 0016_update_task_notification_procedures.py の downgrade() から参照される。
+--       同名の現役オブジェクトが db/procedures/sp_update_task.sql に存在する）
+-- 概要: タスクを楽観ロック(version)付きで更新する。通知発行導入前の版。
+--       ステータス変更時は旧列・新列双方のロックを取得して詰め直し・挿入位置調整を行い、
+--       同一列内でのposition変更時も影響範囲のposition値を調整する。
+--       対象タスクが存在しない場合は何もせずRETURNし、versionが一致しない場合は例外を送出する。
+-- 引数: p_task_id UUID — 更新対象のタスクID
+--       p_editor_id UUID — 編集者のユーザーID（本版では権限チェックに未使用）
+--       p_version INTEGER — 楽観ロック用の現在バージョン
+--       p_title VARCHAR — 新しいタイトル
+--       p_body TEXT — 新しい本文（tasks.descriptionに格納）
+--       p_status VARCHAR — 新しいステータス
+--       p_assignee_id UUID — 新しい担当者のユーザーID（NULLで未割当）
+--       p_due_at TIMESTAMPTZ — 新しい期限日時
+--       p_position INTEGER — 新しい挿入位置（NULLで移動先列の末尾に自動採番）
+-- 戻り値: なし
+-- 副作用: tasksテーブルの対象行をUPDATE（タイトル・本文・ステータス・担当者・期限・position・version）。
+--       ステータス変更やposition変更に伴い、同一プロジェクト・ステータス列内の他タスクのpositionもUPDATEでずらす。
+--       担当者が有効ユーザーでない場合、またはversion不一致の場合は例外(P0006/P0005)を送出する。
 CREATE OR REPLACE PROCEDURE sp_update_task(
     p_task_id UUID,
     p_editor_id UUID,
