@@ -1,3 +1,5 @@
+"""全ORMモデルの共通基底クラスと、主キー・タイムスタンプ用のMixinを定義するモジュール。"""
+
 import uuid
 from datetime import datetime
 
@@ -7,7 +9,11 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class Base(DeclarativeBase):
-	pass
+	"""全ORMモデルが継承するSQLAlchemy宣言的マッピングの基底クラス。
+
+	Alembicのマイグレーション自動生成はこのクラスの `metadata` を参照するため、
+	新規モデルは必ずこのクラス（または本モジュールのMixin経由）を継承する。
+	"""
 
 
 class UUIDPkMixin:

@@ -1,3 +1,5 @@
+"""ログイン試行履歴を表す `LoginHistory` モデルを定義するモジュール。"""
+
 import uuid
 from typing import TYPE_CHECKING
 
@@ -13,6 +15,13 @@ if TYPE_CHECKING:
 
 
 class LoginHistory(UUIDPkMixin, CreatedAtMixin, Base):
+	"""`login_history` テーブルに対応するモデル。
+
+	セッション/JWT/OAuthいずれかの方式でのログイン試行を成功・失敗を問わず追記専用で記録する。
+	`user` はログイン主体への参照だが、ユーザー削除後も履歴を残すため
+	`ondelete="SET NULL"` かつ `lazy="noload"` とし、一覧取得時の暗黙JOINを避ける。
+	"""
+
 	__tablename__ = "login_history"
 
 	user_id: Mapped[uuid.UUID | None] = mapped_column(
